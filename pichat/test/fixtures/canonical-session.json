@@ -1,0 +1,156 @@
+{
+  "piVersion": "0.80.6",
+  "sessionId": "fixture-session",
+  "sessionFile": "/sanitized/session.jsonl",
+  "leafId": "entry-final",
+  "entries": [
+    {
+      "type": "message",
+      "id": "entry-user",
+      "parentId": null,
+      "message": {
+        "role": "user",
+        "content": [{"type": "text", "text": "Check the example."}]
+      }
+    },
+    {
+      "type": "message",
+      "id": "entry-abandoned",
+      "parentId": "entry-user",
+      "message": {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Abandoned response."}],
+        "stopReason": "stop"
+      }
+    },
+    {
+      "type": "message",
+      "id": "entry-tool-call",
+      "parentId": "entry-user",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {"type": "thinking", "thinking": "Inspecting the fixture."},
+          {"type": "text", "text": "I will inspect it."},
+          {
+            "type": "toolCall",
+            "id": "tool-1",
+            "name": "read_example",
+            "arguments": {"path": "example.txt"}
+          }
+        ],
+        "stopReason": "toolUse"
+      }
+    },
+    {
+      "type": "message",
+      "id": "entry-tool-result",
+      "parentId": "entry-tool-call",
+      "message": {
+        "role": "toolResult",
+        "toolCallId": "tool-1",
+        "toolName": "read_example",
+        "isError": false,
+        "content": [{"type": "text", "text": "sanitized output"}]
+      }
+    },
+    {
+      "type": "message",
+      "id": "entry-answer",
+      "parentId": "entry-tool-result",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {"type": "text", "text": "The example is valid."},
+          {"type": "image", "mediaType": "image/png", "data": "omitted"}
+        ],
+        "stopReason": "stop"
+      }
+    },
+    {
+      "type": "custom_message",
+      "id": "entry-hidden-custom-message",
+      "parentId": "entry-answer",
+      "customType": "fixture-hidden",
+      "content": "hidden custom text",
+      "display": false
+    },
+    {
+      "type": "custom_message",
+      "id": "entry-custom-message",
+      "parentId": "entry-hidden-custom-message",
+      "customType": "fixture-visible",
+      "content": [
+        {"type": "text", "text": "Visible extension note."},
+        {"type": "image", "mediaType": "image/jpeg", "data": "omitted"}
+      ],
+      "display": true
+    },
+    {
+      "type": "model_change",
+      "id": "entry-model",
+      "parentId": "entry-custom-message",
+      "provider": "fixture-provider",
+      "modelId": "fixture-model"
+    },
+    {
+      "type": "thinking_level_change",
+      "id": "entry-thinking-level",
+      "parentId": "entry-model",
+      "thinkingLevel": "medium"
+    },
+    {
+      "type": "compaction",
+      "id": "entry-compaction",
+      "parentId": "entry-thinking-level",
+      "summary": "Sanitized compact summary.",
+      "firstKeptEntryId": "entry-answer",
+      "tokensBefore": 120
+    },
+    {
+      "type": "message",
+      "id": "entry-bash",
+      "parentId": "entry-compaction",
+      "message": {
+        "role": "bashExecution",
+        "command": "printf fixture",
+        "output": "fixture",
+        "exitCode": 0
+      }
+    },
+    {
+      "type": "branch_summary",
+      "id": "entry-branch-summary",
+      "parentId": "entry-bash",
+      "fromId": "entry-user",
+      "summary": "Hidden branch summary."
+    },
+    {
+      "type": "custom",
+      "id": "entry-extension-state",
+      "parentId": "entry-branch-summary",
+      "customType": "fixture-state",
+      "data": {"privateShape": "must-not-render"}
+    },
+    {
+      "type": "future_entry",
+      "id": "entry-unknown",
+      "parentId": "entry-extension-state",
+      "opaque": {"secret": "must-not-render"}
+    },
+    {
+      "type": "message",
+      "id": "entry-final",
+      "parentId": "entry-unknown",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {"type": "futureContent", "opaque": "must-not-render"},
+          {"type": "text", "text": "Final persisted answer."}
+        ],
+        "stopReason": "aborted",
+        "errorMessage": "Stopped by fixture."
+      }
+    }
+  ]
+}

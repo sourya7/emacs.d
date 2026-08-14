@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/elpaca-cache-restore [OPTIONS] ARCHIVE
+
+Verify and restore an Elpaca source cache before the first Emacs startup.
+The matching ARCHIVE.sha256 and ARCHIVE.manifest sidecars are required.
+
+Options:
+  --project-root PATH  Configuration root (default: parent of this script)
+  --profile NAME       Require this profile label
+  --force              Replace existing Elpaca sources/builds and a differing lock
+  -h, --help           Show this help
+EOF
+}
+
+die() { echo "elpaca-cache-restore: $*" >&2; exit 1; }
+need() { command -v "$1" >/dev/null || die "required command not found: $1"; }
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+project_root=$(cd -- "$script_dir/.." && pwd -P)
+profile=
+force=false
+archive=
+
+while (($#)); do
+  case $1 in
+    --project-root) [[ $# -ge 2 ]] || die "--project-root requires a path"; project_root=$2; shift 2 ;;
+    --profile) [[ $# -ge 2 ]] || die "--profile requires a name"; profile=$2; shift 2 ;;
+    --force) force=true; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; [[ $# -eq 1 ]] || die "exactly one archive is required"; archive=$1; shift ;;
+    -*) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
+    *) [[ -z $archive ]] || die "exactly one archive is required"; archive=$1; shift ;;
+  esac
+done
+
+[[ -n $archive ]] || { usage >&2; exit 2; }
+for command in cmp emacs git sha256sum tar zstd; do need "$command"; done
+project_root=$(cd -- "$project_root" && pwd -P)
+[[ -f $project_root/init.el && -f $project_root/core/package-manager.el ]] || \
+  die "not an Emacs configuration root: $project_root"
+if [[ $archive != /* ]]; then archive="$PWD/$archive"; fi
+[[ -r $archive ]] || die "archive is not readable: $archive"
+checksum_file="$archive.sha256"
+sidecar_manifest="$archive.manifest"
+[[ -r $checksum_file ]] || die "checksum sidecar is missing: $checksum_file"
+[[ -r $sidecar_manifest ]] || die "manifest sidecar is missing: $sidecar_manifest"
+
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/elpaca-cache-restore.XXXXXX")
+cleanup() { rm -rf -- "$work_dir"; }
+trap cleanup EXIT
+mkdir -p -- "$work_dir/home"
+
+expected_sha=$(awk 'NR == 1 {print $1}' "$checksum_file")
+[[ $expected_sha =~ ^[0-9a-fA-F]{64}$ ]] || die "invalid checksum sidecar: $checksum_file"
+actual_sha=$(sha256sum "$archive" | awk '{print $1}')
+[[ $actual_sha == "$expected_sha" ]] || \
+  die "archive checksum mismatch: expected $expected_sha, got $actual_sha"
+manifest_archive_sha=$(awk -F '\t' '$1 == "archive_sha256" {print $2}' "$sidecar_manifest")
+[[ $manifest_archive_sha == "$actual_sha" ]] || die "manifest and archive checksum do not match"
+
+zstd -q -t "$archive"
+tar --zstd -tf "$archive" > "$work_dir/archive.list"
+while IFS= read -r entry; do
+  [[ -n $entry ]] || continue
+  case $entry in
+    /*|../*|*/../*|*/..) die "unsafe path in archive: $entry" ;;
+  esac
+  case $entry in
+    elpaca-lock.eld|.local/elpaca/source-cache-manifest.tsv|\
+    .local/elpaca/sources|.local/elpaca/sources/|.local/elpaca/sources/*) ;;
+    *) die "unexpected path in archive: $entry" ;;
+  esac
+done < "$work_dir/archive.list"
+if grep -Eq '(^|/)builds/|\.el[cn]$|\.(o|a|so|dylib|dll)$' "$work_dir/archive.list"; then
+  die "archive contains a build or compiled artifact"
+fi
+
+tar --zstd -xOf "$archive" elpaca-lock.eld > "$work_dir/elpaca-lock.eld"
+tar --zstd -xOf "$archive" .local/elpaca/source-cache-manifest.tsv > "$work_dir/internal.manifest"
+awk -F '\t' '$1 != "archive_name" && $1 != "archive_sha256"' \
+  "$sidecar_manifest" > "$work_dir/sidecar.internal"
+cmp -s "$work_dir/internal.manifest" "$work_dir/sidecar.internal" || \
+  die "internal and sidecar manifests do not match"
+
+format=$(awk -F '\t' '$1 == "format" {print $2}' "$work_dir/internal.manifest")
+[[ $format == 1 ]] || die "unsupported cache manifest format: ${format:-missing}"
+archive_profile=$(awk -F '\t' '$1 == "profile" {print $2}' "$work_dir/internal.manifest")
+if [[ -n $profile && $profile != "$archive_profile" ]]; then
+  die "profile mismatch: requested $profile, archive contains $archive_profile"
+fi
+lock_sha=$(awk -F '\t' '$1 == "lock_sha256" {print $2}' "$work_dir/internal.manifest")
+actual_lock_sha=$(sha256sum "$work_dir/elpaca-lock.eld" | awk '{print $1}')
+[[ $lock_sha == "$actual_lock_sha" ]] || die "lock file and manifest do not match"
+
+sources_dir="$project_root/.local/elpaca/sources"
+builds_dir="$project_root/.local/elpaca/builds"
+destination_lock="$project_root/elpaca-lock.eld"
+existing_state=false
+[[ -d $sources_dir && -n $(find "$sources_dir" -mindepth 1 -print -quit) ]] && existing_state=true
+[[ -d $builds_dir && -n $(find "$builds_dir" -mindepth 1 -print -quit) ]] && existing_state=true
+if $existing_state && ! $force; then
+  die "existing Elpaca sources/builds found; use --force to replace them"
+fi
+if [[ -e $destination_lock ]] && ! cmp -s "$destination_lock" "$work_dir/elpaca-lock.eld" && ! $force; then
+  die "existing lock file differs from the archive; use --force only with the intended lock/archive pair"
+fi
+if $force; then
+  rm -rf -- "$sources_dir" "$builds_dir"
+fi
+mkdir -p -- "$project_root/.local/elpaca"
+
+tar --zstd --extract --file="$archive" --directory="$project_root" --no-same-owner
+
+[[ ! -d $builds_dir || -z $(find "$builds_dir" -mindepth 1 -print -quit) ]] || \
+  die "restore unexpectedly populated the builds directory"
+if find "$sources_dir" -type f \( -name '*.elc' -o -name '*.eln' -o -name '*.o' -o \
+     -name '*.a' -o -name '*.so' -o -name '*.dylib' -o -name '*.dll' \) -print -quit | grep -q .; then
+  die "restored sources contain a compiled artifact"
+fi
+
+source_count=0
+shopt -s nullglob
+for source in "$sources_dir"/*; do
+  [[ -d $source ]] || continue
+  ((source_count += 1))
+  git -C "$source" rev-parse --git-dir >/dev/null 2>&1 || die "restored source is not Git: $source"
+done
+expected_source_count=$(awk -F '\t' '$1 == "source_count" {print $2}' "$work_dir/internal.manifest")
+[[ $source_count == "$expected_source_count" ]] || \
+  die "restored source count mismatch: expected $expected_source_count, got $source_count"
+
+while IFS=$'\t' read -r kind name expected_head expected_remote expected_state; do
+  [[ $kind == source ]] || continue
+  source="$sources_dir/$name"
+  [[ -d $source ]] || die "manifest source is missing: $name"
+  actual_head=$(git -C "$source" rev-parse HEAD)
+  [[ $actual_head == "$expected_head" ]] || die "source HEAD mismatch for $name"
+  actual_remote=$(git -C "$source" remote get-url origin 2>/dev/null || printf -- '-')
+  [[ $actual_remote == "$expected_remote" ]] || die "source remote mismatch for $name"
+  actual_state=clean
+  [[ -z $(git -C "$source" status --porcelain --untracked-files=no --ignore-submodules=none) ]] || \
+    actual_state=dirty
+  [[ $actual_state == "$expected_state" ]] || die "source worktree state mismatch for $name"
+done < "$work_dir/internal.manifest"
+
+while IFS=$'\t' read -r kind id type relative_source ref; do
+  [[ $kind == lock ]] || continue
+  if [[ $type == git ]]; then
+    source="$project_root/$relative_source"
+    [[ -d $source ]] || die "locked source is missing for $id: $relative_source"
+    [[ $ref != - ]] || die "locked Git package has no ref: $id"
+    git -C "$source" cat-file -e "$ref^{commit}" 2>/dev/null || \
+      die "locked ref $ref for $id is absent from $relative_source"
+  fi
+done < "$work_dir/internal.manifest"
+
+# Re-resolve every recipe with the restored Elpaca and lock file.  Comparing
+# records proves the lock/archive pair still maps to the archived source dirs.
+HOME="$work_dir/home" \
+ELPACA_CACHE_PROJECT_ROOT="$project_root" \
+ELPACA_CACHE_LOCK_FILE="$destination_lock" \
+emacs --batch -Q -l "$script_dir/elpaca-cache-lock-records.el" > "$work_dir/restored-lock-records"
+awk -F '\t' '$1 == "lock" && $3 == "git"' \
+  "$work_dir/internal.manifest" > "$work_dir/manifest-lock-records"
+awk -F '\t' '$1 == "lock" && $3 == "git"' \
+  "$work_dir/restored-lock-records" > "$work_dir/restored-git-lock-records"
+cmp -s "$work_dir/restored-git-lock-records" "$work_dir/manifest-lock-records" || \
+  die "restored Git lock recipes do not resolve to the archived source layout"
+
+printf 'Restored profile %s to %s\n' "$archive_profile" "$project_root"
+printf 'Validated %d Git source repositories and the complete lock/archive pair.\n' "$source_count"
+printf 'Elpaca builds remain absent and will be generated on first startup.\n'

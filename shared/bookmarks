@@ -1,0 +1,16 @@
+;;;; Emacs Bookmark Format Version 1;;;; -*- coding: utf-8-emacs; mode: lisp-data -*-
+;;; This format is meant to be slightly human-readable;
+;;; nevertheless, you probably don't want to edit it.
+;;; -*- End Of Bookmark File Format Version Stamp -*-
+(
+("hackaday" (location . "@1-day +unread +hackaday")
+ (tags "hackaday" "unread") (handler . elfeed-search-bookmark-handler))
+("hnjobs" (location . "@1-day +unread +hnjobs")
+ (tags "hnjobs" "unread") (handler . elfeed-search-bookmark-handler))
+("lobster" (location . "@1-day +unread +lobster")
+ (tags "lobster" "unread") (handler . elfeed-search-bookmark-handler))
+("reddit" (location . "@1-day +unread +reddit")
+ (tags "reddit" "unread") (handler . elfeed-search-bookmark-handler))
+("hackernews" (location . "@1-day +unread +hn") (tags "hn" "unread")
+ (handler . elfeed-search-bookmark-handler))
+)

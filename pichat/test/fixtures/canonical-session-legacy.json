@@ -1,0 +1,45 @@
+{
+  "piVersion": "0.79-compatible-shape",
+  "sessionId": "legacy-fixture-session",
+  "sessionFile": "/sanitized/legacy-session.jsonl",
+  "leafId": "legacy-custom",
+  "entries": [
+    {
+      "entryType": "message",
+      "id": "legacy-user",
+      "parentId": null,
+      "message": {"role": "user", "content": "Legacy request."}
+    },
+    {
+      "entryType": "message",
+      "id": "legacy-assistant",
+      "parentId": "legacy-user",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {"type": "tool_call", "id": "legacy-tool", "name": "legacy_read", "arguments": {"path": "safe.txt"}}
+        ]
+      }
+    },
+    {
+      "entryType": "message",
+      "id": "legacy-result",
+      "parentId": "legacy-assistant",
+      "message": {
+        "role": "tool_result",
+        "toolCallId": "legacy-tool",
+        "toolName": "legacy_read",
+        "isError": false,
+        "content": [{"type": "text", "text": "Legacy output."}]
+      }
+    },
+    {
+      "entryType": "customMessage",
+      "id": "legacy-custom",
+      "parentId": "legacy-result",
+      "display": true,
+      "customType": "legacy-visible",
+      "content": "Legacy context."
+    }
+  ]
+}

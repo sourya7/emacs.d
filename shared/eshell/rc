@@ -1,0 +1,37 @@
+(setenv "PAGER" "cat")
+
+(defun my/cmd-complete-args (command)
+  "Get completion results from kubectl."
+  (let* (
+         (args (cdr (pcomplete-parse-arguments)))
+         (current-arg (car (last args)))
+         (command (concat
+                   (string-join
+                    (append `(,command "__complete")
+                            args
+                            (when (string-empty-p current-arg) '("")))
+                    " ")
+                   " 2>&1"))
+         (output (shell-command-to-string command))
+         (lines (split-string (string-trim output) "\n"))
+         (completions
+          (cl-remove-if
+           (lambda (line)
+             (or (string-prefix-p ":" line)
+                 (string-prefix-p "Completion ended with directive" line)
+                 (string-empty-p line)))
+           lines))
+         (candidates (mapcar (lambda (line)
+                               (car (split-string line "\t")))
+                             completions)))
+    candidates))
+
+(defun pcomplete/kubectl ()
+  "Completion for kubectl command"
+  (while (pcomplete-here (my/cmd-complete-args "kubectl"))))
+
+(defun pcomplete/docker ()
+  "Completion for docker command"
+  (while (pcomplete-here (my/cmd-complete-args "docker"))))
+
+eshell/clear-scrollback

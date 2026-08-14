@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/elpaca-cache-create [OPTIONS]
+
+Create a portable Elpaca Git-source cache.  Bytecode, native outputs, builds,
+and Elpaca menu caches are deliberately omitted.
+
+Options:
+  --output PATH       Archive path (default: $ELPACA_CACHE_DIR/elpaca-sources-PROFILE.tar.zst)
+  --lock-file PATH    Lock file to package (default: PROJECT/elpaca-lock.eld)
+  --profile NAME      Profile label (default: $ELPACA_CACHE_PROFILE or default)
+  --allow-dirty       Include tracked source modifications and record them
+  --force             Replace an existing archive and sidecars
+  -h, --help          Show this help
+
+Sidecars ARCHIVE.sha256 and ARCHIVE.manifest are created with the archive.
+EOF
+}
+
+die() { echo "elpaca-cache-create: $*" >&2; exit 1; }
+need() { command -v "$1" >/dev/null || die "required command not found: $1"; }
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+project_root=$(cd -- "$script_dir/.." && pwd -P)
+sources_dir="$project_root/.local/elpaca/sources"
+lock_file="$project_root/elpaca-lock.eld"
+profile=${ELPACA_CACHE_PROFILE:-default}
+output=
+allow_dirty=false
+force=false
+
+while (($#)); do
+  case $1 in
+    --output) [[ $# -ge 2 ]] || die "--output requires a path"; output=$2; shift 2 ;;
+    --lock-file) [[ $# -ge 2 ]] || die "--lock-file requires a path"; lock_file=$2; shift 2 ;;
+    --profile) [[ $# -ge 2 ]] || die "--profile requires a name"; profile=$2; shift 2 ;;
+    --allow-dirty) allow_dirty=true; shift ;;
+    --force) force=true; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+for command in emacs git sha256sum tar zstd; do need "$command"; done
+[[ $profile =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid profile name: $profile"
+[[ -d $sources_dir ]] || die "Elpaca sources directory is missing: $sources_dir"
+[[ -f $sources_dir/elpaca/elpaca.el ]] || die "Elpaca bootstrap source is missing from sources/elpaca"
+[[ -r $lock_file ]] || die "lock file is not readable: $lock_file"
+if [[ $lock_file != /* ]]; then lock_file="$PWD/$lock_file"; fi
+if [[ -z $output ]]; then
+  cache_dir=${ELPACA_CACHE_DIR:-$project_root/.tmp}
+  output="$cache_dir/elpaca-sources-$profile.tar.zst"
+elif [[ $output != /* ]]; then
+  output="$PWD/$output"
+fi
+mkdir -p -- "$(dirname -- "$output")"
+
+checksum_file="$output.sha256"
+sidecar_manifest="$output.manifest"
+if [[ -e $output || -e $checksum_file || -e $sidecar_manifest ]]; then
+  $force || die "output or sidecar already exists; pass --force to replace it: $output"
+fi
+
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/elpaca-cache-create.XXXXXX")
+tar_tmp="$work_dir/archive.tar"
+archive_tmp="$work_dir/archive.tar.zst"
+manifest="$work_dir/manifest.tsv"
+lock_records="$work_dir/lock-records.tsv"
+working_files="$work_dir/working-files.nul"
+stage="$work_dir/stage"
+cleanup() { rm -rf -- "$work_dir"; }
+trap cleanup EXIT
+mkdir -p -- "$stage/.local/elpaca" "$work_dir/home"
+
+lock_sha=$(sha256sum "$lock_file" | awk '{print $1}')
+
+HOME="$work_dir/home" \
+ELPACA_CACHE_PROJECT_ROOT="$project_root" \
+ELPACA_CACHE_LOCK_FILE="$lock_file" \
+emacs --batch -Q -l "$script_dir/elpaca-cache-lock-records.el" > "$lock_records"
+[[ -s $lock_records ]] || die "lock file produced no source records"
+
+mapfile -t git_locks < <(find "$sources_dir" -path '*/.git/*' -type f -name '*.lock' -print)
+if ((${#git_locks[@]})); then
+  printf 'Active Git lock files prevent a safe snapshot:\n' >&2
+  printf '  %s\n' "${git_locks[@]}" >&2
+  exit 1
+fi
+
+source_count=0
+dirty_count=0
+shopt -s nullglob
+for source in "$sources_dir"/*; do
+  [[ -d $source ]] || continue
+  ((source_count += 1))
+  git -C "$source" rev-parse --git-dir >/dev/null 2>&1 || die "source is not a Git repository: $source"
+  status=$(git -C "$source" status --porcelain --untracked-files=no --ignore-submodules=none)
+  if [[ -n $status ]]; then
+    ((dirty_count += 1))
+    printf 'Dirty source repository: %s\n%s\n' "${source#"$project_root"/}" "$status" >&2
+  fi
+done
+((source_count > 0)) || die "no source repositories found"
+if ((dirty_count > 0)) && ! $allow_dirty; then
+  die "$dirty_count source repositories have tracked modifications; clean them or pass --allow-dirty"
+fi
+
+# Validate every Git recipe in the lock file against its exact restored source.
+while IFS=$'\t' read -r kind id type relative_source ref; do
+  [[ $kind == lock ]] || die "invalid lock record for $id"
+  if [[ $type == git ]]; then
+    source="$project_root/$relative_source"
+    [[ -d $source ]] || die "locked source is missing for $id: $relative_source"
+    git -C "$source" rev-parse --git-dir >/dev/null 2>&1 || die "locked source is not Git: $relative_source"
+    [[ $ref != - ]] || die "locked Git package has no ref: $id"
+    git -C "$source" cat-file -e "$ref^{commit}" 2>/dev/null || \
+      die "locked ref $ref for $id is absent from $relative_source"
+  fi
+done < "$lock_records"
+
+config_commit=$(git -C "$project_root" rev-parse HEAD)
+config_state=clean
+[[ -z $(git -C "$project_root" status --porcelain --untracked-files=no) ]] || config_state=dirty
+elpaca_commit=$(git -C "$sources_dir/elpaca" rev-parse HEAD)
+installer_version=$(awk '/defvar elpaca-installer-version/{gsub(/\)/, "", $3); print $3; exit}' "$project_root/core/package-manager.el")
+emacs_version=$(emacs --batch -Q --eval '(princ emacs-version)')
+created=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+{
+  printf 'format\t1\n'
+  printf 'profile\t%s\n' "$profile"
+  printf 'created_utc\t%s\n' "$created"
+  printf 'config_commit\t%s\n' "$config_commit"
+  printf 'config_worktree\t%s\n' "$config_state"
+  printf 'elpaca_commit\t%s\n' "$elpaca_commit"
+  printf 'elpaca_installer_version\t%s\n' "$installer_version"
+  printf 'emacs_version\t%s\n' "$emacs_version"
+  printf 'lock_file\telpaca-lock.eld\n'
+  printf 'lock_sha256\t%s\n' "$lock_sha"
+  printf 'source_count\t%d\n' "$source_count"
+  printf 'dirty_source_count\t%d\n' "$dirty_count"
+  cat "$lock_records"
+  for source in "$sources_dir"/*; do
+    [[ -d $source ]] || continue
+    name=${source#"$sources_dir"/}
+    head=$(git -C "$source" rev-parse HEAD)
+    remote=$(git -C "$source" remote get-url origin 2>/dev/null || printf -- '-')
+    state=clean
+    [[ -z $(git -C "$source" status --porcelain --untracked-files=no --ignore-submodules=none) ]] || state=dirty
+    printf 'source\t%s\t%s\t%s\t%s\n' "$name" "$head" "$remote" "$state"
+  done
+} > "$manifest"
+
+cp -- "$lock_file" "$stage/elpaca-lock.eld"
+cp -- "$manifest" "$stage/.local/elpaca/source-cache-manifest.tsv"
+
+printf 'Creating %s from %d source repositories...\n' "$output" "$source_count"
+# Archive tracked working-tree files (including initialized submodules) and
+# append Git metadata separately.  This excludes generated/untracked products
+# without losing tracked dotfiles in repositories whose ignore rules match .*.
+: > "$working_files"
+for source in "$sources_dir"/*; do
+  [[ -d $source ]] || continue
+  relative_root=${source#"$project_root"/}
+  repo_files="$work_dir/repo-files.nul"
+  git -C "$source" ls-files -z --cached --recurse-submodules > "$repo_files"
+  while IFS= read -r -d '' file; do
+    printf '%s/%s\0' "$relative_root" "$file" >> "$working_files"
+  done < "$repo_files"
+done
+tar --create --file="$tar_tmp" --format=posix --null \
+  --exclude='*.elc' --exclude='*.eln' --exclude='*.o' --exclude='*.a' \
+  --exclude='*.so' --exclude='*.dylib' --exclude='*.dll' \
+  -C "$project_root" --files-from="$working_files"
+tar --append --file="$tar_tmp" --format=posix --sort=name -C "$stage" \
+  elpaca-lock.eld .local/elpaca/source-cache-manifest.tsv
+mapfile -t root_git_metadata < <(find "$sources_dir" -mindepth 2 -maxdepth 2 -name .git \
+  -printf '%P\n' | sed 's#^#.local/elpaca/sources/#' | sort)
+((${#root_git_metadata[@]} == source_count)) || \
+  die "expected $source_count source Git directories, found ${#root_git_metadata[@]}"
+mapfile -t all_git_metadata < <(find "$sources_dir" -mindepth 2 -name .git \
+  -printf '%P\n' | sed 's#^#.local/elpaca/sources/#' | sort)
+tar --append --file="$tar_tmp" --format=posix --sort=name -C "$project_root" "${all_git_metadata[@]}"
+zstd -q -T0 -10 -o "$archive_tmp" "$tar_tmp"
+
+zstd -q -t "$archive_tmp"
+tar --zstd -tf "$archive_tmp" > "$work_dir/archive.list"
+grep -Fx 'elpaca-lock.eld' "$work_dir/archive.list" >/dev/null || die "archive verification: lock file missing"
+grep -Fx '.local/elpaca/source-cache-manifest.tsv' "$work_dir/archive.list" >/dev/null || \
+  die "archive verification: internal manifest missing"
+archived_git_count=$(grep -Ec '^\.local/elpaca/sources/[^/]+/\.git/HEAD$' "$work_dir/archive.list")
+((archived_git_count == source_count)) || \
+  die "archive verification: expected $source_count Git HEAD files, found $archived_git_count"
+if grep -Eq '(^|/)builds/|\.el[cn]$|\.(o|a|so|dylib|dll)$' "$work_dir/archive.list"; then
+  die "archive verification: excluded build artifact is present"
+fi
+
+archive_sha=$(sha256sum "$archive_tmp" | awk '{print $1}')
+{
+  cat "$manifest"
+  printf 'archive_name\t%s\n' "$(basename -- "$output")"
+  printf 'archive_sha256\t%s\n' "$archive_sha"
+} > "$work_dir/sidecar.manifest"
+printf '%s  %s\n' "$archive_sha" "$(basename -- "$output")" > "$work_dir/archive.sha256"
+
+mv -f -- "$archive_tmp" "$output"
+mv -f -- "$work_dir/sidecar.manifest" "$sidecar_manifest"
+mv -f -- "$work_dir/archive.sha256" "$checksum_file"
+printf 'Created:\n  %s\n  %s\n  %s\n' "$output" "$checksum_file" "$sidecar_manifest"
+printf 'SHA-256: %s\n' "$archive_sha"

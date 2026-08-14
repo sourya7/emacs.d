@@ -1,0 +1,62 @@
+[
+  {
+    "name": "pi missing API key response",
+    "origin": "rpc-response",
+    "text": "No API key found for \"anthropic\". Run /login or set ANTHROPIC_API_KEY.",
+    "expectedCategory": "missing-credential"
+  },
+  {
+    "name": "pi short missing API key response",
+    "origin": "rpc-response",
+    "text": "No API key for openai/gpt-5",
+    "expectedCategory": "missing-credential"
+  },
+  {
+    "name": "pi no model response",
+    "origin": "rpc-response",
+    "text": "No model selected. Use /model to select a model.",
+    "expectedCategory": "provider-not-configured"
+  },
+  {
+    "name": "documentation mentions API key",
+    "origin": "rpc-response",
+    "text": "The README explains how to rotate an API key safely.",
+    "expectedCategory": null
+  },
+  {
+    "name": "prose begins with missing-key words",
+    "origin": "rpc-response",
+    "text": "No API key found for the documentation example, which is expected.",
+    "expectedCategory": null
+  },
+  {
+    "name": "ordinary unauthorized provider error",
+    "origin": "rpc-response",
+    "text": "Request failed with 401 unauthorized",
+    "expectedCategory": null
+  },
+  {
+    "name": "tool output says no credentials",
+    "origin": "process-exit",
+    "text": "Tests passed: no credentials were included in the fixture.",
+    "expectedCategory": null
+  },
+  {
+    "name": "remote permission policy",
+    "origin": "rpc-response",
+    "text": "Permission denied by the remote repository policy",
+    "expectedCategory": null
+  },
+  {
+    "name": "missing target file is not executable failure",
+    "origin": "process-exit",
+    "text": "No such file or directory: src/missing.txt",
+    "expectedCategory": null
+  },
+  {
+    "name": "provider prose says no models available",
+    "origin": "rpc-response",
+    "text": "The report says that no models available is a possible state.",
+    "expectedCategory": null
+  }
+]

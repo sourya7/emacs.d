@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: write-file
+# key: wf
+# --
+File.open("${1:/tmp/out.txt}", 'w') { |file| file.write($2) }

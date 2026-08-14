@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/elpaca-lock-write [--lock-file PATH] [--profile NAME]
+
+Load this Emacs configuration as an init-time package profile, wait for Elpaca,
+and write exact package recipes and revisions to the lock file.
+
+Environment:
+  EMACS             Emacs executable (default: emacs)
+  ELPACA_CACHE_PROFILE  Profile label (default: default)
+EOF
+}
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+project_root=$(cd -- "$script_dir/.." && pwd -P)
+emacs_bin=${EMACS:-emacs}
+profile=${ELPACA_CACHE_PROFILE:-default}
+lock_file="$project_root/elpaca-lock.eld"
+
+while (($#)); do
+  case $1 in
+    --lock-file)
+      [[ $# -ge 2 ]] || { echo "--lock-file requires a path" >&2; exit 2; }
+      lock_file=$2
+      shift 2
+      ;;
+    --profile)
+      [[ $# -ge 2 ]] || { echo "--profile requires a name" >&2; exit 2; }
+      profile=$2
+      shift 2
+      ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+command -v "$emacs_bin" >/dev/null || { echo "Emacs executable not found: $emacs_bin" >&2; exit 1; }
+[[ $profile =~ ^[A-Za-z0-9._-]+$ ]] || { echo "Invalid profile name: $profile" >&2; exit 2; }
+if [[ $lock_file != /* ]]; then
+  lock_file="$PWD/$lock_file"
+fi
+mkdir -p -- "$(dirname -- "$lock_file")"
+
+major=$($emacs_bin --batch -Q --eval '(princ emacs-major-version)')
+((major >= 30)) || { echo "This configuration requires Emacs 30 or later (found $major)." >&2; exit 1; }
+
+printf 'Writing Elpaca lock file for profile %s to %s\n' "$profile" "$lock_file"
+# Batch Emacs has already completed startup, so temporarily resetting
+# after-init-time makes Elpaca classify declarations loaded from init.el as the
+# active init profile.  This matches a normal interactive startup and ensures
+# elpaca-write-lock-file includes those declarations.
+EMACS_ELPACA_LOCK_FILE="$lock_file" \
+ELPACA_CACHE_PROFILE="$profile" \
+ELPACA_CACHE_PROJECT_ROOT="$project_root" \
+"$emacs_bin" --batch \
+  --eval '(setq user-emacs-directory (file-name-as-directory (getenv "ELPACA_CACHE_PROJECT_ROOT")) after-init-time nil)' \
+  -l "$project_root/early-init.el" \
+  -l "$project_root/init.el" \
+  --eval '(progn (elpaca-wait) (my/elpaca-write-lock-file))'
+
+entries=$(ELPACA_CACHE_LOCK_FILE="$lock_file" "$emacs_bin" --batch -Q --eval \
+  '(with-temp-buffer (insert-file-contents (getenv "ELPACA_CACHE_LOCK_FILE")) (princ (length (read (current-buffer)))))')
+((entries > 0)) || { echo "Generated lock file has no entries: $lock_file" >&2; exit 1; }
+printf 'Wrote %d locked package entries.\n' "$entries"

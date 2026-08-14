@@ -1,0 +1,8 @@
+alias kgns kubectl get namespace $*
+alias gs git status $*
+alias l ls $*
+alias ffw find-file-other-window $1
+alias ff find-file $1
+alias clear clear-scrollback
+alias kgp kubectl get pods
+alias kl kubectl logs

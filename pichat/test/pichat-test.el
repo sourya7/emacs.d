@@ -1,0 +1,60 @@
+;;; pichat-test.el --- PiChat test suite -*- lexical-binding: t; -*-
+
+;;; Commentary:
+
+;; Stable entry point for the focused PiChat ERT test files.
+
+;;; Code:
+
+(require 'ert)
+(require 'cl-lib)
+(setq load-prefer-newer t)
+(require 'pichat-test-support)
+
+(require 'pichat-test-rpc)
+(require 'pichat-test-transport)
+(require 'pichat-test-launch)
+(require 'pichat-test-chat-core)
+(require 'pichat-test-chat-controls)
+(require 'pichat-test-chat-diagnostics)
+(require 'pichat-test-chat-live)
+(require 'pichat-test-chat-input)
+(require 'pichat-test-chat-completion)
+(require 'pichat-test-chat-tools)
+(require 'pichat-test-transcript)
+(require 'pichat-test-render)
+(require 'pichat-test-approval-tools)
+(require 'pichat-test-sessions-reference)
+(require 'pichat-test-session-completion)
+(require 'pichat-test-session-manager)
+(require 'pichat-test-archive)
+(require 'pichat-test-consult)
+(require 'pichat-test-sessions-tree)
+(require 'pichat-test-sessions-visibility)
+(require 'pichat-test-sessions-navigation)
+(require 'pichat-test-sessions-preview)
+(require 'pichat-test-sessions-fork)
+(require 'pichat-test-sessions-clone)
+(require 'pichat-test-sessions-source-navigation)
+(require 'pichat-test-sessions-command-map)
+(require 'pichat-test-chat-projection)
+(require 'pichat-test-chat-projection-skip)
+(require 'pichat-test-chat-projection-incremental)
+(require 'pichat-test-chat-projection-focused-rollback)
+(require 'pichat-test-chat-modification-hooks)
+(require 'pichat-test-chat-view)
+(require 'pichat-test-lifecycle)
+(require 'pichat-test-extension-ui)
+(require 'pichat-test-markdown-presentation)
+(require 'pichat-test-markdown-table)
+(require 'pichat-test-markdown-table-view)
+(require 'pichat-test-tool-enrichment)
+(require 'pichat-test-shell-presentation)
+(require 'pichat-test-chat-navigation)
+(require 'pichat-test-view-modes)
+(require 'pichat-test-view-lifecycle)
+(require 'pichat-test-sessions-integration)
+(require 'pichat-test-integration)
+
+(provide 'pichat-test)
+;;; pichat-test.el ends here

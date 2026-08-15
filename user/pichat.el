@@ -27,19 +27,18 @@
                     pichat-select-model pichat-stop-session
                     pichat-add-reference pichat-smoke-test))
 
-(setq pichat-targets
-      '((lima-devbox
-         :kind ssh
-         :tramp-prefix "/ssh:lima-devbox:"
-         :pi-executable "/etc/profiles/per-user/dev/bin/pi"
-         :remote-path (tramp-own-remote-path)
-         :runtime-home "/home/dev.guest"
-         :path-mappings
-         (("/home/mojo/Dev" . "/home/mojo/Dev")
-          ("/ssh:lima-devbox:/home/dev.guest" . "/home/dev.guest")))))
+;; (setq pichat-targets
+;;       '((lima-devbox
+;;          :kind ssh
+;;          :tramp-prefix "/ssh:lima-devbox:"
+;;          :pi-executable "/etc/profiles/per-user/dev/bin/pi"
+;;          :remote-path (tramp-own-remote-path)
+;;          :runtime-home "/home/dev.guest"
+;;          :path-mappings
+;;          (("/home/mojo/Dev" . "/home/mojo/Dev")
+;;           ("/ssh:lima-devbox:/home/dev.guest" . "/home/dev.guest")))))
 
 ;; (setq pichat-project-target-alist '(("/home/mojo/Dev" . lima-devbox)))
-(setq pichat-project-target-alist nil)
 
 (my/add-all-to-list 'display-buffer-alist
                     '(("\\`\\*PiChat:" (display-buffer-same-window))

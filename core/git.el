@@ -5,7 +5,7 @@
 ;;; Code:
 
 (use-package majutsu
-  :straight (:host github :repo "0WD0/majutsu"))
+  :ensure (:host github :repo "0WD0/majutsu"))
 
 (use-package git-timemachine
   :after evil

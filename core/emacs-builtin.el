@@ -160,7 +160,7 @@
 
 (use-package helpful :defer t)
 
-(use-package casual)
+(use-package casual :defer t)
 
 ;; Local Variables:
 ;; byte-compile-warnings: (not free-vars unresolved)

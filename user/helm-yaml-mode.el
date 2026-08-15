@@ -8,6 +8,7 @@
 (declare-function yaml-mode "yaml-mode.el")
 
 (use-package polymode
+  :commands helm-template-mode
   :config
   (require 'yaml-mode)
   (require 'load-relative)

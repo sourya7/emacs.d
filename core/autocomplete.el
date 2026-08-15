@@ -147,53 +147,6 @@
 (use-package consult-yasnippet
   :after yasnippet)
 
-(use-package consult-gh :after consult
-  :config
-  (defun my/consult-gh-pr-list-default-repo (orig-fun &rest args)
-    "Set default repository from GH_REPO env variable."
-    (if (and (null (car args)) (getenv "GH_REPO"))
-        (apply orig-fun (getenv "GH_REPO") (cdr args))
-      (apply orig-fun args)))
-
-  (defun my/gh-pr-checks ()
-    "Display GitHub PR checks in a formatted buffer."
-    (interactive)
-    (let* ((output (shell-command-to-string
-                    "gh pr checks --json name,state,description,link 2>/dev/null"))
-           (checks (ignore-errors (json-parse-string output :object-type 'alist))))
-      (if (or (not checks) (zerop (length checks)))
-          (message "No PR checks found")
-        (with-current-buffer (get-buffer-create "*gh-pr-checks*")
-          (let ((inhibit-read-only t))
-            (erase-buffer)
-            (seq-doseq (c checks)
-              (let-alist c
-                (let ((url .link))
-                  (insert (pcase .state
-                            ("SUCCESS" "✓") ("FAILURE" "✗") ("PENDING" "○") (_ "●"))
-                          " "
-                          (propertize .name 'face 'bold)
-                          (if (string-empty-p .description) "" (format " — %s" .description))
-                          "\n  "
-                          (propertize url 'face 'link 'mouse-face 'highlight
-                                      'help-echo "mouse-1: open" 'keymap
-                                      (let ((m (make-sparse-keymap)))
-                                        (define-key m [mouse-1]
-                                                    (lambda () (interactive) (browse-url url)))
-                                        (define-key m (kbd "RET")
-                                                    (lambda () (interactive) (browse-url url)))
-                                        m))
-                          "\n"))))
-            (goto-char (point-min))
-            (special-mode))
-          (pop-to-buffer (current-buffer))))))
-
-  (advice-add 'consult-gh-pr-list :around #'my/consult-gh-pr-list-default-repo)
-  (add-to-list 'savehist-additional-variables 'consult-gh--known-orgs-list) ;;keep record of searched orgs
-  (add-to-list 'savehist-additional-variables 'consult-gh--known-repos-list))
-
-(use-package yasnippet-snippets :after yasnippet)
-
 (use-package embark :ensure t
   :functions embark-prefix-help-command
   :custom

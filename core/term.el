@@ -15,12 +15,6 @@
   (dotimes (i 9)
     (define-key vterm-mode-map (kbd (format "M-%d" (1+ i))) nil)))
 
-(use-package eat
-  :commands (eat eat-project eat-project-other-window)
-  :hook (eshell-load . eat-eshell-visual-command-mode)
-  :custom
-  (eat-shell "nu --login"))
-
 (use-package vterm-toggle
     :after vterm
     :defer t

@@ -21,9 +21,11 @@
             :main ,(my/emacs-main-dir "pichat/pichat.el")
             :files ("*.el"
                     ("bridge" "bridge/pichat-bridge.ts"))
-            :inherit nil
-            :wait t)
-  :demand t)
+            :inherit nil)
+  :commands (pichat pichat-global pichat-launch pichat-session-manager
+                    pichat-sessions-browse-files pichat-status
+                    pichat-select-model pichat-stop-session
+                    pichat-add-reference pichat-smoke-test))
 
 (setq pichat-targets
       '((lima-devbox
@@ -126,17 +128,18 @@
   (evil-set-initial-state 'pichat-view-mode 'emacs)
   (evil-set-initial-state 'pichat-session-manager-mode 'emacs))
 
-(general-define-key
- :states 'emacs
- :keymaps '(pichat-view-mode-map
-            pichat-session-manager-mode-map)
- "SPC"
- (general-simulate-key
-  "M-SPC"
-  :state 'emacs
-  :name my/pichat-space-leader
-  :docstring "Open the leader menu in PiChat Emacs-state buffers."
-  :which-key "leader"))
+(with-eval-after-load 'pichat
+  (general-define-key
+   :states 'emacs
+   :keymaps '(pichat-view-mode-map
+              pichat-session-manager-mode-map)
+   "SPC"
+   (general-simulate-key
+    "M-SPC"
+    :state 'emacs
+    :name my/pichat-space-leader
+    :docstring "Open the leader menu in PiChat Emacs-state buffers."
+    :which-key "leader")))
 
 (sharmaso/leader-keys
   "x" '(:which-key "PiChat")
@@ -151,27 +154,28 @@
   "x r" '(pichat-add-reference :which-key "Add reference")
   "x S" '(pichat-smoke-test :which-key "Smoke test"))
 
-(sharmaso/mode-keys
-  :keymaps 'pichat-chat-mode-map
-  "s" '(pichat-chat-send-input :which-key "Send")
-  "a" '(pichat-chat-abort :which-key "Abort")
-  "n" '(pichat-chat-new-session :which-key "New session")
-  "m" '(pichat-chat-cycle-model :which-key "Cycle model")
-  "t" '(pichat-chat-cycle-thinking-level :which-key "Cycle thinking")
-  "r" '(pichat-chat-refresh-status :which-key "Refresh")
-  "R" '(pichat-chat-repaint :which-key "Repaint")
-  "b" '(pichat-sessions-browse-files :which-key "Browse saved sessions")
-  "p" '(pichat-sessions-list :which-key "Session history")
-  "[" '(pichat-sessions-return-to-origin :which-key "Return to source session")
-  "]" '(pichat-sessions-forward-to-fork :which-key "Forward to fork")
-  "z" '(pichat-chat-toggle-tool-at-point :which-key "Cycle tool display")
-  "d" '(pichat-chat-show-tool-details :which-key "Tool details")
-  "J" '(pichat-chat-next-tool :which-key "Next tool")
-  "K" '(pichat-chat-previous-tool :which-key "Previous tool")
-  "x" '(pichat-command-run :which-key "Command picker")
-  "o" '(pichat-chat-compact :which-key "Compact")
-  "f" '(pichat-chat-follow-up :which-key "Follow up")
-  "S" '(pichat-chat-steer :which-key "Steer"))
+(with-eval-after-load 'pichat
+  (sharmaso/mode-keys
+    :keymaps 'pichat-chat-mode-map
+    "s" '(pichat-chat-send-input :which-key "Send")
+    "a" '(pichat-chat-abort :which-key "Abort")
+    "n" '(pichat-chat-new-session :which-key "New session")
+    "m" '(pichat-chat-cycle-model :which-key "Cycle model")
+    "t" '(pichat-chat-cycle-thinking-level :which-key "Cycle thinking")
+    "r" '(pichat-chat-refresh-status :which-key "Refresh")
+    "R" '(pichat-chat-repaint :which-key "Repaint")
+    "b" '(pichat-sessions-browse-files :which-key "Browse saved sessions")
+    "p" '(pichat-sessions-list :which-key "Session history")
+    "[" '(pichat-sessions-return-to-origin :which-key "Return to source session")
+    "]" '(pichat-sessions-forward-to-fork :which-key "Forward to fork")
+    "z" '(pichat-chat-toggle-tool-at-point :which-key "Cycle tool display")
+    "d" '(pichat-chat-show-tool-details :which-key "Tool details")
+    "J" '(pichat-chat-next-tool :which-key "Next tool")
+    "K" '(pichat-chat-previous-tool :which-key "Previous tool")
+    "x" '(pichat-command-run :which-key "Command picker")
+    "o" '(pichat-chat-compact :which-key "Compact")
+    "f" '(pichat-chat-follow-up :which-key "Follow up")
+    "S" '(pichat-chat-steer :which-key "Steer")))
 
 (global-set-key (kbd "C-c p c") #'pichat)
 (global-set-key (kbd "C-c p m") #'pichat-session-manager)

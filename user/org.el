@@ -6,7 +6,7 @@
 
 (use-package org
   :diminish org-indent-mode
-  :ensure `,(unless (string-equal system-type "android") t)
+  :ensure nil
   :hook ((org-mode . org-indent-mode)
          (org-mode . (lambda () (org-bullets-mode 1))))
   :general
@@ -27,8 +27,6 @@
     (interactive)
     (kill-new (org-element-property :value (org-element-at-point))))
 
-  (define-key org-mode-map (kbd "C-c C-r") verb-command-map)
-
   (org-babel-do-load-languages
    'org-babel-load-languages
    (quote ((emacs-lisp . t)
@@ -36,7 +34,6 @@
            (shell . t)
            (python . t)
            (ruby . t)
-           (nushell . t)
            (sqlite . t))))
   :general
   (sharmaso/mode-keys
@@ -71,8 +68,6 @@
     "ti" '(org-toggle-inline-images :wk "Toggle inline images")
     "tl" '(org-toggle-link-display :wk "Toggle link display")))
 
-(use-package verb :after org)
-
 (use-package hl-todo
   :after org
   :hook ((org-mode . hl-todo-mode)
@@ -100,27 +95,7 @@
 
 (use-package consult-denote)
 
-(use-package org-nix-shell
-  :hook (org-mode . org-nix-shell-mode))
-
-(use-package consult-notes
-  :config
-  (when (fboundp 'consult-notes-denote-mode)
-    (consult-notes-denote-mode)))
-
-(use-package denote-explore)
-
-(use-package ob-nushell
-  :ensure (:host github :repo "b3tchi/ob-nushell")
-  :config
-  (add-to-list 'major-mode-remap-alist '(nu-mode . nushell-ts-mode)))
-
 (use-package evil-org :after (evil org) :defer t)
-
-(use-package pandoc-mode
-  :hook ((org-mode . pandoc-mode) (pandoc-mode . pandoc-load-default-settings)))
-
-(use-package literate-calc-mode)
 
 
 (provide 'user/org)

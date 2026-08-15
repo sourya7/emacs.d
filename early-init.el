@@ -6,6 +6,7 @@
 (setq package-enable-at-startup nil)
 (setq gc-cons-threshold (* 200 1024 1024))
 (setq read-process-output-max (* 1024 1024 4))
+(setq elpaca-queue-limit 20)
 
 (when (boundp 'native-comp-eln-load-path)
   (startup-redirect-eln-cache (expand-file-name ".local/eln-cache/" user-emacs-directory)))

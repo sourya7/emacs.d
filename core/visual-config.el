@@ -94,13 +94,6 @@
 (use-package dired-subtree
   :defer nil)
 
-(use-package shackle
-  :functions shackle-mode
-  :custom
-  (shackle-rules '(("*example*" :select t :popup t :align 'below)))
-  :config
-  (shackle-mode t))
-
 (use-package ace-window :defer t
   :custom
   (aw-dispatch-always t))

@@ -99,7 +99,6 @@
   "h" 'consult-history
   "i" 'consult-imenu
   "I" 'consult-imenu-multi
-  "n" 'consult-notes
   "r" 'consult-register
   "R" 'consult-register-store
   "s" 'detached-consult-session
@@ -244,7 +243,6 @@
         "r" 'eww-reload
         "s" 'my/web-search-interactive)
   "t" (define-keymap
-        "p" 'eat-project
         "t" 'vterm-toggle
         "e" 'eshell)
   "v" (define-keymap

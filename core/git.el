@@ -42,7 +42,7 @@
   (magit-display-buffer-function #'magit-display-buffer-fullcolumn-most-v1)
   (magit-bury-buffer-function (lambda (_x) (magit-mode-quit-window t))))
 
-(use-package difftastic)
+(use-package difftastic :defer t)
 
 (use-package diff-hl
   :after magit

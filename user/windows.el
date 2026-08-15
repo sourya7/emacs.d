@@ -14,7 +14,7 @@
           buf-move-left buf-move-right buf-move-up buf-move-down ace-window)
         golden-ratio-exclude-modes '(ediff-mode)))
 
-(use-package neotree)
+(use-package neotree :defer t)
 
 (use-package rotate :defer t)
 

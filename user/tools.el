@@ -344,7 +344,7 @@ request fails, so `my/web-search' can fall back to SearXNG."
          (encoded-query (url-encode-url query))
          (result-list nil))
     (request
-      "https://searx.sharmaso.com/search"
+      "http://localhost:8080/search"
       :params `(("q" . ,encoded-query)
                 ("format" . "json"))
       :parser 'json-read

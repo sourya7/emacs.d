@@ -133,7 +133,6 @@ Optional argument NEW-WINDOW is passed to the browser function."
   (elfeed-feeds (quote
                  (("https://hnrss.org/frontpage" hn dev)
                   ("https://lobste.rs/rss" lobster dev)
-                  ("https://r.sharmaso.com/r/emacs.rss" reddit emacs)
                   ("https://sachachua.com/blog/category/emacs-news/feed/" emacs-news)))))
 
 (use-package elfeed-goodies

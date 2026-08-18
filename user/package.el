@@ -15,6 +15,7 @@
    windows
    ops
    programming
+   golang
    pichat
    org
    ;ruby

@@ -4,38 +4,6 @@
 ;;; Programming Modes
 ;;; Code:
 
-(declare-function gofmt "go-mode")
-(declare-function evil-jump-forward "evil-commands")
-(declare-function evil-local-set-key "evil-core")
-(declare-function evil-normalize-keymaps "evil-core")
-
-(defun my/go-format-buffer ()
-  "Format the current Go buffer with gofmt."
-  (require 'go-mode)
-  (gofmt))
-
-(defun my/go-indent-region (_start _end)
-  "Format Go buffers when `indent-region' is used."
-  (my/go-format-buffer))
-
-(defun my/go-mode-setup ()
-  "Configure Go editing defaults."
-  (setq-local indent-tabs-mode t
-              tab-width 4
-              indent-region-function #'my/go-indent-region)
-  (when (fboundp 'evil-local-set-key)
-    (evil-local-set-key 'normal (kbd "TAB") #'evil-jump-forward)
-    (evil-local-set-key 'normal (kbd "<tab>") #'evil-jump-forward)
-    (when (fboundp 'evil-normalize-keymaps)
-      (evil-normalize-keymaps)))
-  (add-hook 'before-save-hook #'my/go-format-buffer nil t))
-
-(use-package go-mode
-  :ensure t
-  :mode "\\.go\\'"
-  :hook ((go-mode . my/go-mode-setup)
-         (go-ts-mode . my/go-mode-setup)))
-
 (use-package flycheck
   :defer t
   :diminish
@@ -43,7 +11,7 @@
   (flycheck-idle-change-delay 1.5)
   (flycheck-check-syntax-automatically '(save mode-enabled))
   (flycheck-emacs-lisp-load-path 'inherit)
-  (global-flycheck-mode '(not lisp-interaction-mode))
+  (global-flycheck-mode t)
   (flycheck-disabled-checkers '(emacs-lisp-checkdoc)))
 
 (use-package json-mode :mode "\\.json\\'")

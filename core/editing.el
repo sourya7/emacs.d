@@ -78,7 +78,9 @@
   ;; disable treesit for ruby momentarily because of multiple issues (indentation)
   (delete 'ruby treesit-auto-langs)
   (add-to-list 'treesit-extra-load-path (my/emacs-local-dir "tree-sitter"))
-  (treesit-auto-add-to-auto-mode-alist 'all)
+  ;; Only register modes whose grammars are available.  Global remapping will
+  ;; pick up newly installed grammars on subsequent file visits.
+  (treesit-auto-add-to-auto-mode-alist)
   (global-treesit-auto-mode))
 
 (use-package inhibit-mouse

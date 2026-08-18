@@ -2,6 +2,9 @@
 ;;
 ;;; Commentary:
 ;;; Go editing, language-server, build, test, and debugging support.
+;;;
+;;; System dependencies: `go' (including gofmt) and `gopls'.  Install `dlv'
+;;; for Dape debugging and the Go/gomod tree-sitter grammars for `go-ts-mode'.
 ;;; Code:
 
 (declare-function dape "dape")

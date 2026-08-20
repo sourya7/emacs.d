@@ -284,6 +284,47 @@
         (should-not (equal "stale-session" (pichat-session-id session)))
         (should-not state-events)))))
 
+(ert-deftest pichat-rpc-rebind-cancels-stats-clears-usage-and-ignores-late-response ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-rpc-request-timeout 30)
+          cancelled-response
+          context-at-rebind
+          stats-timer)
+      (setf (pichat-session-context-usage session)
+            '(:tokens 45 :contextWindow 100 :percent 45))
+      (pichat-on 'session-rebinding
+                 (lambda (rebound-session _event _plist)
+                   (setq context-at-rebind
+                         (pichat-session-context-usage rebound-session)))
+                 session)
+      (let* ((stats-id
+              (pichat-rpc-get-session-stats
+               session nil
+               (lambda (response _session)
+                 (setq cancelled-response response))))
+             (pending (gethash stats-id
+                               (pichat-session-pending-responses session)))
+             (rebind-id (pichat-rpc-switch-session
+                         session "/sanitized/new.jsonl" nil)))
+        (setq stats-timer (pichat-rpc--pending-timer pending))
+        (should (timerp stats-timer))
+        (pichat-rpc--process-filter
+         proc
+         (format "{\"type\":\"response\",\"id\":%S,\"command\":\"switch_session\",\"success\":true,\"data\":{}}\n"
+                 rebind-id))
+        (should-not (gethash stats-id
+                             (pichat-session-pending-responses session)))
+        (should-not (memq stats-timer timer-list))
+        (should-not context-at-rebind)
+        (should-not (pichat-session-context-usage session))
+        (should (eq 'cancelled
+                    (plist-get cancelled-response :pichat-failure-kind)))
+        (pichat-rpc--process-filter
+         proc
+         (format "{\"type\":\"response\",\"id\":%S,\"command\":\"get_session_stats\",\"success\":true,\"data\":{\"contextUsage\":{\"tokens\":99,\"contextWindow\":100,\"percent\":99}}}\n"
+                 stats-id))
+        (should-not (pichat-session-context-usage session))))))
+
 (ert-deftest pichat-rpc-response-failure-dispatches-error-callback-and-removes-pending ()
   (pichat-test-with-unit-session (session proc)
     (let (error-response)
@@ -311,11 +352,27 @@
 
 (ert-deftest pichat-rpc-get-session-stats-applies-context-usage ()
   (pichat-test-with-unit-session (session proc)
-    (let ((id (pichat-rpc-send session "get_session_stats" nil nil)))
+    (let ((id (pichat-rpc-get-session-stats session nil)))
       (pichat-rpc--process-filter
        proc
        (format "{\"type\":\"response\",\"id\":%S,\"command\":\"get_session_stats\",\"success\":true,\"data\":{\"contextUsage\":{\"tokens\":12,\"contextWindow\":100,\"percent\":12}}}\n" id))
       (should (equal 12 (plist-get (pichat-session-context-usage session) :tokens))))))
+
+(ert-deftest pichat-rpc-get-session-stats-forwards-error-callback ()
+  (pichat-test-with-unit-session (session)
+    (let (captured
+          (error-callback (lambda (&rest _args) nil)))
+      (cl-letf (((symbol-function 'pichat-rpc-send)
+                 (lambda (_session type payload callback &optional error)
+                   (setq captured (list type payload callback error))
+                   "stats-request")))
+        (should (equal "stats-request"
+                       (pichat-rpc-get-session-stats
+                        session #'ignore error-callback))))
+      (should (equal "get_session_stats" (nth 0 captured)))
+      (should-not (nth 1 captured))
+      (should (eq #'ignore (nth 2 captured)))
+      (should (eq error-callback (nth 3 captured))))))
 
 (ert-deftest pichat-rpc-unknown-events-are-normalized-and-emitted ()
   (pichat-test-with-unit-session (session proc)

@@ -24,6 +24,208 @@
               (should (member "get_session_stats" commands))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+(ert-deftest pichat-chat-turn-end-refreshes-stats-while-running ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          calls buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (cl-letf (((symbol-function 'pichat-rpc-get-session-stats)
+                       (lambda (_session callback &optional error-callback)
+                         (push (list callback error-callback) calls)
+                         (format "stats-%d" (length calls)))))
+              (pichat-rpc--process-filter proc "{\"type\":\"agent_start\"}\n")
+              (pichat-rpc--process-filter proc "{\"type\":\"turn_end\"}\n"))
+            (should (eq 'running (pichat-session-state session)))
+            (should (= 1 (length calls))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-chat-stats-refresh-is-single-flight-with-one-follow-up ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          calls buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (cl-letf (((symbol-function 'pichat-rpc-get-session-stats)
+                       (lambda (_session callback &optional error-callback)
+                         (setq calls
+                               (append calls
+                                       (list (list callback error-callback))))
+                         (format "stats-%d" (length calls)))))
+              (pichat-rpc--process-filter proc "{\"type\":\"agent_start\"}\n")
+              (dotimes (_ 3)
+                (pichat-rpc--process-filter proc "{\"type\":\"turn_end\"}\n"))
+              (should (= 1 (length calls)))
+              (funcall (caar calls) '(:success t :data (:contextUsage nil))
+                       session)
+              (should (= 2 (length calls)))
+              (funcall (car (cadr calls))
+                       '(:success t :data (:contextUsage nil)) session)
+              (with-current-buffer buffer
+                (should-not pichat-chat--stats-in-flight)
+                (should-not pichat-chat--stats-pending))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-chat-final-settlement-does-not-duplicate-turn-refresh ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          calls buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (cl-letf (((symbol-function 'pichat-rpc-get-session-stats)
+                       (lambda (_session callback &optional _error-callback)
+                         (push callback calls)
+                         (format "stats-%d" (length calls))))
+                      ((symbol-function 'pichat-rpc-get-entries)
+                       (lambda (&rest _args) "entries")))
+              (pichat-rpc--process-filter proc "{\"type\":\"agent_start\"}\n")
+              (pichat-rpc--process-filter proc "{\"type\":\"turn_end\"}\n")
+              (setf (pichat-session-context-usage session)
+                    '(:tokens 10 :contextWindow 100 :percent 10))
+              (funcall (car calls) '(:success t) session)
+              (pichat-rpc--process-filter proc "{\"type\":\"agent_settled\"}\n")
+              (should (= 1 (length calls)))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-chat-state-follow-up-preserves-turn-coverage ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          calls buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (with-current-buffer buffer
+              (cl-letf (((symbol-function 'pichat-rpc-get-session-stats)
+                         (lambda (_session callback &optional error-callback)
+                           (setq calls
+                                 (append calls
+                                         (list (list callback error-callback))))
+                           (format "stats-%d" (length calls))))
+                        ((symbol-function 'pichat-rpc-get-entries)
+                         (lambda (&rest _args) "entries")))
+                (pichat-rpc--process-filter proc "{\"type\":\"agent_start\"}\n")
+                (pichat-rpc--process-filter proc "{\"type\":\"turn_end\"}\n")
+                (pichat-chat--refresh-stats session 'state)
+                (should (= 1 (length calls)))
+                (funcall (car (nth 0 calls)) '(:success t) session)
+                (should (= 2 (length calls)))
+                (should pichat-chat--stats-run-covered-p)
+                (pichat-rpc--process-filter proc "{\"type\":\"agent_settled\"}\n")
+                (should-not pichat-chat--stats-pending)
+                (funcall (car (nth 1 calls)) '(:success t) session)
+                (should (= 2 (length calls)))
+                (should-not pichat-chat--stats-in-flight))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-chat-stats-updates-mode-line-only-when-usage-changes ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          callbacks
+          (mode-line-updates 0)
+          buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (setf (pichat-session-context-usage session)
+                  '(:tokens 10 :contextWindow 100 :percent 10))
+            (with-current-buffer buffer
+              (cl-letf (((symbol-function 'pichat-rpc-get-session-stats)
+                         (lambda (_session callback &optional _error-callback)
+                           (push callback callbacks)
+                           "stats"))
+                        ((symbol-function 'force-mode-line-update)
+                         (lambda (&rest _args) (cl-incf mode-line-updates))))
+                (pichat-chat--refresh-stats session 'state)
+                (funcall (car callbacks) '(:success t) session)
+                (should (= 0 mode-line-updates))
+                (pichat-chat--refresh-stats session 'state)
+                (setf (pichat-session-context-usage session)
+                      '(:tokens 20 :contextWindow 100 :percent 20))
+                (funcall (car callbacks) '(:success t) session)
+                (should (= 1 mode-line-updates)))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-chat-stats-failure-releases-slot-and-runs-pending-refresh ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          calls buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (with-current-buffer buffer
+              (cl-letf (((symbol-function 'pichat-rpc-get-session-stats)
+                         (lambda (_session callback &optional error-callback)
+                           (setq calls
+                                 (append calls
+                                         (list (list callback error-callback))))
+                           (format "stats-%d" (length calls)))))
+                (pichat-chat--refresh-stats session 'turn)
+                (pichat-chat--refresh-stats session 'turn)
+                (should (= 1 (length calls)))
+                (funcall (cadr (car calls))
+                         '(:success nil :error "stats failed") session)
+                (should (= 2 (length calls)))
+                (funcall (car (cadr calls)) '(:success t) session)
+                (should-not pichat-chat--stats-in-flight))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-chat-buffer-death-cancels-owned-stats-request ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          buffer request-id)
+      (setq buffer (pichat-chat-open session))
+      (with-current-buffer buffer
+        (pichat-chat--refresh-stats session 'state)
+        (setq request-id pichat-chat--stats-request-id))
+      (should (gethash request-id (pichat-session-pending-responses session)))
+      (kill-buffer buffer)
+      (should-not (gethash request-id
+                           (pichat-session-pending-responses session))))))
+
+(ert-deftest pichat-chat-rebind-invalidates-old-stats-and-starts-new-source-refresh ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          buffer old-callback old-token)
+      (unwind-protect
+          (progn
+            (setf (pichat-session-id session) "old-source"
+                  (pichat-session-context-usage session)
+                  '(:tokens 40 :contextWindow 100 :percent 40))
+            (setq buffer (pichat-chat-open session))
+            (with-current-buffer buffer
+              (pichat-chat--refresh-stats session 'state)
+              (setq old-token pichat-chat--stats-in-flight
+                    old-callback
+                    (pichat-rpc--pending-callback
+                     (gethash pichat-chat--stats-request-id
+                              (pichat-session-pending-responses session)))))
+            (let ((rebind-id
+                   (pichat-rpc-switch-session
+                    session "/sanitized/new.jsonl" nil)))
+              (pichat-rpc--process-filter
+               proc
+               (format "{\"type\":\"response\",\"id\":%S,\"command\":\"switch_session\",\"success\":true,\"data\":{}}\n"
+                       rebind-id)))
+            (should-not (pichat-session-context-usage session))
+            (with-current-buffer buffer
+              (should-not pichat-chat--stats-in-flight)
+              (should-not pichat-chat--stats-pending))
+            (let ((state-id (pichat-rpc-get-state session nil)))
+              (pichat-rpc--process-filter
+               proc
+               (format "{\"type\":\"response\",\"id\":%S,\"command\":\"get_state\",\"success\":true,\"data\":{\"sessionId\":\"new-source\",\"isStreaming\":false}}\n"
+                       state-id)))
+            (with-current-buffer buffer
+              (should pichat-chat--stats-in-flight)
+              (should-not (eq old-token pichat-chat--stats-in-flight))
+              (let ((new-token pichat-chat--stats-in-flight))
+                (funcall old-callback '(:success t) session)
+                (should (eq new-token pichat-chat--stats-in-flight)))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
 (ert-deftest pichat-default-model-parser-requires-header-and-parses-rows ()
   (let ((output
          (concat

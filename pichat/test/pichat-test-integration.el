@@ -142,6 +142,218 @@
         (should (equal "pichat-fake" (plist-get model :id)))
         (should (eq (pichat-session-state session) 'idle)))))
 
+  (ert-deftest pichat-integration-context-usage-refreshes-at-each-tool-turn ()
+    (pichat-test-with-integration-session
+        (session :no-session t
+                 :extensions (list pichat-test-bridge-extension)
+                 :script '(:turns
+                           [(:toolCall
+                             (:id "usage-tool-1"
+                              :name "pichat-test-usage-echo"
+                              :arguments (:value "observed"))
+                             :usage (:input 100 :output 10))
+                            (:expectContextIncludes "usage-result: observed"
+                             :text "usage complete"
+                             :delayMs 400
+                             :usage (:input 300 :output 20))]))
+      (let ((pichat-chat-stop-session-on-kill nil)
+            stats-responses
+            buffer handler)
+        (pichat-define-tool pichat-test-usage-echo
+            (:label "Usage Echo"
+             :description "Return a deterministic context-usage marker"
+             :parameters
+             (:type "object"
+              :properties (:value (:type "string"))
+              :required ["value"]))
+          (format "usage-result: %s" (plist-get params :value)))
+        (setq handler
+              (lambda (event-session _event plist)
+                (let ((response (plist-get plist :response)))
+                  (when (and (eq event-session session)
+                             (equal "get_session_stats"
+                                    (plist-get response :command))
+                             (plist-get response :success))
+                    (setq stats-responses
+                          (append
+                           stats-responses
+                           (list
+                            (list
+                             :usage
+                             (plist-get (plist-get response :data)
+                                        :contextUsage)
+                             :state (pichat-session-state session)))))))))
+        (unwind-protect
+            (progn
+              (pichat-on 'response-received handler session)
+              (setq buffer (pichat-chat-open session))
+              (pichat-test-chat-send-and-wait
+               session buffer "measure each tool turn" 8)
+              (pichat-test-wait-until
+               (lambda ()
+                 (and (= 2 (length stats-responses))
+                      (with-current-buffer buffer
+                        (not pichat-chat--stats-in-flight))))
+               4 "two bounded context-usage refreshes")
+              (let* ((first (car stats-responses))
+                     (second (cadr stats-responses))
+                     (first-tokens
+                      (plist-get (plist-get first :usage) :tokens))
+                     (second-tokens
+                      (plist-get (plist-get second :usage) :tokens)))
+                (should (eq 'running (plist-get first :state)))
+                (should (numberp first-tokens))
+                (should (numberp second-tokens))
+                (should (> second-tokens first-tokens))
+                (should (equal (plist-get second :usage)
+                               (pichat-session-context-usage session)))))
+          (when handler (pichat-off 'response-received handler session))
+          (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+  (ert-deftest pichat-integration-compaction-clears-then-restores-context-usage ()
+    (pichat-test-with-integration-session
+        (session
+         :settings '(:compaction
+                     (:enabled t :reserveTokens 1000 :keepRecentTokens 100))
+         :script '(:turns
+                   [(:text "history one" :usage (:input 500 :output 20))
+                    (:text "history two" :usage (:input 700 :output 20))
+                    (:text "compacted summary" :usage (:input 200 :output 30))
+                    (:text "after compaction" :usage (:input 150 :output 15))]))
+      (let ((pichat-chat-stop-session-on-kill nil)
+            buffer)
+        (unwind-protect
+            (progn
+              (setq buffer (pichat-chat-open session))
+              (pichat-test-chat-send-and-wait
+               session buffer (concat "first history " (make-string 2000 ?a)) 8)
+              (pichat-test-wait-until
+               (lambda ()
+                 (with-current-buffer buffer
+                   (not pichat-chat--stats-in-flight)))
+               3 "first turn stats")
+              (pichat-test-chat-send-and-wait
+               session buffer (concat "second history " (make-string 2000 ?b)) 8)
+              (pichat-test-wait-until
+               (lambda ()
+                 (with-current-buffer buffer
+                   (not pichat-chat--stats-in-flight)))
+               3 "second turn stats")
+              (should
+               (numberp
+                (plist-get (pichat-session-context-usage session) :tokens)))
+              (pichat-test-rpc-call session "compact" nil 8)
+              (pichat-test-wait-until
+               (lambda ()
+                 (let ((usage (pichat-session-context-usage session)))
+                   (and usage
+                        (null (plist-get usage :tokens))
+                        (null (plist-get usage :percent))
+                        (with-current-buffer buffer
+                          (not pichat-chat--stats-in-flight)))))
+               4 "unknown context usage after compaction")
+              (with-current-buffer buffer
+                (should (string-match-p
+                         "?/128k" (pichat-chat--mode-line-status))))
+              (pichat-test-chat-send-and-wait
+               session buffer "measure after compaction" 8)
+              (pichat-test-wait-until
+               (lambda ()
+                 (numberp
+                  (plist-get (pichat-session-context-usage session) :tokens)))
+               4 "numeric post-compaction context usage"))
+          (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+  (ert-deftest pichat-integration-failed-compaction-keeps-context-usage ()
+    (pichat-test-with-integration-session
+        (session
+         :settings '(:compaction
+                     (:enabled t :reserveTokens 1000 :keepRecentTokens 100))
+         :script '(:turns
+                   [(:text "failure history one"
+                     :usage (:input 500 :output 20))
+                    (:text "failure history two"
+                     :usage (:input 700 :output 20))
+                    (:error "compaction summary failed")]))
+      (let ((pichat-chat-stop-session-on-kill nil)
+            (stats-count 0)
+            response-handler buffer)
+        (setq response-handler
+              (lambda (_session _event plist)
+                (when (equal "get_session_stats"
+                             (plist-get (plist-get plist :response) :command))
+                  (cl-incf stats-count))))
+        (unwind-protect
+            (progn
+              (pichat-on 'response-received response-handler session)
+              (setq buffer (pichat-chat-open session))
+              (pichat-test-chat-send-and-wait
+               session buffer (concat "failure history "
+                                      (make-string 2000 ?x)) 8)
+              (pichat-test-chat-send-and-wait
+               session buffer (concat "more failure history "
+                                      (make-string 2000 ?y)) 8)
+              (pichat-test-wait-until
+               (lambda ()
+                 (with-current-buffer buffer
+                   (not pichat-chat--stats-in-flight)))
+               3 "pre-failure context usage")
+              (let ((usage-before
+                     (copy-tree (pichat-session-context-usage session)))
+                    (stats-before stats-count)
+                    failed-result)
+                (pichat-rpc-send
+                 session "compact" nil
+                 (lambda (response _session)
+                   (setq failed-result (list :success response)))
+                 (lambda (response _session)
+                   (setq failed-result (list :failure response))))
+                (pichat-test-wait-until
+                 (lambda () failed-result) 8 "failed compaction response")
+                (should (plist-get failed-result :failure))
+                (let ((event
+                       (pichat-test-wait-for-raw-event
+                        session "compaction_end" 4)))
+                  (should (string-match-p
+                           "compaction summary failed"
+                           (or (plist-get event :errorMessage) ""))))
+                (should (equal usage-before
+                               (pichat-session-context-usage session)))
+                (should (= stats-before stats-count))))
+          (when response-handler
+            (pichat-off 'response-received response-handler session))
+          (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+  (ert-deftest pichat-integration-stats-recovers-after-provider-failure ()
+    (pichat-test-with-integration-session
+        (session :no-session t
+                 :script '(:turns
+                           [(:error "intentional usage failure"
+                             :usage (:input 20 :output 1))
+                            (:text "recovered usage"
+                             :usage (:input 80 :output 10))]))
+      (let ((pichat-chat-stop-session-on-kill nil)
+            buffer)
+        (unwind-protect
+            (progn
+              (setq buffer (pichat-chat-open session))
+              (pichat-test-chat-send-and-wait session buffer "fail once" 8)
+              (pichat-test-wait-until
+               (lambda ()
+                 (with-current-buffer buffer
+                   (not pichat-chat--stats-in-flight)))
+               3 "failed-run stats coordinator release")
+              (pichat-test-chat-send-and-wait session buffer "recover" 8)
+              (pichat-test-wait-until
+               (lambda ()
+                 (and (numberp
+                       (plist-get (pichat-session-context-usage session)
+                                  :tokens))
+                      (with-current-buffer buffer
+                        (not pichat-chat--stats-in-flight))))
+               3 "post-failure context usage refresh"))
+          (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
   (ert-deftest pichat-integration-archive-capability-provenance-and-relations ()
     (pichat-test-with-integration-session
         (session :no-session t

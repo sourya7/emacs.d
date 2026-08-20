@@ -45,23 +45,99 @@
       (should (equal "bounded summary"
                      (pichat-transcript-node-summary node))))))
 
-(ert-deftest pichat-chat-aborted-compaction-does-not-request-sync ()
+(ert-deftest pichat-chat-aborted-compaction-does-not-request-sync-or-stats ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
-          (calls 0) buffer)
+          (sync-calls 0) (stats-calls 0) buffer)
       (setf (pichat-session-state session) 'compacting)
       (unwind-protect
           (progn
             (setq buffer (pichat-chat-open session))
             (cl-letf (((symbol-function 'pichat-rpc-get-entries)
-                       (lambda (&rest _args) (cl-incf calls))))
+                       (lambda (&rest _args) (cl-incf sync-calls)))
+                      ((symbol-function 'pichat-rpc-get-session-stats)
+                       (lambda (&rest _args) (cl-incf stats-calls))))
               (pichat-rpc--process-filter
                proc
                "{\"type\":\"compaction_end\",\"reason\":\"manual\",\"aborted\":true}\n"))
-            (should (= 0 calls))
+            (should (= 0 sync-calls))
+            (should (= 0 stats-calls))
             (should (eq 'idle (pichat-session-state session)))
             (should (string-match-p "compaction aborted"
                                     (pichat-test-buffer-text buffer))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-chat-failed-compaction-uses-error-message-without-refresh ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          (sync-calls 0) (stats-calls 0) buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (cl-letf (((symbol-function 'pichat-rpc-get-entries)
+                       (lambda (&rest _args) (cl-incf sync-calls)))
+                      ((symbol-function 'pichat-rpc-get-session-stats)
+                       (lambda (&rest _args) (cl-incf stats-calls))))
+              (pichat-rpc--process-filter
+               proc
+               "{\"type\":\"compaction_end\",\"reason\":\"manual\",\"aborted\":false,\"errorMessage\":\"summary failed\"}\n"))
+            (should (= 0 sync-calls))
+            (should (= 0 stats-calls))
+            (should (string-match-p "compaction failed: summary failed"
+                                    (pichat-test-buffer-text buffer))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-chat-successful-compaction-displays-unknown-context-usage ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          stats-callback buffer)
+      (setf (pichat-session-context-usage session)
+            '(:tokens 90 :contextWindow 100 :percent 90))
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (cl-letf (((symbol-function 'pichat-rpc-get-session-stats)
+                       (lambda (_session callback &optional _error-callback)
+                         (setq stats-callback callback)
+                         "stats"))
+                      ((symbol-function 'pichat-rpc-get-entries)
+                       (lambda (&rest _args) "entries")))
+              (pichat-rpc--process-filter
+               proc
+               "{\"type\":\"compaction_end\",\"reason\":\"manual\",\"aborted\":false}\n")
+              (should stats-callback)
+              (pichat-session-apply-rpc-stats
+               session '(:contextUsage
+                         (:tokens nil :contextWindow 100 :percent nil)))
+              (funcall stats-callback '(:success t) session))
+            (with-current-buffer buffer
+              (should (string-match-p
+                       "?/100" (pichat-chat--mode-line-status)))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-chat-successful-compaction-covers-settlement-stats ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          stats-callback
+          (stats-calls 0)
+          buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (cl-letf (((symbol-function 'pichat-rpc-get-session-stats)
+                       (lambda (_session callback &optional _error-callback)
+                         (cl-incf stats-calls)
+                         (setq stats-callback callback)
+                         "stats"))
+                      ((symbol-function 'pichat-rpc-get-entries)
+                       (lambda (&rest _args) "entries")))
+              (pichat-rpc--process-filter proc "{\"type\":\"agent_start\"}\n")
+              (pichat-rpc--process-filter
+               proc
+               "{\"type\":\"compaction_end\",\"reason\":\"manual\",\"aborted\":false}\n")
+              (funcall stats-callback '(:success t) session)
+              (pichat-rpc--process-filter proc "{\"type\":\"agent_settled\"}\n")
+              (should (= 1 stats-calls))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
 (ert-deftest pichat-chat-idle-custom-sync-coalesces-one-settlement-follow-up ()

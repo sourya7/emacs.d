@@ -330,12 +330,13 @@ have been seen."
     (should (plist-get status :consumedAll))
     (should (= 0 (or (plist-get status :unexpectedCalls) 0)))))
 
-(cl-defmacro pichat-test-with-integration-session ((session-var &key script no-session extensions) &rest body)
+(cl-defmacro pichat-test-with-integration-session
+    ((session-var &key script no-session extensions settings) &rest body)
   "Start real Pi RPC bound to SESSION-VAR and run BODY.
 SCRIPT is a Lisp object encoded as the fake provider script JSON.
 When NO-SESSION is nil, persistent sessions are enabled in an isolated dir.
 EXTENSIONS is a list of additional extension file paths loaded after the fake
-provider."
+provider.  SETTINGS, when non-nil, is written to the isolated Pi agent dir."
   (declare (indent 1))
   `(progn
      (pichat-test-require-pi)
@@ -376,6 +377,11 @@ provider."
                  (insert (json-serialize ,script
                                          :false-object :json-false
                                          :null-object nil)))
+               (when ,settings
+                 (with-temp-file (expand-file-name "settings.json" agent-dir)
+                   (insert (json-serialize ,settings
+                                           :false-object :json-false
+                                           :null-object nil))))
                (unwind-protect
                    (let ((default-directory project-dir))
                      (message "PiChat integration using %s" (pichat-test-pi-version))

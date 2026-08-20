@@ -113,7 +113,9 @@
 (ert-deftest pichat-chat-controls-preserve-buffer-name-and-optional-segments ()
   (pichat-test-with-unit-session (session proc)
     (setf (pichat-session-id session) "019ffc5b-extra"
-          (pichat-session-scope-key session)
+          (pichat-session-owner-directory session)
+          "/home/mojo/.config/emacs.mine"
+          (pichat-session-owner-scope-key session)
           "project:/home/mojo/.config/emacs.mine"
           (pichat-session-name session) "Named session"
           (pichat-session-model session)

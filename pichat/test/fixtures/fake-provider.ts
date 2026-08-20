@@ -16,6 +16,12 @@ type FakeTurn = {
   toolCall?: { id?: string; name: string; arguments?: Record<string, unknown> };
   error?: string;
   delayMs?: number;
+  usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+  };
   expectContextIncludes?: string | string[];
   expectTool?: { name: string; parameters?: Record<string, unknown> };
   expectToolAbsent?: string;
@@ -64,13 +70,17 @@ function writeStatus(extra: Record<string, unknown> = {}) {
   );
 }
 
-function usage(): Usage {
+function usage(overrides: FakeTurn["usage"] = {}): Usage {
+  const input = overrides.input ?? 1;
+  const output = overrides.output ?? 1;
+  const cacheRead = overrides.cacheRead ?? 0;
+  const cacheWrite = overrides.cacheWrite ?? 0;
   return {
-    input: 1,
-    output: 1,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 2,
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens: input + output + cacheRead + cacheWrite,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
 }
@@ -170,6 +180,7 @@ function streamFake(model: Model<any>, context: Context, options?: SimpleStreamO
         throw new Error(`fake provider received unexpected model call ${turnIndex + 1}`);
       }
       turnIndex++;
+      output.usage = usage(turn.usage);
       writeStatus({ lastContext: contextString(context) });
 
       requireExpectedContext(turn, context);

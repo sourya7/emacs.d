@@ -515,9 +515,12 @@ FAILURE-KIND is the machine-readable local failure cause."
                  (not (plist-get (plist-get response :data) :cancelled))
                  (member command '("new_session" "switch_session"
                                    "fork" "clone")))
-        ;; Stale state replies from before the rebind must neither mutate the
-        ;; session nor satisfy consumers waiting for the new identity.
+        ;; Stale state and stats replies from before the rebind must neither
+        ;; mutate the session nor satisfy consumers waiting for the new
+        ;; identity.
         (pichat-rpc--cancel-pending-command session "get_state" id)
+        (pichat-rpc--cancel-pending-command session "get_session_stats" id)
+        (setf (pichat-session-context-usage session) nil)
         ;; Invalidate consumers before command callbacks can request state for
         ;; the newly rebound session.
         (pichat-emit session 'session-rebinding :command command
@@ -720,9 +723,10 @@ Dispatch success to CALLBACK and failure to optional ERROR-CALLBACK."
 Dispatch success to CALLBACK and failure to optional ERROR-CALLBACK."
   (pichat-rpc-send session "clone" nil callback error-callback))
 
-(defun pichat-rpc-get-session-stats (session cb)
-  "Get session stats for SESSION."
-  (pichat-rpc-send session "get_session_stats" nil cb))
+(defun pichat-rpc-get-session-stats (session callback &optional error-callback)
+  "Get session stats for SESSION.
+Dispatch success to CALLBACK and failure to optional ERROR-CALLBACK."
+  (pichat-rpc-send session "get_session_stats" nil callback error-callback))
 
 (defun pichat-rpc-compact (session &optional instructions cb)
   "Compact SESSION with optional INSTRUCTIONS.

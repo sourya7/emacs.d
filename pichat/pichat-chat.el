@@ -282,6 +282,21 @@ from final newlines or redisplay edge cases."
 (defvar-local pichat-chat--sync-pending nil
   "Pending synchronization kind, either `incremental' or `full'.")
 
+(defvar-local pichat-chat--stats-sequence 0
+  "Monotonic generation for context-usage stats requests.")
+
+(defvar-local pichat-chat--stats-in-flight nil
+  "Generation token of the active context-usage stats request.")
+
+(defvar-local pichat-chat--stats-request-id nil
+  "RPC request id owned by the active context-usage refresh.")
+
+(defvar-local pichat-chat--stats-pending nil
+  "Newest context-usage refresh boundary waiting behind an active request.")
+
+(defvar-local pichat-chat--stats-run-covered-p nil
+  "Non-nil when stats cover the latest turn of the active agent run.")
+
 (defvar-local pichat-chat--tool-blocks nil
   "Combined canonical and live tool blocks used by interactive commands.")
 
@@ -445,6 +460,7 @@ it forks into new sessions and does not perform same-file tree navigation.
   (add-hook 'kill-buffer-hook
             #'pichat-chat--cancel-extension-status-projection nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--cancel-sync-request nil t)
+  (add-hook 'kill-buffer-hook #'pichat-chat--cancel-stats-request nil t)
   (add-hook 'kill-buffer-hook #'pichat-markdown-presentation-reset-source nil t)
   (add-hook 'window-size-change-functions
             #'pichat-markdown-presentation-handle-window-change nil t)
@@ -490,6 +506,11 @@ it forks into new sessions and does not perform same-file tree navigation.
   (setq-local pichat-chat--sync-in-flight-full-p nil)
   (setq-local pichat-chat--sync-request-id nil)
   (setq-local pichat-chat--sync-pending nil)
+  (setq-local pichat-chat--stats-sequence 0)
+  (setq-local pichat-chat--stats-in-flight nil)
+  (setq-local pichat-chat--stats-request-id nil)
+  (setq-local pichat-chat--stats-pending nil)
+  (setq-local pichat-chat--stats-run-covered-p nil)
   (setq-local pichat-chat--tool-blocks (make-hash-table :test #'equal))
   (setq-local pichat-chat--canonical-tool-blocks
               (make-hash-table :test #'equal))
@@ -669,6 +690,7 @@ When DEFER-SYNC is non-nil, wait for a subsequent authoritative state reply."
   (pichat-chat--cancel-live-projection)
   (pichat-chat--cancel-extension-status-projection)
   (pichat-chat--cancel-sync-request)
+  (pichat-chat--cancel-stats-request)
   (pichat-chat-input-abandon-in-flight)
   (pichat-markdown-presentation-reset-source)
   (pichat-chat--release-live-projection-fragments)
@@ -684,6 +706,7 @@ When DEFER-SYNC is non-nil, wait for a subsequent authoritative state reply."
         pichat-chat--sync-in-flight nil
         pichat-chat--sync-in-flight-full-p nil
         pichat-chat--sync-pending nil
+        pichat-chat--stats-run-covered-p nil
         pichat-chat--extension-notifications nil
         pichat-chat--thinking-control-error nil)
   (pichat-chat-completion-reset
@@ -720,7 +743,8 @@ When DEFER-SYNC is non-nil, wait for a subsequent authoritative state reply."
   (pichat-chat--reset-for-source nil nil t)
   (setq pichat-chat--source-bound-p nil
         pichat-chat--source-rebinding-p t)
-  (pichat-chat--set-status 'source "[session source changing]"))
+  (pichat-chat--set-status 'source "[session source changing]")
+  (force-mode-line-update))
 
 (defun pichat-chat-canonical-entry-cache (session)
   "Return SESSION's current settled entry cache, or nil.
@@ -924,14 +948,116 @@ length change even though the internal edit itself must not become undoable."
                 'face face
                 'help-echo (format "Pi status: %s" label))))
 
-(defun pichat-chat--refresh-stats (&optional session)
-  "Refresh cached session stats for SESSION and update the mode line."
+(defun pichat-chat--stats-callback-current-p
+    (buffer session source-generation token)
+  "Return non-nil when stats TOKEN still owns BUFFER for SESSION.
+SOURCE-GENERATION identifies the source for which the request was sent."
+  (and (buffer-live-p buffer)
+       (eq session (buffer-local-value 'pichat-chat-session buffer))
+       (= source-generation
+          (buffer-local-value 'pichat-chat--source-generation buffer))
+       (eq token
+           (buffer-local-value 'pichat-chat--stats-in-flight buffer))))
+
+(defun pichat-chat--cancel-stats-request ()
+  "Cancel and invalidate context-usage stats work owned by this chat."
+  (when (and pichat-chat--stats-request-id pichat-chat-session)
+    (pichat-rpc-cancel-request
+     pichat-chat-session pichat-chat--stats-request-id))
+  (cl-incf pichat-chat--stats-sequence)
+  (setq pichat-chat--stats-in-flight nil
+        pichat-chat--stats-request-id nil
+        pichat-chat--stats-pending nil
+        pichat-chat--stats-run-covered-p nil))
+
+(defun pichat-chat--stats-finish
+    (buffer session source-generation token reason previous success response)
+  "Finish BUFFER's stats TOKEN for SESSION.
+REASON is its lifecycle boundary, PREVIOUS is the old cached usage, SUCCESS is
+non-nil for a successful RPC response, and RESPONSE is the response plist."
+  (when (pichat-chat--stats-callback-current-p
+         buffer session source-generation token)
+    (with-current-buffer buffer
+      (let* ((cancelled
+              (eq 'cancelled (plist-get response :pichat-failure-kind)))
+             (pending pichat-chat--stats-pending)
+             (newer-boundary-p (memq pending '(turn compaction))))
+        (setq pichat-chat--stats-in-flight nil
+              pichat-chat--stats-request-id nil
+              pichat-chat--stats-pending nil)
+        (when success
+          (when (and (memq reason '(turn compaction settled))
+                     (not newer-boundary-p))
+            (setq pichat-chat--stats-run-covered-p t))
+          (unless (equal previous (pichat-session-context-usage session))
+            (force-mode-line-update)))
+        (when cancelled
+          (setq pending nil))
+        ;; A settled fallback queued behind a successful final-turn refresh is
+        ;; redundant.  Retain it after failure so settlement still gets one
+        ;; chance to refresh.
+        (when (and (eq pending 'settled)
+                   success pichat-chat--stats-run-covered-p)
+          (setq pending nil))
+        (when (and pending
+                   (eq session pichat-chat-session)
+                   (pichat-session-alive-p session))
+          (pichat-chat--start-stats-request session pending))))))
+
+(defun pichat-chat--start-stats-request (session reason)
+  "Start one context-usage request for SESSION at lifecycle REASON."
+  (let* ((buffer (current-buffer))
+         (source-generation pichat-chat--source-generation)
+         (token (cl-incf pichat-chat--stats-sequence))
+         (previous (copy-tree (pichat-session-context-usage session)))
+         request-id)
+    ;; Establish ownership before sending: unit transports may call back
+    ;; synchronously from `pichat-rpc-get-session-stats'.
+    (setq pichat-chat--stats-in-flight token
+          pichat-chat--stats-request-id nil)
+    (condition-case _condition
+        (setq request-id
+              (pichat-rpc-get-session-stats
+               session
+               (lambda (response callback-session)
+                 (pichat-chat--stats-finish
+                  buffer callback-session source-generation token reason
+                  previous t response))
+               (lambda (response callback-session)
+                 (pichat-chat--stats-finish
+                  buffer callback-session source-generation token reason
+                  previous nil response))))
+      (error
+       (pichat-chat--stats-finish
+        buffer session source-generation token reason previous nil nil)))
+    (when (eq token pichat-chat--stats-in-flight)
+      (setq pichat-chat--stats-request-id request-id))))
+
+(defun pichat-chat--refresh-stats (&optional session reason)
+  "Schedule cached stats refresh for SESSION at lifecycle REASON.
+REASON is one of `state', `turn', `compaction', or `settled'."
   (when-let ((s (or session pichat-chat-session)))
-    (when (pichat-session-alive-p s)
-      (pichat-rpc-get-session-stats
-       s
-       (lambda (_response _session)
-         (force-mode-line-update))))))
+    (when (and (eq s pichat-chat-session)
+               (pichat-session-alive-p s))
+      (setq reason (or reason 'state))
+      (when (memq reason '(turn compaction))
+        (setq pichat-chat--stats-run-covered-p nil))
+      (cond
+       ((and (eq reason 'settled) pichat-chat--stats-run-covered-p)
+        nil)
+       (pichat-chat--stats-in-flight
+        (pcase reason
+          ('settled
+           (unless (or pichat-chat--stats-run-covered-p
+                       (memq pichat-chat--stats-pending '(turn compaction)))
+             (setq pichat-chat--stats-pending 'settled)))
+          ('state
+           (unless pichat-chat--stats-pending
+             (setq pichat-chat--stats-pending 'state)))
+          (_
+           (setq pichat-chat--stats-pending reason))))
+       (t
+        (pichat-chat--start-stats-request s reason))))))
 
 (defun pichat-chat--model-thinking-levels (model)
   "Return thinking levels advertised by full Pi MODEL metadata.
@@ -2974,7 +3100,8 @@ BASE-CACHE is the cache captured by the incremental request."
         (setq pichat-chat--handlers
               `((rpc-event . ,(funcall handler #'pichat-chat--on-rpc-event))
                 (session-rebinding . ,(funcall handler #'pichat-chat--on-session-rebinding))
-                (agent-start . ,(funcall handler #'pichat-chat--on-simple-event))
+                (agent-start . ,(funcall handler #'pichat-chat--on-agent-start))
+                (turn-end . ,(funcall handler #'pichat-chat--on-turn-end))
                 (agent-settled . ,(funcall handler #'pichat-chat--on-agent-settled))
                 (compaction-start . ,(funcall handler #'pichat-chat--on-simple-event))
                 (compaction-end . ,(funcall handler #'pichat-chat--on-simple-event))
@@ -3316,8 +3443,6 @@ Return non-nil only when the projected status value changes."
       (setq pichat-chat--queue-counts
             (cons (length (plist-get raw :steering))
                   (length (plist-get raw :followUp)))))
-    (when (eq event 'compaction-end)
-      (pichat-chat--refresh-stats session))
     (force-mode-line-update)
     (pcase event
       ('compaction-start
@@ -3327,14 +3452,15 @@ Return non-nil only when the projected status value changes."
        (cond
         ((eq t (plist-get raw :aborted))
          (pichat-chat--set-status 'compaction "[compaction aborted]"))
-        ((plist-get raw :error)
+        ((plist-get raw :errorMessage)
          (pichat-chat--set-status
           'compaction
           (format "[compaction failed: %s]"
                   (pichat-chat--bounded-notice
-                   (plist-get raw :error)))))
+                   (plist-get raw :errorMessage)))))
         (t
          (pichat-chat--set-status 'compaction nil)
+         (pichat-chat--refresh-stats session 'compaction)
          (pichat-chat--request-sync nil))))
       ('retry-start
        (pichat-chat--set-status 'retry (pichat-render-event-line raw)))
@@ -3353,12 +3479,21 @@ Return non-nil only when the projected status value changes."
          (pichat-chat--set-status 'agent
                                   (pichat-render-event-line raw)))))))
 
+(defun pichat-chat--on-agent-start (session event plist)
+  "Start a new stats-coverage window and render agent EVENT from PLIST."
+  (setq pichat-chat--stats-run-covered-p nil)
+  (pichat-chat--on-simple-event session event plist))
+
+(defun pichat-chat--on-turn-end (session _event _plist)
+  "Refresh context usage after a completed turn for SESSION."
+  (pichat-chat--refresh-stats session 'turn))
+
 (defun pichat-chat--on-agent-settled (session event plist)
   "Finalize the live preview, prompt, stats, and canonical entries."
   (pichat-chat--on-simple-event session event plist)
   (pichat-chat--preserve-view
     (pichat-chat--insert-prompt))
-  (pichat-chat--refresh-stats session)
+  (pichat-chat--refresh-stats session 'settled)
   (pichat-chat--request-sync nil))
 
 (defun pichat-chat--on-state-changed (session _event _plist)
@@ -3376,7 +3511,7 @@ Return non-nil only when the projected status value changes."
       (pichat-chat--refresh-slash-commands session)))
   (pichat-chat--rename-buffer-maybe session)
   (pichat-chat--refresh-header session)
-  (pichat-chat--refresh-stats session)
+  (pichat-chat--refresh-stats session 'state)
   (force-mode-line-update))
 
 (defun pichat-chat--on-error (_session _event plist)
@@ -3431,7 +3566,8 @@ Return non-nil only when the projected status value changes."
     (pichat-chat--update-pending-ui-count)))
 
 (defun pichat-chat--on-session-ended (_session _event _plist)
-  "Cancel pending UI and display a bounded session-ended status."
+  "Cancel pending UI/stats work and display a session-ended status."
+  (pichat-chat--cancel-stats-request)
   (pichat-chat--cancel-pending-ui-requests)
   (pichat-chat--set-status 'session "[session ended]"))
 

@@ -102,6 +102,22 @@ never consume this ephemeral state.
 PiChat requires Transient for its advanced launcher. The package requires it
 explicitly and does not rely on configuration load order.
 
+Set `pichat-pi-extra-env` to an alist of environment variables that every
+Pi process started by PiChat should receive. Configured values override the
+environment inherited from Emacs without changing Emacs's global environment:
+
+```elisp
+(setq pichat-pi-extra-env
+      '(("PI_OFFLINE" . "1")
+        ("PI_TELEMETRY" . "0")))
+```
+
+This applies to RPC runtimes, model listing, the diagnostic `pi --version`
+probe, and interactive Pi setup. It also controls local settings discovery when
+`PI_CODING_AGENT_DIR` is set. Existing processes must be restarted. Wrapper
+commands receive these values in the wrapper's environment; Docker and similar
+wrappers must explicitly forward them into the contained runtime.
+
 The public launch commands are deliberately small:
 
 - `M-x pichat` opens the preferred runtime for the current project, or the

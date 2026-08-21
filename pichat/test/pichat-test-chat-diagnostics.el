@@ -197,15 +197,54 @@
     (should (equal '("docker" "run" "-it" "image" "pi")
                    (pichat-chat-diagnostics-interactive-argv)))))
 
-(ert-deftest pichat-diagnostics-settings-path-honors-pi-agent-directory ()
-  (pichat-test-with-temp-dir dir
+(ert-deftest pichat-diagnostics-interactive-pi-applies-extra-environment ()
+  (pichat-test-with-clean-state
     (let ((process-environment
-           (cons (concat "PI_CODING_AGENT_DIR=" dir) process-environment))
-          visited)
-      (cl-letf (((symbol-function 'find-file)
-                 (lambda (path &rest _args) (setq visited path))))
-        (pichat-diagnostics-open-settings))
-      (should (equal (expand-file-name "settings.json" dir) visited)))))
+           (cons "PICHAT_INTERACTIVE_ENV=inherited" process-environment))
+          (pichat-pi-extra-env
+           '(("PICHAT_INTERACTIVE_ENV" . "interactive")))
+          (pichat-rpc-command nil)
+          (pichat-pi-executable "/opt/pi")
+          captured)
+      (unwind-protect
+          (cl-letf (((symbol-function 'make-term)
+                     (lambda (&rest _args)
+                       (setq captured (getenv "PICHAT_INTERACTIVE_ENV"))
+                       (error "Stop after environment capture"))))
+            (should-error (pichat-diagnostics-open-interactive-pi))
+            (should (equal "interactive" captured)))
+        (when-let ((buffer (get-buffer "*PiChat Pi Setup*")))
+          (kill-buffer buffer))))))
+
+(ert-deftest pichat-diagnostics-probe-applies-extra-pi-environment ()
+  (let ((process-environment
+         (cons "PICHAT_PROBE_ENV=inherited" process-environment))
+        (pichat-pi-extra-env '(("PICHAT_PROBE_ENV" . "probe")))
+        captured output)
+    (unwind-protect
+        (cl-letf (((symbol-function 'pichat-transport-make-process)
+                   (lambda (_transport _runtime-cwd &rest args)
+                     (setq captured (getenv "PICHAT_PROBE_ENV")
+                           output (plist-get args :buffer))
+                     'fake-process)))
+          (pichat-diagnostics-probe-pi)
+          (should (equal "probe" captured)))
+      (when (buffer-live-p output) (kill-buffer output)))))
+
+(ert-deftest pichat-diagnostics-settings-path-honors-extra-pi-environment ()
+  (pichat-test-with-temp-dir inherited-dir
+    (pichat-test-with-temp-dir configured-dir
+      (let ((process-environment
+             (cons (concat "PI_CODING_AGENT_DIR=" inherited-dir)
+                   process-environment))
+            (pichat-pi-extra-env
+             `(("PI_CODING_AGENT_DIR" . ,configured-dir)))
+            visited)
+        (cl-letf (((symbol-function 'find-file)
+                   (lambda (path &rest _args) (setq visited path))))
+          (pichat-diagnostics-open-settings))
+        (should (equal (expand-file-name "settings.json" configured-dir)
+                       visited))))))
 
 (provide 'pichat-test-chat-diagnostics)
 ;;; pichat-test-chat-diagnostics.el ends here

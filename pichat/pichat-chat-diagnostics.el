@@ -15,6 +15,7 @@
 (require 'term)
 (require 'pichat-session)
 (require 'pichat-transport)
+(require 'pichat-pi-environment)
 (require 'pichat-path)
 (require 'pichat-view)
 
@@ -282,7 +283,8 @@ codes, or missing files in unrelated output."
 (defun pichat-chat-diagnostics--agent-directory ()
   "Return Pi's configured agent directory."
   (file-name-as-directory
-   (expand-file-name (or (getenv "PI_CODING_AGENT_DIR") "~/.pi/agent"))))
+   (expand-file-name
+    (or (pichat-pi-getenv "PI_CODING_AGENT_DIR") "~/.pi/agent"))))
 
 ;;;###autoload
 (defun pichat-diagnostics-open-settings (&optional session)
@@ -341,7 +343,8 @@ never rewritten; configure `pichat-diagnostics-interactive-command' for them."
       (unless (process-live-p (get-buffer-process buffer))
         (with-current-buffer buffer
           (let ((inhibit-read-only t)) (erase-buffer)))
-        (apply #'make-term name (car argv) nil (cdr argv))
+        (let ((process-environment (pichat-pi-process-environment)))
+          (apply #'make-term name (car argv) nil (cdr argv)))
         (with-current-buffer buffer
           (term-mode)
           (term-char-mode)))
@@ -360,22 +363,24 @@ never rewritten; configure `pichat-diagnostics-interactive-command' for them."
          (command (list (or (pichat-transport-pi-executable transport)
                             pichat-pi-executable)
                         "--version")))
-    (pichat-transport-make-process
-     transport runtime-cwd
-     :name "pichat-pi-probe" :buffer output :stderr output :command command
-     :sentinel
-     (lambda (process _event)
-       (when (memq (process-status process) '(exit signal))
-         (let ((status (process-exit-status process))
-               (text (with-current-buffer output
-                       (string-trim
-                        (buffer-substring-no-properties (point-min) (point-max))))))
-           (kill-buffer output)
-           (if (zerop status)
-               (message "Pi available on %s: %s"
-                        (pichat-transport-label transport) text)
-             (message "Pi probe failed on %s (status %d): %s"
-                      (pichat-transport-label transport) status text))))))))
+    (let ((process-environment (pichat-pi-process-environment)))
+      (pichat-transport-make-process
+       transport runtime-cwd
+       :name "pichat-pi-probe" :buffer output :stderr output :command command
+       :sentinel
+       (lambda (process _event)
+         (when (memq (process-status process) '(exit signal))
+           (let ((status (process-exit-status process))
+                 (text (with-current-buffer output
+                         (string-trim
+                          (buffer-substring-no-properties
+                           (point-min) (point-max))))))
+             (kill-buffer output)
+             (if (zerop status)
+                 (message "Pi available on %s: %s"
+                          (pichat-transport-label transport) text)
+               (message "Pi probe failed on %s (status %d): %s"
+                        (pichat-transport-label transport) status text)))))))))
 
 (defun pichat-chat-diagnostics--print-value (value)
   "Return an explicitly inspectable bounded representation of VALUE."

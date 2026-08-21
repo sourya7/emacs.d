@@ -10,6 +10,48 @@
 
 ;;; Transport unit tests
 
+(ert-deftest pichat-pi-process-environment-overrides-without-mutating-emacs ()
+  (let ((process-environment '("PICHAT_KEEP=kept" "PICHAT_OVERRIDE=old"))
+        (pichat-pi-extra-env '(("PICHAT_OVERRIDE" . "first")
+                               ("PICHAT_NEW" . "new")
+                               ("PICHAT_OVERRIDE" . "last"))))
+    (let ((effective (pichat-pi-process-environment)))
+      (should (equal '("PICHAT_KEEP=kept" "PICHAT_OVERRIDE=old")
+                     process-environment))
+      (let ((process-environment effective))
+        (should (equal "kept" (getenv "PICHAT_KEEP")))
+        (should (equal "new" (getenv "PICHAT_NEW")))
+        (should (equal "last" (getenv "PICHAT_OVERRIDE")))))))
+
+(ert-deftest pichat-pi-process-environment-rejects-invalid-entry ()
+  (let ((pichat-pi-extra-env '(("INVALID=NAME" . "value"))))
+    (should-error (pichat-pi-process-environment) :type 'user-error)))
+
+(ert-deftest pichat-rpc-start-applies-extra-pi-environment ()
+  (pichat-test-with-clean-state
+    (let* ((process-environment
+            (cons "PICHAT_RPC_ENV=inherited" process-environment))
+           (pichat-pi-extra-env '(("PICHAT_RPC_ENV" . "rpc")))
+           (pichat-rpc-command '("fake-pi"))
+           (session (pichat-session-make :cwd default-directory))
+           captured buffers)
+      (unwind-protect
+          (cl-letf (((symbol-function 'pichat-transport-make-process)
+                     (lambda (_transport _runtime-cwd &rest args)
+                       (setq captured (getenv "PICHAT_RPC_ENV")
+                             buffers (list (plist-get args :buffer)
+                                           (plist-get args :stderr)))
+                       'fake-process))
+                    ((symbol-function 'set-process-query-on-exit-flag) #'ignore)
+                    ((symbol-function 'set-process-coding-system) #'ignore)
+                    ((symbol-function 'process-put) #'ignore))
+            (pichat-rpc-start session)
+            (should (equal "rpc" captured)))
+        (setf (pichat-session-process session) nil
+              (pichat-session-stderr-buffer session) nil)
+        (dolist (buffer buffers)
+          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
 (ert-deftest pichat-session-persistence-defaults-to-persistent ()
   (should (eq 'persistent
               (pichat-session-persistence (pichat-session-make)))))

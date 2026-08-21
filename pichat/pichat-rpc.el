@@ -14,6 +14,7 @@
 (require 'pichat-events)
 (require 'pichat-path)
 (require 'pichat-transport)
+(require 'pichat-pi-environment)
 (require 'pichat-chat-diagnostics)
 
 (defcustom pichat-pi-executable "pi"
@@ -229,14 +230,15 @@ SESSION in `error' state rather than being confused with a Pi RPC response."
             (signal 'file-error '("Empty Pi RPC command")))
           (setq buffer (generate-new-buffer " *pichat-rpc*")
                 stderr-buffer (generate-new-buffer " *pichat-rpc-stderr*"))
-          (let ((proc (pichat-transport-make-process
-                       transport runtime-cwd
-                       :name "pichat-rpc"
-                       :buffer buffer
-                       :stderr stderr-buffer
-                       :command argv
-                       :filter #'pichat-rpc--process-filter
-                       :sentinel #'pichat-rpc--process-sentinel)))
+          (let* ((process-environment (pichat-pi-process-environment))
+                 (proc (pichat-transport-make-process
+                        transport runtime-cwd
+                        :name "pichat-rpc"
+                        :buffer buffer
+                        :stderr stderr-buffer
+                        :command argv
+                        :filter #'pichat-rpc--process-filter
+                        :sentinel #'pichat-rpc--process-sentinel)))
             (set-process-query-on-exit-flag proc nil)
             (set-process-coding-system proc 'utf-8-unix 'utf-8-unix)
             (process-put proc 'pichat-session session)

@@ -12,6 +12,7 @@
 (require 'project)
 (require 'transient)
 (require 'pichat-transport)
+(require 'pichat-pi-environment)
 (require 'pichat-session)
 (require 'pichat-events)
 (require 'pichat-path)
@@ -538,46 +539,47 @@ provider represented in MODELS."
          (command (pichat--model-list-command search transport)))
     (message "Fetching available Pi models...")
     (condition-case err
-        (pichat-transport-make-process
-         transport runtime-cwd
-         :name "pichat-list-models"
-         :buffer stdout
-         :stderr stderr
-         :command command
-         :sentinel
-         (lambda (process _event)
-           (when (and (memq (process-status process) '(exit signal))
-                      (not (process-get process 'pichat-model-list-finished)))
-             (process-put process 'pichat-model-list-finished t)
-             (let ((status (process-exit-status process)))
-               (unwind-protect
-                   (if (zerop status)
-                       (let ((models
-                              (with-current-buffer stdout
-                                (pichat--parse-model-table
-                                 (buffer-substring-no-properties
-                                  (point-min) (point-max))))))
-                         (if models
-                             (funcall callback models)
-                           (message "Pi returned no matching available models")))
-                     (if (with-current-buffer stderr
-                           (string-blank-p
-                            (buffer-substring-no-properties
-                             (point-min) (point-max))))
-                         (message "Listing Pi models failed (exit %d)" status)
-                       (with-current-buffer stderr
-                         (rename-buffer
-                          (generate-new-buffer-name
-                           "*PiChat Model List Errors*") t)
-                         (goto-char (point-min))
-                         (special-mode)
-                         (message "Listing Pi models failed (exit %d); see %s"
-                                  status (buffer-name)))))
-                 (when (buffer-live-p stdout)
-                   (kill-buffer stdout))
-                 (when (and (buffer-live-p stderr)
-                            (string-prefix-p " " (buffer-name stderr)))
-                   (kill-buffer stderr)))))))
+        (let ((process-environment (pichat-pi-process-environment)))
+          (pichat-transport-make-process
+           transport runtime-cwd
+           :name "pichat-list-models"
+           :buffer stdout
+           :stderr stderr
+           :command command
+           :sentinel
+           (lambda (process _event)
+             (when (and (memq (process-status process) '(exit signal))
+                        (not (process-get process 'pichat-model-list-finished)))
+               (process-put process 'pichat-model-list-finished t)
+               (let ((status (process-exit-status process)))
+                 (unwind-protect
+                     (if (zerop status)
+                         (let ((models
+                                (with-current-buffer stdout
+                                  (pichat--parse-model-table
+                                   (buffer-substring-no-properties
+                                    (point-min) (point-max))))))
+                           (if models
+                               (funcall callback models)
+                             (message "Pi returned no matching available models")))
+                       (if (with-current-buffer stderr
+                             (string-blank-p
+                              (buffer-substring-no-properties
+                               (point-min) (point-max))))
+                           (message "Listing Pi models failed (exit %d)" status)
+                         (with-current-buffer stderr
+                           (rename-buffer
+                            (generate-new-buffer-name
+                             "*PiChat Model List Errors*") t)
+                           (goto-char (point-min))
+                           (special-mode)
+                           (message "Listing Pi models failed (exit %d); see %s"
+                                    status (buffer-name)))))
+                   (when (buffer-live-p stdout)
+                     (kill-buffer stdout))
+                   (when (and (buffer-live-p stderr)
+                              (string-prefix-p " " (buffer-name stderr)))
+                     (kill-buffer stderr))))))))
       (error
        (when (buffer-live-p stdout) (kill-buffer stdout))
        (when (buffer-live-p stderr) (kill-buffer stderr))

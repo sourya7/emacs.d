@@ -416,6 +416,23 @@
                      "--list-models" "sonnet")
                    (pichat--model-list-command " sonnet ")))))
 
+(ert-deftest pichat-model-list-process-applies-extra-pi-environment ()
+  (let ((process-environment
+         (cons "PICHAT_MODEL_ENV=inherited" process-environment))
+        (pichat-pi-extra-env '(("PICHAT_MODEL_ENV" . "models")))
+        captured buffers)
+    (unwind-protect
+        (cl-letf (((symbol-function 'pichat-transport-make-process)
+                   (lambda (_transport _runtime-cwd &rest args)
+                     (setq captured (getenv "PICHAT_MODEL_ENV")
+                           buffers (list (plist-get args :buffer)
+                                         (plist-get args :stderr)))
+                     'fake-process)))
+          (pichat--list-models-async nil #'ignore temporary-file-directory 'local)
+          (should (equal "models" captured)))
+      (dolist (buffer buffers)
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
 (ert-deftest pichat-selected-model-rejects-complete-wrapper-before-listing ()
   (let ((pichat-rpc-command '("docker" "run" "pi"))
         listed)

@@ -51,7 +51,8 @@
 (setq backup-by-copying t
       delete-by-moving-to-trash t
       auto-save-default nil
-      undo-limit 100000000)
+      undo-limit 100000000
+      vc-handled-backends '(Git))
 
 ;; Directory configurations
 ;;(setcar native-comp-eln-load-path (my/emacs-local-dir "eln-cache/"))
@@ -59,6 +60,13 @@
 (setq backup-directory-alist `(("." . ,(my/emacs-local-dir "backups/"))))
 (setq-default no-littering-etc-directory (my/emacs-shared-dir ""))
 (setq-default no-littering-var-directory (my/emacs-local-dir "var/"))
+
+
+;; Rendering optimizations (esp for macos)
+(setq inhibit-compacting-font-caches t)
+(setq-default bidi-display-reordering 'left-to-right
+              bidi-paragraph-direction 'left-to-right)
+(setq bidi-inhibit-bpa t)
 
 ;; ================================
 ;; Editing Behavior

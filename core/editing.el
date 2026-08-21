@@ -72,16 +72,15 @@
   (vundo-window-side 'top))
 
 (use-package treesit-auto
+  :when (and (fboundp 'treesit-available-p) (treesit-available-p))
   :custom
   (treesit-auto-install nil)
   :config
   ;; disable treesit for ruby momentarily because of multiple issues (indentation)
   (delete 'ruby treesit-auto-langs)
   (add-to-list 'treesit-extra-load-path (my/emacs-local-dir "tree-sitter"))
-  ;; Only register modes whose grammars are available.  Global remapping will
-  ;; pick up newly installed grammars on subsequent file visits.
-  (treesit-auto-add-to-auto-mode-alist)
-  (global-treesit-auto-mode))
+  ;; Only register modes whose grammars are available
+  (treesit-auto-add-to-auto-mode-alist))
 
 (use-package inhibit-mouse
   :if (not (eq system-type 'android))

@@ -95,6 +95,7 @@
   :ensure nil
   :custom
   (recentf-max-saved-items 500)
+  (recentf-auto-cleanup 'never)
   (recentf-mode t)
   :config
   (my/add-all-to-list 'recentf-exclude

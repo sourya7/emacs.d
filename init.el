@@ -5,12 +5,15 @@
 ;;; Code:
 
 (defun efs/display-startup-time ()
-  "Output the Emacs startup time."
+  "Output the Emacs startup time and restore runtime GC thresholds."
   (message "Emacs loaded in %s with %d garbage collections."
            (format "%.2f seconds"
                    (float-time
                     (time-subtract after-init-time before-init-time)))
-           gcs-done))
+           gcs-done)
+  (setq gc-cons-threshold (* 32 1024 1024)
+        gc-cons-percentage 0.1))
+
 (add-hook 'emacs-startup-hook #'efs/display-startup-time)
 
 (let ((file-name-handler-alist nil))

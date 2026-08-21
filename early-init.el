@@ -4,7 +4,8 @@
 ;;; Earyly init
 ;;; Code:
 (setq package-enable-at-startup nil)
-(setq gc-cons-threshold (* 200 1024 1024))
+(setq gc-cons-threshold (* 200 1024 1024)
+      gc-cons-percentage 0.6)
 (setq read-process-output-max (* 1024 1024 4))
 (setq elpaca-queue-limit 20)
 

@@ -78,13 +78,13 @@
 
 (ert-deftest pichat-markdown-table-keeps-escaped-and-code-span-pipes-in-cells ()
   (let* ((source
-          (concat "| Expression | Escaped | Long code |\n"
-                  "|---|---|---|\n"
-                  "| `alpha|beta` | left \\| right | ``value ` with | pipe`` |"))
+          (concat "| Expression | Escaped | Long code | Unicode with pipe |\n"
+                  "|---|---|---|---|\n"
+                  "| `alpha|beta` | left \\| right | ``value ` with | pipe`` | prefix \\| – 東京 🚀 |"))
          (table (pichat-test-markdown-table--one source))
          (cells (pichat-markdown-table-row-cells
                  (nth 2 (pichat-markdown-table-rows table)))))
-    (should (= 3 (length cells)))
+    (should (= 4 (length cells)))
     (should (equal "`alpha|beta`"
                    (pichat-markdown-table-cell-source (nth 0 cells))))
     (should (equal "left \\| right"
@@ -92,7 +92,25 @@
     (should (equal "left | right"
                    (pichat-markdown-table-cell-display (nth 1 cells))))
     (should (equal "``value ` with | pipe``"
-                   (pichat-markdown-table-cell-source (nth 2 cells))))))
+                   (pichat-markdown-table-cell-source (nth 2 cells))))
+    (should (equal "prefix \\| – 東京 🚀"
+                   (pichat-markdown-table-cell-source (nth 3 cells))))
+    (should (equal "prefix | – 東京 🚀"
+                   (pichat-markdown-table-cell-display (nth 3 cells))))))
+
+(ert-deftest pichat-markdown-table-preserves-unibyte-cell-display ()
+  (let* ((non-ascii (unibyte-string 233))
+         (source
+          (string-make-unibyte
+           (concat "| Value |\n|---|\n| prefix \\| " non-ascii " |")))
+         (table (pichat-test-markdown-table--one source))
+         (cell (car (pichat-markdown-table-row-cells
+                     (nth 2 (pichat-markdown-table-rows table)))))
+         (display (pichat-markdown-table-cell-display cell)))
+    (should-not (multibyte-string-p display))
+    (should (equal (string-make-unibyte
+                    (concat "prefix | " non-ascii))
+                   display))))
 
 (ert-deftest pichat-markdown-table-does-not-open-code-at-escaped-backtick ()
   (let* ((source

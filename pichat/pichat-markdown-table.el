@@ -227,31 +227,29 @@ Return the symbol `unterminated-code' when a code span is not closed."
 
 (defun pichat-markdown-table--display-cell (source)
   "Return conservative display text derived from cell SOURCE."
-  (let* ((position 0)
-         (output-position 0)
-         (length (length source))
-         ;; Copying preserves a multibyte representation when SOURCE contains
-         ;; Unicode; `make-string' with an ASCII initializer may be unibyte.
-         (output (copy-sequence source)))
+  (let ((position 0)
+        (length (length source))
+        chars)
     (while (< position length)
       (let ((character (aref source position)))
         (cond
          ((and (= character ?\\)
                (< (1+ position) length)
                (= (aref source (1+ position)) ?|))
-          (aset output output-position ?|)
-          (cl-incf output-position)
+          (push ?| chars)
           (cl-incf position 2))
          (t
-          (aset output output-position
-                (if (or (= character ?\t)
+          (push (if (or (= character ?\t)
                         (< character 32)
                         (= character 127))
                     ?\s
-                  character))
-          (cl-incf output-position)
+                  character)
+                chars)
           (cl-incf position)))))
-    (substring output 0 output-position)))
+    (let ((display (concat (nreverse chars))))
+      (if (multibyte-string-p source)
+          display
+        (string-make-unibyte display)))))
 
 (defun pichat-markdown-table--cell (source start end)
   "Return a table cell for SOURCE bounds START and END."

@@ -124,7 +124,7 @@
   ;; state so their documented single-key commands override Evil keys.
   (evil-set-initial-state 'pichat-chat-mode 'normal)
   (evil-set-initial-state 'pichat-chat-compose-mode 'normal)
-  (evil-set-initial-state 'pichat-view-mode 'emacs)
+  (evil-set-initial-state 'pichat-view-mode 'normal)
   (evil-set-initial-state 'pichat-session-manager-mode 'emacs))
 
 (with-eval-after-load 'pichat

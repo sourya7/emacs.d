@@ -274,8 +274,13 @@ TRANSFORM converts complete JSONL lines into candidates."
    transform))
 
 (defun pichat-consult--current-project (projects)
-  "Return the most specific member of PROJECTS containing current context."
-  (let* ((session (pichat-session-current))
+  "Return the most specific member of PROJECTS containing current context.
+The current project is derived from the invoking directory's live session or,
+when that directory has no live session, from `default-directory' itself.
+The global fallback session is deliberately ignored so an unrelated active
+runtime never marks its own project as current."
+  (let* ((session (and (fboundp 'pichat-session-for-directory)
+                       (pichat-session-for-directory default-directory)))
          (context (file-name-as-directory
                    (expand-file-name
                     (or (and session (pichat-session-runtime-cwd session))
@@ -816,15 +821,29 @@ and SUBJECT describe a relation-picker target when present."
   "Load the full saved session represented by CANDIDATE.
 When CANDIDATE belongs to a browser with a contextual selection function,
 call that function with the saved FILE and CWD instead of mutating the active
-runtime."
+runtime.  Without a contextual selection function and without a live session
+for the invoking directory, open FILE in an independent runtime owned by the
+selected session's project rather than replacing an unrelated active session
+through the global fallback." 
   (interactive "sSession: ")
-  (let ((record (pichat-consult--loadable-record candidate))
-        (selection-function (pichat-consult--selection-function candidate)))
-    (if selection-function
-        (funcall selection-function
-                 (plist-get record :session-file) (plist-get record :cwd))
-      (pichat-sessions-switch-file
-       (plist-get record :session-file) (plist-get record :cwd)))))
+  (let* ((record (pichat-consult--loadable-record candidate))
+         (selection-function (pichat-consult--selection-function candidate))
+         (file (plist-get record :session-file))
+         (cwd (plist-get record :cwd)))
+    (cond
+     (selection-function
+      (funcall selection-function file cwd))
+     ((and (fboundp 'pichat-session-for-directory)
+           (fboundp 'pichat-sessions-open-file-independently)
+           (not (pichat-session-for-directory default-directory))
+           (pichat-session-current))
+      ;; The invoking directory has no live session, so the switch path below
+      ;; would hijack the global fallback runtime.  Preserve it by opening an
+      ;; independent runtime rooted at the selected session's own project.
+      (pichat-sessions-open-file-independently
+       file :cwd cwd :owner-directory cwd))
+     (t
+      (pichat-sessions-switch-file file cwd)))))
 
 (defun pichat-consult-open-session-independently (candidate)
   "Load CANDIDATE in a newly created independent PiChat runtime.

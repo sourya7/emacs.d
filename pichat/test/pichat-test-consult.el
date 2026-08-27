@@ -415,6 +415,26 @@
          (current (pichat-consult--current-project projects)))
     (should (equal "/project/subdir" (plist-get current :cwd)))))
 
+(ert-deftest pichat-consult-current-project-ignores-global-fallback-session ()
+  "A stale global session must not mark its own project as current."
+  (let ((pichat-current-session (pichat-session-create :runtime-cwd "/emacs.d/")))
+    (cl-letf (((symbol-function 'pichat-session-for-directory)
+               (lambda (&optional _directory) nil)))
+      ;; No live session for the invoking directory: the unrelated global
+      ;; session rooted at /emacs.d/ must never mark that project current.
+      (let ((default-directory "/deploy-jobs/"))
+        (should-not (pichat-consult--current-project
+                     '((:kind project :cwd "/emacs.d" :count 8)
+                       (:kind project :cwd "/blog" :count 1)))))
+      ;; The invoking directory itself still wins when it is an archive
+      ;; project, so plain browsing labels it instead of nothing.
+      (let ((default-directory "/deploy-jobs/"))
+        (should (equal "/deploy-jobs"
+                       (plist-get (pichat-consult--current-project
+                                   '((:kind project :cwd "/emacs.d" :count 8)
+                                     (:kind project :cwd "/deploy-jobs" :count 4)))
+                                  :cwd)))))))
+
 (ert-deftest pichat-consult-preview-highlights-visible-archive-context ()
   (let ((buffer (generate-new-buffer " *pichat-consult-preview-test*"))
         (record '(:title "Search session" :cwd "/project"
@@ -763,6 +783,44 @@
     (should (equal '(("/saved.jsonl" "/project")
                      ("/saved.jsonl" "/project"))
                    opened))))
+
+(ert-deftest pichat-consult-load-session-preserves-unrelated-active-runtime ()
+  "Plain browse from a directory without a live session opens independently."
+  (let* ((candidate
+          '(:session-id "saved" :session-file "/project/saved.jsonl"
+            :cwd "/project" :source-exists t))
+         independent switched)
+    (cl-letf (((symbol-function 'pichat-session-for-directory)
+               (lambda (&optional _directory) nil))
+              ((symbol-function 'pichat-session-current)
+               (lambda (&optional _session) 'stale-global-session))
+              ((symbol-function 'pichat-sessions-open-file-independently)
+               (lambda (file &rest keys)
+                 (setq independent
+                       (list file
+                             (plist-get keys :cwd)
+                             (plist-get keys :owner-directory)))))
+              ((symbol-function 'pichat-sessions-switch-file)
+               (lambda (&rest _args)
+                 (ert-fail "plain browse replaced an unrelated active runtime"))))
+      (pichat-consult-load-session candidate)
+      (should (equal '("/project/saved.jsonl" "/project" "/project")
+                     independent))))
+  ;; With a live session for the invoking directory, the switch path is kept.
+  (let* ((candidate
+          '(:session-id "saved" :session-file "/project/saved.jsonl"
+            :cwd "/project" :source-exists t))
+         switched)
+    (cl-letf (((symbol-function 'pichat-session-for-directory)
+               (lambda (&optional _directory) 'live-directory-session))
+              ((symbol-function 'pichat-sessions-open-file-independently)
+               (lambda (&rest _args)
+                 (ert-fail "live directory session should use the switch path")))
+              ((symbol-function 'pichat-sessions-switch-file)
+               (lambda (file cwd &optional _callback)
+                 (setq switched (list file cwd)))))
+      (pichat-consult-load-session candidate)
+      (should (equal '("/project/saved.jsonl" "/project") switched)))))
 
 (ert-deftest pichat-consult-relation-reader-is-bounded-narrowable-and-record-backed ()
   (let* ((capability '(:identity test))

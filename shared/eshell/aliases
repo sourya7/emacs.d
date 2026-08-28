@@ -1,8 +1,9 @@
-alias kgns kubectl get namespace $*
-alias gs git status $*
-alias l ls $*
-alias ffw find-file-other-window $1
-alias ff find-file $1
 alias clear clear-scrollback
+alias ff find-file $1
+alias ffw find-file-other-window $1
+alias gs git status $*
+alias kgns kubectl get namespace $*
 alias kgp kubectl get pods
 alias kl kubectl logs
+alias l ls $*
+alias view-cert cat /dev/null | openssl s_client -connect $1:443 -servername $1 2>/dev/null | openssl x509 -text -noout

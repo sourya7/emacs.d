@@ -16,6 +16,8 @@
 
 (use-package json-mode :mode "\\.json\\'")
 
+(setq js-indent-mode 2)
+
 ;; (use-package nushell-ts-mode :mode "\\.nu\\'" :defer nil)
 
 (use-package markdown-mode :defer t)

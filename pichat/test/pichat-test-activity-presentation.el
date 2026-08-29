@@ -33,6 +33,98 @@
   "Return a transcript containing NODES."
   (pichat-transcript-create :nodes nodes :diagnostics nil :metadata nil))
 
+(ert-deftest pichat-activity-tool-use-continuations-merge-without-annotations ()
+  (let* ((transcript
+          (pichat-test-activity--transcript
+           (pichat-test-activity--assistant
+            "turn-1"
+            (list (pichat-test-activity--tool
+                   0 "one" "read" 'done))
+            "toolUse")
+           (pichat-test-activity--assistant
+            "turn-2"
+            (list (pichat-test-activity--content
+                   'thinking 0 :text "continue")
+                  (pichat-test-activity--tool
+                   1 "two" "edit" 'done))
+            "toolUse")))
+         (presentation (pichat-activity-build-presentation
+                       transcript '(thinking tool) t))
+         (groups (pichat-activity-groups presentation)))
+    (should (= 1 (length groups)))
+    (should (equal '(group) (mapcar #'pichat-activity-item-kind presentation)))
+    (should (equal '(tool thinking tool)
+                   (mapcar #'pichat-activity-member-kind
+                           (pichat-activity-group-members (car groups)))))
+    (should (equal '("one" "two")
+                   (pichat-activity-group-tool-ids (car groups))))
+    (should (eq 'complete (pichat-activity-group-status (car groups))))))
+
+(ert-deftest pichat-activity-terminal-stop-reasons-still-split-continuation-run ()
+  (let* ((transcript
+          (pichat-test-activity--transcript
+           (pichat-test-activity--assistant
+            "turn-1"
+            (list (pichat-test-activity--tool 0 "one" "read" 'done))
+            "toolUse")
+           (pichat-test-activity--assistant
+            "turn-2"
+            (list (pichat-test-activity--tool 0 "two" "edit" 'done))
+            "stop")
+           (pichat-test-activity--assistant
+            "turn-3"
+            (list (pichat-test-activity--tool 0 "three" "bash" 'done))
+            "toolUse")))
+         (presentation (pichat-activity-build-presentation
+                       transcript '(tool) t)))
+    (should (equal '(group annotation group)
+                   (mapcar #'pichat-activity-item-kind presentation)))
+    (should (equal '(("one" "two") ("three"))
+                   (mapcar #'pichat-activity-group-tool-ids
+                           (pichat-activity-groups presentation))))))
+
+(ert-deftest pichat-activity-terminal-stop-reasons-cover-length-aborted-and-error ()
+  (dolist (reason '("length" "aborted" "error"))
+    (let* ((transcript
+            (pichat-test-activity--transcript
+             (pichat-test-activity--assistant
+              "before"
+              (list (pichat-test-activity--tool 0 "before-tool" "read" 'done))
+              "toolUse")
+             (pichat-test-activity--assistant
+              "terminal"
+              (list (pichat-test-activity--tool 0 "terminal-tool" "read" 'done))
+              reason)
+             (pichat-test-activity--assistant
+              "after"
+              (list (pichat-test-activity--tool 0 "after-tool" "read" 'done))
+              "toolUse")))
+           (presentation (pichat-activity-build-presentation
+                         transcript '(tool) t)))
+      (should (equal '(group annotation group)
+                     (mapcar #'pichat-activity-item-kind presentation))))))
+
+(ert-deftest pichat-activity-assistant-stop-reason-policy-is-conservative ()
+  (should (pichat-activity--assistant-continuation-stop-reason-p "toolUse"))
+  (should-not (pichat-activity--assistant-terminal-stop-reason-p "toolUse"))
+  (dolist (reason '("stop" "length" "aborted" "error" "provider-finished"))
+    (should (pichat-activity--assistant-terminal-stop-reason-p reason))))
+
+(ert-deftest pichat-activity-explicit-assistant-error-still-annotates ()
+  (let* ((node (pichat-transcript-node-create
+                :kind 'message :key "failed" :role 'assistant
+                :stop-reason "toolUse" :error-message "provider failed"
+                :content (list (pichat-test-activity--tool
+                                0 "failed-tool" "read" 'error))))
+         (presentation
+          (pichat-activity-build-presentation
+           (pichat-test-activity--transcript node) '(tool) t)))
+    (should (equal '(group annotation)
+                   (mapcar #'pichat-activity-item-kind presentation)))
+    (should (eq 'failed
+                (pichat-activity-group-status
+                 (pichat-activity-item-group (car presentation)))))))
+
 (ert-deftest pichat-activity-groups-adjacent-tools-across-node-boundaries ()
   (let* ((first (pichat-test-activity--tool 0 "one" "bash" 'done "one out"))
          (second (pichat-test-activity--tool 0 "two" "read" 'incomplete))

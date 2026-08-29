@@ -43,6 +43,30 @@ KIND is `group', `assistant-content', `annotation', or `node'."
     ('thinking 'thinking)
     (_ nil)))
 
+(defun pichat-activity--assistant-continuation-stop-reason-p (reason)
+  "Return non-nil when REASON means another assistant tool-use turn.
+Pi represents this intermediate state with the =toolUse= stop reason."
+  (or (equal reason "toolUse")
+      (eq reason 'toolUse)))
+
+(defun pichat-activity--assistant-terminal-stop-reason-p (reason)
+  "Return non-nil when non-empty REASON is a terminal boundary.
+Unknown non-empty reasons remain terminal conservatively."
+  (and reason
+       (not (pichat-activity--assistant-continuation-stop-reason-p reason))))
+
+(defun pichat-activity--assistant-continuation-p (node)
+  "Return non-nil when assistant NODE requests another tool-use turn."
+  (pichat-activity--assistant-continuation-stop-reason-p
+   (pichat-transcript-node-stop-reason node)))
+
+(defun pichat-activity--assistant-terminal-p (node)
+  "Return non-nil when assistant NODE has a terminal boundary.
+Explicit errors remain terminal even when a provider also reports =toolUse=."
+  (or (pichat-transcript-node-error-message node)
+      (and (pichat-transcript-node-stop-reason node)
+           (not (pichat-activity--assistant-continuation-p node)))))
+
 (defun pichat-activity--content-visible-p (content show-thinking)
   "Return non-nil when CONTENT is visible under SHOW-THINKING."
   (pcase (pichat-transcript-content-kind content)
@@ -99,7 +123,11 @@ Thought-only activity is active until its owning assistant node settles."
                          members))
         (node-settled-p (seq-some
                          (lambda (member)
-                           (pichat-activity-member-node-stop-reason member))
+                           (or (pichat-activity-member-node-error-message
+                                member)
+                               (pichat-activity--assistant-terminal-stop-reason-p
+                                (pichat-activity-member-node-stop-reason
+                                 member))))
                          members)))
     (cond
      ((seq-some (lambda (status) (memq status '(running incomplete))) statuses)
@@ -222,8 +250,7 @@ whether non-member thinking is a visible boundary.  Source order is retained."
                  ((pichat-activity--content-visible-p content show-thinking)
                   (visible-boundary node content)))))
             (flush-content)
-            (when (or (pichat-transcript-node-stop-reason node)
-                      (pichat-transcript-node-error-message node))
+            (when (pichat-activity--assistant-terminal-p node)
               (flush-group)
               (emit-item
                (pichat-activity-item-create

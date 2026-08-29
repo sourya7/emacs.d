@@ -8,18 +8,30 @@
 
 (require 'pichat-test-support)
 
-(defun pichat-test-chat-activity--tool-event (id name args)
-  "Return an assistant message-end event declaring tool ID NAME ARGS."
+(defun pichat-test-chat-activity--tool-event (id name args &optional stop-reason)
+  "Return an assistant message-end event declaring tool ID NAME ARGS.
+STOP-REASON, when non-nil, is attached to the assistant message."
   (list :type "message_end"
-        :message (list :role "assistant"
-                       :content (list (list :type "toolCall" :id id
-                                            :name name :arguments args)))))
+        :message (append (list :role "assistant"
+                                :content (list (list :type "toolCall" :id id
+                                               :name name :arguments args)))
+                         (and stop-reason (list :stopReason stop-reason)))))
 
 (defun pichat-test-chat-activity--finish-event (id name output)
   "Return a successful execution-end event for ID NAME with OUTPUT."
   (list :type "tool_execution_end" :toolCallId id :toolName name
         :isError nil
         :result (list :content (list (list :type "text" :text output)))))
+
+(defun pichat-test-chat-activity--thinking-tool-event (id name thinking)
+  "Return a tool-use assistant event with THINKING and tool ID NAME."
+  (list :type "message_end"
+        :message (list :role "assistant"
+                       :content (list (list :type "thinking"
+                                             :thinking thinking)
+                                      (list :type "toolCall" :id id
+                                            :name name :arguments nil))
+                       :stopReason "toolUse")))
 
 (defun pichat-test-chat-activity--prose-event (text)
   "Return assistant message-end prose event containing TEXT."
@@ -41,6 +53,82 @@
           (lambda (first second)
             (< (marker-position (plist-get first :start))
                (marker-position (plist-get second :start)))))))
+
+(ert-deftest pichat-chat-activity-tool-use-continuations-share-one-live-group ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-render-markdown nil)
+          (pichat-chat-activity-group-display 'expanded)
+          (pichat-chat-show-thinking t)
+          buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (with-current-buffer buffer
+              (pichat-test-chat-activity--apply
+               pichat-chat--live-draft
+               (pichat-test-chat-activity--thinking-tool-event
+                "continuation-1" "read" "inspect one")
+               (pichat-test-chat-activity--finish-event
+                "continuation-1" "read" "one")
+               (pichat-test-chat-activity--thinking-tool-event
+                "continuation-2" "edit" "inspect two")
+               (pichat-test-chat-activity--finish-event
+                "continuation-2" "edit" "two")
+               (pichat-test-chat-activity--thinking-tool-event
+                "continuation-3" "bash" "inspect three"))
+              (let ((blocks (pichat-test-chat-activity--ordered-blocks)))
+                (should (= 1 (length blocks)))
+                (should (equal '("continuation-1" "continuation-2"
+                                 "continuation-3")
+                               (plist-get (car blocks) :tool-ids)))
+                (should (string-match-p "Thought"
+                                        (pichat-test-buffer-text buffer)))
+                (should (string-match-p "Read a file"
+                                        (pichat-test-buffer-text buffer)))
+                (should (string-match-p "edited a file"
+                                        (pichat-test-buffer-text buffer)))
+                (should (string-match-p "ran a command"
+                                        (pichat-test-buffer-text buffer))))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-chat-activity-tool-use-group-preserves-child-view-and-starts-new-prose-item ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-render-markdown nil)
+          (pichat-chat-activity-group-display 'expanded)
+          buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (with-current-buffer buffer
+              (pichat-test-chat-activity--apply
+               pichat-chat--live-draft
+               (pichat-test-chat-activity--tool-event
+                "view-one" "read" '(:path "one") "toolUse")
+               (pichat-test-chat-activity--finish-event
+                "view-one" "read" "one")
+               (pichat-test-chat-activity--tool-event
+                "view-two" "edit" '(:path "two") "toolUse"))
+              (let ((tool (gethash "view-one" pichat-chat--tool-blocks)))
+                (goto-char (marker-position (plist-get tool :start)))
+                (pichat-chat-toggle-tool-at-point))
+              (pichat-test-chat-activity--apply
+               pichat-chat--live-draft
+               (pichat-test-chat-activity--finish-event
+                "view-two" "edit" "two")
+               (pichat-test-chat-activity--prose-event "Final answer."))
+              (let ((groups (pichat-test-chat-activity--ordered-blocks))
+                    (text (pichat-test-buffer-text buffer)))
+                (should (= 1 (length groups)))
+                (should (eq 'args
+                            (plist-get (gethash "view-one"
+                                                pichat-chat--tool-blocks)
+                                       :display-state)))
+                (should (string-match-p "Final answer" text))
+                (should (< (string-match-p "read" text)
+                           (string-match-p "Final answer" text))))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
 (ert-deftest pichat-chat-activity-latest-collapses-when-prose-begins ()
   (pichat-test-with-unit-session (session proc)

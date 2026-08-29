@@ -50,8 +50,11 @@ Consecutive thinking and tool calls are presented in source-ordered activity
 groups. Group headers summarize bounded enriched tool kinds plus visible
 thinking, and can fold the whole run; expanded groups retain each tool's
 independent header/arguments/output control while thinking remains an indented
-child. Disabling `pichat-chat-show-thinking` hides thinking text and thought-only
-groups but retains tool activity grouping and controls.
+child. A `toolUse` assistant stop reason is an intermediate continuation marker,
+so it does not split an activity group or produce a terminal annotation. Actual
+terminal stops and explicit assistant errors remain boundaries. Disabling
+`pichat-chat-show-thinking` hides thinking text and thought-only groups but
+retains tool activity grouping and controls.
 `pichat-chat-activity-group-display` defaults to `latest`, which keeps current
 live tail activity open and folds older or settled groups. It also accepts
 `collapsed` and `expanded`; an explicit group choice overrides any policy.

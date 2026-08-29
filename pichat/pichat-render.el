@@ -511,6 +511,12 @@ ACTIVITY-MEMBER-P is non-nil, apply the activity member/body visual levels."
            'pichat-activity-source-anchor
            (list 'source (pichat-activity-member-source-key first))
            'pichat-activity-tool-ids (pichat-activity-group-tool-ids group)
+           'pichat-activity-tool-source-keys
+           (mapcar #'pichat-activity-member-source-key
+                   (seq-filter
+                    (lambda (member)
+                      (eq (pichat-activity-member-kind member) 'tool))
+                    (pichat-activity-group-members group)))
            'pichat-activity-expanded expanded
            'pichat-activity-member-kinds
            (mapcar #'pichat-activity-member-kind

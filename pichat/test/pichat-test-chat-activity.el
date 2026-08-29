@@ -246,6 +246,53 @@ STOP-REASON, when non-nil, is attached to the assistant message."
                 (should-not (gethash "growth-two" pichat-chat--tool-blocks)))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+(ert-deftest pichat-chat-activity-collapsed-choice-survives-stream-tool-id-refinement ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-render-markdown nil)
+          (pichat-chat-activity-group-display 'latest)
+          buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (with-current-buffer buffer
+              (pichat-test-chat-activity--apply
+               pichat-chat--live-draft
+               (pichat-test-chat-activity--tool-event
+                "stream-one" "read" '(:path "one.el") "toolUse"))
+              (let ((group (car (pichat-test-chat-activity--ordered-blocks))))
+                (goto-char (marker-position (plist-get group :start)))
+                (pichat-chat-toggle-activity-at-point))
+              (pichat-test-chat-activity--apply
+               pichat-chat--live-draft
+               '(:type "message_start"
+                 :message (:role "assistant" :content nil))
+               '(:type "message_update"
+                 :assistantMessageEvent
+                 (:type "toolcall_start" :contentIndex 0)))
+              (let ((group (car (pichat-test-chat-activity--ordered-blocks))))
+                (should (eq 'collapsed (plist-get group :display-state)))
+                (should (string-match-p "-stream-tool-0\\'"
+                                        (car (last (plist-get group :tool-ids))))))
+              (pichat-test-chat-activity--apply
+               pichat-chat--live-draft
+               '(:type "message_update"
+                 :assistantMessageEvent
+                 (:type "toolcall_end" :contentIndex 0
+                  :toolCall (:type "toolCall" :id "stream-two" :name "edit"
+                             :arguments (:path "two.el")))))
+              (let* ((group (car (pichat-test-chat-activity--ordered-blocks)))
+                     (state (gethash (plist-get group :view-state-key)
+                                     pichat-chat--activity-view-states)))
+                (should (eq 'collapsed (plist-get group :display-state)))
+                (should (equal '("stream-one" "stream-two")
+                               (plist-get group :tool-ids)))
+                (should (equal (plist-get group :tool-ids)
+                               (plist-get state :tool-ids)))
+                (should (equal (plist-get group :tool-source-keys)
+                               (plist-get state :tool-source-keys))))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
 (ert-deftest pichat-chat-activity-collapsed-thinking-choice-survives-first-tool ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)

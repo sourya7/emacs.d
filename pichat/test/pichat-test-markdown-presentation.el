@@ -744,5 +744,47 @@
                                      (marker-position pichat-chat--live-end)))))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+(ert-deftest pichat-markdown-activity-prefix-survives-links-code-lists-tables-and-toggles ()
+  (with-temp-buffer
+    (setq-local pichat-chat--source-generation 12)
+    (insert
+     (propertize
+      "[label](https://example.test)\n\n```elisp\n(message \"x\")\n```\n\n- item\n\n| A | B |\n|---|---|\n| x | y |"
+      'pichat-prose t 'pichat-node-key "prefixed-node"
+      'line-prefix "  " 'wrap-prefix "  "))
+    (cl-letf (((symbol-function
+                'pichat-markdown-presentation--table-width-policy)
+               (lambda (&optional _window) '(60 . 60)))
+              ((symbol-function 'pichat-markdown-presentation--extract-links)
+               (lambda (beg _end)
+                 (list (pichat-test--markdown-link-record
+                        beg "https://example.test" "label")))))
+      (pichat-markdown-presentation-refresh-buffer)
+      (dolist (needle '("[label]" "```elisp" "- item" "| A | B |"))
+        (goto-char (point-min))
+        (search-forward needle)
+        (let ((position (match-beginning 0)))
+          (should (equal "  " (get-text-property position 'line-prefix)))
+          (should (equal "  " (get-text-property position 'wrap-prefix)))))
+      (should
+       (seq-some
+        (lambda (overlay)
+          (when-let ((before (overlay-get overlay 'before-string)))
+            (and (> (length before) 0)
+                 (equal "  " (get-text-property 0 'line-prefix before))
+                 (equal "  " (get-text-property 0 'wrap-prefix before)))))
+        (overlays-in (point-min) (point-max))))
+      (goto-char (point-min))
+      (search-forward "label")
+      (goto-char (match-beginning 0))
+      (pichat-chat-toggle-link-at-point)
+      (should (equal "  " (get-text-property (point) 'line-prefix)))
+      (search-forward "| A | B |")
+      (goto-char (match-beginning 0))
+      (pichat-chat-toggle-table-at-point)
+      (should (equal "  " (get-text-property (point) 'line-prefix)))
+      (pichat-chat-toggle-table-at-point)
+      (should (equal "  " (get-text-property (point) 'line-prefix))))))
+
 (provide 'pichat-test-markdown-presentation)
 ;;; pichat-test-markdown-presentation.el ends here

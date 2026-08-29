@@ -384,9 +384,12 @@
             (with-current-buffer buffer
               (pichat-chat--flush-live-projection))
             (let ((text (pichat-test-buffer-text buffer)))
-              (should (string-match-p (regexp-quote "live plan\n[tool:test_tool done]") text))
+              (should (string-match-p
+                       (regexp-quote
+                        "live plan\n\n▼ Used test_tool\n✓ tool   test_tool")
+                       text))
               (should-not (string-match-p
-                           (regexp-quote "live plan\n\n[tool:test_tool done]")
+                           (regexp-quote "live plan\n▼ Used test_tool")
                            text))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 

@@ -51,6 +51,24 @@
      pichat-chat--live-tool-blocks)
     (sort entries (lambda (first second) (string< (car first) (car second))))))
 
+(defun pichat-test-focused-rollback--activity-block-state ()
+  "Return observable live activity block identity and boundaries."
+  (let (entries)
+    (maphash
+     (lambda (key block)
+       (push (list key block
+                   (plist-get block :start)
+                   (marker-position (plist-get block :start))
+                   (plist-get block :end)
+                   (marker-position (plist-get block :end))
+                   (plist-get block :display-state)
+                   (plist-get block :view-state-key))
+             entries))
+     pichat-chat--live-activity-blocks)
+    (sort entries
+          (lambda (first second)
+            (< (nth 3 first) (nth 3 second))))))
+
 (defun pichat-test-focused-rollback--tool-overlay-state ()
   "Return identity and geometry of all derived tool-location overlays."
   (let (entries)
@@ -94,9 +112,14 @@
    :blocks (pichat-test-focused-rollback--block-state)
    :live-block-table pichat-chat--live-tool-blocks
    :combined-block-table pichat-chat--tool-blocks
+   :activity-blocks (pichat-test-focused-rollback--activity-block-state)
+   :live-activity-block-table pichat-chat--live-activity-blocks
+   :combined-activity-block-table pichat-chat--activity-blocks
    :fingerprint pichat-chat--live-projection-fingerprint
    :views (pichat-test-focused-rollback--hash-entries
            pichat-chat--tool-view-states)
+   :activity-views (pichat-test-focused-rollback--hash-entries
+                    pichat-chat--activity-view-states)
    :enrichments (pichat-test-focused-rollback--hash-entries
                  pichat-chat--tool-enrichments)
    :statuses (copy-tree pichat-chat--status-lines)

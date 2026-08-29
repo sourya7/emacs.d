@@ -96,6 +96,7 @@
 (ert-deftest pichat-chat-execute-fragment-is-final-before-indexing ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-activity-group-display 'expanded)
           (pichat-chat-collapse-tools-by-default nil)
           (pichat-chat-tool-default-display 'output)
           buffer)
@@ -108,14 +109,13 @@
                      (fragment (pichat-render-canonical transcript context))
                      (second (pichat-render-canonical transcript context))
                      (text (pichat-render-fragment-propertized-string fragment))
-                     (header-position (string-match "\\[execute:" text))
+                     (header-position (string-match "✓ run" text))
                      (output-position (string-match "one-pass output" text)))
                 (should (equal fragment second))
                 (should (= 0 (hash-table-count
                               pichat-chat--tool-enrichments)))
                 (should (string-match-p
-                         (regexp-quote
-                          "[execute: printf one-pass — completed]")
+                         (regexp-quote "✓ run    printf one-pass")
                          text))
                 (should (string-match-p
                          (regexp-quote
@@ -169,6 +169,7 @@
 (ert-deftest pichat-chat-live-update-does-not-rewrite-earlier-execute-blocks ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-activity-group-display 'expanded)
           (pichat-chat-collapse-tools-by-default nil)
           (pichat-chat-tool-default-display 'output)
           buffer rendered)
@@ -260,7 +261,7 @@
                      (text (buffer-substring-no-properties
                             (plist-get block :start) (plist-get block :end))))
                 (should (string-match-p
-                         (regexp-quote "— running]") text))
+                         (regexp-quote "… run    printf lines") text))
                 (should (string-match-p "Output:\nalpha\nbeta" text))
                 (let ((start 0) (count 0))
                   (while (string-match "alpha" text start)
@@ -276,7 +277,7 @@
                      (text (buffer-substring-no-properties
                             (plist-get block :start) (plist-get block :end))))
                 (should (string-match-p
-                         (regexp-quote "— exit 7]") text))
+                         (regexp-quote "✗ run    printf lines · exit 7") text))
                 (should (string-match-p
                          (regexp-quote "Command (non-interactive):") text)))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
@@ -362,6 +363,7 @@
 (ert-deftest pichat-chat-canonical-shell-without-live-enrichment-uses-command-layout ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-activity-group-display 'expanded)
           (pichat-chat-collapse-tools-by-default nil)
           (pichat-chat-tool-default-display 'output)
           buffer)
@@ -394,7 +396,7 @@
                        (text (buffer-substring-no-properties
                               (plist-get block :start) (plist-get block :end))))
                   (should (string-match-p
-                           (regexp-quote "[execute: echo persisted — completed]")
+                           (regexp-quote "✓ run    echo persisted")
                            text))
                   (should (string-match-p
                            (regexp-quote

@@ -10,6 +10,7 @@
 (require 'subr-x)
 (require 'json)
 (require 'pichat-transcript)
+(require 'pichat-activity-presentation)
 
 (cl-defstruct (pichat-render-context
                (:constructor pichat-render-context-create)
@@ -20,7 +21,13 @@
   tool-views
   tool-renderer
   max-tool-args
-  max-tool-output)
+  max-tool-output
+  activity-member-kinds
+  activity-display
+  activity-views
+  activity-latest-key
+  activity-live-p
+  activity-header-renderer)
 
 (cl-defstruct (pichat-render-fragment
                (:constructor pichat-render-fragment-create)
@@ -35,7 +42,12 @@
    :show-thinking t
    :tool-view 'summary
    :max-tool-args 1200
-   :max-tool-output 4000))
+   :max-tool-output 4000
+   :activity-member-kinds '(tool)
+   :activity-display 'expanded
+   :activity-views nil
+   :activity-latest-key nil
+   :activity-live-p nil))
 
 (defun pichat-render--text-fragment (text &optional properties)
   "Return a fragment containing TEXT and optional PROPERTIES."
@@ -230,10 +242,34 @@ assistant transcript text."
                  nil nil #'equal)
       (pichat-render-context-tool-view context)))
 
-(defun pichat-render--tool-fragment (tool node-key context)
+(defun pichat-render--indent-fragment (fragment first-prefix rest-prefix)
+  "Apply visual FIRST-PREFIX and REST-PREFIX to FRAGMENT lines.
+The prefixes are display properties and do not alter the fragment's text."
+  (let* ((text (pichat-render-fragment-text fragment))
+         (newline (string-match "\n" text))
+         (first-end (if newline (1+ newline) (length text)))
+         (ranges (copy-sequence (pichat-render-fragment-ranges fragment))))
+    (when (> first-end 0)
+      (push (list :start 0 :end first-end
+                  :properties (list 'line-prefix first-prefix
+                                    'wrap-prefix first-prefix))
+            ranges))
+    (when (< first-end (length text))
+      (push (list :start first-end :end (length text)
+                  :properties (list 'line-prefix rest-prefix
+                                    'wrap-prefix rest-prefix))
+            ranges))
+    (pichat-render-fragment-create :text text :ranges (nreverse ranges))))
+
+(defun pichat-render--assistant-indent (fragment)
+  "Apply the ordinary two-column assistant content indent to FRAGMENT."
+  (pichat-render--indent-fragment fragment "  " "  "))
+
+(defun pichat-render--tool-fragment (tool node-key context &optional activity-member-p)
   "Render normalized TOOL owned by NODE-KEY under CONTEXT.
 When CONTEXT supplies a tool renderer, it may return final presentation text.
-A nil return keeps the generic pure renderer as the fallback."
+A nil return keeps the generic pure renderer as the fallback.  When
+ACTIVITY-MEMBER-P is non-nil, apply the activity member/body visual levels."
   (let* ((name (or (pichat-transcript-content-name tool) "?"))
          (status (or (pichat-transcript-content-status tool) 'incomplete))
          (view (pichat-render-tool-view-for
@@ -277,25 +313,32 @@ A nil return keeps the generic pure renderer as the fallback."
                     (pichat-render--concat
                      (list line (pichat-render--text-fragment output))
                      "\n"))))))))
-    (pichat-render--wrap-properties
-     body
-     (list 'pichat-content-kind 'tool
-           'pichat-tool-key
-           (cons node-key (pichat-transcript-content-tool-call-id tool))))))
+    (setq body
+          (pichat-render--wrap-properties
+           body
+           (list 'pichat-content-kind 'tool
+                 'pichat-tool-key
+                 (cons node-key (pichat-transcript-content-tool-call-id tool))
+                 'pichat-activity-member (and activity-member-p t))))
+    (if activity-member-p
+        (pichat-render--indent-fragment body "  " "    ")
+      body)))
 
 (defun pichat-render--content-fragment (content node-key context)
   "Render normalized CONTENT owned by NODE-KEY under CONTEXT."
   (pcase (pichat-transcript-content-kind content)
     ('tool (pichat-render--tool-fragment content node-key context))
     ('thinking
-     (pichat-render--text-fragment
-      (pichat-render--content-text content)
-      '(pichat-content-kind thinking
-        font-lock-face pichat-thinking-face)))
+     (pichat-render--assistant-indent
+      (pichat-render--text-fragment
+       (pichat-render--content-text content)
+       '(pichat-content-kind thinking
+         font-lock-face pichat-thinking-face))))
     ('prose
-     (pichat-render--text-fragment
-      (pichat-render--content-text content)
-      '(pichat-content-kind prose pichat-prose t)))
+     (pichat-render--assistant-indent
+      (pichat-render--text-fragment
+       (pichat-render--content-text content)
+       '(pichat-content-kind prose pichat-prose t))))
     ('image
      (pichat-render--text-fragment
       (pichat-render--content-text content)
@@ -421,56 +464,192 @@ A nil return keeps the generic pure renderer as the fallback."
      body (list 'pichat-node-key (pichat-transcript-node-key node)
                 'pichat-node-role role))))
 
+(defun pichat-render--assistant-slice-fragment (item context)
+  "Render assistant-content presentation ITEM under CONTEXT."
+  (let* ((node (pichat-activity-item-node item))
+         (node-key (pichat-transcript-node-key node))
+         result previous-kind)
+    (dolist (content (pichat-activity-item-content item))
+      (let* ((kind (pichat-transcript-content-kind content))
+             (fragment (pichat-render--content-fragment
+                        content node-key context))
+             (separator (pichat-render--content-separator previous-kind kind)))
+        (setq result (if result
+                         (pichat-render--concat
+                          (list result fragment) separator)
+                       fragment)
+              previous-kind kind)))
+    (pichat-render--wrap-properties
+     (or result (pichat-render--text-fragment ""))
+     (list 'pichat-node-key node-key
+           'pichat-node-role (pichat-transcript-node-role node)))))
+
+(defun pichat-render--annotation-fragment (node)
+  "Render NODE's assistant stop annotation as a structural fragment."
+  (let ((annotation (pichat-render--assistant-annotation node)))
+    (if annotation
+        (pichat-render--wrap-properties
+         (pichat-render--text-fragment
+          annotation '(pichat-content-kind annotation font-lock-face error))
+         (list 'pichat-node-key (pichat-transcript-node-key node)
+               'pichat-node-role (pichat-transcript-node-role node)))
+      (pichat-render--text-fragment ""))))
+
+(defun pichat-render--activity-header-fragment (group expanded context)
+  "Render GROUP header with EXPANDED state under CONTEXT."
+  (let* ((renderer (pichat-render-context-activity-header-renderer context))
+         (text (or (and renderer (funcall renderer group expanded context))
+                   (format "%s %s"
+                           (if expanded "▼" "▶")
+                           (pichat-activity-format-summary group))))
+         (first (car (pichat-activity-group-members group))))
+    (pichat-render--text-fragment
+     text
+     (list 'pichat-content-kind 'activity-header
+           'pichat-activity-key (pichat-activity-group-key group)
+           'pichat-activity-anchor (pichat-activity-group-anchor group)
+           'pichat-activity-tool-ids (pichat-activity-group-tool-ids group)
+           'pichat-activity-expanded expanded
+           'pichat-activity-status (pichat-activity-group-status group)
+           'pichat-node-key (pichat-activity-member-node-key first)
+           'pichat-node-role (pichat-activity-member-role first)
+           'font-lock-face 'pichat-tool-label-face))))
+
+(defun pichat-render--activity-member-fragment (member group context)
+  "Render MEMBER as a child of GROUP under CONTEXT."
+  (let* ((content (pichat-activity-member-content member))
+         (node-key (pichat-activity-member-node-key member))
+         (fragment
+          (pcase (pichat-activity-member-kind member)
+            ('tool (pichat-render--tool-fragment
+                    content node-key context t))
+            (_ (pichat-render--assistant-indent
+                (pichat-render--content-fragment
+                 content node-key context))))))
+    (pichat-render--wrap-properties
+     fragment
+     (list 'pichat-activity-member t
+           'pichat-activity-key (pichat-activity-group-key group)
+           'pichat-node-key node-key
+           'pichat-node-role (pichat-activity-member-role member)))))
+
+(defun pichat-render--trailing-newlines (text)
+  "Return the number of trailing newline characters in TEXT."
+  (let ((position (1- (length text))) (count 0))
+    (while (and (>= position 0) (eq (aref text position) ?\n))
+      (cl-incf count)
+      (cl-decf position))
+    count))
+
+(defun pichat-render--prefix-for-separation (previous-text desired)
+  "Return display separator after PREVIOUS-TEXT with DESIRED newlines."
+  (if (null previous-text) ""
+    (make-string (max 0 (- desired
+                           (pichat-render--trailing-newlines previous-text)))
+                 ?\n)))
+
+(defun pichat-render--presentation-records (transcript context)
+  "Return shared logical fragment records for TRANSCRIPT under CONTEXT."
+  (let* ((member-kinds
+          (or (pichat-render-context-activity-member-kinds context) '(tool)))
+         (presentation
+          (pichat-activity-build-presentation
+           transcript member-kinds
+           (pichat-render-context-show-thinking context)))
+         records previous-text)
+    (cl-labels
+        ((emit
+          (key node-key tool-id activity-key fragment desired-newlines)
+          (unless (string-empty-p (pichat-render-fragment-text fragment))
+            (let* ((prefix (pichat-render--prefix-for-separation
+                            previous-text desired-newlines))
+                   (complete (if (string-empty-p prefix)
+                                 fragment
+                               (pichat-render--concat
+                                (list (pichat-render--text-fragment prefix)
+                                      fragment)
+                                ""))))
+              (push (list :key key :node-key node-key :tool-id tool-id
+                          :activity-key activity-key :fragment complete)
+                    records)
+              (setq previous-text
+                    (pichat-render-fragment-text complete))))))
+      (dolist (item presentation)
+        (pcase (pichat-activity-item-kind item)
+          ('group
+           (let* ((group (pichat-activity-item-group item))
+                  (group-key (pichat-activity-group-key group))
+                  (expanded
+                   (pichat-activity-resolve-expanded-p
+                    group
+                    (or (pichat-render-context-activity-display context)
+                        'expanded)
+                    (pichat-render-context-activity-views context)
+                    (pichat-render-context-activity-latest-key context)
+                    (pichat-render-context-activity-live-p context))))
+             (emit (list 'activity group-key)
+                   (pichat-activity-member-node-key
+                    (car (pichat-activity-group-members group)))
+                   nil group-key
+                   (pichat-render--activity-header-fragment
+                    group expanded context)
+                   2)
+             (when expanded
+               (dolist (member (pichat-activity-group-members group))
+                 (let ((tool-id (pichat-activity-member-tool-call-id member)))
+                   (emit (list 'tool
+                               (pichat-activity-member-node-key member)
+                               (or tool-id
+                                   (pichat-activity-member-source-key member)))
+                         (pichat-activity-member-node-key member)
+                         tool-id group-key
+                         (pichat-render--activity-member-fragment
+                          member group context)
+                         1))))))
+          ('assistant-content
+           (emit (pichat-activity-item-key item)
+                 (pichat-transcript-node-key
+                  (pichat-activity-item-node item))
+                 nil nil
+                 (pichat-render--assistant-slice-fragment item context)
+                 2))
+          ('annotation
+           (emit (pichat-activity-item-key item)
+                 (pichat-transcript-node-key
+                  (pichat-activity-item-node item))
+                 nil nil
+                 (pichat-render--annotation-fragment
+                  (pichat-activity-item-node item))
+                 2))
+          ('node
+           (let ((node (pichat-activity-item-node item)))
+             (emit (pichat-activity-item-key item)
+                   (pichat-transcript-node-key node) nil nil
+                   (pichat-render--node-fragment node context) 2))))))
+    (nreverse records)))
+
 (defun pichat-render-logical-strings (transcript &optional context)
   "Return stable logical rendered records for TRANSCRIPT.
-Each record contains a propertized `:text', its top-level `:node-key', and a
-stable `:key'.  Tool runs are additionally keyed by tool-call id so callers
-can preserve unrelated tool regions.  Concatenating the returned strings is
-exactly equivalent to `pichat-render-canonical'."
-  (let ((context (or context (pichat-render-default-context)))
-        rendered-node-p
-        records)
-    (dolist (node (pichat-transcript-nodes transcript))
-      (let* ((node-key (pichat-transcript-node-key node))
-             (fragment (pichat-render--node-fragment node context))
-             (text (pichat-render-fragment-propertized-string fragment))
-             (position 0)
-             (part-index 0)
-             first-part-p)
-        (unless (string-empty-p text)
-          (setq first-part-p t)
-          (while (< position (length text))
-            (let* ((tool-key (get-text-property
-                              position 'pichat-tool-key text))
-                   (next (or (next-single-property-change
-                              position 'pichat-tool-key text (length text))
-                             (length text)))
-                   (tool-id (cdr-safe tool-key))
-                   (part (substring text position next)))
-              (when (and first-part-p rendered-node-p)
-                (setq part (concat "\n\n" part)))
-              (push (list :key (if tool-id
-                                   (list 'tool node-key tool-id)
-                                 (list 'node node-key part-index))
-                          :node-key node-key
-                          :tool-id tool-id
-                          :text part)
-                    records)
-              (unless tool-id (cl-incf part-index))
-              (setq first-part-p nil
-                    position next)))
-          (setq rendered-node-p t))))
-    (nreverse records)))
+Canonical and logical rendering consume the same presentation sequence, and
+concatenating every returned `:text' exactly equals `pichat-render-canonical'."
+  (let ((context (or context (pichat-render-default-context))))
+    (mapcar
+     (lambda (record)
+       (list :key (plist-get record :key)
+             :node-key (plist-get record :node-key)
+             :tool-id (plist-get record :tool-id)
+             :activity-key (plist-get record :activity-key)
+             :text (pichat-render-fragment-propertized-string
+                    (plist-get record :fragment))))
+     (pichat-render--presentation-records transcript context))))
 
 (defun pichat-render-canonical (transcript &optional context)
   "Purely render canonical TRANSCRIPT using explicit CONTEXT."
-  (let ((context (or context (pichat-render-default-context)))
-        fragments)
-    (dolist (node (pichat-transcript-nodes transcript))
-      (let ((fragment (pichat-render--node-fragment node context)))
-        (unless (string-empty-p (pichat-render-fragment-text fragment))
-          (push fragment fragments))))
-    (pichat-render--concat (nreverse fragments) "\n\n")))
+  (let* ((context (or context (pichat-render-default-context)))
+         (records (pichat-render--presentation-records transcript context)))
+    (pichat-render--concat
+     (mapcar (lambda (record) (plist-get record :fragment)) records)
+     "")))
 
 (provide 'pichat-render)
 ;;; pichat-render.el ends here

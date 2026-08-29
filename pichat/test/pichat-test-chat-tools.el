@@ -71,6 +71,7 @@
 (ert-deftest pichat-chat-live-fallback-tool-statuses-fold-by-default ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-activity-group-display 'expanded)
           (pichat-chat-collapse-tools-by-default t)
           buffer)
       (unwind-protect
@@ -173,11 +174,11 @@
                               (plist-get block :start) (plist-get block :end))))
                 (should (eq 'summary (plist-get block :display-state)))
                 (should (overlayp overlay))
-                (should (equal " [src/a.el:9]"
-                               (substring-no-properties
-                                (overlay-get overlay 'after-string))))
-                (should-not (string-match-p
-                             (regexp-quote " [src/a.el:9]") source))
+                (should-not (overlay-get overlay 'after-string))
+                (should (equal "src/a.el:9"
+                               (buffer-substring-no-properties
+                                (overlay-start overlay) (overlay-end overlay))))
+                (should (string-match-p (regexp-quote "src/a.el:9") source))
                 (goto-char (marker-position (plist-get block :start)))
                 (pichat-chat-toggle-tool-at-point)
                 (setq block (gethash "located" pichat-chat--tool-blocks)
@@ -214,9 +215,11 @@
                                        pichat-chat--tool-blocks))
                        (overlay (plist-get block :overlay)))
                   (should (overlayp overlay))
-                  (should (equal " [rollback.el]"
-                                 (substring-no-properties
-                                  (overlay-get overlay 'after-string))))))))
+                  (should-not (overlay-get overlay 'after-string))
+                  (should (equal "rollback.el"
+                                 (buffer-substring-no-properties
+                                  (overlay-start overlay)
+                                  (overlay-end overlay))))))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
 (ert-deftest pichat-chat-tool-location-actions-visit-copy-path-and-location ()
@@ -326,33 +329,53 @@
                                   (list :data data) session))))
               (with-current-buffer buffer (pichat-chat-repaint)))
             (with-current-buffer buffer
-              (let* ((block (gethash "tool-1" pichat-chat--tool-blocks))
-                     (canonical-key (plist-get block :canonical-key)))
-                (should block)
-                (should (eq 'summary (plist-get block :display-state)))
+              (let* ((node
+                      (cl-find-if
+                       (lambda (candidate)
+                         (cl-find "tool-1"
+                                  (pichat-transcript-node-content candidate)
+                                  :key #'pichat-transcript-content-tool-call-id
+                                  :test #'equal))
+                       (pichat-transcript-nodes
+                        pichat-chat--canonical-transcript)))
+                     (canonical-view-key
+                      (pichat-chat--canonical-tool-view-key
+                       (pichat-transcript-node-key node) "tool-1"))
+                     (activity
+                      (car (pichat-test--hash-table-keys
+                            pichat-chat--activity-blocks))))
+                (should-not (gethash "tool-1" pichat-chat--tool-blocks))
                 (should (eq 'summary
-                            (gethash
-                             (pichat-chat--canonical-tool-view-key
-                              (car canonical-key) "tool-1")
-                             pichat-chat--tool-view-states)))
+                            (gethash canonical-view-key
+                                     pichat-chat--tool-view-states)))
                 (should-not
                  (gethash (pichat-chat--live-tool-view-key "tool-1")
                           pichat-chat--tool-view-states))
-                (should (equal "safe.txt:5"
-                               (pichat-chat-tool-ui-location-string
-                                (gethash "tool-1"
-                                         pichat-chat--tool-enrichments))))
-                (should (overlayp (plist-get block :overlay)))
-                (should (equal " [safe.txt:5]"
-                               (substring-no-properties
-                                (overlay-get (plist-get block :overlay)
-                                             'after-string))))
-                (goto-char (marker-position (plist-get block :start)))
-                (let (copied)
-                  (cl-letf (((symbol-function 'kill-new)
-                             (lambda (text &optional _) (setq copied text))))
-                    (pichat-chat-copy-tool-location))
-                  (should (equal "safe.txt:5" copied))))
+                (should (eq 'collapsed
+                            (plist-get (gethash activity
+                                               pichat-chat--activity-blocks)
+                                       :display-state)))
+                (goto-char
+                 (marker-position
+                  (plist-get (gethash activity pichat-chat--activity-blocks)
+                             :start)))
+                (pichat-chat-toggle-activity-at-point)
+                (let ((block (gethash "tool-1" pichat-chat--tool-blocks)))
+                  (should block)
+                  (should (eq 'summary (plist-get block :display-state)))
+                  (should (equal "safe.txt:5"
+                                 (pichat-chat-tool-ui-location-string
+                                  (gethash "tool-1"
+                                           pichat-chat--tool-enrichments))))
+                  (should (overlayp (plist-get block :overlay)))
+                  (should-not
+                   (overlay-get (plist-get block :overlay) 'after-string))
+                  (goto-char (marker-position (plist-get block :start)))
+                  (let (copied)
+                    (cl-letf (((symbol-function 'kill-new)
+                               (lambda (text &optional _) (setq copied text))))
+                      (pichat-chat-copy-tool-location))
+                    (should (equal "safe.txt:5" copied)))))
               (should-not (gethash "tool-1"
                                    pichat-chat--tool-auxiliary-details))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
@@ -462,6 +485,38 @@
               (should (= 0 (hash-table-count
                             pichat-chat--tool-view-states)))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-chat-tool-ui-concise-headers-cover-enriched-kinds-and-fallback ()
+  (dolist (case '(("bash" (:command "printf hello") "✓ run    printf hello")
+                  ("read" (:path "src/read.el" :line 8)
+                   "✓ read   src/read.el:8")
+                  ("write" (:path "src/new.el") "✓ write  src/new.el:1")
+                  ("edit" (:path "src/edit.el") "✓ edit   src/edit.el")
+                  ("grep" (:pattern "needle" :path "pichat/")
+                   "✓ search needle in pichat/")
+                  ("fetch" (:url "https://example.test/data")
+                   "✓ fetch  https://example.test/data")
+                  ("extension_tool" (:value "opaque")
+                   "✓ tool   extension_tool")))
+    (pcase-let ((`(,name ,args ,expected) case))
+      (let* ((raw (list :toolCallId (concat "id-" name)
+                        :toolName name :args args))
+             (text (pichat-chat-tool-ui-text
+                    raw "done" "output" 'summary 300 4000
+                    pichat-chat-tool-truncation-notice-format)))
+        (should (string-match-p (regexp-quote expected) text))
+        (should-not (string-match-p "opaque" text)))))
+  (let* ((raw '(:toolCallId "bad" :toolName "bash"
+                :args (:command "make test")))
+         (enrichment (pichat-tool-enrichment-build
+                      "bad" "bash" '(:command "make test")))
+         (enrichment
+          (plist-put enrichment :shell-outcome '(:kind exit :exit-code 2)))
+         (text (pichat-chat-tool-ui-text
+                raw "error" "failed" 'summary 300 4000
+                pichat-chat-tool-truncation-notice-format enrichment)))
+    (should (string-match-p
+             (regexp-quote "✗ run    make test · exit 2") text))))
 
 (provide 'pichat-test-chat-tools)
 ;;; pichat-test-chat-tools.el ends here

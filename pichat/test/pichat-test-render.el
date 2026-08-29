@@ -104,5 +104,115 @@
     (should (equal before transcript))
     (should (equal first second))))
 
+(defun pichat-test-render--grouping-transcript ()
+  "Return a compact transcript with two tool groups and prose boundaries."
+  (pichat-transcript-create
+   :nodes
+   (list
+    (pichat-transcript-node-create
+     :kind 'message :key "assistant-one" :role 'assistant
+     :content
+     (list
+      (pichat-transcript-content-create
+       :kind 'tool :index 0 :tool-call-id "read-one" :name "read"
+       :arguments '(:path "one.el") :status 'done
+       :output (list (pichat-transcript-content-create
+                      :kind 'prose :index 0 :text "first output")))
+      (pichat-transcript-content-create
+       :kind 'tool :index 1 :tool-call-id "edit-two" :name "edit"
+       :arguments '(:path "two.el") :status 'incomplete :output nil)
+      (pichat-transcript-content-create
+       :kind 'prose :index 2 :text "Assistant **answer**.")))
+    (pichat-transcript-node-create
+     :kind 'message :key "user" :role 'user
+     :content (list (pichat-transcript-content-create
+                     :kind 'prose :index 0 :text "Next question")))
+    (pichat-transcript-node-create
+     :kind 'message :key "assistant-two" :role 'assistant
+     :content (list (pichat-transcript-content-create
+                     :kind 'tool :index 0 :tool-call-id "fetch-three"
+                     :name "fetch" :arguments '(:url "https://example.test")
+                     :status 'done :output nil))))
+   :diagnostics nil :metadata nil))
+
+(defun pichat-test-render--activity-context (display &optional live latest view)
+  "Return an activity render context for DISPLAY, LIVE, LATEST, and VIEW."
+  (pichat-render-context-create
+   :show-thinking t :tool-view (or view 'summary)
+   :max-tool-args 200 :max-tool-output 200
+   :activity-member-kinds '(tool) :activity-display display
+   :activity-latest-key latest :activity-live-p live))
+
+(ert-deftest pichat-render-activity-collapsed-group-emits-only-bounded-header ()
+  (let* ((transcript (pichat-test-render--grouping-transcript))
+         (text (pichat-render-fragment-text
+                (pichat-render-canonical
+                 transcript (pichat-test-render--activity-context 'collapsed)))))
+    (should (string-match-p "Read a file and edited a file" text))
+    (should (string-match-p "Fetched data" text))
+    (should-not (string-match-p (regexp-quote "[tool:") text))
+    (should-not (string-match-p (regexp-opt '("one.el" "two.el" "example.test"))
+                                text))
+    (should (< (string-match-p "Read a file" text)
+               (string-match-p (regexp-quote "Assistant **answer**.") text)
+               (string-match-p "Next question" text)
+               (string-match-p "Fetched data" text)))))
+
+(ert-deftest pichat-render-activity-expanded-groups-preserve-properties-and-indents ()
+  (let* ((transcript (pichat-test-render--grouping-transcript))
+         (context (pichat-test-render--activity-context 'expanded nil nil 'output))
+         (fragment (pichat-render-canonical transcript context))
+         (text (pichat-render-fragment-propertized-string fragment))
+         (header (string-match "Read a file" text))
+         (tool (string-match "tool:read done" text))
+         (body (string-match "first output" text))
+         (prose (string-match (regexp-quote "Assistant **answer**.") text))
+         (user (string-match "▌ Next question" text)))
+    (should header)
+    (should tool)
+    (should (get-text-property header 'pichat-activity-key text))
+    (should (get-text-property tool 'pichat-activity-member text))
+    (should (equal "  " (get-text-property tool 'line-prefix text)))
+    (should (equal "  " (get-text-property tool 'wrap-prefix text)))
+    (should (equal "    " (get-text-property body 'line-prefix text)))
+    (should (equal "  " (get-text-property prose 'line-prefix text)))
+    (should-not (get-text-property header 'line-prefix text))
+    (should-not (get-text-property user 'line-prefix text))))
+
+(ert-deftest pichat-render-activity-latest-expands-only-current-live-tail-group ()
+  (let* ((transcript (pichat-test-render--grouping-transcript))
+         (presentation (pichat-activity-build-presentation
+                        transcript '(tool) t))
+         (groups (pichat-activity-groups presentation))
+         (latest (pichat-activity-group-key (car (last groups))))
+         (context (pichat-test-render--activity-context
+                   'latest t latest 'summary))
+         (text (pichat-render-fragment-text
+                (pichat-render-canonical transcript context))))
+    (should-not (string-match-p "tool:read" text))
+    (should-not (string-match-p "tool:edit" text))
+    (should (string-match-p "tool:fetch done" text))))
+
+(ert-deftest pichat-render-logical-activity-records-equal-canonical-exactly ()
+  (let* ((transcript (pichat-test-render--grouping-transcript))
+         (context (pichat-test-render--activity-context 'expanded nil nil 'output))
+         (canonical
+          (pichat-render-fragment-propertized-string
+           (pichat-render-canonical transcript context)))
+         (records (pichat-render-logical-strings transcript context))
+         (logical (mapconcat (lambda (record) (plist-get record :text))
+                             records "")))
+    (should (equal-including-properties canonical logical))
+    (should (= 2 (cl-count-if
+                  (lambda (record) (plist-get record :activity-key))
+                  (seq-filter (lambda (record)
+                                (eq 'activity (car-safe (plist-get record :key))))
+                              records))))
+    (should (= 3 (cl-count-if (lambda (record) (plist-get record :tool-id))
+                              records)))
+    (should (equal (substring-no-properties canonical)
+                   (pichat-render-fragment-text
+                    (pichat-render-canonical transcript context))))))
+
 (provide 'pichat-test-render)
 ;;; pichat-test-render.el ends here

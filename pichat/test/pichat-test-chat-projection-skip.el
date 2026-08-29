@@ -123,7 +123,7 @@
                 (setf (pichat-transcript-content-status tool) 'done)
                 (pichat-chat--project-live-tail)
                 (should (string-match-p
-                         (regexp-quote "[tool:read done]")
+                         (regexp-quote "✓ read   initial.el")
                          (pichat-test-buffer-text buffer)))
                 ;; Output-only change.
                 (setf (pichat-transcript-content-output tool)
@@ -152,9 +152,11 @@
                                        pichat-chat--live-tool-blocks))
                        (overlay (plist-get block :overlay)))
                   (should (overlayp overlay))
-                  (should (equal " [derived.el:7]"
-                                 (substring-no-properties
-                                  (overlay-get overlay 'after-string)))))
+                  (should-not (overlay-get overlay 'after-string))
+                  (should (equal "derived.el:7"
+                                 (buffer-substring-no-properties
+                                  (overlay-start overlay)
+                                  (overlay-end overlay)))))
                 (should (= 4 focused-snapshots))
                 (should (zerop full-snapshots)))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))

@@ -141,22 +141,32 @@ the underlying canonical/live source text and block display state are intact."
     (when (and location start end (< start end))
       (save-excursion
         (goto-char start)
-        (when (search-forward "]" (min end (line-end-position)) t)
-          (let* ((position (point))
-                 (overlay (make-overlay position position nil t nil))
-                 (text
-                  (propertize
-                   (format " [%s]" location)
-                   'font-lock-face 'link
-                   'mouse-face 'highlight
-                   'help-echo
-                   "RET or mouse-1: visit; C-c C-w: copy location"
-                   'keymap pichat-chat-tool-location-map
-                   'pichat-tool-location location)))
-            (overlay-put overlay 'after-string text)
-            (overlay-put overlay 'evaporate t)
-            (overlay-put overlay 'pichat-tool-location-overlay t)
-            (setf (plist-get block :overlay) overlay)))))))
+        (let* ((line-end (min end (line-end-position)))
+               (found (search-forward location line-end t))
+               (overlay
+                (if found
+                    (make-overlay (- found (length location)) found nil t nil)
+                  (make-overlay line-end line-end nil t nil))))
+          (overlay-put overlay 'font-lock-face 'link)
+          (overlay-put overlay 'mouse-face 'highlight)
+          (overlay-put overlay 'help-echo
+                       "RET or mouse-1: visit; C-c C-w: copy location")
+          (overlay-put overlay 'keymap pichat-chat-tool-location-map)
+          (overlay-put overlay 'pichat-tool-location location)
+          (unless found
+            (overlay-put
+             overlay 'after-string
+             (propertize
+              (format " [%s]" location)
+              'font-lock-face 'link
+              'mouse-face 'highlight
+              'help-echo
+              "RET or mouse-1: visit; C-c C-w: copy location"
+              'keymap pichat-chat-tool-location-map
+              'pichat-tool-location location)))
+          (overlay-put overlay 'evaporate t)
+          (overlay-put overlay 'pichat-tool-location-overlay t)
+          (setf (plist-get block :overlay) overlay))))))
 
 (defun pichat-chat-tool-ui-refresh-decorations (blocks enrichments generation)
   "Recreate location decorations for BLOCKS in GENERATION."
@@ -186,16 +196,15 @@ edits a buffer or mutates transcript state."
                enrichments generation tool-id)
               (pichat-tool-enrichment-build
                tool-id (plist-get raw :toolName) (plist-get raw :args)))))
-    (when (pichat-shell-presentation-execute-p enrichment)
-      (pichat-chat-tool-ui-text
-       raw
-       (symbol-name
-        (or (pichat-transcript-content-status tool) 'incomplete))
-       (pichat-chat-tool-ui--canonical-output tool)
-       (pichat-render-tool-view-for context node-key tool-id)
-       (pichat-render-context-max-tool-args context)
-       (pichat-render-context-max-tool-output context)
-       notice-format enrichment))))
+    (pichat-chat-tool-ui-text
+     raw
+     (symbol-name
+      (or (pichat-transcript-content-status tool) 'incomplete))
+     (pichat-chat-tool-ui--canonical-output tool)
+     (pichat-render-tool-view-for context node-key tool-id)
+     (pichat-render-context-max-tool-args context)
+     (pichat-render-context-max-tool-output context)
+     notice-format enrichment)))
 
 (defun pichat-chat-tool-ui-index-tools
     (transcript start end context live-p generation enrichments)
@@ -259,11 +268,70 @@ creates block records, markers, and overlays; rendered text is never edited."
           (concat (substring text 0 limit)
                   (format "…[%d chars omitted]" (- (length text) limit))))))))
 
+(defun pichat-chat-tool-ui--single-line (value limit fallback)
+  "Return VALUE flattened and bounded to LIMIT, or FALLBACK."
+  (let ((text (replace-regexp-in-string
+               "[[:space:]\n\r]+" " "
+               (string-trim (if (stringp value) value "")))))
+    (if (string-empty-p text)
+        fallback
+      (truncate-string-to-width text limit nil nil "…"))))
+
+(defun pichat-chat-tool-ui-status-glyph (status)
+  "Return concise status glyph for normalized STATUS."
+  (pcase (if (symbolp status) status (intern (or status "incomplete")))
+    ('done "✓")
+    ('error "✗")
+    ('orphan "?")
+    ((or 'running 'incomplete) "…")
+    (_ "?")))
+
+(defun pichat-chat-tool-ui-kind-label (kind)
+  "Return concise row label for enrichment KIND."
+  (pcase kind
+    ('execute "run")
+    ('read "read")
+    ('write "write")
+    ('edit "edit")
+    ('search "search")
+    ('fetch "fetch")
+    (_ "tool")))
+
+(defun pichat-chat-tool-ui--exception-label (enrichment status)
+  "Return exceptional outcome suffix for ENRICHMENT and STATUS, or nil."
+  (when (pichat-shell-presentation-execute-p enrichment)
+    (let ((label (pichat-shell-presentation-outcome-label
+                  (plist-get enrichment :shell-outcome) status)))
+      (unless (member label '("running" "completed" "incomplete"))
+        label))))
+
+(defun pichat-chat-tool-ui-format-header (raw status enrichment)
+  "Return a concise enriched header for RAW with STATUS and ENRICHMENT."
+  (let* ((kind (or (plist-get enrichment :kind) 'other))
+         (title (pichat-chat-tool-ui--single-line
+                 (plist-get enrichment :title) 120
+                 (pichat-chat-tool-ui--single-line
+                  (plist-get raw :toolName) 60 "unknown tool")))
+         (exception (pichat-chat-tool-ui--exception-label enrichment status)))
+    (propertize
+     (format "%s %-6s %s%s"
+             (pichat-chat-tool-ui-status-glyph status)
+             (pichat-chat-tool-ui-kind-label kind)
+             title
+             (if exception (format " · %s" exception) ""))
+     'font-lock-face 'pichat-tool-label-face)))
+
+(defun pichat-chat-tool-ui--replace-first-line (text header)
+  "Return TEXT with its first line replaced by HEADER."
+  (if (string-match "\n" text)
+      (concat header (substring text (match-beginning 0)))
+    header))
+
 (defun pichat-chat-tool-ui-text
     (raw status text state max-args max-output notice-format &optional enrichment)
   "Return rendered tool text for RAW, STATUS, TEXT, and display STATE.
 ENRICHMENT enables kind-specific presentation; it is derived from RAW when
-omitted."
+omitted.  Complete raw values remain available through the block details UI."
   (let* ((state (or state 'output))
          (enrichment
           (or enrichment
@@ -271,23 +339,39 @@ omitted."
                (plist-get raw :toolCallId)
                (plist-get raw :toolName)
                (plist-get raw :args))))
-         (header
-          (propertize
-           (format "[tool:%s %s]" (or (plist-get raw :toolName) "?") status)
-           'font-lock-face 'pichat-tool-label-face)))
+         (header (pichat-chat-tool-ui-format-header raw status enrichment)))
     (if (pichat-shell-presentation-execute-p enrichment)
-        (pichat-shell-presentation-text
-         enrichment status text state max-args max-output notice-format)
-      (if (eq state 'summary)
-          (format "%s\n" header)
-        (let ((args (pichat-chat-tool-ui-truncate-args
-                     (plist-get raw :args) max-args)))
-          (if (eq state 'args)
-              (format "%s%s\n" header (if args (format " %s" args) ""))
-            (format "%s%s\n%s\n" header
-                    (if args (format " %s" args) "")
-                    (pichat-chat-tool-ui-truncate-output
-                     text max-output notice-format))))))))
+        (pichat-chat-tool-ui--replace-first-line
+         (pichat-shell-presentation-text
+          enrichment status text state max-args max-output notice-format)
+         header)
+      (let ((args (pichat-chat-tool-ui-truncate-args
+                   (plist-get raw :args) max-args)))
+        (pcase state
+          ('summary (format "%s\n" header))
+          ('args
+           (if args
+               (format "%s\nArguments:\n%s\n" header args)
+             (format "%s\n" header)))
+          (_
+           (format "%s%sOutput:\n%s\n"
+                   header
+                   (if args (format "\nArguments:\n%s\n" args) "\n")
+                   (pichat-chat-tool-ui-truncate-output
+                    text max-output notice-format))))))))
+
+(defun pichat-chat-tool-ui-indent-text (text)
+  "Return a copy of TEXT with visual activity member/body prefixes."
+  (let* ((copy (copy-sequence text))
+         (newline (string-match "\n" copy))
+         (first-end (if newline (1+ newline) (length copy))))
+    (when (> first-end 0)
+      (add-text-properties 0 first-end
+                           '(line-prefix "  " wrap-prefix "  ") copy))
+    (when (< first-end (length copy))
+      (add-text-properties first-end (length copy)
+                           '(line-prefix "    " wrap-prefix "    ") copy))
+    copy))
 
 (defun pichat-chat-tool-ui-replace-region
     (block text tracked-markers edit-function)
@@ -300,7 +384,9 @@ buffer-edit and view-preservation mechanics."
          (end-pos (marker-position end-marker))
          (logical-properties
           (cl-loop for property in '(pichat-node-key pichat-node-role
-                                      pichat-content-kind pichat-tool-key)
+                                      pichat-content-kind pichat-tool-key
+                                      pichat-activity-key
+                                      pichat-activity-member)
                    for value = (get-text-property start-pos property)
                    when value append (list property value)))
          (tracked
@@ -349,16 +435,17 @@ buffer-edit and view-preservation mechanics."
                (plist-get raw :toolName)
                (plist-get raw :args))))
          (new
-          (concat
-           (or (plist-get block :prefix) "")
-           (pichat-chat-tool-ui-text
-            raw (or (plist-get block :status) "done")
-            (or (plist-get block :full-text) "")
-            (or (plist-get block :display-state) 'summary)
-            (plist-get context :max-args)
-            (plist-get context :max-output)
-            (plist-get context :truncation-notice)
-            enrichment))))
+          (pichat-chat-tool-ui-indent-text
+           (concat
+            (or (plist-get block :prefix) "")
+            (pichat-chat-tool-ui-text
+             raw (or (plist-get block :status) "done")
+             (or (plist-get block :full-text) "")
+             (or (plist-get block :display-state) 'summary)
+             (plist-get context :max-args)
+             (plist-get context :max-output)
+             (plist-get context :truncation-notice)
+             enrichment)))))
     (pichat-chat-tool-ui-replace-region
      block new (plist-get context :tracked-markers)
      (plist-get context :edit-function))

@@ -32,6 +32,7 @@
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
           (pichat-chat-render-markdown nil)
+          (pichat-chat-activity-group-display 'expanded)
           operation before-calls after-calls buffer)
       (unwind-protect
           (progn

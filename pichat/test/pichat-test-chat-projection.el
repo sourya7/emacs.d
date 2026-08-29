@@ -612,7 +612,15 @@
               (should (equal "entry-user"
                              (get-text-property (match-beginning 0)
                                                 'pichat-node-key)))
-              (search-forward "tool:read_example")
+              (search-forward "Read a file")
+              (goto-char (match-beginning 0))
+              (let ((activity (pichat-chat--activity-at-point)))
+                (should activity)
+                (should (eq 'collapsed (plist-get activity :display-state)))
+                (pichat-chat-toggle-activity-at-point))
+              (goto-char (point-min))
+              (search-forward "✓ read")
+              (goto-char (match-beginning 0))
               (should (pichat-chat--tool-at-point))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
@@ -635,6 +643,7 @@
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
           (pichat-chat-render-markdown nil)
+          (pichat-chat-activity-group-display 'expanded)
           buffer canonical-id canonical-block)
       (unwind-protect
           (progn

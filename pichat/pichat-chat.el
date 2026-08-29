@@ -23,6 +23,7 @@
 (require 'pichat-tool-enrichment)
 (require 'pichat-shell-presentation)
 (require 'pichat-chat-tool-ui)
+(require 'pichat-chat-activity-ui)
 (require 'pichat-chat-completion)
 (require 'pichat-chat-input)
 (require 'pichat-chat-diagnostics)
@@ -63,6 +64,16 @@ When nil, C-c C-c sends and RET inserts a newline."
   :type '(choice (const :tag "Header only" summary)
                  (const :tag "Header and args" args)
                  (const :tag "Header, args, and output" output))
+  :group 'pichat)
+
+(defcustom pichat-chat-activity-group-display 'latest
+  "Default disclosure policy for agent activity groups.
+`latest' expands only current live tail activity, `collapsed' folds every
+group, and `expanded' opens every group.  Explicit per-group choices override
+this policy without changing individual tool display state."
+  :type '(choice (const :tag "Current live activity only" latest)
+                 (const :tag "Collapse all activity" collapsed)
+                 (const :tag "Expand all activity" expanded))
   :group 'pichat)
 
 (defcustom pichat-chat-max-tool-output-chars 4000
@@ -309,6 +320,18 @@ from final newlines or redisplay edge cases."
 (defvar-local pichat-chat--tool-view-states nil
   "Tool display states keyed by source-local tool call id.")
 
+(defvar-local pichat-chat--activity-blocks nil
+  "Combined canonical and live activity group blocks.")
+
+(defvar-local pichat-chat--canonical-activity-blocks nil
+  "Activity group blocks owned by the canonical region.")
+
+(defvar-local pichat-chat--live-activity-blocks nil
+  "Activity group blocks owned by the live-tail region.")
+
+(defvar-local pichat-chat--activity-view-states nil
+  "Explicit activity disclosure states keyed by source-local identity.")
+
 (defvar-local pichat-chat--tool-auxiliary-details nil
   "Non-persisted live tool details keyed by tool call id.")
 
@@ -409,6 +432,7 @@ Markup characters remain visible; this is fontification only."
     (define-key map (kbd "C-c C-p") #'pichat-sessions-list)
     (define-key map (kbd "C-c C-b") #'pichat-sessions-browse-files)
     (define-key map (kbd "C-c C-z") #'pichat-chat-toggle-tool-at-point)
+    (define-key map (kbd "C-c C-;") #'pichat-chat-toggle-activity-at-point)
     (define-key map (kbd "C-c C-d") #'pichat-chat-show-tool-details)
     (define-key map (kbd "C-c C-g") #'pichat-chat-visit-tool-location)
     (define-key map (kbd "C-c C-w") #'pichat-chat-copy-tool-location)
@@ -517,6 +541,13 @@ it forks into new sessions and does not perform same-file tree navigation.
   (setq-local pichat-chat--live-tool-blocks
               (make-hash-table :test #'equal))
   (setq-local pichat-chat--tool-view-states (make-hash-table :test #'equal))
+  (setq-local pichat-chat--activity-blocks (make-hash-table :test #'equal))
+  (setq-local pichat-chat--canonical-activity-blocks
+              (make-hash-table :test #'equal))
+  (setq-local pichat-chat--live-activity-blocks
+              (make-hash-table :test #'equal))
+  (setq-local pichat-chat--activity-view-states
+              (make-hash-table :test #'equal))
   (setq-local pichat-chat--tool-auxiliary-details
               (make-hash-table :test #'equal))
   (setq-local pichat-chat--tool-enrichments
@@ -655,6 +686,16 @@ Use its scope label as a unique provisional identity until Pi reports an id."
   "Release markers and overlays owned only by live-tail tool blocks."
   (pichat-chat-tool-ui-release-blocks pichat-chat--live-tool-blocks))
 
+(defun pichat-chat--release-activity-blocks ()
+  "Release markers owned by all current activity group blocks."
+  (pichat-chat-activity-ui-release-blocks
+   pichat-chat--canonical-activity-blocks)
+  (pichat-chat-activity-ui-release-blocks pichat-chat--live-activity-blocks))
+
+(defun pichat-chat--release-live-activity-blocks ()
+  "Release markers owned only by live-tail activity group blocks."
+  (pichat-chat-activity-ui-release-blocks pichat-chat--live-activity-blocks))
+
 (defun pichat-chat--release-live-projection-fragments (&optional fragments)
   "Release boundary markers owned by live FRAGMENTS or current state."
   (dolist (fragment (or fragments pichat-chat--live-projection-fragments))
@@ -712,10 +753,15 @@ When DEFER-SYNC is non-nil, wait for a subsequent authoritative state reply."
   (pichat-chat-completion-reset
    pichat-chat--source-generation (pichat-chat--completion-source-key))
   (pichat-chat--release-tool-blocks)
+  (pichat-chat--release-activity-blocks)
   (setq pichat-chat--tool-blocks (make-hash-table :test #'equal)
         pichat-chat--canonical-tool-blocks (make-hash-table :test #'equal)
         pichat-chat--live-tool-blocks (make-hash-table :test #'equal)
         pichat-chat--tool-view-states (make-hash-table :test #'equal)
+        pichat-chat--activity-blocks (make-hash-table :test #'equal)
+        pichat-chat--canonical-activity-blocks (make-hash-table :test #'equal)
+        pichat-chat--live-activity-blocks (make-hash-table :test #'equal)
+        pichat-chat--activity-view-states (make-hash-table :test #'equal)
         pichat-chat--tool-auxiliary-details
         (make-hash-table :test #'equal)
         pichat-chat--tool-enrichments
@@ -1801,20 +1847,39 @@ Signal a user error when thinking control is disabled or unavailable."
     (pichat-chat-tool-ui-render-tool-text
      enrichments generation notice-format tool node-key context)))
 
+(defun pichat-chat--activity-presentation-state (transcript live-p)
+  "Return explicit activity presentation state for TRANSCRIPT and LIVE-P."
+  (pichat-chat-activity-ui-presentation-state
+   transcript '(tool) pichat-chat-show-thinking live-p
+   pichat-chat--source-generation pichat-chat--activity-view-states
+   pichat-chat--live-draft pichat-chat-activity-group-display))
+
 (defun pichat-chat--canonical-render-context (&optional transcript)
   "Return an explicit canonical render context for optional TRANSCRIPT."
-  (pichat-render-context-create
-   :show-thinking pichat-chat-show-thinking
-   :tool-view (pichat-chat--tool-completed-display-state)
-   :tool-views (and transcript
-                    (pichat-chat--tool-views-for-transcript transcript nil))
-   :tool-renderer
-   (apply-partially
-    #'pichat-chat--render-tool-text-with-path-context
-    pichat-chat--tool-enrichments pichat-chat--source-generation
-    pichat-chat-tool-truncation-notice-format)
-   :max-tool-args pichat-chat-max-tool-args-chars
-   :max-tool-output pichat-chat-max-tool-output-chars))
+  (let ((activity (and transcript
+                       (pichat-chat--activity-presentation-state
+                        transcript nil))))
+    (pichat-render-context-create
+     :show-thinking pichat-chat-show-thinking
+     :tool-view (pichat-chat--tool-completed-display-state)
+     :tool-views (and transcript
+                      (pichat-chat--tool-views-for-transcript transcript nil))
+     :tool-renderer
+     (apply-partially
+      #'pichat-chat--render-tool-text-with-path-context
+      pichat-chat--tool-enrichments pichat-chat--source-generation
+      pichat-chat-tool-truncation-notice-format)
+     :max-tool-args pichat-chat-max-tool-args-chars
+     :max-tool-output pichat-chat-max-tool-output-chars
+     :activity-member-kinds '(tool)
+     :activity-display pichat-chat-activity-group-display
+     :activity-views (plist-get activity :views)
+     :activity-latest-key nil
+     :activity-live-p nil
+     :activity-header-renderer
+     (apply-partially #'pichat-chat-activity-ui-format-header
+                      pichat-chat--tool-enrichments
+                      pichat-chat--source-generation))))
 
 (defun pichat-chat--index-canonical-tools (transcript start end context
                                                       &optional live-p)
@@ -1826,9 +1891,14 @@ Signal a user error when thinking control is disabled or unavailable."
      transcript start end context live-p pichat-chat--source-generation
      pichat-chat--tool-enrichments)))
 
+(defun pichat-chat--index-activity-groups (start end &optional live-p)
+  "Build activity header blocks between START and END for LIVE-P source."
+  (pichat-chat-activity-ui-index-groups
+   start end live-p pichat-chat--source-generation))
+
 (defun pichat-chat--projection-snapshot ()
   "Capture buffer and projection state for transactional rollback."
-  (let (block-markers fragment-markers)
+  (let (block-markers activity-block-markers fragment-markers)
     (dolist (fragment pichat-chat--live-projection-fragments)
       (push (list fragment
                   (marker-position (plist-get fragment :start))
@@ -1843,6 +1913,16 @@ Signal a user error when thinking control is disabled or unavailable."
                        (marker-position (plist-get block :start))
                        (marker-position (plist-get block :end)))
                  block-markers))
+         table)))
+    (dolist (table (list pichat-chat--canonical-activity-blocks
+                         pichat-chat--live-activity-blocks))
+      (when (hash-table-p table)
+        (maphash
+         (lambda (key block)
+           (push (list key block
+                       (marker-position (plist-get block :start))
+                       (marker-position (plist-get block :end)))
+                 activity-block-markers))
          table)))
     (list :text (buffer-substring (point-min) (point-max))
           :point (point)
@@ -1867,10 +1947,17 @@ Signal a user error when thinking control is disabled or unavailable."
           :canonical-blocks pichat-chat--canonical-tool-blocks
           :live-blocks pichat-chat--live-tool-blocks
           :block-markers block-markers
+          :activity-blocks pichat-chat--activity-blocks
+          :canonical-activity-blocks pichat-chat--canonical-activity-blocks
+          :live-activity-blocks pichat-chat--live-activity-blocks
+          :activity-block-markers activity-block-markers
           :live-fragments pichat-chat--live-projection-fragments
           :fragment-markers fragment-markers
           :view-states (and (hash-table-p pichat-chat--tool-view-states)
                             (copy-hash-table pichat-chat--tool-view-states))
+          :activity-view-states
+          (and (hash-table-p pichat-chat--activity-view-states)
+               (copy-hash-table pichat-chat--activity-view-states))
           :auxiliary (and (hash-table-p pichat-chat--tool-auxiliary-details)
                           (copy-hash-table
                            pichat-chat--tool-auxiliary-details))
@@ -1892,6 +1979,10 @@ Signal a user error when thinking control is disabled or unavailable."
     (set-marker (plist-get (cadr entry) :start) (nth 2 entry))
     (set-marker-insertion-type (plist-get (cadr entry) :start) t)
     (set-marker (plist-get (cadr entry) :end) (nth 3 entry)))
+  (dolist (entry (plist-get snapshot :activity-block-markers))
+    (set-marker (plist-get (cadr entry) :start) (nth 2 entry))
+    (set-marker-insertion-type (plist-get (cadr entry) :start) t)
+    (set-marker (plist-get (cadr entry) :end) (nth 3 entry)))
   (unless (eq pichat-chat--live-projection-fragments
               (plist-get snapshot :live-fragments))
     (pichat-chat--release-live-projection-fragments))
@@ -1903,9 +1994,16 @@ Signal a user error when thinking control is disabled or unavailable."
         pichat-chat--canonical-tool-blocks
         (plist-get snapshot :canonical-blocks)
         pichat-chat--live-tool-blocks (plist-get snapshot :live-blocks)
+        pichat-chat--activity-blocks (plist-get snapshot :activity-blocks)
+        pichat-chat--canonical-activity-blocks
+        (plist-get snapshot :canonical-activity-blocks)
+        pichat-chat--live-activity-blocks
+        (plist-get snapshot :live-activity-blocks)
         pichat-chat--live-projection-fragments
         (plist-get snapshot :live-fragments)
         pichat-chat--tool-view-states (plist-get snapshot :view-states)
+        pichat-chat--activity-view-states
+        (plist-get snapshot :activity-view-states)
         pichat-chat--tool-auxiliary-details (plist-get snapshot :auxiliary)
         pichat-chat--entry-cache (plist-get snapshot :cache)
         pichat-chat--canonical-transcript (plist-get snapshot :transcript)
@@ -1971,6 +2069,22 @@ Signal a user error when thinking control is disabled or unavailable."
        pichat-chat--live-tool-blocks))
     records))
 
+(defun pichat-chat--focused-activity-block-snapshot ()
+  "Capture current live activity block identities and boundaries."
+  (let (records)
+    (when (hash-table-p pichat-chat--live-activity-blocks)
+      (maphash
+       (lambda (_key block)
+         (let ((start (plist-get block :start))
+               (end (plist-get block :end)))
+           (push (list :block block
+                       :start (marker-position start)
+                       :start-insertion (marker-insertion-type start)
+                       :end (marker-position end))
+                 records)))
+       pichat-chat--live-activity-blocks))
+    records))
+
 (defun pichat-chat--focused-markdown-snapshot ()
   "Capture derived Markdown state needed by terminal live rollback."
   (let (overlays)
@@ -2014,10 +2128,15 @@ No chat-buffer text is copied; the active Emacs change group owns text undo."
    :blocks pichat-chat--tool-blocks
    :live-blocks pichat-chat--live-tool-blocks
    :block-state (pichat-chat--focused-block-snapshot)
+   :activity-blocks pichat-chat--activity-blocks
+   :live-activity-blocks pichat-chat--live-activity-blocks
+   :activity-block-state (pichat-chat--focused-activity-block-snapshot)
    :fragments pichat-chat--live-projection-fragments
    :fragment-state (pichat-chat--focused-fragment-snapshot)
    :view-states
    (pichat-chat--hash-state-snapshot pichat-chat--tool-view-states)
+   :activity-view-states
+   (pichat-chat--hash-state-snapshot pichat-chat--activity-view-states)
    :auxiliary
    (pichat-chat--hash-state-snapshot pichat-chat--tool-auxiliary-details)
    :enrichments
@@ -2065,6 +2184,7 @@ No chat-buffer text is copied; the active Emacs change group owns text undo."
   ;; Current tables may contain retained old blocks as well as newly indexed
   ;; blocks.  Release all of them, then revive the captured objects exactly.
   (pichat-chat--release-live-tool-blocks)
+  (pichat-chat--release-live-activity-blocks)
   (let ((start (cdr (assq pichat-chat--live-start
                           (plist-get snapshot :markers))))
         (end (cdr (assq pichat-chat--live-end
@@ -2078,10 +2198,16 @@ No chat-buffer text is copied; the active Emacs change group owns text undo."
     (set-marker (car entry) (cdr entry)))
   (setq pichat-chat--tool-blocks (plist-get snapshot :blocks)
         pichat-chat--live-tool-blocks (plist-get snapshot :live-blocks)
+        pichat-chat--activity-blocks (plist-get snapshot :activity-blocks)
+        pichat-chat--live-activity-blocks
+        (plist-get snapshot :live-activity-blocks)
         pichat-chat--live-projection-fragments
         (plist-get snapshot :fragments)
         pichat-chat--tool-view-states
         (pichat-chat--restore-hash-state (plist-get snapshot :view-states))
+        pichat-chat--activity-view-states
+        (pichat-chat--restore-hash-state
+         (plist-get snapshot :activity-view-states))
         pichat-chat--tool-auxiliary-details
         (pichat-chat--restore-hash-state (plist-get snapshot :auxiliary))
         pichat-chat--tool-enrichments
@@ -2094,6 +2220,13 @@ No chat-buffer text is copied; the active Emacs change group owns text undo."
       (set-marker (plist-get fragment :start) (nth 1 entry))
       (set-marker-insertion-type (plist-get fragment :start) t)
       (set-marker (plist-get fragment :end) (nth 2 entry))))
+  (dolist (entry (plist-get snapshot :activity-block-state))
+    (let* ((block (plist-get entry :block))
+           (start (plist-get block :start))
+           (end (plist-get block :end)))
+      (set-marker start (plist-get entry :start))
+      (set-marker-insertion-type start (plist-get entry :start-insertion))
+      (set-marker end (plist-get entry :end))))
   (dolist (entry (plist-get snapshot :block-state))
     (let* ((block (plist-get entry :block))
            (start (plist-get block :start))
@@ -2196,18 +2329,27 @@ Uncertain live state retains the complete projection transaction."
          (pichat-chat--with-projection-rollback ,@body)))))
 
 (defun pichat-chat--commit-live-tool-view-transfers ()
-  "Move matching explicit live tool views to projected canonical keys."
-  (maphash
-   (lambda (_id block)
-     (when-let* ((canonical-key (plist-get block :canonical-key))
-                 (tool-id (plist-get (plist-get block :raw) :toolCallId))
+  "Move matching explicit live tool views to canonical transcript keys.
+This walks normalized canonical content so tools hidden by a folded activity
+parent retain their independent explicit state."
+  (when (pichat-transcript-p pichat-chat--canonical-transcript)
+    (dolist (node (pichat-transcript-nodes pichat-chat--canonical-transcript))
+      (dolist (content (pichat-transcript-node-content node))
+        (when (eq (pichat-transcript-content-kind content) 'tool)
+          (let* ((tool-id (pichat-transcript-content-tool-call-id content))
                  (live-key (pichat-chat--live-tool-view-key tool-id))
                  (state (gethash live-key pichat-chat--tool-view-states)))
-       (puthash (pichat-chat--canonical-tool-view-key
-                 (car canonical-key) tool-id)
-                state pichat-chat--tool-view-states)
-       (remhash live-key pichat-chat--tool-view-states)))
-   pichat-chat--tool-blocks))
+            (when state
+              (puthash (pichat-chat--canonical-tool-view-key
+                        (pichat-transcript-node-key node) tool-id)
+                       state pichat-chat--tool-view-states)
+              (remhash live-key pichat-chat--tool-view-states))))))))
+
+(defun pichat-chat--commit-live-activity-view-transfers ()
+  "Move compatible live activity choices to projected canonical groups."
+  (pichat-chat-activity-ui-transfer-live-views
+   pichat-chat--canonical-activity-blocks
+   pichat-chat--activity-view-states pichat-chat--source-generation))
 
 (defun pichat-chat--extension-notification-face (type)
   "Return the display face for extension notification TYPE."
@@ -2322,6 +2464,7 @@ canonical keys as part of the projection transaction."
       (pichat-chat--with-projection-rollback
         (pichat-chat--cancel-live-projection)
         (pichat-chat--release-tool-blocks)
+        (pichat-chat--release-activity-blocks)
         (pichat-chat--release-live-projection-fragments)
         (let* ((modified (buffer-modified-p))
                (rendered
@@ -2340,7 +2483,7 @@ canonical keys as part of the projection transaction."
                              pichat-chat--prompt-start
                              pichat-chat--input-start))))
                (statuses-before (copy-tree pichat-chat--status-lines))
-               canonical-end blocks)
+               canonical-end blocks activity-blocks)
           (pichat-chat--with-buffer-edit
             (delete-region canonical-start replace-end)
             (goto-char canonical-start)
@@ -2368,7 +2511,10 @@ canonical keys as part of the projection transaction."
             (pichat-chat--style-live-input)
             (setq blocks
                   (pichat-chat--index-canonical-tools
-                   transcript canonical-start canonical-end context)))
+                   transcript canonical-start canonical-end context)
+                  activity-blocks
+                  (pichat-chat--index-activity-groups
+                   canonical-start canonical-end nil)))
           ;; Adjust prompt undo positions from the final projected prefix.
           (pichat-chat--adjust-undo-for-prefix-delta
            replace-end
@@ -2384,9 +2530,22 @@ canonical keys as part of the projection transaction."
                 pichat-chat--tool-blocks
                 (pichat-chat--merge-tool-block-tables
                  pichat-chat--canonical-tool-blocks
-                 pichat-chat--live-tool-blocks))
+                 pichat-chat--live-tool-blocks)
+                pichat-chat--canonical-activity-blocks activity-blocks
+                pichat-chat--live-activity-blocks
+                (make-hash-table :test #'equal)
+                pichat-chat--activity-blocks
+                (pichat-chat-activity-ui-merge-block-tables
+                 pichat-chat--canonical-activity-blocks
+                 pichat-chat--live-activity-blocks))
           (when transfer-live-views-p
-            (pichat-chat--commit-live-tool-view-transfers))
+            (pichat-chat--commit-live-tool-view-transfers)
+            (pichat-chat--commit-live-activity-view-transfers)
+            (pichat-chat-activity-ui-prune-views
+             pichat-chat--canonical-activity-blocks
+             pichat-chat--live-activity-blocks
+             pichat-chat--activity-view-states
+             pichat-chat--source-generation))
           (clrhash pichat-chat--tool-auxiliary-details)
           (dolist (key '(agent compaction retry queue synchronization source))
             (pichat-chat--set-status-state key nil))
@@ -2453,17 +2612,27 @@ projection.  Without pending work it remains immediately visible."
 
 (defun pichat-chat--live-render-context (transcript)
   "Return status-aware render policy for transient TRANSCRIPT."
-  (pichat-render-context-create
-   :show-thinking pichat-chat-show-thinking
-   :tool-view 'output
-   :tool-views (pichat-chat--tool-views-for-transcript transcript t)
-   :tool-renderer
-   (apply-partially
-    #'pichat-chat--render-tool-text-with-path-context
-    pichat-chat--tool-enrichments pichat-chat--source-generation
-    pichat-chat-tool-truncation-notice-format)
-   :max-tool-args pichat-chat-max-tool-args-chars
-   :max-tool-output pichat-chat-max-tool-output-chars))
+  (let ((activity (pichat-chat--activity-presentation-state transcript t)))
+    (pichat-render-context-create
+     :show-thinking pichat-chat-show-thinking
+     :tool-view 'output
+     :tool-views (pichat-chat--tool-views-for-transcript transcript t)
+     :tool-renderer
+     (apply-partially
+      #'pichat-chat--render-tool-text-with-path-context
+      pichat-chat--tool-enrichments pichat-chat--source-generation
+      pichat-chat-tool-truncation-notice-format)
+     :max-tool-args pichat-chat-max-tool-args-chars
+     :max-tool-output pichat-chat-max-tool-output-chars
+     :activity-member-kinds '(tool)
+     :activity-display pichat-chat-activity-group-display
+     :activity-views (plist-get activity :views)
+     :activity-latest-key (plist-get activity :latest-key)
+     :activity-live-p t
+     :activity-header-renderer
+     (apply-partially #'pichat-chat-activity-ui-format-header
+                      pichat-chat--tool-enrichments
+                      pichat-chat--source-generation))))
 
 (defun pichat-chat--merge-tool-block-tables (first second)
   "Return a combined tool-block table containing FIRST and SECOND.
@@ -2657,7 +2826,7 @@ mutated.  SECOND wins if a transient tool id collides with a canonical id."
          (end (marker-position pichat-chat--live-end))
          (tracked (pichat-chat--live-suffix-marker-positions))
          (delta (- (length replacement) (- end start)))
-         fragment-state blocks)
+         fragment-state blocks activity-blocks)
     (pichat-chat--release-live-projection-fragments)
     (pichat-chat--with-buffer-edit
       (delete-region start end)
@@ -2675,10 +2844,15 @@ mutated.  SECOND wins if a transient tool id collides with a canonical id."
       (setq fragment-state
             (pichat-chat--make-live-fragment-state fragments start)))
     (pichat-chat--release-live-tool-blocks)
+    (pichat-chat--release-live-activity-blocks)
     (setq blocks
           (pichat-chat--index-canonical-tools
-           transcript start (+ start (length replacement)) context t))
-    (list :fragments fragment-state :blocks blocks :incremental nil)))
+           transcript start (+ start (length replacement)) context t)
+          activity-blocks
+          (pichat-chat--index-activity-groups
+           start (+ start (length replacement)) t))
+    (list :fragments fragment-state :blocks blocks
+          :activity-blocks activity-blocks :incremental nil)))
 
 (defun pichat-chat--live-fragment-change-span (old new)
   "Return OLD/NEW middle span metadata, or nil when no fragments differ."
@@ -2741,13 +2915,21 @@ mutated.  SECOND wins if a transient tool id collides with a canonical id."
              (tracked (pichat-chat--live-suffix-marker-positions))
              (delta (- (length replacement) (- end start)))
              (retained-blocks (make-hash-table :test #'equal))
-             new-fragment-state new-blocks blocks)
+             (retained-activity-blocks (make-hash-table :test #'equal))
+             new-fragment-state new-blocks blocks
+             new-activity-blocks activity-blocks)
         (maphash
          (lambda (id block)
            (if (pichat-chat--live-block-overlaps-p block start end)
                (pichat-chat-tool-ui-release-block block)
              (puthash id block retained-blocks)))
          pichat-chat--live-tool-blocks)
+        (maphash
+         (lambda (key block)
+           (if (pichat-chat--live-block-overlaps-p block start end)
+               (pichat-chat-activity-ui-release-block block)
+             (puthash key block retained-activity-blocks)))
+         pichat-chat--live-activity-blocks)
         (dolist (fragment old-middle)
           (pichat-chat--release-live-projection-fragments (list fragment)))
         (pichat-chat--with-buffer-edit
@@ -2767,12 +2949,19 @@ mutated.  SECOND wins if a transient tool id collides with a canonical id."
                start (+ start (length replacement))
                (plist-get candidate :context) t)
               blocks (pichat-chat--merge-tool-block-tables
-                      retained-blocks new-blocks))
+                      retained-blocks new-blocks)
+              new-activity-blocks
+              (pichat-chat--index-activity-groups
+               start (+ start (length replacement)) t)
+              activity-blocks
+              (pichat-chat-activity-ui-merge-block-tables
+               retained-activity-blocks new-activity-blocks))
         (list :fragments
               (append (cl-subseq old 0 prefix-count)
                       new-fragment-state
                       (cl-subseq old old-end-index))
-              :blocks blocks :incremental t)))))
+              :blocks blocks :activity-blocks activity-blocks
+              :incremental t)))))
 
 (defun pichat-chat--refresh-final-live-presentation ()
   "Refresh optional presentation overlays for committed final live text."
@@ -2791,13 +2980,21 @@ mutated.  SECOND wins if a transient tool id collides with a canonical id."
 
 (defun pichat-chat--commit-live-projection-result (candidate result)
   "Commit CANDIDATE projection RESULT after all buffer-local edits succeed."
-  (let ((live-blocks (plist-get result :blocks)))
+  (let ((live-blocks (plist-get result :blocks))
+        (live-activity-blocks (plist-get result :activity-blocks)))
     (setq pichat-chat--live-projection-fragments
           (plist-get result :fragments)
           pichat-chat--live-tool-blocks live-blocks
           pichat-chat--tool-blocks
           (pichat-chat--merge-tool-block-tables
-           pichat-chat--canonical-tool-blocks live-blocks))
+           pichat-chat--canonical-tool-blocks live-blocks)
+          pichat-chat--live-activity-blocks live-activity-blocks
+          pichat-chat--activity-blocks
+          (pichat-chat-activity-ui-merge-block-tables
+           pichat-chat--canonical-activity-blocks live-activity-blocks))
+    (pichat-chat-activity-ui-prune-views
+     pichat-chat--canonical-activity-blocks live-activity-blocks
+     pichat-chat--activity-view-states pichat-chat--source-generation)
     (pichat-chat--set-compatibility-diagnostics
      (plist-get candidate :transcript))
     (setq pichat-chat--live-projection-fingerprint
@@ -3180,6 +3377,53 @@ BASE-CACHE is the cache captured by the incremental request."
   "Set BLOCK to an explicit summary display."
   (pichat-chat-tool-ui-collapse-block
    block pichat-chat--tool-view-states (pichat-chat--tool-ui-context)))
+
+(defun pichat-chat--activity-at-point ()
+  "Return activity header block at point, if any."
+  (pichat-chat-activity-ui-block-at pichat-chat--activity-blocks (point)))
+
+;;;###autoload
+(defun pichat-chat-toggle-activity-at-point (&optional event)
+  "Toggle the activity group header at point without fetching source data."
+  (interactive (list (and (listp last-command-event) last-command-event)))
+  (when event (posn-set-point (event-end event)))
+  (let ((block (pichat-chat--activity-at-point)))
+    (unless block (user-error "No activity group header at point"))
+    (let* ((group-key (plist-get block :key))
+           (state-key (plist-get block :view-state-key))
+           (present (gethash state-key pichat-chat--activity-view-states
+                             'pichat-absent))
+           (next (if (eq (plist-get block :display-state) 'expanded)
+                     'collapsed 'expanded)))
+      (pichat-chat-activity-ui-store-view
+       block pichat-chat--activity-view-states next)
+      (condition-case err
+          (pichat-chat--reproject-display-options)
+        (error
+         (if (eq present 'pichat-absent)
+             (remhash state-key pichat-chat--activity-view-states)
+           (puthash state-key present pichat-chat--activity-view-states))
+         (signal (car err) (cdr err))))
+      (when-let ((new (gethash group-key pichat-chat--activity-blocks)))
+        (goto-char (marker-position (plist-get new :start)))))))
+
+;;;###autoload
+(defun pichat-chat-next-activity ()
+  "Move point to the next visible activity group header."
+  (interactive)
+  (if-let ((next (pichat-chat-activity-ui-next-position
+                  pichat-chat--activity-blocks (point))))
+      (goto-char next)
+    (user-error "No next activity group")))
+
+;;;###autoload
+(defun pichat-chat-previous-activity ()
+  "Move point to the previous visible activity group header."
+  (interactive)
+  (if-let ((previous (pichat-chat-activity-ui-previous-position
+                      pichat-chat--activity-blocks (point))))
+      (goto-char previous)
+    (user-error "No previous activity group")))
 
 (defun pichat-chat--tool-at-point ()
   "Return tool block plist at point, if any."

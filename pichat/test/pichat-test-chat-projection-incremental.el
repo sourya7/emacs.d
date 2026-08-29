@@ -102,6 +102,7 @@
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
           (pichat-chat-render-markdown nil)
+          (pichat-chat-activity-group-display 'expanded)
           (pichat-chat-collapse-tools-by-default nil)
           (pichat-chat-tool-default-display 'output)
           buffer)
@@ -193,6 +194,7 @@
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
           (pichat-chat-render-markdown nil)
+          (pichat-chat-activity-group-display 'expanded)
           buffer standalone-key)
       (unwind-protect
           (progn
@@ -222,7 +224,7 @@
                      (attached-key (car (plist-get block :canonical-key))))
                 (should block)
                 (should-not (equal standalone-key attached-key))
-                (should (= 1 (how-many (regexp-quote "[tool:read running]")
+                (should (= 1 (how-many (regexp-quote "… read   moving.el")
                                        (point-min) (point-max)))))
               (pichat-pi-live-draft-apply
                pichat-chat--live-draft
@@ -246,7 +248,7 @@
                 (should block)
                 (should (equal "orphan" (plist-get block :status)))
                 (should (string-match-p
-                         (regexp-quote "[tool:read orphan]")
+                         (regexp-quote "? read   moving.el")
                          (buffer-substring-no-properties
                           pichat-chat--live-start pichat-chat--live-end))))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))

@@ -46,12 +46,22 @@ PiChat links are exposed as URL targets rather than their visible labels.
 
 User messages are rendered only from authoritative Pi events.  Unknown protocol
 data is normalized to bounded diagnostics rather than printed as raw objects.
+Consecutive tool calls are presented in source-ordered activity groups. Group
+headers summarize bounded enriched tool kinds and can fold the whole run;
+expanded groups retain each tool's independent header/arguments/output control.
+`pichat-chat-activity-group-display` defaults to `latest`, which keeps current
+live tail activity open and folds older or settled groups. It also accepts
+`collapsed` and `expanded`; an explicit group choice overrides any policy.
+Assistant prose and tool rows share a shallow visual gutter without adding
+spaces to copied or exported transcript text.
+
 Running tools show their available arguments and output; completed, errored,
 orphaned, and settled-incomplete tools use the configured completed display
 (defaulting to a folded header). Only explicit user fold choices survive live
 reprojection and transfer transactionally to matching canonical tools after
-settlement. Derived file locations appear as actionable overlay text without
-changing canonical/live source text. Location records associate with matching
+settlement. Group and tool choices are independent: closing and reopening a
+group does not reset a child's selected tool view. Derived file locations appear
+as actionable overlay text without changing canonical/live source text. Location records associate with matching
 canonical tools by source generation and tool-call ID and remain available from
 settlement until source rebinding or chat-buffer death. They are never persisted
 as transcript data. Non-persisted auxiliary execution details are available only
@@ -81,7 +91,12 @@ derives presentation-only classification and locations, and performs no file
 I/O. `pichat-shell-presentation.el` consumes execute-kind enrichment and Pi's
 cumulative tool observations to derive command layout and distinct success,
 exit, signal, timeout, and tool-error labels; it owns no chat or transcript
-state. `pichat-chat-tool-ui.el` receives transcript, block, view, enrichment, and
+state. `pichat-activity-presentation.el` derives generic source-ordered activity
+members, groups, identities, aggregate status, and bounded summaries without
+owning buffers or protocol state. `pichat-chat-activity-ui.el` consumes that
+pure model to format enriched headers and index marker-backed disclosure blocks;
+it never fetches source data or edits transcript regions.
+`pichat-chat-tool-ui.el` receives transcript, block, view, enrichment, and
 buffer-edit context explicitly; it supplies pure specialized tool text to the
 initial render pass, then indexes that final text without editing it. It owns
 explicit fold replacements, details, and derived location overlays but never
@@ -535,7 +550,13 @@ Additional chat keys:
 - `M-x pichat-chat-describe-link-at-point` — show a link destination
 - `M-x pichat-chat-toggle-link-display` — toggle all links in the buffer
 - `M-x pichat-chat-toggle-table-display` — toggle all tables in the buffer
-- `C-c C-z` — cycle tool block display: header → args → output
+- `RET`, `TAB`, or mouse-1 on an activity header — expand or collapse that
+  source-ordered tool group
+- `C-c C-;` — expand or collapse the activity group header at point
+- `M-x pichat-chat-next-activity` / `M-x pichat-chat-previous-activity` — move
+  between visible activity group headers
+- `C-c C-z` — cycle a visible child tool block between header and arguments;
+  the selected child view survives parent-group folding
 - `C-c C-d` — show full tool details/output, kind, title, and location at point
 - `C-c C-g` — visit the local tool location at point
 - `C-c C-w` — copy the local tool location at point

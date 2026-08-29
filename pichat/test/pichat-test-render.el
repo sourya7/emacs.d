@@ -163,6 +163,12 @@
     (should (eq 'thinking
                 (get-text-property (string-match "private plan" shown)
                                    'pichat-content-kind shown)))
+    (should (equal '(thinking "thought-node" ("thought-node" 0))
+                   (get-text-property (string-match "private plan" shown)
+                                      'pichat-logical-key shown)))
+    (should (equal '(tool "thought-node" "thought-tool")
+                   (get-text-property (string-match "tool:read done" shown)
+                                      'pichat-logical-key shown)))
     (should (equal "  "
                    (get-text-property (string-match "private plan" shown)
                                       'line-prefix shown)))
@@ -207,6 +213,24 @@
     (should tool)
     (should (get-text-property header 'pichat-activity-key text))
     (should (get-text-property tool 'pichat-activity-member text))
+    (should (equal
+             (list 'activity
+                   (get-text-property header 'pichat-activity-key text))
+             (get-text-property header 'pichat-logical-key text)))
+    (should (equal '(tool "assistant-one" "read-one")
+                   (get-text-property tool 'pichat-logical-key text)))
+    (should (equal (get-text-property tool 'pichat-logical-key text)
+                   (get-text-property body 'pichat-logical-key text)))
+    (should-not (equal (get-text-property header 'pichat-logical-key text)
+                       (get-text-property tool 'pichat-logical-key text)))
+    (should (get-text-property prose 'pichat-logical-key text))
+    (should (get-text-property user 'pichat-logical-key text))
+    ;; Inter-record separators deliberately remain outside semantic records.
+    (let ((tool-start (previous-single-property-change
+                       tool 'pichat-logical-key text)))
+      (should tool-start)
+      (should-not (get-text-property (1- tool-start)
+                                     'pichat-logical-key text)))
     (should (equal "  " (get-text-property tool 'line-prefix text)))
     (should (equal "  " (get-text-property tool 'wrap-prefix text)))
     (should (equal "    " (get-text-property body 'line-prefix text)))

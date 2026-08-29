@@ -566,7 +566,10 @@ ACTIVITY-MEMBER-P is non-nil, apply the activity member/body visual levels."
         ((emit
           (key node-key tool-id activity-key fragment desired-newlines)
           (unless (string-empty-p (pichat-render-fragment-text fragment))
-            (let* ((prefix (pichat-render--prefix-for-separation
+            (let* ((fragment
+                    (pichat-render--wrap-properties
+                     fragment (list 'pichat-logical-key key)))
+                   (prefix (pichat-render--prefix-for-separation
                             previous-text desired-newlines))
                    (complete (if (string-empty-p prefix)
                                  fragment

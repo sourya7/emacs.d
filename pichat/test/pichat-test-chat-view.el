@@ -32,6 +32,26 @@
          (fragment (pichat-render-canonical transcript context)))
     (pichat-chat--project-canonical nil transcript fragment context)))
 
+(defun pichat-test-chat-view--tool-event (id name path)
+  "Return a tool-use event declaring ID with NAME and PATH."
+  (list :type "message_end"
+        :message (list :role "assistant" :stopReason "toolUse"
+                       :content (list (list :type "toolCall" :id id
+                                            :name name
+                                            :arguments (list :path path))))))
+
+(defun pichat-test-chat-view--tool-finish-event (id name output)
+  "Return a successful tool execution event for ID, NAME, and OUTPUT."
+  (list :type "tool_execution_end" :toolCallId id :toolName name
+        :isError nil
+        :result (list :content (list (list :type "text" :text output)))))
+
+(defun pichat-test-chat-view--apply-events (&rest events)
+  "Apply live draft EVENTS and project the resulting live tail."
+  (dolist (event events)
+    (pichat-pi-live-draft-apply pichat-chat--live-draft event))
+  (pichat-chat--project-live-tail))
+
 (defun pichat-test-chat-view--anchor-at (position)
   "Return the observable node key and offset at POSITION."
   (when-let ((key (get-text-property position 'pichat-node-key)))
@@ -466,6 +486,219 @@
                            (marker-position pichat-chat--prompt-start))))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+(ert-deftest pichat-chat-view-tool-growth-keeps-reader-inside-first-tool-output ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-render-markdown nil)
+          (pichat-chat-activity-group-display 'expanded)
+          (pichat-chat-collapse-tools-by-default nil)
+          (pichat-chat-tool-default-display 'output)
+          (pichat-chat-follow-bottom-threshold 0)
+          buffer)
+      (unwind-protect
+          (save-window-excursion
+            (setq buffer (pichat-chat-open session))
+            (with-current-buffer buffer
+              (pichat-test-chat-view--apply-events
+               (pichat-test-chat-view--tool-event
+                "cursor-first" "read" "first.el")
+               (pichat-test-chat-view--tool-finish-event
+                "cursor-first" "read" "inspection target output")))
+            (let* ((reader (selected-window))
+                   (follower (split-window-right))
+                   expected-tool expected-logical expected-offset
+                   header-before
+                   (full-count 0))
+              (set-window-buffer follower buffer)
+              (with-current-buffer buffer
+                (let* ((block (gethash "cursor-first"
+                                       pichat-chat--tool-blocks))
+                       (end (marker-position (plist-get block :end))))
+                  (goto-char (marker-position (plist-get block :start)))
+                  (search-forward "target" end)
+                  (backward-char 3)
+                  (setq expected-tool
+                        (get-text-property (point) 'pichat-tool-key)
+                        expected-logical
+                        (get-text-property (point) 'pichat-logical-key)
+                        expected-offset
+                        (cadr (pichat-chat--property-anchor-at
+                               (point) 'pichat-logical-key)))
+                  (save-excursion
+                    (goto-char
+                     (text-property-any
+                      pichat-chat--live-start pichat-chat--live-end
+                      'pichat-content-kind 'activity-header))
+                    (setq header-before
+                          (buffer-substring-no-properties
+                           (point) (line-end-position))))
+                  (pichat-test-chat-view--place-window reader (point) nil))
+                (pichat-test-chat-view--place-window follower (point-max) -1))
+              (select-window reader)
+              (redisplay t)
+              (with-current-buffer buffer
+                (cl-letf (((symbol-function 'pichat-chat--replace-live-full)
+                           (let ((original
+                                  (symbol-function
+                                   'pichat-chat--replace-live-full)))
+                             (lambda (candidate)
+                               (cl-incf full-count)
+                               (funcall original candidate)))))
+                  (pichat-test-chat-view--apply-events
+                   (pichat-test-chat-view--tool-event
+                    "cursor-second" "edit" "second.el")))
+                (should (= 0 full-count))
+                (save-excursion
+                  (goto-char
+                   (text-property-any
+                    pichat-chat--live-start pichat-chat--live-end
+                    'pichat-content-kind 'activity-header))
+                  (should-not
+                   (equal header-before
+                          (buffer-substring-no-properties
+                           (point) (line-end-position)))))
+                (let ((position (window-point reader)))
+                  (should (eq 'tool
+                              (get-text-property position
+                                                 'pichat-content-kind)))
+                  (should (equal expected-tool
+                                 (get-text-property position
+                                                    'pichat-tool-key)))
+                  (should (equal expected-logical
+                                 (get-text-property position
+                                                    'pichat-logical-key)))
+                  (should (= expected-offset
+                             (cadr (pichat-chat--property-anchor-at
+                                    position 'pichat-logical-key))))
+                  (should-not (eq 'activity-header
+                                  (get-text-property
+                                   position 'pichat-content-kind))))
+                (should (= (window-point follower) (point-max)))
+                (should (<= (- (point-max) (window-end follower t))
+                            pichat-chat-follow-bottom-threshold))))
+        (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
+(ert-deftest pichat-chat-view-full-fallback-keeps-reader-inside-later-tool ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-render-markdown nil)
+          (pichat-chat-activity-group-display 'expanded)
+          (pichat-chat-collapse-tools-by-default nil)
+          (pichat-chat-tool-default-display 'output)
+          (pichat-chat-follow-bottom-threshold 0)
+          buffer)
+      (unwind-protect
+          (save-window-excursion
+            (setq buffer (pichat-chat-open session))
+            (with-current-buffer buffer
+              (pichat-test-chat-view--apply-events
+               (pichat-test-chat-view--tool-event "full-first" "read" "one.el")
+               (pichat-test-chat-view--tool-finish-event
+                "full-first" "read" "first")
+               (pichat-test-chat-view--tool-event "full-second" "edit" "two.el")
+               (pichat-test-chat-view--tool-finish-event
+                "full-second" "edit" "second output"))
+              (let* ((window (selected-window))
+                     (block (gethash "full-second" pichat-chat--tool-blocks))
+                     (position (marker-position (plist-get block :start)))
+                     (expected-tool
+                      (get-text-property position 'pichat-tool-key))
+                     (expected-logical
+                      (get-text-property position 'pichat-logical-key))
+                     (full-count 0))
+                (pichat-test-chat-view--place-window window position nil)
+                (pichat-pi-live-draft-apply
+                 pichat-chat--live-draft
+                 (pichat-test-chat-view--tool-event
+                  "full-third" "bash" "three.el"))
+                (pichat-chat--release-live-projection-fragments)
+                (setq pichat-chat--live-projection-fragments nil
+                      pichat-chat--live-projection-fingerprint nil)
+                (cl-letf (((symbol-function 'pichat-chat--replace-live-full)
+                           (let ((original
+                                  (symbol-function
+                                   'pichat-chat--replace-live-full)))
+                             (lambda (candidate)
+                               (cl-incf full-count)
+                               (funcall original candidate)))))
+                  (pichat-chat--project-live-tail))
+                (should (= 1 full-count))
+                (should (equal expected-tool
+                               (get-text-property (window-point window)
+                                                  'pichat-tool-key)))
+                (should (equal expected-logical
+                               (get-text-property (window-point window)
+                                                  'pichat-logical-key)))
+                (should (eq 'tool
+                            (get-text-property (window-point window)
+                                               'pichat-content-kind))))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-chat-view-settlement-matches-tool-reader-by-unique-id ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-render-markdown nil)
+          (pichat-chat-activity-group-display 'expanded)
+          (pichat-chat-collapse-tools-by-default nil)
+          (pichat-chat-tool-default-display 'output)
+          (pichat-chat-follow-bottom-threshold 0)
+          buffer)
+      (unwind-protect
+          (save-window-excursion
+            (setq buffer (pichat-chat-open session))
+            (with-current-buffer buffer
+              (pichat-test-chat-view--apply-events
+               (pichat-test-chat-view--tool-event
+                "settle-reader" "read" "settle.el")
+               (pichat-test-chat-view--tool-finish-event
+                "settle-reader" "read" "settled output"))
+              (let* ((window (selected-window))
+                     (block (gethash "settle-reader"
+                                     pichat-chat--tool-blocks))
+                     (position (marker-position (plist-get block :start)))
+                     (live-logical
+                      (get-text-property position 'pichat-logical-key))
+                     (tool
+                      (pichat-transcript-content-create
+                       :kind 'tool :index 0 :tool-call-id "settle-reader"
+                       :name "read" :arguments '(:path "settle.el")
+                       :status 'done
+                       :output (list (pichat-transcript-content-create
+                                      :kind 'prose :index 0
+                                      :text "settled output"))))
+                     (transcript
+                      (pichat-transcript-create
+                       :nodes
+                       (list (pichat-transcript-node-create
+                              :kind 'message :key "canonical-settled-node"
+                              :role 'assistant :content (list tool)))
+                       :diagnostics nil :metadata nil))
+                     (context
+                      (pichat-chat--canonical-render-context transcript))
+                     (fragment (pichat-render-canonical transcript context)))
+                (pichat-test-chat-view--place-window window position nil)
+                (pichat-chat--project-canonical
+                 nil transcript fragment context t)
+                (let ((settled-position (window-point window)))
+                  (should (eq 'tool
+                              (get-text-property settled-position
+                                                 'pichat-content-kind)))
+                  (should (equal '("canonical-settled-node" . "settle-reader")
+                                 (get-text-property settled-position
+                                                    'pichat-tool-key)))
+                  (should-not
+                   (equal live-logical
+                          (get-text-property settled-position
+                                             'pichat-logical-key)))))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-chat-view-tool-id-anchor-rejects-ambiguous-ranges ()
+  (with-temp-buffer
+    (insert (propertize "first" 'pichat-tool-key '("one" . "duplicate")))
+    (insert "\n")
+    (insert (propertize "second" 'pichat-tool-key '("two" . "duplicate")))
+    (should-not (pichat-chat--tool-id-anchor-position '("duplicate" 0)))))
+
 (ert-deftest pichat-chat-view-tool-update-keeps-folded-reader-and-follower ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
@@ -488,21 +721,35 @@
               (pichat-chat--flush-live-projection))
             (let* ((reader (selected-window))
                    (follower (split-window-right))
-                   reader-anchor)
+                   reader-anchor reader-tool-key reader-logical-key)
               (set-window-buffer follower buffer)
               (with-current-buffer buffer
-                (let ((block (gethash "follow-fold"
-                                      pichat-chat--tool-blocks)))
-                  (pichat-test-chat-view--place-window
-                   reader (marker-position (plist-get block :start)) nil)
+                (let* ((block (gethash "follow-fold"
+                                       pichat-chat--tool-blocks))
+                       (start (marker-position (plist-get block :start)))
+                       (logical-key
+                        (get-text-property start 'pichat-logical-key)))
+                  (pichat-test-chat-view--place-window reader start nil)
                   (goto-char (window-point reader))
                   (pichat-chat-toggle-tool-at-point)
-                  (should (eq 'summary (plist-get block :display-state))))
+                  (should (eq 'summary (plist-get block :display-state)))
+                  (should (equal logical-key
+                                 (get-text-property
+                                  (marker-position (plist-get block :start))
+                                  'pichat-logical-key))))
                 (pichat-test-chat-view--place-window follower (point-max) -1)
                 (setq reader-anchor
                       (pichat-test-chat-view--anchor-at
-                       (window-point reader)))
-                (should reader-anchor))
+                       (window-point reader))
+                      reader-tool-key
+                      (get-text-property (window-point reader)
+                                         'pichat-tool-key)
+                      reader-logical-key
+                      (get-text-property (window-point reader)
+                                         'pichat-logical-key))
+                (should reader-anchor)
+                (should reader-tool-key)
+                (should reader-logical-key))
               (select-window reader)
               (redisplay t)
               (pichat-rpc--process-filter
@@ -517,6 +764,15 @@
                 (should (equal reader-anchor
                                (pichat-test-chat-view--anchor-at
                                 (window-point reader))))
+                (should (equal reader-tool-key
+                               (get-text-property (window-point reader)
+                                                  'pichat-tool-key)))
+                (should (equal reader-logical-key
+                               (get-text-property (window-point reader)
+                                                  'pichat-logical-key)))
+                (should (eq 'tool
+                            (get-text-property (window-point reader)
+                                               'pichat-content-kind)))
                 (should (= (window-point follower) (point-max)))
                 (should (<= (- (point-max) (window-end follower t))
                             pichat-chat-follow-bottom-threshold)))))

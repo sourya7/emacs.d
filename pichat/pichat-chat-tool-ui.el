@@ -383,7 +383,8 @@ buffer-edit and view-preservation mechanics."
          (start-pos (marker-position start-marker))
          (end-pos (marker-position end-marker))
          (logical-properties
-          (cl-loop for property in '(pichat-node-key pichat-node-role
+          (cl-loop for property in '(pichat-logical-key
+                                      pichat-node-key pichat-node-role
                                       pichat-content-kind pichat-tool-key
                                       pichat-activity-key
                                       pichat-activity-member)

@@ -1403,18 +1403,73 @@ editable by the user."
                        (point-max))))
           (min end (+ start (cadr anchor))))))))
 
+(defun pichat-chat--property-anchor-at (position property)
+  "Return PROPERTY's value and local offset at POSITION, or nil."
+  (when-let ((value (get-text-property position property)))
+    (let* ((candidate (previous-single-property-change
+                       position property nil (point-min)))
+           (start (if (and candidate
+                           (equal value (get-text-property candidate property)))
+                      candidate
+                    position)))
+      (list value (- position start)))))
+
+(defun pichat-chat--property-anchor-position
+    (anchor property &optional matcher)
+  "Resolve ANCHOR to one unambiguous PROPERTY range.
+MATCHER compares each property value with ANCHOR's saved value and defaults to
+`equal'.  Return nil when no range or more than one range matches."
+  (when anchor
+    (let ((position (point-min))
+          (limit (point-max))
+          (matcher (or matcher #'equal))
+          found ambiguous)
+      (while (< position limit)
+        (let* ((value (get-text-property position property))
+               (next (or (next-single-property-change
+                          position property nil limit)
+                         limit)))
+          (when (funcall matcher value (car anchor))
+            (if found
+                (setq ambiguous t)
+              (setq found (cons position next))))
+          (setq position next)))
+      (when (and found (not ambiguous))
+        (min (1- (cdr found))
+             (+ (car found) (cadr anchor)))))))
+
+(defun pichat-chat--tool-id-anchor-at (position)
+  "Return the tool-call ID and local tool offset at POSITION, or nil."
+  (when-let ((anchor (pichat-chat--property-anchor-at
+                      position 'pichat-tool-key)))
+    (when-let ((tool-id (cdr-safe (car anchor))))
+      (list tool-id (cadr anchor)))))
+
+(defun pichat-chat--tool-id-anchor-position (anchor)
+  "Resolve tool-call ANCHOR only when one visible tool range matches."
+  (pichat-chat--property-anchor-position
+   anchor 'pichat-tool-key
+   (lambda (tool-key tool-id)
+     (and (consp tool-key) (equal (cdr tool-key) tool-id)))))
+
 (defun pichat-chat--capture-view-anchor (position live-start live-end)
   "Capture a compact restorable anchor for POSITION.
 LIVE-START and LIVE-END describe the replaceable live region before an edit."
   (let* ((fallback (copy-marker position))
+         (record (pichat-chat--property-anchor-at
+                  position 'pichat-logical-key))
+         (tool (pichat-chat--tool-id-anchor-at position))
          (logical (pichat-chat--logical-anchor-at position))
          (live-offset
           (and live-start live-end (< live-start live-end)
                (>= position live-start) (< position live-end)
                (- position live-start))))
     (cond
-     (logical
-      (append (list :kind 'logical :logical logical)
+     ((or record logical)
+      (append (list :kind 'logical)
+              (when record (list :record record))
+              (when tool (list :tool tool))
+              (when logical (list :logical logical))
               (when live-offset (list :live-offset live-offset))
               (list :fallback fallback :absolute position)))
      (live-offset
@@ -1456,7 +1511,11 @@ LIVE-START and LIVE-END describe the replaceable live region before an edit."
                       (plist-get anchor :absolute))))
     (pcase (plist-get anchor :kind)
       ('logical
-       (or (pichat-chat--logical-anchor-position
+       (or (pichat-chat--property-anchor-position
+            (plist-get anchor :record) 'pichat-logical-key)
+           (pichat-chat--tool-id-anchor-position
+            (plist-get anchor :tool))
+           (pichat-chat--logical-anchor-position
             (plist-get anchor :logical))
            (and (plist-member anchor :live-offset)
                 (or (pichat-chat--live-anchor-position anchor)

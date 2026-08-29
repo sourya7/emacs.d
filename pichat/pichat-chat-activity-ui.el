@@ -90,14 +90,17 @@ GENERATION, VIEW-STATES, LIVE-DRAFT, and POLICY resolve source-local state."
   "Return current enrichment for MEMBER from ENRICHMENTS and GENERATION."
   (let* ((content (pichat-activity-member-content member))
          (id (pichat-activity-member-tool-call-id member))
-         (record (and (hash-table-p enrichments) (gethash id enrichments))))
-    (if (and record
+         (record (and (eq (pichat-activity-member-kind member) 'tool)
+                      (hash-table-p enrichments) (gethash id enrichments))))
+    (if (and (eq (pichat-activity-member-kind member) 'tool)
+             record
              (= generation (or (plist-get record :source-generation) -1)))
         record
-      (pichat-tool-enrichment-build
-       id
-       (pichat-transcript-content-name content)
-       (pichat-transcript-content-arguments content)))))
+      (and (eq (pichat-activity-member-kind member) 'tool)
+           (pichat-tool-enrichment-build
+            id
+            (pichat-transcript-content-name content)
+            (pichat-transcript-content-arguments content))))))
 
 (defun pichat-chat-activity-ui-format-header
     (enrichments generation group expanded _context)

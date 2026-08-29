@@ -16,7 +16,8 @@
                (:constructor pichat-activity-member-create)
                (:conc-name pichat-activity-member-))
   "One source-ordered member of an activity group."
-  kind node-key role content-index content tool-call-id source-key)
+  kind node-key role content-index content tool-call-id source-key
+  node-stop-reason node-error-message)
 
 (cl-defstruct (pichat-activity-group
                (:constructor pichat-activity-group-create)
@@ -68,10 +69,13 @@ KIND is `group', `assistant-content', `annotation', or `node'."
      :content-index index
      :content content
      :tool-call-id tool-id
-     :source-key (list node-key index ordinal))))
+     :source-key (list node-key index)
+     :node-stop-reason (pichat-transcript-node-stop-reason node)
+     :node-error-message (pichat-transcript-node-error-message node))))
 
 (defun pichat-activity--group-status (members)
-  "Reduce normalized tool status from MEMBERS conservatively."
+  "Reduce normalized activity status from MEMBERS conservatively.
+Thought-only activity is active until its owning assistant node settles."
   (let ((statuses
          (mapcar (lambda (member)
                    (pichat-transcript-content-status
@@ -79,15 +83,35 @@ KIND is `group', `assistant-content', `annotation', or `node'."
                  (seq-filter
                   (lambda (member)
                     (eq (pichat-activity-member-kind member) 'tool))
-                  members))))
+                  members)))
+        (thinking-p (seq-some
+                     (lambda (member)
+                       (and (eq (pichat-activity-member-kind member) 'thinking)
+                            (let ((text (pichat-transcript-content-text
+                                         (pichat-activity-member-content member))))
+                              (not (string-empty-p (string-trim (or text "")))))))
+                     members))
+        (node-failure-p (seq-some
+                         (lambda (member)
+                           (or (member (pichat-activity-member-node-stop-reason member)
+                                       '("error" "aborted" error aborted))
+                               (pichat-activity-member-node-error-message member)))
+                         members))
+        (node-settled-p (seq-some
+                         (lambda (member)
+                           (pichat-activity-member-node-stop-reason member))
+                         members)))
     (cond
      ((seq-some (lambda (status) (memq status '(running incomplete))) statuses)
       'active)
      ((memq 'error statuses) 'failed)
      ((memq 'orphan statuses) 'orphaned)
+     (node-failure-p 'failed)
      ((and statuses (cl-every (lambda (status) (eq status 'done)) statuses))
       'complete)
      (statuses 'active)
+     ((and thinking-p node-settled-p) 'complete)
+     (thinking-p 'active)
      (t 'complete))))
 
 (defun pichat-activity--make-group (members ordinal)
@@ -99,13 +123,24 @@ KIND is `group', `assistant-content', `annotation', or `node'."
                           (let ((id (pichat-activity-member-tool-call-id member)))
                             (and (pichat-activity--valid-tool-id-p id) id)))
                         members)))
+         (first-tool (seq-find
+                      (lambda (member)
+                        (eq (pichat-activity-member-kind member) 'tool))
+                      members))
          (anchor
           (or (car valid-ids)
               (list 'source (pichat-activity-member-source-key first))))
-         (key (list 'activity
-                    (pichat-activity-member-node-key first)
-                    (pichat-activity-member-content-index first)
-                    anchor ordinal))
+         ;; A tool-anchored group keeps its Stage 1 identity when thinking is
+         ;; prepended or inserted between tool calls.  Thought-only groups use
+         ;; their first normalized content position as a source-local key.
+         (key (if first-tool
+                  (list 'activity
+                        (pichat-activity-member-node-key first-tool)
+                        (pichat-activity-member-content-index first-tool)
+                        anchor)
+                (list 'activity 'thinking
+                      (pichat-activity-member-node-key first)
+                      (pichat-activity-member-content-index first))))
          (tools (seq-filter
                  (lambda (member)
                    (eq (pichat-activity-member-kind member) 'tool))
@@ -175,7 +210,10 @@ whether non-member thinking is a visible boundary.  Source order is retained."
               (let ((member-kind (pichat-activity--member-kind content)))
                 (cond
                  ((and member-kind
-                       (memq member-kind enabled-member-kinds))
+                       (memq member-kind enabled-member-kinds)
+                       (or (not (eq member-kind 'thinking))
+                           (pichat-activity--content-visible-p
+                            content show-thinking)))
                   (flush-content)
                   (push (pichat-activity--member
                          node content member-ordinal)
@@ -197,7 +235,10 @@ whether non-member thinking is a visible boundary.  Source order is retained."
             (dolist (content (pichat-transcript-node-content node))
               (let ((member-kind (pichat-activity--member-kind content)))
                 (if (and member-kind
-                         (memq member-kind enabled-member-kinds))
+                         (memq member-kind enabled-member-kinds)
+                         (or (not (eq member-kind 'thinking))
+                             (pichat-activity--content-visible-p
+                              content show-thinking)))
                     (progn
                       (flush-content)
                       (push (pichat-activity--member
@@ -274,6 +315,12 @@ tail group eligible for `latest'; LIVE-P distinguishes transient projection."
           (setf (alist-get kind counts) (1+ (or (alist-get kind counts) 0))))))
     (mapcar (lambda (kind) (cons kind (alist-get kind counts))) order)))
 
+(defun pichat-activity--thinking-count (group)
+  "Return the number of visible thinking members in GROUP."
+  (cl-count-if (lambda (member)
+                 (eq (pichat-activity-member-kind member) 'thinking))
+               (pichat-activity-group-members group)))
+
 (defun pichat-activity--kind-phrase (kind count group)
   "Return a bounded summary phrase for KIND COUNT in GROUP."
   (pcase kind
@@ -285,7 +332,11 @@ tail group eligible for `latest'; LIVE-P distinguishes transient projection."
     ('fetch (if (= count 1) "fetched data" (format "fetched data %d times" count)))
     (_
      (if (= (pichat-activity-group-tool-count group) 1)
-         (let* ((member (car (pichat-activity-group-members group)))
+         (let* ((member (or (seq-find
+                              (lambda (candidate)
+                                (eq (pichat-activity-member-kind candidate) 'tool))
+                              (pichat-activity-group-members group))
+                            (car (pichat-activity-group-members group))))
                 (name (replace-regexp-in-string
                        "[[:space:]\n\r]+" " "
                        (string-trim
@@ -312,7 +363,11 @@ KIND-FUNCTION receives an activity member and may return an enrichment kind."
                     (pichat-activity--kind-phrase
                      (car entry) (cdr entry) group))
                   (pichat-activity--count-kinds group kind-function)))
-         (phrase (pichat-activity--join-phrases phrases))
+         (thinking-count (pichat-activity--thinking-count group))
+         (phrase (pichat-activity--join-phrases
+                  (if (> thinking-count 0)
+                      (cons "Thought" phrases)
+                    phrases)))
          (summary (if (string-empty-p phrase) phrase
                     (concat (upcase (substring phrase 0 1))
                             (substring phrase 1))))
@@ -320,9 +375,12 @@ KIND-FUNCTION receives an activity member and may return an enrichment kind."
          (complete (pichat-activity-group-complete-count group))
          (suffix
           (pcase (pichat-activity-group-status group)
-            ('active (format " · %d/%d complete" complete total))
-            ('failed (format " · %d/%d complete, failed" complete total))
-            ('orphaned (format " · %d/%d complete, orphaned" complete total))
+            ('active (and (> total 0)
+                          (format " · %d/%d complete" complete total)))
+            ('failed (and (> total 0)
+                          (format " · %d/%d complete, failed" complete total)))
+            ('orphaned (and (> total 0)
+                            (format " · %d/%d complete, orphaned" complete total)))
             ('complete (and (> total 1)
                             (format " · %d/%d complete" complete total))))))
     (truncate-string-to-width (concat summary suffix) 160 nil nil "…")))

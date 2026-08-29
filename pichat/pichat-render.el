@@ -43,7 +43,7 @@
    :tool-view 'summary
    :max-tool-args 1200
    :max-tool-output 4000
-   :activity-member-kinds '(tool)
+   :activity-member-kinds '(thinking tool)
    :activity-display 'expanded
    :activity-views nil
    :activity-latest-key nil
@@ -510,6 +510,9 @@ ACTIVITY-MEMBER-P is non-nil, apply the activity member/body visual levels."
            'pichat-activity-anchor (pichat-activity-group-anchor group)
            'pichat-activity-tool-ids (pichat-activity-group-tool-ids group)
            'pichat-activity-expanded expanded
+           'pichat-activity-member-kinds
+           (mapcar #'pichat-activity-member-kind
+                   (pichat-activity-group-members group))
            'pichat-activity-status (pichat-activity-group-status group)
            'pichat-node-key (pichat-activity-member-node-key first)
            'pichat-node-role (pichat-activity-member-role first)
@@ -597,7 +600,7 @@ ACTIVITY-MEMBER-P is non-nil, apply the activity member/body visual levels."
              (when expanded
                (dolist (member (pichat-activity-group-members group))
                  (let ((tool-id (pichat-activity-member-tool-call-id member)))
-                   (emit (list 'tool
+                   (emit (list (pichat-activity-member-kind member)
                                (pichat-activity-member-node-key member)
                                (or tool-id
                                    (pichat-activity-member-source-key member)))

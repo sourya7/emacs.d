@@ -1850,7 +1850,7 @@ Signal a user error when thinking control is disabled or unavailable."
 (defun pichat-chat--activity-presentation-state (transcript live-p)
   "Return explicit activity presentation state for TRANSCRIPT and LIVE-P."
   (pichat-chat-activity-ui-presentation-state
-   transcript '(tool) pichat-chat-show-thinking live-p
+   transcript '(thinking tool) pichat-chat-show-thinking live-p
    pichat-chat--source-generation pichat-chat--activity-view-states
    pichat-chat--live-draft pichat-chat-activity-group-display))
 
@@ -1871,7 +1871,7 @@ Signal a user error when thinking control is disabled or unavailable."
       pichat-chat-tool-truncation-notice-format)
      :max-tool-args pichat-chat-max-tool-args-chars
      :max-tool-output pichat-chat-max-tool-output-chars
-     :activity-member-kinds '(tool)
+     :activity-member-kinds '(thinking tool)
      :activity-display pichat-chat-activity-group-display
      :activity-views (plist-get activity :views)
      :activity-latest-key nil
@@ -2624,7 +2624,7 @@ projection.  Without pending work it remains immediately visible."
       pichat-chat-tool-truncation-notice-format)
      :max-tool-args pichat-chat-max-tool-args-chars
      :max-tool-output pichat-chat-max-tool-output-chars
-     :activity-member-kinds '(tool)
+     :activity-member-kinds '(thinking tool)
      :activity-display pichat-chat-activity-group-display
      :activity-views (plist-get activity :views)
      :activity-latest-key (plist-get activity :latest-key)

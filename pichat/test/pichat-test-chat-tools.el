@@ -342,8 +342,14 @@
                       (pichat-chat--canonical-tool-view-key
                        (pichat-transcript-node-key node) "tool-1"))
                      (activity
-                      (car (pichat-test--hash-table-keys
-                            pichat-chat--activity-blocks))))
+                      (cl-find-if
+                       (lambda (key)
+                         (member "tool-1"
+                                 (plist-get
+                                  (gethash key pichat-chat--activity-blocks)
+                                  :tool-ids)))
+                       (pichat-test--hash-table-keys
+                        pichat-chat--activity-blocks))))
                 (should-not (gethash "tool-1" pichat-chat--tool-blocks))
                 (should (eq 'summary
                             (gethash canonical-view-key

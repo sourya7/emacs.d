@@ -46,9 +46,12 @@ PiChat links are exposed as URL targets rather than their visible labels.
 
 User messages are rendered only from authoritative Pi events.  Unknown protocol
 data is normalized to bounded diagnostics rather than printed as raw objects.
-Consecutive tool calls are presented in source-ordered activity groups. Group
-headers summarize bounded enriched tool kinds and can fold the whole run;
-expanded groups retain each tool's independent header/arguments/output control.
+Consecutive thinking and tool calls are presented in source-ordered activity
+groups. Group headers summarize bounded enriched tool kinds plus visible
+thinking, and can fold the whole run; expanded groups retain each tool's
+independent header/arguments/output control while thinking remains an indented
+child. Disabling `pichat-chat-show-thinking` hides thinking text and thought-only
+groups but retains tool activity grouping and controls.
 `pichat-chat-activity-group-display` defaults to `latest`, which keeps current
 live tail activity open and folds older or settled groups. It also accepts
 `collapsed` and `expanded`; an explicit group choice overrides any policy.

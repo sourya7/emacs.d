@@ -135,12 +135,47 @@
                      :status 'done :output nil))))
    :diagnostics nil :metadata nil))
 
+(ert-deftest pichat-render-activity-thinking-is-an-indented-child-and-can-be-hidden ()
+  (let* ((thinking (pichat-transcript-content-create
+                    :kind 'thinking :index 0 :text "private plan"))
+         (tool (pichat-transcript-content-create
+                :kind 'tool :index 1 :tool-call-id "thought-tool"
+                :name "read" :status 'done))
+         (transcript (pichat-transcript-create
+                      :nodes (list (pichat-transcript-node-create
+                                    :kind 'message :key "thought-node"
+                                    :role 'assistant
+                                    :content (list thinking tool)))
+                      :diagnostics nil :metadata nil))
+         (shown (pichat-render-fragment-propertized-string
+                 (pichat-render-canonical transcript
+                  (pichat-render-context-create
+                   :show-thinking t :tool-view 'summary
+                   :activity-member-kinds '(thinking tool)
+                   :activity-display 'expanded))))
+         (hidden (pichat-render-fragment-text
+                  (pichat-render-canonical transcript
+                   (pichat-render-context-create
+                    :show-thinking nil :tool-view 'summary
+                    :activity-member-kinds '(thinking tool)
+                    :activity-display 'expanded)))))
+    (should (string-match-p "private plan" shown))
+    (should (eq 'thinking
+                (get-text-property (string-match "private plan" shown)
+                                   'pichat-content-kind shown)))
+    (should (equal "  "
+                   (get-text-property (string-match "private plan" shown)
+                                      'line-prefix shown)))
+    (should (string-match-p "tool:read done" shown))
+    (should-not (string-match-p "private plan" hidden))
+    (should (string-match-p "tool:read done" hidden))))
+
 (defun pichat-test-render--activity-context (display &optional live latest view)
   "Return an activity render context for DISPLAY, LIVE, LATEST, and VIEW."
   (pichat-render-context-create
    :show-thinking t :tool-view (or view 'summary)
    :max-tool-args 200 :max-tool-output 200
-   :activity-member-kinds '(tool) :activity-display display
+   :activity-member-kinds '(thinking tool) :activity-display display
    :activity-latest-key latest :activity-live-p live))
 
 (ert-deftest pichat-render-activity-collapsed-group-emits-only-bounded-header ()

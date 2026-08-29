@@ -386,7 +386,7 @@
             (let ((text (pichat-test-buffer-text buffer)))
               (should (string-match-p
                        (regexp-quote
-                        "live plan\n\n▼ Used test_tool\n✓ tool   test_tool")
+                        "▼ Thought and used test_tool\nlive plan\n✓ tool   test_tool")
                        text))
               (should-not (string-match-p
                            (regexp-quote "live plan\n▼ Used test_tool")
@@ -413,7 +413,7 @@
              proc
              "{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"live plan\"},{\"type\":\"text\",\"text\":\"Final answer\"}]}}\n")
             (let ((text (pichat-test-buffer-text buffer)))
-              (should (string-match-p (regexp-quote "live plan\n\nFinal answer") text))
+              (should (string-match-p (regexp-quote "▶ Thought\n\nFinal answer") text))
               (should-not (string-match-p (regexp-quote "live planFinal answer") text))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 

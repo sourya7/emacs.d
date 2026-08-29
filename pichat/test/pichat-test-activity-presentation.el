@@ -127,6 +127,125 @@
                    (mapcar #'pichat-activity-member-kind
                            (pichat-activity-group-members group))))))
 
+(ert-deftest pichat-activity-thinking-joins-tools-in-source-order ()
+  (let* ((node
+          (pichat-test-activity--assistant
+           "mixed"
+           (list (pichat-test-activity--content
+                  'thinking 0 :text "plan")
+                 (pichat-test-activity--tool 1 "one" "read" 'done)
+                 (pichat-test-activity--content
+                  'thinking 2 :text "follow-up")
+                 (pichat-test-activity--tool 3 "two" "edit" 'done))))
+         (group (car (pichat-activity-groups
+                      (pichat-activity-build-presentation
+                       (pichat-test-activity--transcript node)
+                       '(thinking tool) t)))))
+    (should (equal '(thinking tool thinking tool)
+                   (mapcar #'pichat-activity-member-kind
+                           (pichat-activity-group-members group))))
+    (should (equal '("one" "two")
+                   (pichat-activity-group-tool-ids group)))
+    (should (equal "one" (pichat-activity-group-anchor group)))))
+
+(ert-deftest pichat-activity-thinking-only-groups-have-stable-source-keys ()
+  (let* ((transcript
+          (pichat-test-activity--transcript
+           (pichat-test-activity--assistant
+            "thought-node"
+            (list (pichat-test-activity--content
+                   'thinking 0 :text "plan")))))
+         (first (car (pichat-activity-groups
+                      (pichat-activity-build-presentation
+                       transcript '(thinking tool) t))))
+         (second (car (pichat-activity-groups
+                       (pichat-activity-build-presentation
+                        transcript '(thinking tool) t)))))
+    (should (equal (pichat-activity-group-key first)
+                   (pichat-activity-group-key second)))
+    (should (equal '(thinking)
+                   (mapcar #'pichat-activity-member-kind
+                           (pichat-activity-group-members first))))
+    (should (equal "Thought" (pichat-activity-format-summary first)))))
+
+(ert-deftest pichat-activity-hidden-thinking-preserves-tool-anchor-and-merge ()
+  (let* ((node (pichat-test-activity--assistant
+                "hidden"
+                (list (pichat-test-activity--tool 0 "one" "read" 'done)
+                      (pichat-test-activity--content
+                       'thinking 1 :text "hidden")
+                      (pichat-test-activity--tool 2 "two" "edit" 'done))))
+         (groups (pichat-activity-groups
+                  (pichat-activity-build-presentation
+                   (pichat-test-activity--transcript node)
+                   '(thinking tool) nil))))
+    (should (= 1 (length groups)))
+    (should (equal '(tool tool)
+                   (mapcar #'pichat-activity-member-kind
+                           (pichat-activity-group-members (car groups)))))
+    (should (equal "one" (pichat-activity-group-anchor (car groups))))))
+
+(ert-deftest pichat-activity-thinking-prose-and-tools-have-independent-boundaries ()
+  (let* ((thinking (lambda (key text)
+                     (pichat-test-activity--assistant
+                      key (list (pichat-test-activity--content
+                                 'thinking 0 :text text)))))
+         (tool (lambda (key id)
+                 (pichat-test-activity--assistant
+                  key (list (pichat-test-activity--tool 0 id "read" 'done)))))
+         (transcript
+          (pichat-test-activity--transcript
+           (funcall thinking "thought" "plan")
+           (pichat-test-activity--assistant
+            "prose" (list (pichat-test-activity--content
+                           'prose 0 :text "answer")))
+           (funcall tool "tool" "read-1")))
+         (groups (pichat-activity-groups
+                  (pichat-activity-build-presentation
+                   transcript '(thinking tool) t))))
+    (should (= 2 (length groups)))
+    (should (equal '(nil ("read-1"))
+                   (mapcar #'pichat-activity-group-tool-ids groups)))
+    (should (eq 'active
+                (pichat-activity-group-status (car groups))))))
+
+(ert-deftest pichat-activity-thinking-status-follows-node-settlement ()
+  (let* ((make (lambda (reason error)
+                 (pichat-activity-groups
+                  (pichat-activity-build-presentation
+                   (pichat-test-activity--transcript
+                    (pichat-transcript-node-create
+                     :kind 'message :key "thought" :role 'assistant
+                     :stop-reason reason :error-message error
+                     :content (list (pichat-test-activity--content
+                                     'thinking 0 :text "plan"))))
+                   '(thinking tool) t))))
+    (should (eq 'active
+                (pichat-activity-group-status (car (funcall make nil nil)))))
+    (should (eq 'complete
+                (pichat-activity-group-status (car (funcall make "stop" nil)))))
+    (should (eq 'failed
+                (pichat-activity-group-status
+                 (car (funcall make "error" "provider failed"))))))))
+
+(ert-deftest pichat-activity-group-summary-combines-thought-and-enriched-tools ()
+  (let* ((group (car (pichat-activity-groups
+                      (pichat-activity-build-presentation
+                       (pichat-test-activity--transcript
+                        (pichat-test-activity--assistant
+                         "mixed"
+                         (list (pichat-test-activity--content
+                                'thinking 0 :text "secret details")
+                               (pichat-test-activity--tool
+                                1 "read" "read" 'done))))
+                       '(thinking tool) t))))
+    (should (equal "Thought and read a file"
+                   (pichat-activity-format-summary
+                    group (lambda (_member) 'read))))
+    (should-not (string-match-p "secret"
+                                (pichat-activity-format-summary
+                                 group (lambda (_member) 'read)))))))
+
 (ert-deftest pichat-activity-group-identity-ignores-status-output-and-arguments ()
   (let* ((make
           (lambda (status output args)

@@ -378,6 +378,121 @@
         (when (buffer-live-p compose) (kill-buffer compose))
         (when (buffer-live-p chat) (kill-buffer chat))))))
 
+(ert-deftest pichat-response-selection-prefers-assistant-at-point-then-latest ()
+  (let* ((first (pichat-test-chat-navigation--node
+                 "assistant-one" 'assistant "first"))
+         (latest (pichat-test-chat-navigation--node
+                  "assistant-two" 'assistant "latest"))
+         (transcript
+          (pichat-transcript-create
+           :nodes (list first
+                        (pichat-test-chat-navigation--node
+                         "user-between" 'user "question")
+                        latest)))
+         (at-point
+          (pichat-chat-navigation-select-response
+           transcript "assistant-one" '(7 "session-a")))
+         (fallback
+          (pichat-chat-navigation-select-response
+           transcript "user-between" '(7 "session-a"))))
+    (should (equal "assistant-one"
+                   (pichat-chat-navigation-response-node-key at-point)))
+    (should (equal "first"
+                   (pichat-chat-navigation-response-markdown at-point)))
+    (should (equal "assistant-two"
+                   (pichat-chat-navigation-response-node-key fallback)))
+    (should (equal "latest"
+                   (pichat-chat-navigation-response-markdown fallback)))
+    (should-not
+     (pichat-chat-navigation-select-response
+      (pichat-transcript-create
+       :nodes (list (pichat-test-chat-navigation--node
+                     "only-user" 'user "question")))
+      nil '(7 "session-a")))))
+
+(ert-deftest pichat-response-extraction-preserves-only-exact-ordered-prose ()
+  (let* ((first "# Heading\n\n| Name | URL |\n|---|---|\n")
+         (second "| Pi | [site](https://example.test) |\n\n```elisp\n(message \"ok\")\n```\n")
+         (tool
+          (pichat-transcript-content-create
+           :kind 'tool :index 2 :tool-call-id "response-tool" :name "bash"
+           :arguments '(:command "secret-command") :status 'done
+           :output (list (pichat-transcript-content-create
+                          :kind 'prose :index 0 :text "secret output"))))
+         (node
+          (pichat-transcript-node-create
+           :kind 'message :key "mixed-assistant" :role 'assistant
+           :stop-reason "error" :error-message "display annotation"
+           :content
+           (list
+            (pichat-transcript-content-create
+             :kind 'prose :index 0 :text first)
+            (pichat-transcript-content-create
+             :kind 'thinking :index 1 :text "secret thinking")
+            tool
+            (pichat-transcript-content-create
+             :kind 'prose :index 3 :text second)
+            (pichat-transcript-content-create
+             :kind 'image :index 4 :text "[display image]"))))
+         (response
+          (pichat-chat-navigation-select-response
+           (pichat-transcript-create :nodes (list node))
+           "mixed-assistant" '(11 "source"))))
+    (should (equal (list first second)
+                   (pichat-chat-navigation-response-prose-segments response)))
+    (should (equal (concat first second)
+                   (pichat-chat-navigation-response-markdown response)))
+    (dolist (excluded '("secret thinking" "secret-command" "secret output"
+                        "display annotation" "[display image]"))
+      (should-not
+       (string-match-p
+        (regexp-quote excluded)
+        (pichat-chat-navigation-response-markdown response))))))
+
+(ert-deftest pichat-response-selection-represents-empty-prose-exactly ()
+  (let* ((tool-only
+          (pichat-transcript-node-create
+           :kind 'message :key "tool-only" :role 'assistant
+           :content
+           (list
+            (pichat-transcript-content-create
+             :kind 'thinking :index 0 :text "thinking")
+            (pichat-transcript-content-create
+             :kind 'tool :index 1 :tool-call-id "only-tool" :name "read"
+             :status 'done :output nil))))
+         (response
+          (pichat-chat-navigation-select-response
+           (pichat-transcript-create :nodes (list tool-only))
+           nil 'source-token)))
+    (should (equal "tool-only"
+                   (pichat-chat-navigation-response-node-key response)))
+    (should-not (pichat-chat-navigation-response-prose-segments response))
+    (should (equal ""
+                   (pichat-chat-navigation-response-markdown response)))))
+
+(ert-deftest pichat-response-identity-detects-source-rebind-and-removed-node ()
+  (let* ((node (pichat-test-chat-navigation--node
+                "stable-assistant" 'assistant "settled"))
+         (transcript (pichat-transcript-create :nodes (list node)))
+         (token '(3 "session-a" "/tmp/a.jsonl"))
+         (response
+          (pichat-chat-navigation-select-response transcript nil token)))
+    ;; The captured token is independent of later mutation by the caller.
+    (setcar token 99)
+    (should
+     (pichat-chat-navigation-response-current-p
+      response transcript '(3 "session-a" "/tmp/a.jsonl")))
+    (should-not
+     (pichat-chat-navigation-response-current-p
+      response transcript '(4 "session-b" "/tmp/b.jsonl")))
+    (should-not
+     (pichat-chat-navigation-response-current-p
+      response
+      (pichat-transcript-create
+       :nodes (list (pichat-test-chat-navigation--node
+                     "replacement" 'assistant "new source")))
+      '(3 "session-a" "/tmp/a.jsonl")))))
+
 (ert-deftest pichat-canonical-markdown-export-ignores-display-and-truncation ()
   (let* ((full-output (concat "0123456789\n~~~ embedded fence\n" "tail"))
          (tool

@@ -3,9 +3,10 @@
 ;;; Commentary:
 
 ;; Focused helpers for logical turn navigation, active-item selection, compose
-;; buffers, and canonical-transcript Markdown export.  The chat orchestration
-;; layer supplies all markers, block tables, transcripts, and input callbacks;
-;; this module does not require or mutate `pichat-chat'.
+;; buffers, canonical assistant-response selection, and transcript Markdown
+;; export.  The chat orchestration layer supplies all markers, block tables,
+;; transcripts, source tokens, and input callbacks; this module does not require
+;; or mutate `pichat-chat'.
 
 ;;; Code:
 
@@ -280,6 +281,82 @@ buffer and its text intact.  Applying never submits the prompt to Pi."
       (if (> width 1)
           (concat fence " " value " " fence)
         (concat fence value fence)))))
+
+(cl-defstruct (pichat-chat-navigation-response
+               (:constructor pichat-chat-navigation-response-create)
+               (:conc-name pichat-chat-navigation-response-))
+  "A canonical assistant response selected for a secondary view.
+NODE-KEY identifies the durable canonical assistant node.  SOURCE-TOKEN is an
+opaque identity supplied by the chat orchestration layer.  PROSE-SEGMENTS are
+exact canonical prose strings in content order, and MARKDOWN is their direct
+concatenation with no display separators or annotations."
+  node-key
+  source-token
+  prose-segments
+  markdown)
+
+(defun pichat-chat-navigation--assistant-node-p (node)
+  "Return non-nil when NODE is a canonical assistant message."
+  (and (pichat-transcript-node-p node)
+       (eq 'message (pichat-transcript-node-kind node))
+       (eq 'assistant (pichat-transcript-node-role node))))
+
+(defun pichat-chat-navigation--assistant-node (transcript preferred-node-key)
+  "Select an assistant node from TRANSCRIPT.
+Use PREFERRED-NODE-KEY when it names an assistant message; otherwise return the
+latest assistant message.  Return nil when the transcript has no assistant
+message."
+  (let (preferred latest)
+    (dolist (node (pichat-transcript-nodes transcript))
+      (when (pichat-chat-navigation--assistant-node-p node)
+        (setq latest node)
+        (when (and preferred-node-key
+                   (equal preferred-node-key
+                          (pichat-transcript-node-key node)))
+          (setq preferred node))))
+    (or preferred latest)))
+
+(defun pichat-chat-navigation-select-response
+    (transcript preferred-node-key source-token)
+  "Return a canonical assistant response selected from TRANSCRIPT.
+PREFERRED-NODE-KEY is normally the projected `pichat-node-key' at point.  When
+it does not identify an assistant message, select the latest assistant message.
+SOURCE-TOKEN is retained opaquely so a later view can reject refresh or return
+operations after source rebinding.  Only canonical `prose' content contributes
+to the result; thinking, tools, tool output, images, unknown content, and
+presentation annotations are excluded.  Multiple prose segments are directly
+concatenated in canonical content order.  A tool-only assistant response is
+represented by an empty segment list and empty Markdown.  Return nil when no
+assistant response exists."
+  (unless (pichat-transcript-p transcript)
+    (user-error "No synchronized PiChat transcript to select from"))
+  (when-let ((node (pichat-chat-navigation--assistant-node
+                    transcript preferred-node-key)))
+    (let ((segments
+           (cl-loop for content in (pichat-transcript-node-content node)
+                    when (eq 'prose
+                             (pichat-transcript-content-kind content))
+                    collect (or (pichat-transcript-content-text content) ""))))
+      (pichat-chat-navigation-response-create
+       :node-key (pichat-transcript-node-key node)
+       :source-token (copy-tree source-token)
+       :prose-segments segments
+       :markdown (mapconcat #'identity segments "")))))
+
+(defun pichat-chat-navigation-response-current-p
+    (response transcript source-token)
+  "Return non-nil when RESPONSE still identifies TRANSCRIPT and SOURCE-TOKEN.
+This validates identity only: the source token must match and the durable node
+key must still name an assistant message in the current canonical transcript."
+  (and (pichat-chat-navigation-response-p response)
+       (pichat-transcript-p transcript)
+       (equal source-token
+              (pichat-chat-navigation-response-source-token response))
+       (let ((key (pichat-chat-navigation-response-node-key response)))
+         (cl-some (lambda (node)
+                    (and (pichat-chat-navigation--assistant-node-p node)
+                         (equal key (pichat-transcript-node-key node))))
+                  (pichat-transcript-nodes transcript)))))
 
 (defun pichat-chat-navigation--content-text (content)
   "Return exact normalized text from CONTENT."

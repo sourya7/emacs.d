@@ -28,6 +28,7 @@
 (require 'pichat-chat-input)
 (require 'pichat-chat-diagnostics)
 (require 'pichat-chat-navigation)
+(require 'pichat-response-view)
 (require 'pichat-view)
 (require 'pichat-bridge-transport)
 
@@ -447,6 +448,7 @@ Markup characters remain visible; this is fontification only."
     (define-key map (kbd "C-c M-p") #'pichat-chat-previous-user-turn)
     (define-key map (kbd "C-c C-.") #'pichat-chat-jump-to-active-item)
     (define-key map (kbd "C-c C-,") #'pichat-chat-open-compose-buffer)
+    (define-key map (kbd "C-c C-h") #'pichat-chat-view-response)
     (define-key map (kbd "M-<up>") #'pichat-chat-history-previous)
     (define-key map (kbd "M-<down>") #'pichat-chat-history-next)
     (define-key map [remap move-beginning-of-line]
@@ -4241,15 +4243,19 @@ and finally the prompt while Pi is running."
     (goto-char (plist-get target :position))
     (message "PiChat active item: %s" (plist-get target :kind))))
 
-(defun pichat-chat--compose-source-token ()
-  "Return the current source identity captured by compose editors."
+(defun pichat-chat--source-token ()
+  "Return the current chat source identity."
   (list pichat-chat--source-generation
         pichat-chat--source-session-id
         pichat-chat--source-session-file))
 
+(defun pichat-chat--compose-source-token ()
+  "Return the current source identity captured by compose editors."
+  (pichat-chat--source-token))
+
 (defun pichat-chat--compose-source-valid-p (token)
   "Return non-nil when compose source TOKEN is still current."
-  (equal token (pichat-chat--compose-source-token)))
+  (equal token (pichat-chat--source-token)))
 
 (defun pichat-chat--replace-from-compose (text point-offset)
   "Replace the current prompt with TEXT and return its POINT-OFFSET position."
@@ -4281,6 +4287,53 @@ and finally the prompt while Pi is running."
         (car text-and-point) (cdr text-and-point)
         (pichat-chat--compose-source-token)
         #'pichat-chat--compose-source-valid-p)))))
+
+(defun pichat-chat--response-view-refresh (response)
+  "Return a refreshed canonical RESPONSE or reject stale source identity."
+  (let ((token (pichat-chat--source-token)))
+    (unless (pichat-chat-navigation-response-current-p
+             response pichat-chat--canonical-transcript token)
+      (user-error "PiChat response source changed; snapshot preserved"))
+    (pichat-chat-navigation-select-response
+     pichat-chat--canonical-transcript
+     (pichat-chat-navigation-response-node-key response)
+     token)))
+
+(defun pichat-chat--response-view-origin-position (response)
+  "Return RESPONSE's current canonical display position or reject it."
+  (let ((token (pichat-chat--source-token)))
+    (unless (pichat-chat-navigation-response-current-p
+             response pichat-chat--canonical-transcript token)
+      (user-error "PiChat response source changed; snapshot preserved"))
+    (let* ((start (and (markerp pichat-chat--canonical-start)
+                       (marker-position pichat-chat--canonical-start)))
+           (end (and (markerp pichat-chat--canonical-end)
+                     (marker-position pichat-chat--canonical-end)))
+           (position
+            (and start end
+                 (text-property-any
+                  start end 'pichat-node-key
+                  (pichat-chat-navigation-response-node-key response)))))
+      (or position
+          (user-error
+           "PiChat response is no longer projected; snapshot preserved")))))
+
+;;;###autoload
+(defun pichat-chat-view-response ()
+  "Render the settled canonical assistant response at point, or the latest one."
+  (interactive)
+  (unless (pichat-transcript-p pichat-chat--canonical-transcript)
+    (user-error "No synchronized PiChat transcript to view"))
+  (let* ((origin (pichat-view-capture-origin))
+         (response
+          (pichat-chat-navigation-select-response
+           pichat-chat--canonical-transcript
+           (get-text-property (point) 'pichat-node-key)
+           (pichat-chat--source-token))))
+    (unless response (user-error "No settled assistant response to view"))
+    (pichat-response-view-open
+     response origin #'pichat-chat--response-view-refresh
+     #'pichat-chat--response-view-origin-position (buffer-name))))
 
 ;;;###autoload
 (defun pichat-chat-export-transcript-to-markdown ()

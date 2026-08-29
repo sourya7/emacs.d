@@ -53,6 +53,7 @@
 (require 'pichat-test-tool-enrichment)
 (require 'pichat-test-shell-presentation)
 (require 'pichat-test-chat-navigation)
+(require 'pichat-test-response-view)
 (require 'pichat-test-view-modes)
 (require 'pichat-test-view-lifecycle)
 (require 'pichat-test-sessions-integration)

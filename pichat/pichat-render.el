@@ -508,6 +508,8 @@ ACTIVITY-MEMBER-P is non-nil, apply the activity member/body visual levels."
      (list 'pichat-content-kind 'activity-header
            'pichat-activity-key (pichat-activity-group-key group)
            'pichat-activity-anchor (pichat-activity-group-anchor group)
+           'pichat-activity-source-anchor
+           (list 'source (pichat-activity-member-source-key first))
            'pichat-activity-tool-ids (pichat-activity-group-tool-ids group)
            'pichat-activity-expanded expanded
            'pichat-activity-member-kinds

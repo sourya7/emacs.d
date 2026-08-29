@@ -2992,6 +2992,9 @@ mutated.  SECOND wins if a transient tool id collides with a canonical id."
           pichat-chat--activity-blocks
           (pichat-chat-activity-ui-merge-block-tables
            pichat-chat--canonical-activity-blocks live-activity-blocks))
+    (pichat-chat-activity-ui-refresh-live-views
+     live-activity-blocks pichat-chat--activity-view-states
+     pichat-chat--source-generation)
     (pichat-chat-activity-ui-prune-views
      pichat-chat--canonical-activity-blocks live-activity-blocks
      pichat-chat--activity-view-states pichat-chat--source-generation)

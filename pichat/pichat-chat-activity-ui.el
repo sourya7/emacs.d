@@ -32,10 +32,42 @@
   (list 'canonical 'activity group-key))
 
 (defun pichat-chat-activity-ui--state-view (state tool-ids)
-  "Return STATE's view when its evidence matches TOOL-IDS."
+  "Return STATE's view when its evidence exactly matches TOOL-IDS."
   (when (and (listp state)
              (equal (plist-get state :tool-ids) tool-ids))
     (plist-get state :view)))
+
+(defun pichat-chat-activity-ui--tool-ids-extend-p (previous current)
+  "Return non-nil when CURRENT only appends tool IDs to PREVIOUS."
+  (and (listp previous)
+       (listp current)
+       (<= (length previous) (length current))
+       (equal previous (seq-take current (length previous)))))
+
+(defun pichat-chat-activity-ui--source-anchor (group)
+  "Return GROUP's first-member source anchor."
+  (when-let ((first (car (pichat-activity-group-members group))))
+    (list 'source (pichat-activity-member-source-key first))))
+
+(defun pichat-chat-activity-ui--live-explicit-view
+    (view-states generation group)
+  "Return the explicit live view for GROUP without mutating VIEW-STATES.
+A live group may only extend its prior tool evidence.  A source-anchored choice
+also follows thought-only activity when it gains its first durable tool anchor."
+  (let* ((anchor (pichat-activity-group-anchor group))
+         (tool-ids (pichat-activity-group-tool-ids group))
+         (live-key
+          (pichat-chat-activity-ui-live-view-key generation anchor))
+         (source-key
+          (pichat-chat-activity-ui-live-view-key
+           generation (pichat-chat-activity-ui--source-anchor group)))
+         (state (or (gethash live-key view-states)
+                    (and (not (equal source-key live-key))
+                         (gethash source-key view-states)))))
+    (when (and state
+               (pichat-chat-activity-ui--tool-ids-extend-p
+                (plist-get state :tool-ids) tool-ids))
+      (plist-get state :view))))
 
 (defun pichat-chat-activity-ui-explicit-view
     (view-states generation group live-p)
@@ -49,8 +81,8 @@ GENERATION scopes transient choices and LIVE-P selects the owning source."
          (live-key
           (pichat-chat-activity-ui-live-view-key generation anchor)))
     (if live-p
-        (pichat-chat-activity-ui--state-view
-         (gethash live-key view-states) tool-ids)
+        (pichat-chat-activity-ui--live-explicit-view
+         view-states generation group)
       (or (pichat-chat-activity-ui--state-view
            (gethash canonical-key view-states) tool-ids)
           (pichat-chat-activity-ui--state-view
@@ -151,10 +183,13 @@ LIVE-P and GENERATION determine each block's explicit view-state key."
                   (copy-sequence
                    (or (get-text-property position 'pichat-activity-tool-ids)
                        nil)))
+                 (source-anchor
+                  (get-text-property position 'pichat-activity-source-anchor))
                  (block
                   (list :start (copy-marker position t)
                         :end (copy-marker next nil)
-                        :key group-key :anchor anchor :tool-ids tool-ids
+                        :key group-key :anchor anchor
+                        :source-anchor source-anchor :tool-ids tool-ids
                         :display-state
                         (if (get-text-property position
                                               'pichat-activity-expanded)
@@ -219,6 +254,33 @@ LIVE-P and GENERATION determine each block's explicit view-state key."
            (list :view view
                  :tool-ids (copy-sequence (plist-get block :tool-ids)))
            view-states))
+
+(defun pichat-chat-activity-ui-refresh-live-views
+    (live-blocks view-states generation)
+  "Refresh compatible explicit states from committed LIVE-BLOCKS.
+Tool evidence may grow only by appending IDs.  A source-anchored thought-only
+state migrates to the durable tool anchor after the first tool appears."
+  (maphash
+   (lambda (_key block)
+     (let* ((live-key (plist-get block :view-state-key))
+            (source-key
+             (pichat-chat-activity-ui-live-view-key
+              generation (plist-get block :source-anchor)))
+            (state (or (gethash live-key view-states)
+                       (and (not (equal source-key live-key))
+                            (gethash source-key view-states))))
+            (tool-ids (plist-get block :tool-ids)))
+       (when (and state
+                  (pichat-chat-activity-ui--tool-ids-extend-p
+                   (plist-get state :tool-ids) tool-ids))
+         ;; Use a fresh value so transaction snapshots retain old evidence.
+         (puthash live-key
+                  (list :view (plist-get state :view)
+                        :tool-ids (copy-sequence tool-ids))
+                  view-states)
+         (unless (equal source-key live-key)
+           (remhash source-key view-states)))))
+   live-blocks))
 
 (defun pichat-chat-activity-ui-transfer-live-views
     (canonical-blocks view-states generation)

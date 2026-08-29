@@ -39,6 +39,15 @@ STOP-REASON, when non-nil, is attached to the assistant message."
         :message (list :role "assistant"
                        :content (list (list :type "text" :text text)))))
 
+(defun pichat-test-chat-activity--thinking-event (text &optional stop-reason)
+  "Return assistant message-end thinking event containing TEXT.
+STOP-REASON, when non-nil, is attached to the assistant message."
+  (list :type "message_end"
+        :message (append (list :role "assistant"
+                               :content (list (list :type "thinking"
+                                                    :thinking text)))
+                         (and stop-reason (list :stopReason stop-reason)))))
+
 (defun pichat-test-chat-activity--apply (draft &rest events)
   "Apply EVENTS to DRAFT and project its live tail."
   (dolist (event events) (pichat-pi-live-draft-apply draft event))
@@ -201,6 +210,79 @@ STOP-REASON, when non-nil, is attached to the assistant message."
                                      :display-state)))
               (should (= 1 (hash-table-count
                             pichat-chat--activity-view-states)))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-chat-activity-collapsed-live-choice-survives-tool-growth ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-render-markdown nil)
+          (pichat-chat-activity-group-display 'latest)
+          buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (with-current-buffer buffer
+              (pichat-test-chat-activity--apply
+               pichat-chat--live-draft
+               (pichat-test-chat-activity--tool-event
+                "growth-one" "read" '(:path "one.el") "toolUse"))
+              (let ((group (car (pichat-test-chat-activity--ordered-blocks))))
+                (goto-char (marker-position (plist-get group :start)))
+                (pichat-chat-toggle-activity-at-point))
+              (pichat-test-chat-activity--apply
+               pichat-chat--live-draft
+               (pichat-test-chat-activity--finish-event
+                "growth-one" "read" "one")
+               (pichat-test-chat-activity--tool-event
+                "growth-two" "edit" '(:path "two.el") "toolUse"))
+              (let* ((group (car (pichat-test-chat-activity--ordered-blocks)))
+                     (state (gethash (plist-get group :view-state-key)
+                                     pichat-chat--activity-view-states)))
+                (should (eq 'collapsed (plist-get group :display-state)))
+                (should (equal '("growth-one" "growth-two")
+                               (plist-get group :tool-ids)))
+                (should (equal (plist-get group :tool-ids)
+                               (plist-get state :tool-ids)))
+                (should-not (gethash "growth-two" pichat-chat--tool-blocks)))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-chat-activity-collapsed-thinking-choice-survives-first-tool ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-render-markdown nil)
+          (pichat-chat-show-thinking t)
+          (pichat-chat-activity-group-display 'latest)
+          buffer old-state-key)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (with-current-buffer buffer
+              (pichat-test-chat-activity--apply
+               pichat-chat--live-draft
+               (pichat-test-chat-activity--thinking-event
+                "Planning" "toolUse"))
+              (let ((group (car (pichat-test-chat-activity--ordered-blocks))))
+                (goto-char (marker-position (plist-get group :start)))
+                (pichat-chat-toggle-activity-at-point)
+                (setq group (car (pichat-test-chat-activity--ordered-blocks))
+                      old-state-key (plist-get group :view-state-key)))
+              (pichat-test-chat-activity--apply
+               pichat-chat--live-draft
+               (pichat-test-chat-activity--tool-event
+                "planned-tool" "read" '(:path "planned.el") "toolUse"))
+              (let* ((group (car (pichat-test-chat-activity--ordered-blocks)))
+                     (state-key (plist-get group :view-state-key))
+                     (state (gethash state-key
+                                     pichat-chat--activity-view-states)))
+                (should (eq 'collapsed (plist-get group :display-state)))
+                (should (equal '("planned-tool")
+                               (plist-get group :tool-ids)))
+                (should-not (equal old-state-key state-key))
+                (should-not (gethash old-state-key
+                                     pichat-chat--activity-view-states))
+                (should (eq 'collapsed (plist-get state :view)))
+                (should (equal '("planned-tool")
+                               (plist-get state :tool-ids))))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
 (ert-deftest pichat-chat-activity-indexing-navigation-and-header-keymap ()

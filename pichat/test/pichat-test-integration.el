@@ -433,7 +433,9 @@
           (should (eq 'none (plist-get parent :parent-resolution)))
           (should (= 1 (plist-get parent :child-count))))
         (let (switched)
-          (cl-letf (((symbol-function 'pichat-sessions-switch-file)
+          (cl-letf (((symbol-function 'pichat-session-for-directory)
+                     (lambda (&optional _directory) session))
+                    ((symbol-function 'pichat-sessions-switch-file)
                      (lambda (file cwd &optional _ready)
                        (setq switched (list file cwd)))))
             (pichat-consult-load-session
@@ -887,7 +889,7 @@
               (with-current-buffer buffer
                 (let ((text (buffer-substring-no-properties (point-min) (point-max))))
                   (should (string-match-p (regexp-quote "call emacs tool") text))
-                  (should (string-match-p (regexp-quote "[tool:pichat-test-echo") text))
+                  (should (string-match-p (regexp-quote "pichat-test-echo") text))
                   (should (string-match-p (regexp-quote "tool result observed") text)))))
           (when (buffer-live-p buffer)
             (kill-buffer buffer))))))

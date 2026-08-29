@@ -1660,6 +1660,13 @@ runtime."
     (pcase-let ((`(,file ,cwd) (pichat-sessions--choose-basic-file session)))
       (pichat-sessions-switch-file file cwd))))
 
+(defun pichat-sessions--consult-available-p ()
+  "Load the optional Consult integration and return non-nil when usable."
+  (and (or (featurep 'pichat-consult)
+           (require 'pichat-consult nil t))
+       (fboundp 'pichat-consult-available-p)
+       (pichat-consult-available-p)))
+
 (cl-defun pichat-sessions-browse-files-independently
     (&key session owner-directory owner-scope ready error-callback
           display-function basic)
@@ -1694,8 +1701,7 @@ arguments are forwarded to `pichat-sessions-open-file-independently'."
          (archive-unavailable (_reason)
            (continue-once #'open-basic)))
       (if (or basic
-              (not (fboundp 'pichat-consult-available-p))
-              (not (pichat-consult-available-p)))
+              (not (pichat-sessions--consult-available-p)))
           (open-basic)
         (pichat-archive-discover
          (or session (pichat-session-current)) buffer
@@ -1712,8 +1718,7 @@ capability, or any archive availability failure uses the synchronous JSONL file
 picker.  Discovery never starts a Pi process solely for browsing."
   (interactive "P")
   (if (or basic
-          (not (fboundp 'pichat-consult-available-p))
-          (not (pichat-consult-available-p)))
+          (not (pichat-sessions--consult-available-p)))
       (pichat-sessions-browse-files-basic)
     (let ((session (pichat-session-current))
           (buffer (current-buffer))
@@ -1736,8 +1741,7 @@ picker.  Discovery never starts a Pi process solely for browsing."
 This graph navigation is separate from the live source back/forward stacks.
 Loading a relation uses the ordinary saved-session switch transaction."
   (interactive)
-  (unless (and (fboundp 'pichat-consult-available-p)
-               (pichat-consult-available-p))
+  (unless (pichat-sessions--consult-available-p)
     (user-error "Related session browsing requires Consult and Node.js"))
   (let* ((session (pichat-session-current))
          (session-id (and session (pichat-session-id session)))

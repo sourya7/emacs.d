@@ -49,7 +49,13 @@
                 #'pichat-view-quit))
     (should (assq 'shr-h1 face-remapping-alist))
     (should (assq 'shr-code face-remapping-alist))
-    (should (assq 'shr-link face-remapping-alist))))
+    (should (assq 'shr-link face-remapping-alist))
+    (should (eq (lookup-key pichat-response-view-link-map (kbd "RET"))
+                #'pichat-response-view-open-link-at-point))
+    (should (eq (lookup-key pichat-response-view-link-map (kbd "w"))
+                #'pichat-response-view-copy-link-at-point))
+    (should (eq (lookup-key pichat-response-view-link-map (kbd "?"))
+                #'pichat-response-view-describe-link-at-point))))
 
 (ert-deftest pichat-response-view-renders-reflowed-structured-html-with-faces ()
   (let ((pichat-response-view-convert-function
@@ -80,6 +86,94 @@
       (search-forward "Name")
       (should (memq 'pichat-response-view-table-face
                     (ensure-list (get-text-property (1- (point)) 'face)))))))
+
+(ert-deftest pichat-response-view-opens-only-configured-safe-link-schemes ()
+  (let ((pichat-response-view-convert-function
+         (lambda (_markdown)
+           (concat "<p><a href=\"https://safe.test/path\">safe</a> "
+                   "<a href=\"javascript:alert(1)\">unsafe</a></p>")))
+        (pichat-response-view-safe-link-schemes '("https"))
+        opened described)
+    (with-temp-buffer
+      (pichat-response-view-mode)
+      (pichat-response-view--replace-rendering
+       (pichat-test-response-view--response "links" "links") 60)
+      (goto-char (point-min))
+      (search-forward "safe")
+      (backward-char)
+      (should (equal "https://safe.test/path"
+                     (get-text-property (point) 'shr-url)))
+      (cl-letf (((symbol-function 'browse-url)
+                 (lambda (url &rest _) (setq opened url))))
+        (pichat-response-view-open-link-at-point))
+      (should (equal "https://safe.test/path" opened))
+      (search-forward "unsafe")
+      (backward-char)
+      (should-not (get-text-property (point) 'shr-url))
+      (should (equal "javascript:alert(1)"
+                     (get-text-property (point) 'pichat-response-view-url)))
+      (let ((opened-before opened))
+        (should-error (pichat-response-view-open-link-at-point)
+                      :type 'user-error)
+        (should (equal opened-before opened)))
+      (pichat-response-view-copy-link-at-point)
+      (should (equal "javascript:alert(1)" (current-kill 0 t)))
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format-string &rest args)
+                   (setq described (apply #'format format-string args)))))
+        (pichat-response-view-describe-link-at-point))
+      (should (equal "javascript:alert(1)" described)))))
+
+(ert-deftest pichat-response-view-discards-active-html-and-remote-resources ()
+  (let ((pichat-response-view-convert-function
+         (lambda (_markdown)
+           (concat
+            "<html><head><link rel=\"stylesheet\" href=\"https://bad.test/x.css\">"
+            "<meta http-equiv=\"refresh\" content=\"0;url=https://bad.test\">"
+            "</head><body><p onclick=\"bad()\">Safe <b>prose</b></p>"
+            "<figure><img src=\"https://bad.test/pixel\" alt=\"tracker\">"
+            "<figcaption>REMOTE CAPTION</figcaption></figure>"
+            "<script>EXECUTE</script><iframe src=\"https://bad.test\">FRAME</iframe>"
+            "<form action=\"https://bad.test\">FORM</form></body></html>")))
+        (image-rendered nil)
+        (external-renderer-called nil)
+        (shr-external-rendering-functions
+         `((p . ,(lambda (_dom) (setq external-renderer-called t))))))
+    (cl-letf (((symbol-function 'shr-tag-img)
+               (lambda (&rest _) (setq image-rendered t)))
+              ((symbol-function 'url-retrieve-synchronously)
+               (lambda (&rest _) (error "unexpected resource retrieval"))))
+      (with-temp-buffer
+        (pichat-response-view-mode)
+        (pichat-response-view--replace-rendering
+         (pichat-test-response-view--response "hostile" "hostile") 60)
+        (let ((text (buffer-string)))
+          (should (string-match-p "Safe prose" text))
+          (should (string-match-p "Image omitted: tracker" text))
+          (dolist (discarded '("REMOTE CAPTION" "EXECUTE" "FRAME" "FORM"
+                               "bad.test"))
+            (should-not (string-match-p discarded text))))
+        (should-not image-rendered)
+        (should-not external-renderer-called)
+        (should-not (text-property-not-all
+                     (point-min) (point-max) 'shr-url nil))))))
+
+(ert-deftest pichat-response-view-conversion-failure-shows-exact-markdown ()
+  (let* ((exact "# Exact source\n\n[unsafe](file:///tmp/private)\n")
+         (pichat-response-view-convert-function
+          (lambda (_markdown) (user-error "converter unavailable"))))
+    (with-temp-buffer
+      (pichat-response-view-mode)
+      (pichat-response-view--replace-rendering
+       (pichat-test-response-view--response "fallback" exact) 60)
+      (should (equal exact pichat-response-view-source-markdown))
+      (should (string-match-p "Rendered preview unavailable"
+                              (buffer-string)))
+      (should (string-suffix-p exact (buffer-string)))
+      (should-not (text-property-not-all
+                   (point-min) (point-max) 'shr-url nil))
+      (pichat-response-view-copy-markdown)
+      (should (equal exact (current-kill 0 t))))))
 
 (ert-deftest pichat-response-view-copies-exact-source-and-shows-empty-response ()
   (let ((pichat-response-view-convert-function

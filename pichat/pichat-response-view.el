@@ -10,9 +10,11 @@
 
 (require 'cl-lib)
 (require 'dom)
+(require 'browse-url)
 (require 'face-remap)
 (require 'shr)
 (require 'subr-x)
+(require 'url-parse)
 (require 'pichat-chat-navigation)
 (require 'pichat-view)
 
@@ -53,6 +55,21 @@
   "Face used when a selected assistant response contains no prose."
   :group 'pichat-response-view)
 
+(defface pichat-response-view-unsafe-link-face
+  '((t :inherit shadow :underline t))
+  "Face used for links whose URL scheme PiChat will not open."
+  :group 'pichat-response-view)
+
+(defface pichat-response-view-fallback-face
+  '((t :inherit warning :weight bold))
+  "Face used for the exact-Markdown fallback notice."
+  :group 'pichat-response-view)
+
+(defcustom pichat-response-view-safe-link-schemes '("https" "http" "mailto")
+  "URL schemes that rendered response views may open explicitly."
+  :type '(repeat string)
+  :group 'pichat-response-view)
+
 (defcustom pichat-response-view-convert-function
   #'pichat-response-view--markdown-to-html
   "Function converting one exact Markdown string to an HTML string."
@@ -74,6 +91,19 @@
 (defvar-local pichat-response-view-return-function nil
   "Origin-buffer callback returning the response's current position.")
 
+(defconst pichat-response-view--safe-html-tags
+  '(html body main article section header footer nav aside figure div p br hr
+    h1 h2 h3 h4 h5 h6 ul ol li dl dt dd blockquote pre code kbd samp var
+    strong b em i del s strike mark q cite abbr table thead tbody tfoot tr th
+    td caption a span sup sub details summary)
+  "Inert structural HTML elements retained before SHR rendering.")
+
+(defconst pichat-response-view--discarded-html-tags
+  '(head script style iframe frame frameset object embed svg math
+    video audio source track link meta base form input button textarea
+    select option canvas template)
+  "Active or resource-bearing HTML elements discarded with their contents.")
+
 (defun pichat-response-view--markdown-to-html (markdown)
   "Convert MARKDOWN to an HTML fragment using `markdown-mode'."
   (unless (require 'markdown-mode nil t)
@@ -87,6 +117,67 @@
           (with-current-buffer output
             (buffer-substring-no-properties (point-min) (point-max))))
       (when (buffer-live-p output) (kill-buffer output)))))
+
+(defun pichat-response-view--safe-url-p (url)
+  "Return non-nil when URL has an explicitly allowed scheme."
+  (and (stringp url)
+       (string-match-p "\\`[[:alpha:]][[:alnum:]+.-]*:" url)
+       (let* ((parsed (ignore-errors (url-generic-parse-url url)))
+              (scheme (and parsed (url-type parsed))))
+         (and scheme
+              (member (downcase scheme)
+                      pichat-response-view-safe-link-schemes)))))
+
+(defun pichat-response-view--safe-table-attribute (name value)
+  "Return a safe table attribute pair for NAME and VALUE, or nil."
+  (when (and (stringp value)
+             (pcase name
+               ((or 'colspan 'rowspan)
+                (string-match-p "\\`[1-9][0-9]*\\'" value))
+               ('align (member (downcase value) '("left" "center" "right")))
+               (_ nil)))
+    (cons name value)))
+
+(defun pichat-response-view--safe-attributes (tag attributes)
+  "Return the inert subset of ATTRIBUTES permitted for TAG."
+  (pcase tag
+    ('a (delq nil
+              (list (when-let ((href (alist-get 'href attributes)))
+                      (and (stringp href) (cons 'href href)))
+                    (when-let ((title (alist-get 'title attributes)))
+                      (and (stringp title) (cons 'title title))))))
+    ((or 'th 'td)
+     (delq nil
+           (mapcar (lambda (name)
+                     (pichat-response-view--safe-table-attribute
+                      name (alist-get name attributes)))
+                   '(align colspan rowspan))))
+    (_ nil)))
+
+(defun pichat-response-view--sanitize-dom (node)
+  "Return an inert, resource-free copy of parsed HTML NODE."
+  (cond
+   ((stringp node) node)
+   ((not (consp node)) nil)
+   (t
+    (let ((tag (dom-tag node)))
+      (cond
+       ((eq tag 'img)
+        (let ((alt (dom-attr node 'alt)))
+          `(span nil ,(if (and (stringp alt) (not (string-empty-p alt)))
+                          (format "[Image omitted: %s]" alt)
+                        "[Image omitted]"))))
+       ((memq tag pichat-response-view--discarded-html-tags) nil)
+       ((memq tag pichat-response-view--safe-html-tags)
+        (cons tag
+              (cons (pichat-response-view--safe-attributes
+                     tag (dom-attributes node))
+                    (delq nil
+                          (mapcar #'pichat-response-view--sanitize-dom
+                                  (dom-children node))))))
+       ;; Unknown converter extensions are omitted rather than entrusted to
+       ;; SHR's evolving element handlers.
+       (t nil))))))
 
 (defun pichat-response-view--render-faced-tag (renderer dom face)
   "Render DOM with SHR RENDERER and append FACE to the inserted text."
@@ -110,33 +201,80 @@
   (pichat-response-view--render-faced-tag
    #'shr-tag-table dom 'pichat-response-view-table-face))
 
+(defvar pichat-response-view-link-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET") #'pichat-response-view-open-link-at-point)
+    (define-key map (kbd "w") #'pichat-response-view-copy-link-at-point)
+    (define-key map (kbd "?") #'pichat-response-view-describe-link-at-point)
+    map)
+  "Keymap attached to rendered response links.")
+
+(defun pichat-response-view--render-link (dom)
+  "Render link DOM while retaining only explicitly safe open behavior."
+  (let ((start (point))
+        (url (dom-attr dom 'href)))
+    (if (pichat-response-view--safe-url-p url)
+        (shr-tag-a dom)
+      (shr-generic dom))
+    (when (and (stringp url) (< start (point)))
+      (add-text-properties
+       start (point)
+       `(pichat-response-view-url ,url
+         keymap ,pichat-response-view-link-map
+         help-echo ,(if (pichat-response-view--safe-url-p url)
+                        "RET: open; w: copy URL; ?: describe URL"
+                      "Opening disabled; w: copy URL; ?: describe URL")
+         mouse-face highlight))
+      (unless (pichat-response-view--safe-url-p url)
+        (remove-text-properties start (point) '(shr-url nil follow-link nil))
+        (add-face-text-property
+         start (point) 'pichat-response-view-unsafe-link-face t)))))
+
 (defun pichat-response-view--html-dom (html)
   "Parse HTML into a DOM suitable for SHR."
   (unless (fboundp 'libxml-parse-html-region)
     (user-error "This Emacs lacks libxml HTML parsing support"))
   (with-temp-buffer
     (insert html)
-    (libxml-parse-html-region (point-min) (point-max))))
+    (pichat-response-view--sanitize-dom
+     (libxml-parse-html-region (point-min) (point-max)))))
+
+(defun pichat-response-view--fallback-string (markdown error-data)
+  "Return exact MARKDOWN with a clear notice for rendering ERROR-DATA."
+  (concat
+   (propertize
+    (format "Rendered preview unavailable (%s); showing exact Markdown.\n\n"
+            (truncate-string-to-width
+             (error-message-string error-data) 160 nil nil t))
+    'face 'pichat-response-view-fallback-face)
+   markdown))
 
 (defun pichat-response-view--rendered-string (markdown width)
-  "Return propertized SHR output for MARKDOWN rendered at WIDTH."
+  "Return secure propertized SHR output for MARKDOWN rendered at WIDTH.
+Conversion and rendering failures return a clearly labelled exact-Markdown
+fallback instead of losing the canonical response text."
   (if (string-empty-p markdown)
       (propertize "No assistant prose in this response.\n"
                   'face 'pichat-response-view-empty-face)
-    (let* ((html (funcall pichat-response-view-convert-function markdown))
-           (dom (pichat-response-view--html-dom html)))
-      (with-temp-buffer
-        (let ((shr-width (and (integerp width) (max 20 width)))
-              (shr-max-width nil)
-              (shr-inhibit-images t)
-              (shr-use-fonts (display-graphic-p))
-              (shr-external-rendering-functions
-               (append '((blockquote . pichat-response-view--render-blockquote)
-                         (pre . pichat-response-view--render-pre)
-                         (table . pichat-response-view--render-table))
-                       shr-external-rendering-functions)))
-          (shr-insert-document dom))
-        (buffer-substring (point-min) (point-max))))))
+    (condition-case error-data
+        (let* ((html (funcall pichat-response-view-convert-function markdown))
+               (dom (pichat-response-view--html-dom html)))
+          (unless dom (error "Markdown conversion produced no safe HTML"))
+          (with-temp-buffer
+            (let ((shr-width (and (integerp width) (max 20 width)))
+                  (shr-max-width nil)
+                  (shr-inhibit-images t)
+                  (shr-use-fonts (display-graphic-p))
+                  ;; Do not expose untrusted assistant DOM to unrelated SHR
+                  ;; extension renderers installed in the user's environment.
+                  (shr-external-rendering-functions
+                   '((a . pichat-response-view--render-link)
+                     (blockquote . pichat-response-view--render-blockquote)
+                     (pre . pichat-response-view--render-pre)
+                     (table . pichat-response-view--render-table))))
+              (shr-insert-document dom))
+            (buffer-substring (point-min) (point-max))))
+      (error (pichat-response-view--fallback-string markdown error-data)))))
 
 (defun pichat-response-view--display-width (origin)
   "Return an initial rendering width derived from ORIGIN."
@@ -185,6 +323,36 @@
       (user-error "PiChat response source changed; snapshot preserved"))
     (pichat-response-view--replace-rendering response width)
     (message "PiChat response view refreshed")))
+
+(defun pichat-response-view--url-at-point ()
+  "Return the rendered response URL at point, including at its end."
+  (or (get-text-property (point) 'pichat-response-view-url)
+      (and (> (point) (point-min))
+           (get-text-property (1- (point)) 'pichat-response-view-url))))
+
+(defun pichat-response-view-open-link-at-point ()
+  "Open the explicitly allowed rendered response link at point."
+  (interactive)
+  (let ((url (pichat-response-view--url-at-point)))
+    (unless url (user-error "No rendered response link at point"))
+    (unless (pichat-response-view--safe-url-p url)
+      (user-error "PiChat will not open URL scheme: %s" url))
+    (browse-url url)))
+
+(defun pichat-response-view-copy-link-at-point ()
+  "Copy the rendered response link destination at point."
+  (interactive)
+  (let ((url (pichat-response-view--url-at-point)))
+    (unless url (user-error "No rendered response link at point"))
+    (kill-new url)
+    (message "Copied PiChat response link: %s" url)))
+
+(defun pichat-response-view-describe-link-at-point ()
+  "Display the rendered response link destination at point."
+  (interactive)
+  (let ((url (pichat-response-view--url-at-point)))
+    (unless url (user-error "No rendered response link at point"))
+    (message "%s" url)))
 
 (defun pichat-response-view-copy-markdown ()
   "Copy the exact canonical Markdown owned by this response snapshot."

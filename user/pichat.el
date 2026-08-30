@@ -8,9 +8,6 @@
 
 (require 'cl-lib)
 
-(use-package visual-fill-column
-  :defer t)
-
 ;; Development-only dependency used by pichat/test/run-coverage.sh.  Keeping it
 ;; deferred avoids loading coverage instrumentation in normal Emacs sessions.
 (use-package undercover

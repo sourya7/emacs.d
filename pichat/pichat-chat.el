@@ -104,14 +104,6 @@ When nil, thinking blocks are omitted from the chat transcript."
   :type 'boolean
   :group 'pichat)
 
-(defcustom pichat-max-width 120
-  "Maximum visual width of PiChat chat buffers before wrapping.
-When nil, PiChat wraps at the window edge.  When non-nil and
-`visual-fill-column' is available, PiChat visually wraps at this width."
-  :type '(choice (const :tag "Window width" nil)
-                 integer)
-  :group 'pichat)
-
 (defcustom pichat-chat-tool-truncation-notice-format
   "\n\n[… %d chars truncated; use C-c C-d on the tool block for full output]"
   "Format string used for truncated tool output notices."
@@ -143,14 +135,10 @@ from final newlines or redisplay edge cases."
   :type 'integer
   :group 'pichat)
 
-(declare-function visual-fill-column-mode "visual-fill-column")
 (declare-function pichat-select-model "pichat" (&optional session))
 (declare-function pichat-stop-session "pichat" (&optional session))
 (declare-function pichat-forget-session "pichat" (session))
 (declare-function pichat-note-session-updated "pichat" (session))
-(defvar visual-fill-column-width)
-(defvar visual-fill-column-center-text)
-
 (defface pichat-user-block-face
   '((((class color) (min-colors 88) (background light))
      :inherit default :background "gray92" :extend t)
@@ -457,17 +445,6 @@ Markup characters remain visible; this is fontification only."
     map)
   "Keymap for `pichat-chat-mode'.")
 
-(defun pichat-chat--setup-visual-width ()
-  "Configure PiChat visual wrapping."
-  (setq-local truncate-lines nil)
-  (visual-line-mode 1)
-  (when pichat-max-width
-    (setq-local fill-column pichat-max-width)
-    (when (require 'visual-fill-column nil t)
-      (setq-local visual-fill-column-width pichat-max-width)
-      (setq-local visual-fill-column-center-text nil)
-      (visual-fill-column-mode 1))))
-
 (define-derived-mode pichat-chat-mode text-mode "PiChat"
   "Major mode for chatting with Pi.
 
@@ -475,7 +452,8 @@ Markup characters remain visible; this is fontification only."
 it forks into new sessions and does not perform same-file tree navigation.
 `C-c C-b' separately browses saved session files and switches sources.
 `C-c C-r' browses the active persisted session's archived parent and children."
-  (pichat-chat--setup-visual-width)
+  (setq-local truncate-lines nil)
+  (visual-line-mode 1)
   (add-hook 'kill-buffer-hook #'pichat-chat--cancel-pending-ui-requests nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--cancel-live-projection nil t)
   (add-hook 'kill-buffer-hook

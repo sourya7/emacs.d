@@ -8,6 +8,20 @@
 
 (require 'pichat-test-support)
 
+(ert-deftest pichat-chat-mode-wraps-at-window-edge-with-visual-lines ()
+  (let ((pichat-chat-stop-session-on-kill nil))
+    (with-temp-buffer
+      (setq-local truncate-lines t)
+      (visual-line-mode -1)
+      (pichat-chat-mode)
+      (should (local-variable-p 'truncate-lines))
+      (should-not truncate-lines)
+      (should visual-line-mode)
+      (should word-wrap)
+      (should-not (featurep 'visual-fill-column))
+      (should-not (local-variable-p 'visual-fill-column-width))
+      (should-not (local-variable-p 'visual-fill-column-center-text)))))
+
 (ert-deftest pichat-chat-agent-settlement-requests-current-context-usage ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)

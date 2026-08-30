@@ -47,6 +47,7 @@
 (require 'pichat-test-chat-view)
 (require 'pichat-test-lifecycle)
 (require 'pichat-test-extension-ui)
+(require 'pichat-test-markdown-fontification)
 (require 'pichat-test-markdown-presentation)
 (require 'pichat-test-markdown-table)
 (require 'pichat-test-markdown-table-view)

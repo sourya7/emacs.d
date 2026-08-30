@@ -15,6 +15,7 @@
 (require 'pichat-rpc)
 (require 'pichat-pi)
 (require 'pichat-render)
+(require 'pichat-markdown-fontification)
 (require 'pichat-markdown-presentation)
 (require 'pichat-reference)
 (require 'pichat-commands)
@@ -143,7 +144,6 @@ from final newlines or redisplay edge cases."
   :type 'integer
   :group 'pichat)
 
-(declare-function markdown-mode "markdown-mode")
 (declare-function visual-fill-column-mode "visual-fill-column")
 (declare-function pichat-select-model "pichat" (&optional session))
 (declare-function pichat-stop-session "pichat" (&optional session))
@@ -487,9 +487,7 @@ it forks into new sessions and does not perform same-file tree navigation.
             #'pichat-chat--cancel-extension-status-projection nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--cancel-sync-request nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--cancel-stats-request nil t)
-  (add-hook 'kill-buffer-hook #'pichat-markdown-presentation-reset-source nil t)
-  (add-hook 'window-size-change-functions
-            #'pichat-markdown-presentation-handle-window-change nil t)
+  (pichat-markdown-presentation-setup)
   (add-hook 'kill-buffer-hook #'pichat-chat--remove-event-handlers nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--stop-session-on-kill nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--release-session-buffer nil t)
@@ -568,21 +566,6 @@ it forks into new sessions and does not perform same-file tree navigation.
   (setq-local pichat-chat--extension-title nil)
   (setq-local pichat-chat--widget-start (make-marker))
   (setq-local pichat-chat--widget-end (make-marker))
-  (setq-local pichat-markdown-presentation--states
-              (make-hash-table :test #'equal))
-  (setq-local pichat-markdown-presentation--parse-cache
-              (make-hash-table :test #'equal))
-  (setq-local pichat-markdown-presentation--parse-cache-order nil)
-  (setq-local pichat-markdown-presentation--parse-cache-chars 0)
-  (setq-local pichat-markdown-presentation--active-parse-cache nil)
-  (setq-local pichat-markdown-presentation--overlays
-              (make-hash-table :test #'equal))
-  (setq-local pichat-markdown-presentation--table-layout-cache
-              (make-hash-table :test #'equal))
-  (setq-local pichat-markdown-presentation--table-layout-cache-order nil)
-  (setq-local pichat-markdown-presentation--table-width nil)
-  (setq-local pichat-markdown-presentation--width-timer nil)
-  (setq-local pichat-markdown-presentation--warned nil)
   (setq-local mode-line-format
               '(" " mode-line-buffer-identification
                 "  " (:eval (pichat-chat--mode-line-status))))
@@ -735,7 +718,6 @@ When DEFER-SYNC is non-nil, wait for a subsequent authoritative state reply."
   (pichat-chat--cancel-sync-request)
   (pichat-chat--cancel-stats-request)
   (pichat-chat-input-abandon-in-flight)
-  (pichat-markdown-presentation-reset-source)
   (pichat-chat--release-live-projection-fragments)
   (cl-incf pichat-chat--source-generation)
   (setq pichat-chat--source-session-id session-id
@@ -1866,31 +1848,10 @@ Signal a user error when thinking control is disabled or unavailable."
               (force-mode-line-update)))
           (message "PiChat session name set: %s" name)))))))
 
-(defun pichat-chat--markdown-apply-face (beg end face)
-  "Apply Markdown FACE to assistant prose in BEG..END."
-  (when face
-    (put-text-property beg end 'font-lock-face face)))
-
-(defun pichat-chat--markdown-fontify-run (beg end)
-  "Markdown-fontify the assistant prose run in BEG..END."
-  (let ((parsed (pichat-markdown-presentation-parse-run beg end)))
-    (let ((inhibit-read-only t))
-      (with-silent-modifications
-        (pcase-dolist (`(,start ,finish ,face)
-                       (pichat-markdown-parsed-run-face-runs parsed))
-          (pichat-chat--markdown-apply-face
-           (+ beg start) (+ beg finish) face))))))
-
 (defun pichat-chat--markdown-fontify-region (beg end)
-  "Markdown-fontify each assistant prose run in BEG..END."
-  (when (and pichat-chat-markdown-mode (< beg end))
-    (let ((pos beg))
-      (while (< pos end)
-        (let ((next (or (next-single-property-change pos 'pichat-prose nil end)
-                        end)))
-          (when (get-text-property pos 'pichat-prose)
-            (pichat-chat--markdown-fontify-run pos next))
-          (setq pos next))))))
+  "Fail-open Markdown-fontify completed assistant prose in BEG..END."
+  (when pichat-chat-markdown-mode
+    (pichat-markdown-fontification-apply-region beg end)))
 
 (defun pichat-chat--tool-views-for-transcript (transcript live-p)
   "Return pure per-tool render views for TRANSCRIPT."
@@ -2081,10 +2042,10 @@ Signal a user error when thinking control is disabled or unavailable."
   (setq buffer-undo-list (plist-get snapshot :undo-list))
   (when (boundp 'pending-undo-list)
     (setq pending-undo-list (plist-get snapshot :pending-undo-list)))
-  (set-buffer-modified-p (plist-get snapshot :modified))
-  ;; Presentation overlays are not part of the text snapshot.  They are a
-  ;; fallible derived layer and must be recreated after restoring source text.
-  (ignore-errors (pichat-markdown-presentation-refresh-buffer)))
+  ;; Optional presentation overlays are intentionally outside projection
+  ;; rollback ownership.  Exact source and fontification properties are part
+  ;; of the text snapshot; a later presentation refresh may derive overlays.
+  (set-buffer-modified-p (plist-get snapshot :modified)))
 
 (defun pichat-chat--hash-state-snapshot (table)
   "Return a shallow contents snapshot retaining hash TABLE identity."
@@ -2146,37 +2107,8 @@ Signal a user error when thinking control is disabled or unavailable."
        pichat-chat--live-activity-blocks))
     records))
 
-(defun pichat-chat--focused-markdown-snapshot ()
-  "Capture derived Markdown state needed by terminal live rollback."
-  (let (overlays)
-    (dolist (overlay (overlays-in (point-min) (point-max)))
-      (when (overlay-get overlay 'pichat-markdown-presentation)
-        (push (list overlay (overlay-start overlay) (overlay-end overlay))
-              overlays)))
-    (list
-     :overlay-records overlays
-     :overlay-registry
-     (pichat-chat--hash-state-snapshot
-      pichat-markdown-presentation--overlays)
-     :states
-     (pichat-chat--hash-state-snapshot
-      pichat-markdown-presentation--states)
-     :parse-cache
-     (pichat-chat--hash-state-snapshot
-      pichat-markdown-presentation--parse-cache)
-     :parse-cache-order pichat-markdown-presentation--parse-cache-order
-     :parse-cache-chars pichat-markdown-presentation--parse-cache-chars
-     :active-parse-cache pichat-markdown-presentation--active-parse-cache
-     :table-layout-cache
-     (pichat-chat--hash-state-snapshot
-      pichat-markdown-presentation--table-layout-cache)
-     :table-layout-cache-order
-     pichat-markdown-presentation--table-layout-cache-order
-     :table-width pichat-markdown-presentation--table-width
-     :warned pichat-markdown-presentation--warned)))
-
-(defun pichat-chat--focused-live-snapshot (candidate)
-  "Capture owned state for focused rollback of live CANDIDATE.
+(defun pichat-chat--focused-live-snapshot (_candidate)
+  "Capture owned state for focused rollback of a live candidate.
 No chat-buffer text is copied; the active Emacs change group owns text undo."
   (list
    :modified (buffer-modified-p)
@@ -2203,42 +2135,7 @@ No chat-buffer text is copied; the active Emacs change group owns text undo."
    :enrichments
    (pichat-chat--hash-state-snapshot pichat-chat--tool-enrichments)
    :fingerprint pichat-chat--live-projection-fingerprint
-   :statuses (copy-tree pichat-chat--status-lines)
-   :markdown
-   (and (plist-get candidate :final-p)
-        (pichat-chat--focused-markdown-snapshot))))
-
-(defun pichat-chat--restore-focused-markdown (snapshot)
-  "Restore terminal Markdown presentation from focused SNAPSHOT."
-  (when snapshot
-    (dolist (overlay (overlays-in (point-min) (point-max)))
-      (when (overlay-get overlay 'pichat-markdown-presentation)
-        (delete-overlay overlay)))
-    (setq pichat-markdown-presentation--overlays
-          (pichat-chat--restore-hash-state
-           (plist-get snapshot :overlay-registry))
-          pichat-markdown-presentation--states
-          (pichat-chat--restore-hash-state (plist-get snapshot :states))
-          pichat-markdown-presentation--parse-cache
-          (pichat-chat--restore-hash-state (plist-get snapshot :parse-cache))
-          pichat-markdown-presentation--parse-cache-order
-          (plist-get snapshot :parse-cache-order)
-          pichat-markdown-presentation--parse-cache-chars
-          (plist-get snapshot :parse-cache-chars)
-          pichat-markdown-presentation--active-parse-cache
-          (plist-get snapshot :active-parse-cache)
-          pichat-markdown-presentation--table-layout-cache
-          (pichat-chat--restore-hash-state
-           (plist-get snapshot :table-layout-cache))
-          pichat-markdown-presentation--table-layout-cache-order
-          (plist-get snapshot :table-layout-cache-order)
-          pichat-markdown-presentation--table-width
-          (plist-get snapshot :table-width)
-          pichat-markdown-presentation--warned
-          (plist-get snapshot :warned))
-    (dolist (record (plist-get snapshot :overlay-records))
-      (move-overlay (car record) (cadr record) (caddr record)
-                    (current-buffer)))))
+   :statuses (copy-tree pichat-chat--status-lines)))
 
 (defun pichat-chat--restore-focused-live-snapshot (snapshot)
   "Restore owned projection state from focused live SNAPSHOT."
@@ -2305,7 +2202,6 @@ No chat-buffer text is copied; the active Emacs change group owns text undo."
                       (plist-get entry :overlay-start)
                       (plist-get entry :overlay-end)
                       (current-buffer)))))
-  (pichat-chat--restore-focused-markdown (plist-get snapshot :markdown))
   (set-buffer-modified-p (plist-get snapshot :modified)))
 
 (defun pichat-chat--focused-live-rollback-safe-p (candidate)
@@ -2521,8 +2417,7 @@ Return the resulting end position."
 When TRANSFER-LIVE-VIEWS-P is non-nil, commit matching explicit live views to
 canonical keys as part of the projection transaction."
   (pichat-chat--preserve-view
-    (pichat-markdown-presentation--with-parse-cycle
-      (pichat-chat--with-projection-rollback
+    (pichat-chat--with-projection-rollback
         (pichat-chat--cancel-live-projection)
         (pichat-chat--release-tool-blocks)
         (pichat-chat--release-activity-blocks)
@@ -2623,8 +2518,9 @@ canonical keys as part of the projection transaction."
           (unless (equal statuses-before pichat-chat--status-lines)
             (pichat-chat--render-status-region))
           (set-buffer-modified-p modified)))
-      ;; Commit canonical text before attempting optional visual presentation.
-      (pichat-markdown-presentation--refresh-after-toggle))))
+    ;; Commit canonical text and fontification before attempting the optional
+    ;; inline overlay layer, whose cache and failures are not transactional.
+    (pichat-markdown-presentation--refresh-after-toggle)))
 
 (defun pichat-chat--cancel-live-projection ()
   "Cancel the pending coalesced live-tail projection."
@@ -2738,8 +2634,6 @@ mutated.  SECOND wins if a transient tool id collides with a canonical id."
    (list pichat-chat--source-generation
          (pichat-live-draft-message-final-p pichat-chat--live-draft)
          (pichat-live-draft-settled-p pichat-chat--live-draft)
-         (and pichat-chat-markdown-mode
-              (pichat-live-draft-message-final-p pichat-chat--live-draft))
          (pichat-chat--compatibility-diagnostics-text transcript)
          tool-identities)))
 
@@ -3083,12 +2977,12 @@ Return non-nil when a changed candidate commits."
                              (pichat-chat--replace-live-fragments candidate))
                         (pichat-chat--replace-live-full candidate))))
               (pichat-chat--commit-live-projection-result candidate result)
-              ;; Keep this inside the rollback owner.  The presentation helper
-              ;; still fails open for ordinary derived-layer errors, while an
-              ;; unexpected escaping failure restores the prior live display.
-              (when (plist-get candidate :final-p)
-                (pichat-chat--refresh-final-live-presentation))
-              (set-buffer-modified-p modified))))
+              (set-buffer-modified-p modified)))
+          ;; Inline overlays remain an optional post-commit layer until their
+          ;; removal phase; projection rollback owns neither their caches nor
+          ;; their failures.
+          (when (plist-get candidate :final-p)
+            (pichat-chat--refresh-final-live-presentation)))
         t))))
 
 (defun pichat-chat--capture-tool-enrichment (raw source-generation)

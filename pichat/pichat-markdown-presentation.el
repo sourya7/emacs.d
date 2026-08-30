@@ -85,7 +85,7 @@
                (:constructor pichat-markdown-parsed-run-create)
                (:conc-name pichat-markdown-parsed-run-))
   "Position-independent derived data for one Markdown prose run."
-  source-digest face-runs links fenced-code-ranges tables)
+  source-digest links fenced-code-ranges tables)
 
 (defconst pichat-markdown-presentation--parser-version 2)
 
@@ -160,6 +160,27 @@ set only when BODY completes successfully."
     (define-key map (kbd "RET") #'pichat-chat-open-table-at-point)
     map)
   "Keymap used by PiChat Markdown table overlays.")
+
+(defun pichat-markdown-presentation-setup ()
+  "Initialize inline Markdown presentation state in the current buffer."
+  (setq-local pichat-markdown-presentation--states
+              (make-hash-table :test #'equal))
+  (setq-local pichat-markdown-presentation--parse-cache
+              (make-hash-table :test #'equal))
+  (setq-local pichat-markdown-presentation--parse-cache-order nil)
+  (setq-local pichat-markdown-presentation--parse-cache-chars 0)
+  (setq-local pichat-markdown-presentation--active-parse-cache nil)
+  (setq-local pichat-markdown-presentation--overlays
+              (make-hash-table :test #'equal))
+  (setq-local pichat-markdown-presentation--table-layout-cache
+              (make-hash-table :test #'equal))
+  (setq-local pichat-markdown-presentation--table-layout-cache-order nil)
+  (setq-local pichat-markdown-presentation--table-width nil)
+  (setq-local pichat-markdown-presentation--width-timer nil)
+  (setq-local pichat-markdown-presentation--warned nil)
+  (add-hook 'kill-buffer-hook #'pichat-markdown-presentation-reset-source nil t)
+  (add-hook 'window-size-change-functions
+            #'pichat-markdown-presentation-handle-window-change nil t))
 
 (defun pichat-markdown-presentation--ensure-state ()
   "Ensure current buffer has a presentation state table."
@@ -446,14 +467,7 @@ DIGEST is SOURCE's precomputed identity."
       (let ((pos (point-min))
             (max (point-max))
             (seen (make-hash-table :test #'equal))
-            faces links)
-        (while (< pos max)
-          (let ((next (or (next-single-property-change pos 'face nil max) max))
-                (face (get-text-property pos 'face)))
-            (when face
-              (push (list (1- pos) (1- next) face) faces))
-            (setq pos next)))
-        (setq pos (point-min))
+            links)
         (while (< pos max)
           (let* ((map (get-text-property pos 'keymap))
                  (next (or (next-single-property-change pos 'keymap nil max)
@@ -493,7 +507,6 @@ DIGEST is SOURCE's precomputed identity."
                         (point-min) (point-max)))))
           (pichat-markdown-parsed-run-create
            :source-digest digest
-           :face-runs (nreverse faces)
            :links (nreverse links)
            :fenced-code-ranges code-ranges
            :tables (pichat-markdown-table-parse source code-ranges)))))))

@@ -245,24 +245,6 @@
       (should (equal "https://example.test/a_(b)"
                      (pichat-markdown-link-url (car links)))))))
 
-(ert-deftest pichat-markdown-face-and-link-consumers-share-one-parse ()
-  (skip-unless (require 'markdown-mode nil t))
-  (with-temp-buffer
-    (setq-local pichat-chat--source-generation 1)
-    (insert (propertize "**bold** [source](https://example.test)"
-                        'pichat-prose t 'pichat-node-key "node"))
-    (let ((calls 0)
-          (original (symbol-function 'font-lock-ensure)))
-      (cl-letf (((symbol-function 'font-lock-ensure)
-                 (lambda (&rest args)
-                   (cl-incf calls)
-                   (apply original args))))
-        (pichat-chat--markdown-fontify-run (point-min) (point-max))
-        (should (= 1 (length
-                      (pichat-markdown-presentation--extract-links
-                       (point-min) (point-max)))))
-        (should (= 1 calls))))))
-
 (ert-deftest pichat-markdown-parse-cache-is-bounded-and-resettable ()
   (with-temp-buffer
     (setq-local pichat-chat--source-generation 1)
@@ -637,87 +619,6 @@
     (should (= 0 (hash-table-count pichat-markdown-presentation--states)))
     (should-not (seq-some #'pichat-markdown-presentation--owned-p
                           (overlays-in (point-min) (point-max))))))
-
-(ert-deftest pichat-chat-canonical-presentation-survives-projection-rollback ()
-  (pichat-test-with-unit-session (session proc)
-    (let ((pichat-chat-stop-session-on-kill nil)
-          buffer)
-      (unwind-protect
-          (progn
-            (setq buffer (pichat-chat-open session))
-            (cl-letf (((symbol-function 'pichat-markdown-presentation--extract-links)
-                       (lambda (beg _end)
-                         (list (pichat-test--markdown-link-record beg)))))
-              (with-current-buffer buffer
-                (let* ((transcript
-                        (pichat-transcript-create
-                         :nodes
-                         (list
-                          (pichat-transcript-node-create
-                           :kind 'message :key "node" :role 'assistant
-                           :content
-                           (list (pichat-transcript-content-create
-                                  :kind 'prose :index 0
-                                  :text "[source](https://example.test/path)"))))
-                         :diagnostics nil :metadata nil))
-                       (context (pichat-chat--canonical-render-context transcript))
-                       (fragment (pichat-render-canonical transcript context)))
-                  (pichat-chat--project-canonical nil transcript fragment context)
-                  (goto-char (marker-position pichat-chat--canonical-start))
-                  (should (pichat-markdown-presentation--overlay-at-point 'link))
-                  (should-error
-                   (pichat-chat--with-projection-rollback
-                     (pichat-chat--with-buffer-edit (erase-buffer))
-                     (error "forced rollback")))
-                  (goto-char (marker-position pichat-chat--canonical-start))
-                  (should (pichat-markdown-presentation--overlay-at-point 'link))
-                  (should (string-match-p
-                           (regexp-quote "[source](https://example.test/path)")
-                           (buffer-substring-no-properties
-                            (point-min) (point-max))))))))
-        (when (buffer-live-p buffer) (kill-buffer buffer))))))
-
-(ert-deftest pichat-chat-table-presentation-survives-projection-rollback ()
-  (pichat-test-with-unit-session (session proc)
-    (let ((pichat-chat-stop-session-on-kill nil)
-          (source "| A | B |\n|---|---|\n| x | y |")
-          buffer)
-      (unwind-protect
-          (progn
-            (setq buffer (pichat-chat-open session))
-            (with-current-buffer buffer
-              (let* ((transcript
-                      (pichat-transcript-create
-                       :nodes
-                       (list
-                        (pichat-transcript-node-create
-                         :kind 'message :key "node" :role 'assistant
-                         :content
-                         (list (pichat-transcript-content-create
-                                :kind 'prose :index 0 :text source))))
-                       :diagnostics nil :metadata nil))
-                     (context
-                      (pichat-chat--canonical-render-context transcript))
-                     (fragment (pichat-render-canonical transcript context)))
-                (pichat-chat--project-canonical
-                 nil transcript fragment context)
-                (should (seq-some
-                         (lambda (overlay)
-                           (overlay-get overlay 'before-string))
-                         (overlays-in (point-min) (point-max))))
-                (should-error
-                 (pichat-chat--with-projection-rollback
-                   (pichat-chat--with-buffer-edit (erase-buffer))
-                   (error "forced rollback")))
-                (should (string-match-p
-                         (regexp-quote source)
-                         (buffer-substring-no-properties
-                          (point-min) (point-max))))
-                (should (seq-some
-                         (lambda (overlay)
-                           (overlay-get overlay 'before-string))
-                         (overlays-in (point-min) (point-max)))))))
-        (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
 (ert-deftest pichat-chat-live-presentation-waits-for-final-message ()
   (pichat-test-with-unit-session (session proc)

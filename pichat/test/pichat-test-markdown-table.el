@@ -268,8 +268,7 @@
   (let* ((source "| A | B |\n|---|---|\n| x | y |")
          (parsed (pichat-markdown-presentation--parse-source
                   source (secure-hash 'sha1 source))))
-    (should (= 1 (length (pichat-markdown-parsed-run-tables parsed))))
-    (should (pichat-markdown-parsed-run-face-runs parsed))))
+    (should (= 1 (length (pichat-markdown-parsed-run-tables parsed))))))
 
 (defun pichat-test-markdown-table--layout-texts
     (source width &optional rows columns unicode minimum)

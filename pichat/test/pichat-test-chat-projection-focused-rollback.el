@@ -80,17 +80,6 @@
     (sort entries (lambda (first second)
                     (< (or (cadr first) 0) (or (cadr second) 0))))))
 
-(defun pichat-test-focused-rollback--markdown-overlay-state ()
-  "Return identity and geometry of owned Markdown presentation overlays."
-  (let (entries)
-    (dolist (overlay (overlays-in (point-min) (point-max)))
-      (when (overlay-get overlay 'pichat-markdown-presentation)
-        (push (list overlay (overlay-start overlay) (overlay-end overlay)
-                    (overlay-properties overlay))
-              entries)))
-    (sort entries (lambda (first second)
-                    (< (or (cadr first) 0) (or (cadr second) 0))))))
-
 (defun pichat-test-focused-rollback--state ()
   "Capture exact observable projection state around an injected failure."
   (list
@@ -123,8 +112,7 @@
    :enrichments (pichat-test-focused-rollback--hash-entries
                  pichat-chat--tool-enrichments)
    :statuses (copy-tree pichat-chat--status-lines)
-   :tool-overlays (pichat-test-focused-rollback--tool-overlay-state)
-   :markdown-overlays (pichat-test-focused-rollback--markdown-overlay-state)))
+   :tool-overlays (pichat-test-focused-rollback--tool-overlay-state)))
 
 (defun pichat-test-focused-rollback--start (draft text path)
   "Populate DRAFT with live TEXT and a located read tool for PATH."
@@ -226,26 +214,26 @@
                       (error "injected decoration failure"))))
            (pichat-chat--project-live-tail)))))))
 
-(ert-deftest pichat-chat-focused-rollback-restores-markdown-presentation-failure ()
+(ert-deftest pichat-chat-focused-rollback-restores-fontification-failure ()
   (pichat-test-focused-rollback--with-buffer
     (setq pichat-chat-markdown-mode t)
-    (pichat-markdown-presentation--metadata-overlay
-     (marker-position pichat-chat--live-start)
-     (1+ (marker-position pichat-chat--live-start))
-     'link '(phase-5 existing-link) 'compact t)
-    (should (pichat-test-focused-rollback--markdown-overlay-state))
     (pichat-test-focused-rollback--candidate
      pichat-chat--live-draft "message_end"
-     "changed [Markdown](https://example.com/new)" "markdown.el")
+     "changed **Markdown**" "markdown.el")
     (let ((original
-           (symbol-function 'pichat-chat--refresh-final-live-presentation)))
+           (symbol-function 'pichat-chat--markdown-fontify-region)))
       (pichat-test-focused-rollback--assert-failure-restores
        (lambda ()
          (cl-letf (((symbol-function
-                     'pichat-chat--refresh-final-live-presentation)
-                    (lambda ()
-                      (funcall original)
-                      (error "injected Markdown presentation failure"))))
+                     'pichat-markdown-fontification-apply-region)
+                    (lambda (beg end)
+                      (put-text-property beg end 'font-lock-face
+                                         'font-lock-keyword-face)
+                      t))
+                   ((symbol-function 'pichat-chat--markdown-fontify-region)
+                    (lambda (beg end)
+                      (funcall original beg end)
+                      (error "injected Markdown fontification failure"))))
            (pichat-chat--project-live-tail)))))))
 
 (ert-deftest pichat-chat-focused-rollback-restores-post-edit-pre-commit-failure ()

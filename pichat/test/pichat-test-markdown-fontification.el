@@ -109,7 +109,7 @@
                          'font-lock-face 'font-lock-keyword-face)))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
-(ert-deftest pichat-chat-live-fingerprint-does-not-own-markdown-presentation-state ()
+(ert-deftest pichat-chat-live-fingerprint-is-independent-of-fontification-mode ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
           buffer enabled disabled)
@@ -133,19 +133,45 @@
               (should (equal enabled disabled))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
-(ert-deftest pichat-chat-source-reset-does-not-own-markdown-presentation-state ()
+(ert-deftest pichat-chat-preserves-raw-markdown-links-and-tables ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
-          buffer (resets 0))
+          (source (concat "[label](https://example.test/path)\n\n"
+                          "| Name | Value |\n|---|---|\n| raw | **bold** |"))
+          buffer)
       (unwind-protect
           (progn
             (setq buffer (pichat-chat-open session))
             (with-current-buffer buffer
-              (cl-letf (((symbol-function 'pichat-markdown-presentation-reset-source)
-                         (lambda () (cl-incf resets))))
-                (pichat-chat--reset-for-source "new-source" nil t))
-              (should (zerop resets))))
-        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+              (let* ((transcript
+                      (pichat-transcript-create
+                       :nodes
+                       (list
+                        (pichat-transcript-node-create
+                         :kind 'message :key "raw-markdown" :role 'assistant
+                         :content
+                         (list
+                          (pichat-transcript-content-create
+                           :kind 'prose :index 0 :text source))))
+                       :diagnostics nil :metadata nil))
+                     (context
+                      (pichat-chat--canonical-render-context transcript))
+                     (fragment (pichat-render-canonical transcript context)))
+                (pichat-chat--project-canonical
+                 nil transcript fragment context))
+              (goto-char (marker-position pichat-chat--canonical-start))
+              (should (search-forward source
+                                      (marker-position
+                                       pichat-chat--canonical-end)
+                                      t))
+              (let ((end (point))
+                    (beg (- (point) (length source))))
+                (should (equal source
+                               (buffer-substring-no-properties beg end)))
+                (should-not (overlays-in beg end)))
+              (dolist (key '("C-c C-l" "C-c C-a" "C-c C-<return>"))
+                (should-not (lookup-key pichat-chat-mode-map (kbd key)))))
+        (when (buffer-live-p buffer) (kill-buffer buffer)))))))
 
 (provide 'pichat-test-markdown-fontification)
 ;;; pichat-test-markdown-fontification.el ends here

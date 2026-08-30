@@ -33,17 +33,6 @@ rollback; their edits never enter prompt undo history. Canonical reconstruction,
 status changes outside the live tail, and uncertain marker topology retain the
 complete-display rollback transaction.
 
-Completed assistant prose also has a derived Markdown presentation layer.
-Inline Markdown links display as compact clickable labels, while their exact
-source remains in the buffer. PiChat parses and displays pipe tables with its
-own bounded renderer: each preview row stays on one visual line, wide cells are
-ellipsized, and omitted rows or columns have explicit counts. Incomplete
-streaming Markdown remains unrendered. Presentation overlays are recreated after
-projection and rollback; malformed tables or presentation failures leave exact
-raw Markdown visible rather than failing transcript projection. Shell Maker is
-not used by PiChat's table path. When Embark is installed, compact and expanded
-PiChat links are exposed as URL targets rather than their visible labels.
-
 User messages are rendered only from authoritative Pi events.  Unknown protocol
 data is normalized to bounded diagnostics rather than printed as raw objects.
 Consecutive thinking and tool calls are presented in source-ordered activity
@@ -530,32 +519,6 @@ session clears the fork/clone chain.
 Additional chat keys:
 
 - `C-c C-v` — repaint from authoritative Pi session entries
-- `C-c C-l` — toggle the Markdown link at point between compact and source
-- `C-c C-a` — toggle the Markdown table at point between rendered and source
-- `RET` over a Markdown table, `C-c C-<return>`, or
-  `M-x pichat-chat-open-table-at-point` — open its complete immutable table
-  viewer; the explicit chat binding remains available when a modal keymap masks
-  the contextual `RET`
-- Inline tables show conservative plain cell text rather than nested Markdown
-  styling or clickable cell links. They preserve exact source, never wrap a
-  cell, use `…` for truncation, and show explicit omitted-row/column counts.
-  `pichat-chat-table-preview-max-rows`,
-  `pichat-chat-table-preview-max-columns`,
-  `pichat-chat-table-min-column-width`,
-  `pichat-chat-table-max-width-fraction`, and
-  `pichat-chat-table-unicode-borders` control supported preview behavior.
-- The complete table viewer is read-only and horizontally scrollable. Its keys
-  are `q` to kill, `t` to return to a still-current origin, `<`/`>` to scroll,
-  `n`/`p` to move by semantic rows, `g` to reset position and horizontal scroll,
-  `w` to copy exact Markdown, `s` to toggle normalized/raw views, and `a` to
-  explicitly align a snapshot that exceeded automatic alignment limits. Built-in
-  Org table support loads only when this viewer opens; PiChat never evaluates
-  formulas, Babel, links, or exports from assistant table content.
-- `M-x pichat-chat-open-link-at-point` — open an allowed link (`http`, `https`, or `mailto`)
-- `M-x pichat-chat-copy-link-at-point` — copy a link destination
-- `M-x pichat-chat-describe-link-at-point` — show a link destination
-- `M-x pichat-chat-toggle-link-display` — toggle all links in the buffer
-- `M-x pichat-chat-toggle-table-display` — toggle all tables in the buffer
 - `RET`, `TAB`, or mouse-1 on an activity header — expand or collapse that
   source-ordered tool group
 - `C-c C-;` — expand or collapse the activity group header at point

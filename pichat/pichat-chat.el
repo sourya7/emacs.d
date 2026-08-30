@@ -16,7 +16,6 @@
 (require 'pichat-pi)
 (require 'pichat-render)
 (require 'pichat-markdown-fontification)
-(require 'pichat-markdown-presentation)
 (require 'pichat-reference)
 (require 'pichat-commands)
 (require 'pichat-sessions)
@@ -438,10 +437,6 @@ Markup characters remain visible; this is fontification only."
     (define-key map (kbd "C-c C-g") #'pichat-chat-visit-tool-location)
     (define-key map (kbd "C-c C-w") #'pichat-chat-copy-tool-location)
     (define-key map (kbd "C-c C-v") #'pichat-chat-repaint)
-    (define-key map (kbd "C-c C-l") #'pichat-chat-toggle-link-at-point)
-    (define-key map (kbd "C-c C-a") #'pichat-chat-toggle-table-at-point)
-    (define-key map (kbd "C-c C-<return>")
-                #'pichat-chat-open-table-at-point)
     (define-key map (kbd "M-n") #'pichat-chat-next-tool)
     (define-key map (kbd "M-p") #'pichat-chat-previous-tool)
     (define-key map (kbd "C-c M-n") #'pichat-chat-next-user-turn)
@@ -487,7 +482,6 @@ it forks into new sessions and does not perform same-file tree navigation.
             #'pichat-chat--cancel-extension-status-projection nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--cancel-sync-request nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--cancel-stats-request nil t)
-  (pichat-markdown-presentation-setup)
   (add-hook 'kill-buffer-hook #'pichat-chat--remove-event-handlers nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--stop-session-on-kill nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--release-session-buffer nil t)
@@ -2517,10 +2511,7 @@ canonical keys as part of the projection transaction."
            (pichat-chat--compatibility-diagnostics-text transcript))
           (unless (equal statuses-before pichat-chat--status-lines)
             (pichat-chat--render-status-region))
-          (set-buffer-modified-p modified)))
-    ;; Commit canonical text and fontification before attempting the optional
-    ;; inline overlay layer, whose cache and failures are not transactional.
-    (pichat-markdown-presentation--refresh-after-toggle)))
+          (set-buffer-modified-p modified)))))
 
 (defun pichat-chat--cancel-live-projection ()
   "Cancel the pending coalesced live-tail projection."
@@ -2918,21 +2909,6 @@ mutated.  SECOND wins if a transient tool id collides with a canonical id."
               :blocks blocks :activity-blocks activity-blocks
               :incremental t)))))
 
-(defun pichat-chat--refresh-final-live-presentation ()
-  "Refresh optional presentation overlays for committed final live text."
-  (condition-case err
-      (pichat-markdown-presentation-refresh-region
-       (marker-position pichat-chat--live-start)
-       (marker-position pichat-chat--live-end))
-    (error
-     (pichat-markdown-presentation-remove-region
-      (marker-position pichat-chat--live-start)
-      (marker-position pichat-chat--live-end))
-     (pichat-markdown-presentation--warn-once
-      'live-refresh
-      (format "PiChat live Markdown presentation failed: %s"
-              (error-message-string err))))))
-
 (defun pichat-chat--commit-live-projection-result (candidate result)
   "Commit CANDIDATE projection RESULT after all buffer-local edits succeed."
   (let ((live-blocks (plist-get result :blocks))
@@ -2977,12 +2953,7 @@ Return non-nil when a changed candidate commits."
                              (pichat-chat--replace-live-fragments candidate))
                         (pichat-chat--replace-live-full candidate))))
               (pichat-chat--commit-live-projection-result candidate result)
-              (set-buffer-modified-p modified)))
-          ;; Inline overlays remain an optional post-commit layer until their
-          ;; removal phase; projection rollback owns neither their caches nor
-          ;; their failures.
-          (when (plist-get candidate :final-p)
-            (pichat-chat--refresh-final-live-presentation)))
+              (set-buffer-modified-p modified))))
         t))))
 
 (defun pichat-chat--capture-tool-enrichment (raw source-generation)

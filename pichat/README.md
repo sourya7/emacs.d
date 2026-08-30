@@ -64,11 +64,65 @@ before canonical synchronization and are explicitly reported as unavailable
 afterward. Compatibility diagnostics are deduplicated and displayed as bounded
 status entries.
 
+## Markdown source and rendered responses
+
+The interactive chat buffer keeps assistant Markdown as exact visible source.
+Completed assistant prose receives theme-aware Markdown faces when
+`markdown-mode` is available, but PiChat does not replace links, pipe tables, or
+other markup with custom inline displays. Streaming prose remains unfontified
+until its existing final-message boundary. Chat buffers use
+`visual-line-mode` and wrap at the window edge without `visual-fill-column`.
+Thinking and tool activity keep their independent folding behavior.
+
+Use `C-c C-h` or `M-x pichat-chat-view-response` for a rendered, read-only
+snapshot of a settled canonical assistant response. If point identifies a
+canonical assistant message, PiChat selects that response; otherwise it selects
+the latest canonical assistant message. Selection and extraction read the
+canonical transcript model rather than folded, truncated, fontified, or
+overlaid buffer display. The snapshot concatenates that response's exact prose
+segments in source order and excludes thinking, tool calls, and tool output. A
+response with no prose opens an explicit empty-response view.
+
+Rendered response keys are:
+
+- `g` — explicitly refresh and rerender the same canonical response at the
+  current window width
+- `t` — return to that response in its originating chat
+- `w` — copy the snapshot's exact canonical Markdown
+- `q` — close the response view
+- `RET`, `w`, or `?` on a rendered link — open, copy, or describe its destination
+
+Response views are snapshots and do not update automatically while an assistant
+streams. Refresh and return validate both the source identity and assistant node;
+if the chat dies, rebinds, or no longer projects the response, the existing
+snapshot remains readable but those operations are rejected. Copying exact
+Markdown remains available from the snapshot.
+
+Assistant Markdown and embedded HTML are untrusted. PiChat uses the configured
+`markdown-mode` conversion boundary, parses the result with libxml, retains only
+a strict inert element and attribute allowlist, and renders through isolated SHR
+handlers. Active or resource-bearing HTML is discarded, remote images are never
+fetched, unknown elements are omitted, and unrelated SHR extension renderers are
+not invoked. Only explicitly configured URL schemes in
+`pichat-response-view-safe-link-schemes` (`https`, `http`, and `mailto` by
+default) may be opened. Disallowed destinations remain available for explicit
+copying or inspection but cannot be opened by the view. If Markdown conversion,
+HTML parsing, sanitization, or SHR rendering fails—or the required conversion
+support is unavailable—the view shows a labelled exact-Markdown fallback rather
+than losing the response.
+
 ## Module dependency direction
 
-`pichat-chat.el` is the mode and event-orchestration layer. It may consume
-focused presentation modules, but those modules do not require or mutate the
-chat layer's state implicitly. `pichat-chat-input.el` owns prompt submission,
+`pichat-chat.el` is the mode and event-orchestration layer. It consumes focused
+presentation modules, but those modules do not require or mutate the chat
+layer's state implicitly. `pichat-markdown-fontification.el` is a fail-open,
+fontification-only component: it copies face runs from a temporary
+`markdown-mode` buffer onto exact completed prose and has no chat, link, table,
+overlay, or cache dependency. `pichat-response-view.el` owns secure rendered
+response snapshots and depends on the canonical selection API plus the common
+read-only view lifecycle; chat orchestration supplies source validation and
+origin callbacks explicitly, so the response module never requires
+`pichat-chat.el`. `pichat-chat-input.el` owns prompt submission,
 history, recovery, and pending/in-flight attachment coordination without
 requiring the chat layer; orchestration supplies prompt markers and compact
 status presentation. `pichat-attachments.el` owns bounded image records, file
@@ -96,10 +150,11 @@ buffer-edit context explicitly; it supplies pure specialized tool text to the
 initial render pass, then indexes that final text without editing it. It owns
 explicit fold replacements, details, and derived location overlays but never
 requires `pichat-chat.el`.
-`pichat-chat-navigation.el` owns logical turn/active-target selection, expanded
-prompt-editor lifecycle, and canonical-model Markdown serialization without
-requiring the chat layer; orchestration supplies source tokens, markers, block
-tables, and the prompt replacement callback. `pichat-archive.el` owns exact-RPC
+`pichat-chat-navigation.el` owns logical turn/active-target selection, canonical
+assistant-response selection and exact prose extraction, expanded prompt-editor
+lifecycle, and canonical-model Markdown serialization without requiring the
+chat layer; orchestration supplies source tokens, markers, block tables, and the
+prompt replacement callback. `pichat-archive.el` owns exact-RPC
 capability discovery, helper provenance, process execution, and protocol
 normalization without depending on Consult or querying SQLite; `pichat-consult.el`
 consumes only normalized archive records. The chat layer owns event orchestration
@@ -519,6 +574,8 @@ session clears the fork/clone chain.
 Additional chat keys:
 
 - `C-c C-v` — repaint from authoritative Pi session entries
+- `C-c C-h` — render the canonical assistant response at point, or the latest
+  canonical assistant response when point does not identify one
 - `RET`, `TAB`, or mouse-1 on an activity header — expand or collapse that
   source-ordered tool group
 - `C-c C-;` — expand or collapse the activity group header at point

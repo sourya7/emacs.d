@@ -9,6 +9,8 @@
   ;; Do not allow the cursor in the minibuffer prompt
   :hook (minibuffer-setup . cursor-intangible-mode)
   :custom
+  (scroll-conservatively 10)
+  (scroll-margin 15)
   ;; Support opening new minibuffers from inside existing minibuffers.
   (enable-recursive-minibuffers t)
   ;; Hide commands in M-x which do not work in the current mode.  Vertico

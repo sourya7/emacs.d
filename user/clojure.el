@@ -108,6 +108,7 @@
 
 ;;; Structural Editing
 (use-package paredit
+  :ensure (:host github :repo "emacsmirror/paredit")
   :hook ((clojure-mode . paredit-mode)
          (clojurescript-mode . paredit-mode)
          (clojurec-mode . paredit-mode)

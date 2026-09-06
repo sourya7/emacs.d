@@ -330,6 +330,13 @@ unrelated `special-mode` buffers. Non-Evil users need no additional setup.
 
 This repo loads PiChat through `user/pichat.el`.
 
+Exact tested Pi releases and previously reviewed upstream RPC changes are
+recorded in [`PI_COMPATIBILITY.md`](./PI_COMPATIBILITY.md). Before testing an
+upgrade, run `pichat/test/report-upstream-rpc-changes.sh` to list changes to
+Pi's [`rpc.md`](https://github.com/earendil-works/pi/commits/main/packages/coding-agent/docs/rpc.md)
+since the recorded review watermark. Compatibility is advanced only after the
+complete real-Pi suite passes; see [`TESTING_GUIDELINES.md`](./TESTING_GUIDELINES.md).
+
 Commands:
 
 - `M-x pichat` — open the preferred current-scope chat

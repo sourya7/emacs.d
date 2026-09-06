@@ -110,6 +110,36 @@ missing scenarios, not as a substitute for behavioral assertions.
 
 Integration tests must isolate Pi state with temporary `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`, project cwd, and session directory. They must not read normal user credentials, packages, settings, trust decisions, or sessions. CI should pin one supported Pi version and include `pi --version` in failure diagnostics.
 
+## Compatibility verification workflow
+
+[`PI_COMPATIBILITY.md`](./PI_COMPATIBILITY.md) is the authoritative record of
+exact Pi releases that passed the complete suite and upstream RPC changes that
+have already been reviewed. A persisted-session fixture version is provenance,
+not a verified compatibility claim.
+
+Before testing a newer Pi release:
+
+1. Run `pichat/test/report-upstream-rpc-changes.sh`. By default it compares the
+   recorded `last_reviewed_pi` with the installed `pi --version`; explicit old
+   and new refs are also accepted. Set `PI_UPSTREAM_DIR` to reuse a full local
+   checkout of the upstream Pi repository.
+2. Give every reported `packages/coding-agent/docs/rpc.md` commit a disposition
+   in the compatibility ledger. Inspect the implementation diff too when the
+   documentation alone does not establish client impact.
+3. Add or activate focused tests for behavior PiChat implements.
+4. Run `pichat/test/run-tests.sh --full` against the exact target release.
+5. Append the result to the verification history. Advance `last_verified_pi`
+   and its immutable release-commit and RPC-document-blob identifiers only when
+   the complete suite passes. Failed attempts remain recorded without advancing
+   that watermark.
+6. Advance `last_reviewed_pi` and its identifiers only after every intervening
+   RPC documentation change has a ledger row, including changes classified as
+   compatible, intentionally unsupported, or not applicable.
+
+Do not remove old ledger entries after implementing them. Updating their
+status and adding source/test locations prevents later upgrades from
+re-identifying the same upstream feature.
+
 ## Development checklist
 
 Report focused test-file sizes while reviewing test organization:

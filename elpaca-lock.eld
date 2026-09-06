@@ -423,6 +423,17 @@
                       :type git :protocol https :inherit t :depth
                       treeless :ref
                       "cf06b4ccdce6a39346c32f05139f9ee8b77ee229"))
+ (eglot-codelens :source "elpaca-menu-lock-file" :recipe
+                 (:source nil :package "eglot-codelens" :id
+                          eglot-codelens :host github :repo
+                          "zsxh/eglot-codelens" :type git :protocol
+                          https :inherit t :depth treeless :ref
+                          "a51c6c10293b5e5dc31d14a08ecd9d64f537062b"))
+ (eglot-jdtls :source "elpaca-menu-lock-file" :recipe
+              (:source nil :package "eglot-jdtls" :id eglot-jdtls
+                       :host github :repo "zsxh/eglot-jdtls" :type git
+                       :protocol https :inherit t :depth treeless :ref
+                       "ab4f83a5833cb9d59dc93127ef8554599cbe9622"))
  (elfeed :source "elpaca-menu-lock-file" :recipe
          (:package "elfeed" :fetcher github :repo
                    "emacs-elfeed/elfeed" :files

@@ -16,6 +16,7 @@
    ops
    programming
    golang
+   java
    pichat
    org
    ;ruby

@@ -92,15 +92,16 @@
             (dolist (spec specs)
               (run spec (equal "external" (plist-get spec :id))))
 
-            ;; Immediate mutation wins the race with the RPC client: all three
-            ;; start-event observations already contain post-state.  Pi's
-            ;; tool_call hook, however, saw the real pre-state before execute.
+            ;; An RPC start observer races with immediate execution and may see
+            ;; either pre- or post-state.  Pi's in-process tool_call hook,
+            ;; however, reliably sees pre-state before execute.
             (dolist (spec (seq-take specs 3))
               (let* ((id (plist-get spec :id))
                      (event (gethash id end-events))
                      (details (plist-get (plist-get event :result) :details)))
-                (should (equal (plist-get spec :content)
-                               (gethash id at-start)))
+                (should (member (gethash id at-start)
+                                (list (plist-get spec :before)
+                                      (plist-get spec :content))))
                 (should (equal (plist-get spec :before)
                                (plist-get details :preflightText)))
                 (should (equal (plist-get spec :content)

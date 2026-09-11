@@ -72,6 +72,15 @@
     (should (eq 'pichat-thinking-face
                 (get-text-property thinking-position 'font-lock-face text)))))
 
+(ert-deftest pichat-render-tool-args-encodes-decoded-json-arrays ()
+  (should
+   (equal
+    "{\"queries\":[\"first query\",\"second query\"],\"domainFilter\":[\"example.test\",\"-blocked.test\"],\"includeContent\":true}"
+    (pichat-render-tool-args
+     '(:queries ("first query" "second query")
+       :domainFilter ("example.test" "-blocked.test")
+       :includeContent t)))))
+
 (ert-deftest pichat-render-summary-does-not-serialize-tool-arguments ()
   (let* ((tool (pichat-transcript-content-create
                 :kind 'tool :index 0 :tool-call-id "large-write"

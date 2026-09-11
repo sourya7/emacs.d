@@ -156,7 +156,11 @@ assistant transcript text."
 (defun pichat-render-tool-args (args)
   "Return compact string for tool ARGS."
   (condition-case _
-      (json-serialize args :false-object :json-false :null-object nil)
+      ;; RPC objects are decoded as plists and JSON arrays as lists.
+      ;; `json-serialize' treats every list as an object representation, so a
+      ;; normal array such as ("first" "second") fails while looking for
+      ;; symbol keys.  `json-encode' understands this plist/list convention.
+      (json-encode args)
     (error "[unavailable arguments]")))
 
 (defun pichat-render--bounded-line-value (value)

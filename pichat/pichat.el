@@ -14,6 +14,7 @@
 (require 'pichat-transport)
 (require 'pichat-pi-environment)
 (require 'pichat-session)
+(require 'pichat-backend)
 (require 'pichat-events)
 (require 'pichat-path)
 (require 'pichat-rpc)
@@ -176,7 +177,10 @@ SCOPE, when non-nil, is a (KEY CWD LABEL) value from
   "Return non-nil when SESSION is its owner scope's preferred session."
   (and session
        (let ((key (pichat-session-owner-scope-key session)))
-         (and key (eq (gethash key pichat--sessions-by-scope) session)))))
+         (and key
+              (eq (gethash (pichat-backend-scope-key session key)
+                           pichat--sessions-by-scope)
+                  session)))))
 
 (defun pichat-clear-default-session (session)
   "Remove SESSION from every preferred-scope slot without forgetting it."
@@ -198,7 +202,8 @@ SCOPE, when non-nil, is a (KEY CWD LABEL) value from
   (pichat-register-session session)
   (let ((key (pichat-session-owner-scope-key session)))
     (unless key (user-error "PiChat session has no owner scope"))
-    (puthash key session pichat--sessions-by-scope)
+    (puthash (pichat-backend-scope-key session key)
+             session pichat--sessions-by-scope)
     (setf (pichat-session-scope-key session) key)
     (pichat--notify-registry-change 'default-changed session)
     session))
@@ -324,7 +329,7 @@ session over the global `pichat-current-session'."
   "Display and synchronize exact SESSION through DISPLAY-FUNCTION."
   (funcall display-function session)
   (unless (eq 'error (pichat-session-state session))
-    (pichat-rpc-get-state session (lambda (_response _session) nil)))
+    (pichat-backend-get-state session (lambda (_response _session) nil)))
   session)
 
 (defun pichat--open-launch-profile (profile &optional directory)
@@ -407,7 +412,7 @@ LAUNCH-OPTIONS supports `:persistence' and an exact run-local `:model'."
           (format "manual:%s#%d" (pichat--directory-basename cwd)
                   pichat--manual-session-counter))
     (pichat-register-session session scope)
-    (pichat-rpc-start session)
+    (pichat-backend-start-session session)
     (setq pichat-current-session session)
     (when (called-interactively-p 'interactive)
       (if (pichat-session-alive-p session)
@@ -425,7 +430,7 @@ LAUNCH-OPTIONS supports `:persistence' and an exact run-local `:model'."
   (let ((session (pichat-session-current session)))
     (unless session
       (user-error "No PiChat session"))
-    (pichat-rpc-stop session)
+    (pichat-backend-stop-session session)
     (pichat-clear-default-session session)
     (when (eq session pichat-current-session)
       (setq pichat-current-session nil))))
@@ -651,13 +656,14 @@ minibuffer quit is deliberately allowed to propagate to the caller."
   "Prompt for one of MODELS and select it in SESSION.
 A quit from the minibuffer prompt cancels the ordinary operation silently."
   (when (pichat-session-alive-p session)
+    (pichat-backend-require-capability session 'models "Model selection")
     (condition-case nil
         (pcase-let* ((`(,choice . ,model) (pichat--read-model-choice models)))
           (when (pichat-session-alive-p session)
             (pichat-rpc-set-model
              session (plist-get model :provider) (plist-get model :id)
              (lambda (_response model-session)
-               (pichat-rpc-get-state
+               (pichat-backend-get-state
                 model-session
                 (lambda (_state-response _state-session)
                   (force-mode-line-update)
@@ -672,6 +678,7 @@ in `pichat-launch' when the selection must apply only to a new runtime."
   (interactive)
   (let ((session (pichat-session-current session)))
     (unless session (user-error "No PiChat session"))
+    (pichat-backend-require-capability session 'models "Model selection")
     (pichat-rpc-get-available-models
      session
      (lambda (response response-session)
@@ -692,7 +699,7 @@ in `pichat-launch' when the selection must apply only to a new runtime."
              (pichat-session-runtime-id session))
             session)
     (when (pichat-session-alive-p session)
-      (ignore-errors (pichat-rpc-stop session)))
+      (ignore-errors (pichat-backend-stop-session session)))
     (pichat-forget-session session)))
 
 (defun pichat--selected-model-launch-error (session stage response)
@@ -766,7 +773,7 @@ in `pichat-launch' when the selection must apply only to a new runtime."
   (pichat--selected-model-launch-call
    session "startup readiness"
    (lambda ()
-     (pichat-rpc-get-state
+     (pichat-backend-get-state
       session
       (lambda (response ready-session)
         (when (and (eq ready-session session)
@@ -797,7 +804,7 @@ in `pichat-launch' when the selection must apply only to a new runtime."
   (let ((session (pichat-session-current session)))
     (unless session
       (user-error "No PiChat session"))
-    (pichat-rpc-get-state
+    (pichat-backend-get-state
      session
      (lambda (response _session)
        (let ((data (plist-get response :data)))
@@ -830,11 +837,11 @@ This is the first implementation check; it does not send an LLM prompt."
      0.2 nil
      (lambda ()
        (if (pichat-session-alive-p session)
-           (pichat-rpc-get-state
+           (pichat-backend-get-state
             session
             (lambda (response _session)
               (message "PiChat smoke test OK: %S" (plist-get response :data))
-              (pichat-rpc-stop session)))
+              (pichat-backend-stop-session session)))
          (message "PiChat smoke test failed: process is not alive"))))
     session))
 

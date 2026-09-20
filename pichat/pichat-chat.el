@@ -13,6 +13,7 @@
 (require 'pichat-session)
 (require 'pichat-events)
 (require 'pichat-rpc)
+(require 'pichat-backend)
 (require 'pichat-pi)
 (require 'pichat-render)
 (require 'pichat-markdown-fontification)
@@ -568,7 +569,7 @@ it forks into new sessions and does not perform same-file tree navigation.
       (if (fboundp 'pichat-stop-session)
           (pichat-stop-session session)
         (when (pichat-session-alive-p session)
-          (pichat-rpc-stop session)))
+          (pichat-backend-stop-session session)))
       (when (fboundp 'pichat-forget-session)
         (pichat-forget-session session)))))
 
@@ -678,7 +679,7 @@ Use its scope label as a unique provisional identity until Pi reports an id."
 (defun pichat-chat--cancel-sync-request ()
   "Cancel the RPC request owned by the current synchronization."
   (when (and pichat-chat--sync-request-id pichat-chat-session)
-    (pichat-rpc-cancel-request
+    (pichat-backend-cancel-owned-request
      pichat-chat-session pichat-chat--sync-request-id))
   (setq pichat-chat--sync-request-id nil))
 
@@ -964,7 +965,7 @@ SOURCE-GENERATION identifies the source for which the request was sent."
 (defun pichat-chat--cancel-stats-request ()
   "Cancel and invalidate context-usage stats work owned by this chat."
   (when (and pichat-chat--stats-request-id pichat-chat-session)
-    (pichat-rpc-cancel-request
+    (pichat-backend-cancel-owned-request
      pichat-chat-session pichat-chat--stats-request-id))
   (cl-incf pichat-chat--stats-sequence)
   (setq pichat-chat--stats-in-flight nil
@@ -1013,13 +1014,13 @@ non-nil for a successful RPC response, and RESPONSE is the response plist."
          (token (cl-incf pichat-chat--stats-sequence))
          (previous (copy-tree (pichat-session-context-usage session)))
          request-id)
-    ;; Establish ownership before sending: unit transports may call back
-    ;; synchronously from `pichat-rpc-get-session-stats'.
+    ;; Establish ownership before sending: unit backends may call back
+    ;; synchronously from `pichat-backend-get-stats'.
     (setq pichat-chat--stats-in-flight token
           pichat-chat--stats-request-id nil)
     (condition-case _condition
         (setq request-id
-              (pichat-rpc-get-session-stats
+              (pichat-backend-get-stats
                session
                (lambda (response callback-session)
                  (pichat-chat--stats-finish
@@ -1040,7 +1041,8 @@ non-nil for a successful RPC response, and RESPONSE is the response plist."
 REASON is one of `state', `turn', `compaction', or `settled'."
   (when-let ((s (or session pichat-chat-session)))
     (when (and (eq s pichat-chat-session)
-               (pichat-session-alive-p s))
+               (pichat-session-alive-p s)
+               (pichat-backend-capable-p s 'stats))
       (setq reason (or reason 'state))
       (when (memq reason '(turn compaction))
         (setq pichat-chat--stats-run-covered-p nil))
@@ -1080,6 +1082,7 @@ omitted `xhigh' and `max' levels are unsupported."
   "Return availability state of SESSION's thinking control."
   (let ((model (pichat-session-model session)))
     (cond
+     ((not (pichat-backend-capable-p session 'thinking)) 'unavailable)
      ((not (pichat-session-alive-p session)) 'unavailable)
      ((or (not (listp model)) (not (plist-member model :reasoning)))
       'unavailable)
@@ -1131,12 +1134,13 @@ straightforward to exercise without synthesizing mouse input."
 
 (defun pichat-chat--mode-line-model-control (session model-name)
   "Return model selector segment for SESSION displaying MODEL-NAME verbatim."
-  (if (pichat-session-alive-p session)
+  (if (and (pichat-session-alive-p session)
+           (pichat-backend-capable-p session 'models))
       (pichat-chat--mode-line-control
        (if (equal model-name "?") "select" model-name)
        "mouse-1: select Pi model" pichat-chat--model-mode-line-map)
     (pichat-chat--mode-line-control
-     model-name "Pi model selection unavailable: session not connected" nil t)))
+     model-name "Model selection unavailable for this backend" nil t)))
 
 (defun pichat-chat--compact-thinking-level (level)
   "Return compact display text for Pi thinking LEVEL."
@@ -1593,20 +1597,22 @@ Nested calls in another buffer establish an independent transaction."
   "Abort the current Pi run or active automatic retry delay."
   (interactive)
   (unless pichat-chat-session (user-error "No PiChat session"))
-  (if (pichat-session-retrying-p pichat-chat-session)
-      (pichat-rpc-abort-retry pichat-chat-session)
-    (pichat-rpc-abort pichat-chat-session)))
+  (pichat-backend-abort-session
+   pichat-chat-session
+   (pichat-session-retrying-p pichat-chat-session)))
 
 (defun pichat-chat-steer (message)
   "Queue steering MESSAGE."
   (interactive "sSteer: ")
   (unless pichat-chat-session (user-error "No PiChat session"))
+  (pichat-backend-require-capability pichat-chat-session 'queue "Steering")
   (pichat-rpc-steer pichat-chat-session message))
 
 (defun pichat-chat-follow-up (message)
   "Queue follow-up MESSAGE."
   (interactive "sFollow-up: ")
   (unless pichat-chat-session (user-error "No PiChat session"))
+  (pichat-backend-require-capability pichat-chat-session 'queue "Follow-up")
   (pichat-rpc-follow-up pichat-chat-session message))
 
 (defun pichat-chat-set-steering-mode (mode)
@@ -1614,25 +1620,30 @@ Nested calls in another buffer establish an independent transaction."
   (interactive (list (completing-read "Steering mode: "
                                       '("one-at-a-time" "all") nil t)))
   (unless pichat-chat-session (user-error "No PiChat session"))
+  (pichat-backend-require-capability pichat-chat-session 'queue "Steering mode")
   (pichat-rpc-set-steering-mode
    pichat-chat-session mode
    (lambda (_response session)
-     (pichat-rpc-get-state session (lambda (_r _s) (force-mode-line-update))))))
+     (pichat-backend-get-state
+      session (lambda (_r _s) (force-mode-line-update))))))
 
 (defun pichat-chat-set-follow-up-mode (mode)
   "Set Pi follow-up queue MODE for the current session."
   (interactive (list (completing-read "Follow-up mode: "
                                       '("one-at-a-time" "all") nil t)))
   (unless pichat-chat-session (user-error "No PiChat session"))
+  (pichat-backend-require-capability pichat-chat-session 'queue "Follow-up mode")
   (pichat-rpc-set-follow-up-mode
    pichat-chat-session mode
    (lambda (_response session)
-     (pichat-rpc-get-state session (lambda (_r _s) (force-mode-line-update))))))
+     (pichat-backend-get-state
+      session (lambda (_r _s) (force-mode-line-update))))))
 
 (defun pichat-chat-compact (&optional instructions)
   "Compact current Pi session with optional INSTRUCTIONS."
   (interactive "sCompaction instructions (optional): ")
   (unless pichat-chat-session (user-error "No PiChat session"))
+  (pichat-backend-require-capability pichat-chat-session 'compact "Compaction")
   (pichat-rpc-compact pichat-chat-session
                        (unless (string-empty-p instructions) instructions)
                        (lambda (_response _session)
@@ -1643,30 +1654,35 @@ Nested calls in another buffer establish an independent transaction."
 A successful unrelated new session clears Session History source navigation."
   (interactive)
   (unless pichat-chat-session (user-error "No PiChat session"))
+  (pichat-backend-require-capability
+   pichat-chat-session 'new-conversation "New session")
   (when (yes-or-no-p "Start a new Pi session? ")
-    (pichat-rpc-new-session
+    (pichat-backend-start-new-conversation
      pichat-chat-session
      (lambda (response session)
        (if (plist-get (plist-get response :data) :cancelled)
            (message "PiChat new session cancelled")
          (pichat-sessions-clear-source-navigation session)
          (pichat-chat--set-status 'source "[new session]")
-         (pichat-rpc-get-state
+         (pichat-backend-get-state
           session (lambda (_r _s) (force-mode-line-update))))))))
 
 (defun pichat-chat-cycle-model ()
   "Cycle Pi model for current session."
   (interactive)
   (unless pichat-chat-session (user-error "No PiChat session"))
+  (pichat-backend-require-capability pichat-chat-session 'models "Model cycling")
   (pichat-rpc-cycle-model
    pichat-chat-session
    (lambda (_response session)
-     (pichat-rpc-get-state session (lambda (_r _s) (force-mode-line-update))))))
+     (pichat-backend-get-state
+      session (lambda (_r _s) (force-mode-line-update))))))
 
 (defun pichat-chat--thinking-levels-for-selection (session)
   "Return model-supported thinking levels selectable for SESSION.
 Signal a user error when thinking control is disabled or unavailable."
   (unless session (user-error "No PiChat session"))
+  (pichat-backend-require-capability session 'thinking "Thinking control")
   (pcase (pichat-chat--thinking-control-state session)
     ('disabled (user-error "Selected Pi model does not support thinking"))
     ('unavailable (user-error "Pi thinking control is unavailable")))
@@ -1718,7 +1734,7 @@ Signal a user error when thinking control is disabled or unavailable."
     (with-current-buffer buffer
       (setq pichat-chat--thinking-control-error nil)
       (force-mode-line-update))
-    (pichat-rpc-get-state
+    (pichat-backend-get-state
      session
      (apply-partially #'pichat-chat--thinking-control-refreshed
                       buffer session source-generation)
@@ -1729,6 +1745,8 @@ Signal a user error when thinking control is disabled or unavailable."
   "Cycle thinking level for current session and refresh authoritative state."
   (interactive)
   (unless pichat-chat-session (user-error "No PiChat session"))
+  (pichat-backend-require-capability
+   pichat-chat-session 'thinking "Thinking control")
   (pcase (pichat-chat--thinking-control-state pichat-chat-session)
     ('disabled (user-error "Selected Pi model does not support thinking"))
     ('unavailable (user-error "Pi thinking control is unavailable"))
@@ -1793,9 +1811,9 @@ Signal a user error when thinking control is disabled or unavailable."
   "Refresh Pi state displayed in the mode line."
   (interactive)
   (unless pichat-chat-session (user-error "No PiChat session"))
-  (pichat-rpc-get-state pichat-chat-session
-                         (lambda (_response _session)
-                           (force-mode-line-update))))
+  (pichat-backend-get-state pichat-chat-session
+                            (lambda (_response _session)
+                              (force-mode-line-update))))
 
 ;;;###autoload
 (defun pichat-chat-set-session-name (name)
@@ -1807,11 +1825,12 @@ Signal a user error when thinking control is disabled or unavailable."
      (list (read-string "Session name: " current))))
   (let ((session (pichat-session-current)))
     (unless session (user-error "No PiChat session"))
+    (pichat-backend-require-capability session 'naming "Session naming")
     (pichat-rpc-set-session-name
      session
      name
      (lambda (_response s)
-       (pichat-rpc-get-state
+       (pichat-backend-get-state
         s
         (lambda (_state-response _session)
           (when (buffer-live-p (pichat-session-buffer s))
@@ -3104,6 +3123,8 @@ BASE-CACHE is the cache captured by the incremental request."
 
 (defun pichat-chat--start-sync (full)
   "Start one FULL or incremental canonical synchronization."
+  (pichat-backend-require-capability
+   pichat-chat-session 'transcript "Transcript synchronization")
   (let* ((session pichat-chat-session)
          (buffer (current-buffer))
          (base-cache pichat-chat--entry-cache)
@@ -3160,7 +3181,7 @@ BASE-CACHE is the cache captured by the incremental request."
                           (or (plist-get response :error) "unknown error"))
                  (pichat-chat--finish-sync generation))))))
       (let ((request-id
-             (pichat-rpc-get-entries
+             (pichat-backend-get-transcript
               session (unless full cursor) #'success #'failure)))
         ;; Synchronous test transports may finish before returning an id.
         (when (equal generation pichat-chat--sync-in-flight)
@@ -3194,7 +3215,8 @@ BASE-CACHE is the cache captured by the incremental request."
 (defun pichat-chat--install-handlers (session buffer)
   "Install SESSION event handlers for BUFFER."
   (with-current-buffer buffer
-    (unless pichat-chat--handlers
+    (when (and (pichat-backend-capable-p session 'events)
+               (not pichat-chat--handlers))
       (let ((handler (lambda (event-fn)
                        (lambda (session event plist)
                          (when (buffer-live-p buffer)
@@ -3708,7 +3730,9 @@ Return non-nil only when the projected status value changes."
       (maphash (lambda (id _raw) (push id ids)) pichat-chat--pending-ui-requests)
       (dolist (id ids)
         (when (and pichat-chat-session
-                   (pichat-session-alive-p pichat-chat-session))
+                   (pichat-session-alive-p pichat-chat-session)
+                   (pichat-backend-capable-p
+                    pichat-chat-session 'extension-ui))
           (ignore-errors
             (pichat-rpc-extension-ui-cancel pichat-chat-session id)))
         (remhash id pichat-chat--pending-ui-requests)))
@@ -3760,6 +3784,8 @@ Return non-nil only when the projected status value changes."
 
 (defun pichat-chat--complete-ui-request (session id method value)
   "Respond to dialog ID for SESSION using METHOD-specific VALUE."
+  (pichat-backend-require-capability
+   session 'extension-ui "Pi extension UI")
   (when (pichat-session-alive-p session)
     (if (string= method "confirm")
         (pichat-rpc-extension-ui-confirm session id value)
@@ -3775,6 +3801,7 @@ Return non-nil only when the projected status value changes."
   "Return non-nil when SESSION request ID may interact in this chat now."
   (and (eq session pichat-chat-session)
        (pichat-session-alive-p session)
+       (pichat-backend-capable-p session 'extension-ui)
        (hash-table-p pichat-chat--pending-ui-requests)
        (gethash id pichat-chat--pending-ui-requests)
        (null pichat-chat--active-ui-request)
@@ -3847,7 +3874,9 @@ Return non-nil only when the projected status value changes."
                 (condition-case _err
                     (pichat-chat--interact-with-ui-request session raw)
                   ((quit error)
-                   (when (pichat-session-alive-p session)
+                   (when (and (pichat-session-alive-p session)
+                              (pichat-backend-capable-p
+                               session 'extension-ui))
                      (pichat-rpc-extension-ui-cancel session id))))
               (remhash id pichat-chat--pending-ui-requests)
               (when (equal id pichat-chat--active-ui-request)

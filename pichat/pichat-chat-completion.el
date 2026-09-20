@@ -11,6 +11,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'pichat-session)
+(require 'pichat-backend)
 (require 'pichat-rpc)
 
 (defvar-local pichat-chat-completion--commands nil
@@ -112,7 +113,8 @@ unavailable."
         (setq pichat-chat-completion--session session
               pichat-chat-completion--request-id nil
               pichat-chat-completion--last-error nil)
-        (if (not (pichat-session-alive-p session))
+        (if (or (not (pichat-session-alive-p session))
+                (not (pichat-backend-capable-p session 'commands)))
             (progn
               (setq pichat-chat-completion--commands nil
                     pichat-chat-completion--status 'unavailable)

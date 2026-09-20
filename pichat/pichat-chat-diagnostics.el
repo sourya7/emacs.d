@@ -14,6 +14,7 @@
 (require 'pp)
 (require 'term)
 (require 'pichat-session)
+(require 'pichat-backend)
 (require 'pichat-transport)
 (require 'pichat-pi-environment)
 (require 'pichat-path)
@@ -291,6 +292,9 @@ codes, or missing files in unrelated output."
   "Visit the owning runtime's settings.json without displaying auth.json."
   (interactive)
   (let ((session (pichat-session-current session)))
+    (when session
+      (pichat-backend-require-capability
+       session 'diagnostics "Pi settings"))
     (if (and session
              (eq (pichat-transport-kind
                   (pichat-session-transport session)) 'ssh))
@@ -317,6 +321,10 @@ Use SESSION's working directory when available.  Arbitrary RPC wrappers are
 never rewritten; configure `pichat-diagnostics-interactive-command' for them."
   (interactive)
   (let* ((session (pichat-session-current session))
+         (_capability
+          (when session
+            (pichat-backend-require-capability
+             session 'diagnostics "Interactive Pi setup")))
          (argv (pichat-chat-diagnostics-interactive-argv session))
          (transport (and session (pichat-session-transport session))))
     (unless argv
@@ -355,6 +363,10 @@ never rewritten; configure `pichat-diagnostics-interactive-command' for them."
   "Run `pi --version' through SESSION's transport and report availability."
   (interactive)
   (let* ((session (pichat-session-current session))
+         (_capability
+          (when session
+            (pichat-backend-require-capability
+             session 'diagnostics "Pi availability probe")))
          (transport (if session (pichat-session-transport session)
                       pichat-transport-local))
          (runtime-cwd (if session (pichat-session-runtime-cwd session)
@@ -398,6 +410,8 @@ paths, prompts, command arguments, provider output, and credentials."
   (interactive)
   (let ((session (pichat-session-current session)))
     (unless session (user-error "No PiChat session"))
+    (pichat-backend-require-capability
+     session 'diagnostics "Transport diagnostics")
     (let ((buffer (get-buffer-create "*PiChat Transport Diagnostics*"))
           (records (reverse (copy-sequence
                              (pichat-session-diagnostics session))))

@@ -8,6 +8,7 @@
 
 (require 'cl-lib)
 (require 'pichat-session)
+(require 'pichat-backend)
 (require 'pichat-rpc)
 
 (defun pichat-command--prompt-and-run (session commands)
@@ -28,7 +29,7 @@ A quit from either minibuffer prompt cancels the operation silently."
                (args (read-string (format "/%s args: " (plist-get cmd :name))))
                (message (string-trim (concat "/" (plist-get cmd :name) " " args))))
           (when (pichat-session-alive-p session)
-            (pichat-rpc-prompt session message)))
+            (pichat-backend-submit-prompt session message)))
       (quit nil))))
 
 ;;;###autoload
@@ -37,6 +38,7 @@ A quit from either minibuffer prompt cancels the operation silently."
   (interactive)
   (let ((session (pichat-session-current session)))
     (unless session (user-error "No current PiChat session"))
+    (pichat-backend-require-capability session 'commands "Pi commands")
     (pichat-rpc-get-commands
      session
      (lambda (response response-session)

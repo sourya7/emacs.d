@@ -113,6 +113,15 @@ than losing the response.
 
 ## Module dependency direction
 
+`pichat-backend.el` defines the optional backend contract, capability checks,
+and backend-qualified scope identity without requiring Pi RPC or any native LLM
+library. Sessions own a backend object and opaque backend state; legacy and
+ordinary sessions default to `pi`. `pichat-backend-pi.el` is a thin delegation
+to the existing RPC functions. Shared lifecycle, prompt, abort, state,
+transcript, stats, and owned-request cancellation paths dispatch through this
+boundary, while Pi-only controls are rejected by capability checks before side
+effects.
+
 `pichat-chat.el` is the mode and event-orchestration layer. It consumes focused
 presentation modules, but those modules do not require or mutate the chat
 layer's state implicitly. `pichat-markdown-fontification.el` is a fail-open,

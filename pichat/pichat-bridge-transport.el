@@ -3,6 +3,7 @@
 ;;; Code:
 
 (require 'pichat-rpc)
+(require 'pichat-backend)
 (require 'pichat-tool-bridge)
 
 (defconst pichat-bridge-transport-handshake-title "__pichat_handshake__")
@@ -25,6 +26,8 @@
 
 (defun pichat-bridge-transport-handle (session raw)
   "Handle bridge sentinel RAW for SESSION.  Return non-nil if handled."
+  (pichat-backend-require-capability
+   session 'extension-ui "Pi extension bridge")
   (let ((id (plist-get raw :id))
         (title (plist-get raw :title)))
     (cond

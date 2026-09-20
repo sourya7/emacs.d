@@ -2,13 +2,14 @@
 
 ;;; Commentary:
 
-;; Session data object.  Pi remains authoritative; this struct caches state and
-;; holds process/RPC bookkeeping for Emacs.
+;; Session data object.  Each backend remains authoritative for its own state;
+;; this struct holds shared caches plus Pi's process/RPC bookkeeping.
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'pichat-transport)
+(require 'pichat-backend)
 
 (defvar pichat-current-session)
 (defvar pichat-chat-session)
@@ -20,6 +21,8 @@
 (cl-defstruct (pichat-session
                (:constructor pichat-session-create))
   runtime-id
+  backend
+  backend-state
   id
   name
   cwd
@@ -64,9 +67,15 @@
   follow-up-mode
   context-usage)
 
+;; The Pi method implementations can be loaded after the session accessors above
+;; exist without introducing a dependency from the backend contract to RPC.
+(require 'pichat-backend-pi)
+
 (defun pichat-session-make (&rest args)
   "Create a `pichat-session' with sensible defaults and ARGS overrides."
   (let ((session (apply #'pichat-session-create args)))
+    (unless (pichat-session-backend session)
+      (setf (pichat-session-backend session) pichat-backend-pi))
     (unless (pichat-session-transport session)
       (setf (pichat-session-transport session) pichat-transport-local))
     (unless (pichat-session-emacs-cwd session)
@@ -130,9 +139,8 @@
   session)
 
 (defun pichat-session-alive-p (session)
-  "Return non-nil if SESSION has a live RPC process."
-  (let ((proc (pichat-session-process session)))
-    (and proc (process-live-p proc))))
+  "Return non-nil when SESSION is alive according to its backend."
+  (pichat-backend-session-alive-p session))
 
 (defun pichat-session-current (&optional session)
   "Return the best current PiChat session.

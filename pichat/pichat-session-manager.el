@@ -12,6 +12,7 @@
 (require 'project)
 (require 'tabulated-list)
 (require 'pichat-session)
+(require 'pichat-backend)
 (require 'pichat-transport)
 (require 'pichat-path)
 (require 'pichat-events)
@@ -256,7 +257,7 @@ or Bufferlo dependency."
   (when (and pichat-session-manager--preview-request-id
              pichat-session-manager--preview-request-session)
     (ignore-errors
-      (pichat-rpc-cancel-request
+      (pichat-backend-cancel-owned-request
        pichat-session-manager--preview-request-session
        pichat-session-manager--preview-request-id)))
   (setq pichat-session-manager--preview-request-id nil
@@ -458,6 +459,10 @@ canonical chat cache while an RPC refresh is pending."
                          '(running compacting retrying))))
     (setq pichat-session-manager--preview-runtime-id runtime-id)
     (cond
+     ((not (pichat-backend-capable-p session 'session-history))
+      (pichat-session-manager--cancel-preview-request)
+      (pichat-session-manager--render-preview
+       session nil "Transcript preview is unavailable for this backend."))
      ((and (pichat-session-alive-p session)
            (or force active-p (null snapshot)))
       (pichat-session-manager--render-preview
@@ -641,7 +646,7 @@ canonical chat cache while an RPC refresh is pending."
                   directory scope (when transport (list :transport transport)))))
     (pichat-session-manager--display session)
     (unless (eq (pichat-session-state session) 'error)
-      (pichat-rpc-get-state session (lambda (&rest _args) nil)))
+      (pichat-backend-get-state session (lambda (&rest _args) nil)))
     session))
 
 (defun pichat-session-manager--read-project-directory ()
@@ -702,6 +707,8 @@ of the persistent project list."
   (interactive)
   (let* ((session (pichat-session-manager--session-at-point))
          (directory (pichat-session-manager--owner-directory session)))
+    (pichat-backend-require-capability
+     session 'transport "Starting another Pi runtime in this scope")
     (unless directory (user-error "Selected runtime has no owner directory"))
     (pichat-session-manager--start-in-directory
      directory (pichat-session-manager--owner-scope session)
@@ -713,6 +720,9 @@ Use the manager row only for archive discovery.  The saved source's recorded
 working directory determines the new runtime's project and display routing."
   (interactive)
   (let ((selected (ignore-errors (pichat-session-manager--session-at-point))))
+    (when selected
+      (pichat-backend-require-capability
+       selected 'saved-sessions "Saved-session browsing"))
     (pichat-sessions-browse-files-independently
      :session selected
      :display-function #'pichat-session-manager--display
@@ -757,8 +767,10 @@ working directory determines the new runtime's project and display routing."
 (defun pichat-session-manager-diagnostics ()
   "Open transport diagnostics for the selected runtime."
   (interactive)
-  (pichat-show-transport-diagnostics
-   (pichat-session-manager--session-at-point)))
+  (let ((session (pichat-session-manager--session-at-point)))
+    (pichat-backend-require-capability
+     session 'diagnostics "Transport diagnostics")
+    (pichat-show-transport-diagnostics session)))
 
 (defun pichat-session-manager-quit ()
   "Bury the global manager without affecting any runtime session."

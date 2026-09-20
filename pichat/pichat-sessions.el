@@ -12,6 +12,7 @@
 (require 'json)
 (require 'pichat-rpc)
 (require 'pichat-session)
+(require 'pichat-backend)
 (require 'pichat-events)
 (require 'pichat-render)
 (require 'pichat-path)
@@ -1031,7 +1032,7 @@ Interactively, an empty query clears the current search."
 (defun pichat-sessions--cancel-owned-request ()
   "Cancel the tree request owned by the current history buffer."
   (when (and pichat-sessions--request-id pichat-sessions-session)
-    (pichat-rpc-cancel-request
+    (pichat-backend-cancel-owned-request
      pichat-sessions-session pichat-sessions--request-id))
   (setq pichat-sessions--request-id nil))
 
@@ -1105,6 +1106,8 @@ Interactively, an empty query clears the current search."
 When ORIGIN is non-nil, show BUFFER from that captured view origin after the
 accepted response.  When TARGET-ID is non-nil, move to that visible entry
 before displaying BUFFER."
+  (pichat-backend-require-capability
+   session 'session-history "Session history")
   (pichat-sessions--install-request-owner session buffer)
   (with-current-buffer buffer
     (pichat-sessions--cancel-owned-request)
@@ -1156,6 +1159,8 @@ before displaying BUFFER."
   "Refresh the current session history."
   (interactive)
   (unless pichat-sessions-session (user-error "No current PiChat session"))
+  (pichat-backend-require-capability
+   pichat-sessions-session 'session-history "Session history")
   (pichat-sessions--request-tree
    pichat-sessions-session (current-buffer)))
 
@@ -1166,14 +1171,16 @@ This view previews entries or forks user prompts into new sessions; it does not
 change the active leaf within the current file.  When ENTRY-ID is non-nil, move
 to that visible entry after the tree is synchronized."
   (interactive)
-  (let* ((session (pichat-session-current session))
-         (buffer (get-buffer-create "*PiChat Session History*")))
+  (let ((session (pichat-session-current session)))
     (unless session (user-error "No current PiChat session"))
-    (with-current-buffer buffer
-      (unless (derived-mode-p 'pichat-sessions-mode)
-        (pichat-sessions-mode)))
-    (pichat-sessions--request-tree
-     session buffer (pichat-view-capture-origin) entry-id)))
+    (pichat-backend-require-capability
+     session 'session-history "Session history")
+    (let ((buffer (get-buffer-create "*PiChat Session History*")))
+      (with-current-buffer buffer
+        (unless (derived-mode-p 'pichat-sessions-mode)
+          (pichat-sessions-mode)))
+      (pichat-sessions--request-tree
+       session buffer (pichat-view-capture-origin) entry-id))))
 
 (defun pichat-sessions--root-dir (&optional session)
   "Return the Emacs-visible Pi session root for optional SESSION."
@@ -1508,6 +1515,9 @@ non-minibuffer buffer."
          (runtime-file (pichat-sessions--runtime-file file candidate))
          (cwd-resolution (pichat-sessions--host-cwd-resolution cwd candidate))
          (session (pichat-sessions--active-session))
+         (_capability
+          (pichat-backend-require-capability
+           session 'saved-sessions "Saved-session switching"))
          (session-cwd
           (when-let ((host-cwd (plist-get cwd-resolution :path)))
             (file-name-as-directory (expand-file-name host-cwd))))
@@ -1523,7 +1533,7 @@ non-minibuffer buffer."
        (if (plist-get (plist-get response :data) :cancelled)
            (message "PiChat session switch cancelled")
          (pichat-sessions-clear-source-navigation s)
-         (pichat-rpc-get-state
+         (pichat-backend-get-state
           s
           (lambda (_r _s)
             (when session-cwd
@@ -1563,6 +1573,9 @@ cancellation, or state-synchronization failure stops and forgets only the new
 runtime."
   (unless (and (stringp file) (not (string-empty-p (string-trim file))))
     (user-error "No saved Pi session file was selected"))
+  (when source-session
+    (pichat-backend-require-capability
+     source-session 'saved-sessions "Saved-session browsing"))
   (let* ((runtime-file (pichat-sessions--runtime-file file source-session))
          (cwd-resolution (pichat-sessions--host-cwd-resolution cwd source-session))
          (session-cwd
@@ -1618,7 +1631,8 @@ runtime."
            (if (plist-get (plist-get response :data) :cancelled)
                (cleanup (list :success nil :pichat-failure-kind 'cancelled
                               :error "PiChat session switch cancelled"))
-             (pichat-rpc-get-state response-session #'state-ready #'failure))))
+             (pichat-backend-get-state
+              response-session #'state-ready #'failure))))
       (if (or (eq (pichat-session-state session) 'error)
               (not (pichat-session-alive-p session)))
           (cleanup (list :success nil :pichat-failure-kind 'process
@@ -1657,6 +1671,9 @@ runtime."
 (defun pichat-sessions-browse-files-basic (&optional session)
   "Browse saved files for SESSION with synchronous built-in completion."
   (let ((session (or session (pichat-session-current))))
+    (when session
+      (pichat-backend-require-capability
+       session 'saved-sessions "Saved-session browsing"))
     (pcase-let ((`(,file ,cwd) (pichat-sessions--choose-basic-file session)))
       (pichat-sessions-switch-file file cwd))))
 
@@ -1676,6 +1693,9 @@ synchronous JSONL picker.  SESSION is the explicit runtime used for archive
 capability discovery.  BASIC forces the synchronous picker.  Remaining keyword
 arguments are forwarded to `pichat-sessions-open-file-independently'."
   (interactive)
+  (when session
+    (pichat-backend-require-capability
+     session 'saved-sessions "Saved-session browsing"))
   (let ((buffer (current-buffer))
         (continued nil))
     (cl-labels
@@ -1717,6 +1737,9 @@ provide an explicitly trusted host-local capability.  BASIC, missing UI/runtime
 capability, or any archive availability failure uses the synchronous JSONL file
 picker.  Discovery never starts a Pi process solely for browsing."
   (interactive "P")
+  (when-let ((session (pichat-session-current)))
+    (pichat-backend-require-capability
+     session 'saved-sessions "Saved-session browsing"))
   (if (or basic
           (not (pichat-sessions--consult-available-p)))
       (pichat-sessions-browse-files-basic)
@@ -1744,6 +1767,9 @@ Loading a relation uses the ordinary saved-session switch transaction."
   (unless (pichat-sessions--consult-available-p)
     (user-error "Related session browsing requires Consult and Node.js"))
   (let* ((session (pichat-session-current))
+         (_capability
+          (pichat-backend-require-capability
+           session 'archive "Related-session browsing"))
          (session-id (and session (pichat-session-id session)))
          (session-file (and session (pichat-session-session-file session)))
          (buffer (current-buffer))
@@ -2353,13 +2379,14 @@ SOURCE-TOKEN identifies the pre-fork source and ORIGIN-BUFFER owns the command."
   "Execute the complete fork UI transaction captured by CONTEXT."
   (let ((session (plist-get context :session))
         (id (plist-get context :entry-id)))
+    (pichat-backend-require-capability session 'branching "Session forking")
     (pichat-rpc-fork
      session id
      (lambda (response response-session)
        (if (plist-get (plist-get response :data) :cancelled)
            (message "PiChat fork cancelled; session history was unchanged")
          (let ((text (plist-get (plist-get response :data) :text)))
-           (pichat-rpc-get-state
+           (pichat-backend-get-state
             response-session
             (lambda (_state-response state-session)
               (if (eq state-session session)
@@ -2518,12 +2545,13 @@ constructs or sends a source path.  Use `pichat-sessions-browse-files' instead."
 (defun pichat-sessions--request-clone (context)
   "Execute the complete clone transaction captured by CONTEXT."
   (let ((session (plist-get context :session)))
+    (pichat-backend-require-capability session 'branching "Session cloning")
     (pichat-rpc-clone
      session
      (lambda (response response-session)
        (if (plist-get (plist-get response :data) :cancelled)
            (message "PiChat clone cancelled; session history was unchanged")
-         (pichat-rpc-get-state
+         (pichat-backend-get-state
           response-session
           (lambda (_state-response state-session)
             (if (eq state-session session)
@@ -2584,7 +2612,7 @@ occurs only after switch success."
          (setf (pichat-session-session-file-forward-stack session) remaining
                (pichat-session-session-file-back-stack session)
                (cons current opposite)))
-       (pichat-rpc-get-state
+       (pichat-backend-get-state
         response-session
         (lambda (_state-response state-session)
           (if (eq state-session session)
@@ -2616,6 +2644,8 @@ occurs only after switch success."
          (target (car source-stack)))
     (unless session
       (user-error "No PiChat session"))
+    (pichat-backend-require-capability
+     session 'branching "Session source navigation")
     (unless (pichat-sessions--persisted-path-p current)
       (user-error "Current PiChat session has no persisted source file"))
     (unless (pichat-sessions--persisted-path-p target)

@@ -12,6 +12,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'pichat-rpc)
+(require 'pichat-backend)
 (require 'pichat-attachments)
 (require 'pichat-chat-completion)
 
@@ -376,6 +377,8 @@ changed by this operation."
   (interactive)
   (unless pichat-chat-session
     (user-error "No PiChat session for this buffer"))
+  (pichat-backend-require-capability
+   pichat-chat-session 'submit "Prompt submission")
   (let* ((text (buffer-substring-no-properties
                 pichat-chat--input-start (point-max)))
          (message (string-trim text))
@@ -400,7 +403,7 @@ changed by this operation."
       (setq pichat-chat--pending-attachments nil)
       (condition-case err
           (setq request-id
-                (pichat-rpc-prompt
+                (pichat-backend-submit-prompt
                  pichat-chat-session message
                  (and attachments
                       (pichat-attachments-wire-images attachments))

@@ -12,6 +12,7 @@
 (require 'json)
 (require 'subr-x)
 (require 'pichat-session)
+(require 'pichat-backend)
 (require 'pichat-rpc)
 (require 'pichat-transport)
 
@@ -819,6 +820,9 @@ A live SESSION is authoritative.  Without one, an explicitly configured
 `pichat-archive-standalone-source' may supply a host-local capability.  CALLBACK
 receives a validated capability.  UNAVAILABLE-CALLBACK receives one structured
 reason.  Exactly one callback runs while this request remains current."
+  (when session
+    (pichat-backend-require-capability
+     session 'archive "Archive discovery"))
   (pichat-archive-cancel-discovery)
   (let ((cached (and session (pichat-archive-cached-capability session)))
         (process (and session (pichat-session-process session))))
@@ -851,7 +855,8 @@ reason.  Exactly one callback runs while this request remains current."
              (cancel-owned ()
                (unless finished
                  (setq finished t)
-                 (when rpc-id (pichat-rpc-cancel-request session rpc-id))
+                 (when rpc-id
+                   (pichat-backend-cancel-owned-request session rpc-id))
                  (when (process-live-p status-process)
                    (delete-process status-process))
                  (release)))
@@ -870,7 +875,7 @@ reason.  Exactly one callback runs while this request remains current."
                  (if (current-p)
                      (progn
                        (when rpc-id
-                         (pichat-rpc-cancel-request session rpc-id))
+                         (pichat-backend-cancel-owned-request session rpc-id))
                        (unavailable 'command-timeout))
                    (cancel-owned))))
              (status-ok (stdout source helper node)

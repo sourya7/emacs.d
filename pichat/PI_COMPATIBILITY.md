@@ -23,12 +23,14 @@ a version alone cannot distinguish a moved tag or an unchanged RPC document.
 
 ## Current status
 
-- No exact Pi release has yet been recorded as passing the complete suite.
+- The verified-release watermark has not yet been advanced. Phase 0 baseline
+  runs against Pi 0.85.1 passed with the optional-dependency skips noted below;
+  this scoped backend investigation does not advance compatibility watermarks.
 - The persisted-session fixture baseline is Pi 0.80.6; this is fixture provenance,
   not proof that the current complete suite passed on that release.
 - RPC documentation changes through Pi 0.84.4 have been reviewed.
-- The latest verification attempt, against Pi 0.84.4, failed and therefore did
-  not advance `last_verified_pi`.
+- The earlier verification attempt against Pi 0.84.4 failed. It remains in the
+  history independently of the later successful baseline runs.
 
 ## RPC change ledger
 
@@ -52,6 +54,7 @@ here. Use one of these dispositions:
 | [`c93ea6ccf`](https://github.com/earendil-works/pi/commit/c93ea6ccf0a398c293641e8001db06b8f7997c79) streaming usage field | 0.84.2 | compatible-no-change | The top-level field is additive; transcript reduction ignores it without rejecting the event. |
 | [`830a0a59e`](https://github.com/earendil-works/pi/commit/830a0a59e975ed3a4e551be18dc60d45479f5118) tool metadata at `toolcall_start` | 0.84.3 | implemented | Live tool correlation and enrichment are covered by `pichat/test/pichat-test-transcript.el` and `pichat/test/pichat-test-tool-enrichment.el`. |
 | [`a79b37334`](https://github.com/earendil-works/pi/commit/a79b3733421ead0dcea3cbe32247ea2464400dcb) `clear_queue` | 0.84.4 | pending | PiChat has no `clear_queue` wrapper. Decide whether abort should retrieve and restore queued text before claiming this behavior. |
+| [`bea67d90d`](https://github.com/earendil-works/pi/commit/bea67d90d1a74dde8852c63cac72d476013d3879) abort cancels compaction/branch summary and waits for idle | Reviewed in 0.85.1 | compatible-no-change | Phase 0 reviewed the RPC and implementation diff. PiChat retains event-based settlement; `pichat-test-lifecycle.el` covers aborted compaction. No new abort/compaction UI behavior is claimed. |
 
 Do not delete rows after implementation. Change their disposition and add the
 implementation and test locations so later upgrades do not rediscover the same
@@ -62,6 +65,12 @@ feature.
 | Date | Pi version | Pi release commit | Command | Result |
 |---|---:|---|---|---|
 | 2026-09-06 | 0.84.4 | [`b79e4cc8`](https://github.com/earendil-works/pi/commit/b79e4cc834970cca69daebffab7df1da7d1e52c4) | `pichat/test/run-tests.sh --full` | **Failed:** 632 expected, 2 failed, 3 skipped. Failures: `pichat-consult-archive-process-classifies-caller-and-availability-failures` and `pichat-integration-mutation-timing-requires-pre-execution-hook`. |
+| 2026-09-20 | 0.85.1 | [`d981de12`](https://github.com/earendil-works/pi/commit/d981de1229ef899957bbe968bc8dcda02a21f477) | `pichat/test/run-tests.sh --full` (native-backend Phase 0 baseline) | **Passed:** 635 passed, 0 unexpected, 3 optional-dependency skips (two Consult/Embark tests, one Orderless test). No production changes. |
+| 2026-09-20 | 0.85.1 | [`d981de12`](https://github.com/earendil-works/pi/commit/d981de1229ef899957bbe968bc8dcda02a21f477) | `pichat/test/run-tests.sh --full` (Phase 0 final) | **Passed:** 635 passed, 0 unexpected, 11 skips: the same 3 optional-dependency skips plus 8 explicit future-backend contract targets. No production changes. |
+| 2026-09-20 | 0.85.1 | [`d981de12`](https://github.com/earendil-works/pi/commit/d981de1229ef899957bbe968bc8dcda02a21f477) | `pichat/test/run-tests.sh --full` (corrected gptel decision) | **Failed:** 634 passed, 1 failed, 11 skipped. The timing-sensitive `pichat-rpc-unexpected-exit-retains-stderr-outside-normal-error-event` observed Emacs's process-sentinel suffix in stderr; it passed 5/5 focused reruns. |
+| 2026-09-20 | 0.85.1 | [`d981de12`](https://github.com/earendil-works/pi/commit/d981de1229ef899957bbe968bc8dcda02a21f477) | `pichat/test/run-tests.sh --full` (corrected gptel decision rerun) | **Passed:** 635 passed, 0 unexpected, 11 skips. No production changes; eight skips remain future native-backend contracts. |
+| 2026-09-20 | 0.85.1 | [`d981de12`](https://github.com/earendil-works/pi/commit/d981de1229ef899957bbe968bc8dcda02a21f477) | `pichat/test/run-tests.sh --full` (llm/CLIProxy Phase 0R) | **Failed:** 634 passed, 1 failed, 11 skipped. The timing-sensitive `pichat-consult-archive-process-classifies-caller-and-availability-failures` passed 5/5 focused reruns. |
+| 2026-09-20 | 0.85.1 | [`d981de12`](https://github.com/earendil-works/pi/commit/d981de1229ef899957bbe968bc8dcda02a21f477) | `pichat/test/run-tests.sh --full` (llm/CLIProxy Phase 0R rerun) | **Passed:** 635 passed, 0 unexpected, 11 skips. No production changes; eight skips remain future native-backend contracts. Compatibility watermarks unchanged. |
 
 A failed attempt is retained because it records what was actually tested, but it
 must never update the `last_verified_*` fields.

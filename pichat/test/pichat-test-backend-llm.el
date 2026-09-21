@@ -13,6 +13,7 @@
 
 (defvar pichat-llm-provider)
 (defvar pichat-llm-model)
+(defvar pichat-llm-error-max-chars)
 (declare-function pichat-test-llm--invoke nil
                   (provider prompt partial-callback final-callback error-callback))
 (declare-function pichat-llm-provider-spec-create "pichat-backend-llm"
@@ -24,6 +25,8 @@
                   "pichat-backend-llm" (project region model &optional gcloud))
 (declare-function pichat-backend-llm-launch "pichat-backend-llm"
                   (&optional provider model directory))
+(declare-function pichat-llm--auth-source-key "pichat-backend-llm" ())
+(declare-function pichat-llm--require-public-api "pichat-backend-llm" ())
 
 (when (pichat-test-llm-available-p)
   (pichat-test-llm-install-offline-parser-shims)
@@ -32,12 +35,16 @@
 
   (cl-defstruct pichat-test-llm-request cancelled)
   (cl-defstruct pichat-test-llm-provider scripts calls pending streaming)
+  (cl-defstruct pichat-test-invalid-llm-provider)
 
   (cl-defmethod llm-name ((_provider pichat-test-llm-provider))
     "offline-test")
 
   (cl-defmethod llm-capabilities ((provider pichat-test-llm-provider))
     (when (pichat-test-llm-provider-streaming provider) '(streaming)))
+
+  (cl-defmethod llm-capabilities ((_provider pichat-test-invalid-llm-provider))
+    (error "Invalid offline provider"))
 
   (cl-defmethod llm-cancel-request ((request pichat-test-llm-request))
     (setf (pichat-test-llm-request-cancelled request) t))
@@ -259,11 +266,20 @@
     (let* ((provider-a
             (make-pichat-test-llm-provider
              :streaming t :scripts '(delayed)))
+           (provider-a-rebound
+            (make-pichat-test-llm-provider
+             :streaming t
+             :scripts '(((final . (:text "fresh conversation"))))))
+           (provider-a-queue (list provider-a provider-a-rebound))
+           (provider-a-spec
+            (pichat-llm-provider-spec-create
+             :factory (lambda () (pop provider-a-queue))
+             :label "offline" :model "offline-model" :streaming t))
            (provider-b
             (make-pichat-test-llm-provider
              :streaming t
              :scripts '(((final . (:text "independent"))))))
-           (session-a (pichat-test-llm--session provider-a))
+           (session-a (pichat-test-llm--session-from-spec provider-a-spec))
            (session-b (pichat-test-llm--session provider-b))
            (old-id (pichat-session-id session-a)))
       (unwind-protect
@@ -274,11 +290,25 @@
                    (car (pichat-test-llm-provider-pending provider-a))))
               (pichat-backend-start-new-conversation session-a #'ignore)
               (should-not (equal old-id (pichat-session-id session-a)))
+              (should
+               (eq provider-a-rebound
+                   (pichat-llm-state-provider
+                    (pichat-session-backend-state session-a))))
+              (should-not
+               (eq provider-a
+                   (pichat-llm-state-provider
+                    (pichat-session-backend-state session-a))))
+              (should-not provider-a-queue)
               (funcall (plist-get pending :partial) '(:text "stale"))
               (funcall (plist-get pending :final) '(:text "stale final")))
             (should-not
              (pichat-llm-state-journal
               (pichat-session-backend-state session-a)))
+            (pichat-backend-submit-prompt
+             session-a "fresh" nil nil #'ignore #'ignore)
+            (should (equal (pichat-test-llm--journal-texts session-a)
+                           '(("user" "fresh")
+                             ("assistant" "fresh conversation"))))
             (pichat-backend-submit-prompt
              session-b "other" nil nil #'ignore #'ignore)
             (should-not
@@ -339,6 +369,43 @@
                    (mapcar (lambda (call) (plist-get call :prompt))
                            (pichat-test-llm-provider-calls provider))))
               (should (eq (car prompts) (cadr prompts)))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))
+        (pichat-backend-stop-session session)))))
+
+(ert-deftest pichat-backend-llm-prompt-undo-isolates-projection ()
+  "Undo edits only the draft after native live and canonical projection."
+  (pichat-test-llm--require)
+  (pichat-test-with-clean-state
+    (let* ((provider
+            (make-pichat-test-llm-provider
+             :streaming t :scripts '(delayed)))
+           (session (pichat-test-llm--session provider))
+           (pichat-chat-stop-session-on-kill nil)
+           buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session t))
+            (pichat-test-llm--send buffer "project safely")
+            (let ((pending
+                   (car (pichat-test-llm-provider-pending provider))))
+              (funcall (plist-get pending :partial) '(:text "live text"))
+              (funcall (plist-get pending :final) '(:text "canonical text")))
+            (with-current-buffer buffer
+              (buffer-enable-undo)
+              (setq buffer-undo-list nil)
+              (goto-char (point-max))
+              (insert "draft")
+              (undo-boundary)
+              ;; Native transcript synchronization is synchronous here.  Its
+              ;; canonical repaint must not enter the prompt's undo history.
+              (pichat-chat-repaint)
+              (let ((inhibit-message t)) (undo 1))
+              (should (string-empty-p (pichat-chat--input-text))))
+            (should (= 1 (pichat-test-llm--buffer-count
+                          buffer "canonical text")))
+            (should (equal (pichat-test-llm--journal-texts session)
+                           '(("user" "project safely")
+                             ("assistant" "canonical text")))))
         (when (buffer-live-p buffer) (kill-buffer buffer))
         (pichat-backend-stop-session session)))))
 
@@ -526,6 +593,96 @@
            :persistence 'memory)))
     (pichat-backend-start-session session)
     session))
+
+(ert-deftest pichat-backend-llm-provider-resolution-and-rebind-failure ()
+  "Resolve nested specs and preserve the conversation if replacement fails."
+  (pichat-test-llm--require)
+  (pichat-test-with-clean-state
+    (let* ((provider
+            (make-pichat-test-llm-provider
+             :streaming t
+             :scripts '(((final . (:text "settled"))))))
+           (nested
+            (pichat-llm-provider-spec-create
+             :factory (lambda () provider)
+             :label "nested" :model "nested-model" :streaming t))
+           (source
+            (pichat-llm-provider-spec-create
+             :factory (lambda () nested)
+             :model "nested-model" :streaming 'auto))
+           (session (pichat-test-llm--session-from-spec source))
+           (state (pichat-session-backend-state session)))
+      (unwind-protect
+          (progn
+            (should (eq source (pichat-llm-state-provider-spec state)))
+            (should (eq provider (pichat-llm-state-provider state)))
+            (should (equal "nested-model" (pichat-llm-state-model state)))
+            (pichat-backend-submit-prompt
+             session "keep this" nil nil #'ignore #'ignore)
+            (let ((old-id (pichat-session-id session))
+                  (old-prompt (pichat-llm-state-prompt state))
+                  (old-journal (copy-tree (pichat-llm-state-journal state) t)))
+              ;; SOURCE deliberately returns the already claimed provider.  A
+              ;; failed replacement must be atomic and retain the old source.
+              (should-error
+               (pichat-backend-start-new-conversation session #'ignore)
+               :type 'user-error)
+              (should (pichat-session-alive-p session))
+              (should (equal old-id (pichat-session-id session)))
+              (should (eq provider (pichat-llm-state-provider state)))
+              (should (eq old-prompt (pichat-llm-state-prompt state)))
+              (should (equal old-journal (pichat-llm-state-journal state)))))
+        (pichat-backend-stop-session session)))
+    (let ((mismatched
+           (pichat-llm-provider-spec-create
+            :model "outer-model"
+            :factory
+            (lambda ()
+              (pichat-llm-provider-spec-create
+               :model "inner-model"
+               :factory
+               (lambda ()
+                 (make-pichat-test-llm-provider :streaming t)))))))
+      (should-error (pichat-test-llm--session-from-spec mismatched)
+                    :type 'user-error))))
+
+(ert-deftest pichat-backend-llm-public-api-compatibility-guard ()
+  "Reject an llm installation missing a required public function."
+  (pichat-test-llm--require)
+  (let ((definition (symbol-function 'llm-name)))
+    (unwind-protect
+        (progn
+          (fmakunbound 'llm-name)
+          (should-error (pichat-llm--require-public-api)
+                        :type 'user-error))
+      (fset 'llm-name definition)))
+  (should (pichat-llm--require-public-api)))
+
+(ert-deftest pichat-backend-llm-provider-setup-errors-are-bounded ()
+  "Reject missing credentials, executables, and invalid factory products."
+  (pichat-test-llm--require)
+  (cl-letf (((symbol-function 'auth-source-pick-first-password)
+             (lambda (&rest _args) nil)))
+    (should-error (pichat-llm--auth-source-key) :type 'user-error))
+  (dolist (spec
+           (list
+            (pichat-llm-make-vertex-gemini-provider
+             "project" "region" "model" "/missing/pichat-gcloud")
+            (pichat-llm-make-vertex-claude-provider
+             "project" "region" "model" "/missing/pichat-gcloud")
+            (pichat-llm-provider-spec-create
+             :model "model" :factory (lambda () nil))
+            (pichat-llm-provider-spec-create
+             :model "model"
+             :factory (lambda () (make-pichat-test-invalid-llm-provider)))))
+    (let ((message
+           (condition-case err
+               (progn
+                 (pichat-test-llm--session-from-spec spec)
+                 nil)
+             (user-error (error-message-string err)))))
+      (should (stringp message))
+      (should (<= (length message) (+ pichat-llm-error-max-chars 80))))))
 
 (ert-deftest pichat-backend-llm-launch-config-and-local-naming ()
   "Launch configuration fails cleanly and native naming remains local."

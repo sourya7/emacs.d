@@ -146,6 +146,23 @@ Keys are weak so this safety record does not itself retain provider objects.")
   "Return non-nil when VALUE is a nonblank string."
   (and (stringp value) (not (string-blank-p value))))
 
+(defun pichat-llm--require-public-api ()
+  "Ensure the loaded llm.el exposes the public API used by PiChat.
+Do not silently fall back to private or version-specific implementation
+functions when a future llm.el changes one of these application seams."
+  (dolist (function '(llm-make-chat-prompt
+                      llm-chat-prompt-append-response
+                      llm-chat-async
+                      llm-chat-streaming
+                      llm-capabilities
+                      llm-name
+                      llm-cancel-request))
+    (unless (fboundp function)
+      (user-error
+       "llm.el %s is missing public function `%s'"
+       pichat-llm-tested-version function)))
+  t)
+
 (defun pichat-llm--bounded-error (value)
   "Return bounded, single-line, credential-redacted text for VALUE."
   (let* ((case-fold-search t)
@@ -287,6 +304,86 @@ GCLOUD defaults to `pichat-llm-vertex-gcloud-executable'."
                  (pichat-llm--bounded-error
                   (error-message-string err))))))
 
+(defun pichat-llm--prepare-provider (source-spec)
+  "Resolve and validate a fresh provider from SOURCE-SPEC.
+Return a plist containing the provider, its effective specification, model,
+label, capabilities, call wrapper, and streaming policy.  Resolution is
+side-effect free with respect to PiChat session state, so callers can preserve
+an existing conversation when provider construction fails."
+  (let ((spec source-spec)
+        (model (pichat-llm-provider-spec-model source-spec))
+        seen
+        provider)
+    (while (not provider)
+      (unless (pichat-llm-provider-spec-p spec)
+        (user-error "Invalid native provider specification: %s"
+                    (pichat-llm--bounded-error spec)))
+      (unless (functionp (pichat-llm-provider-spec-factory spec))
+        (user-error "PiChat llm provider specification has no factory"))
+      (when (memq spec seen)
+        (user-error "Native provider factory returned a cyclic specification"))
+      (push spec seen)
+      (let ((produced (pichat-llm--invoke-provider-factory spec)))
+        (unless produced
+          (user-error "Native provider factory returned nil"))
+        (if (pichat-llm-provider-spec-p produced)
+            (let ((produced-model
+                   (pichat-llm-provider-spec-model produced)))
+              (when (and model produced-model
+                         (not (equal model produced-model)))
+                (user-error
+                 "Model argument does not match the provider factory specification"))
+              (setq model (or produced-model model)
+                    spec produced))
+          (setq provider produced))))
+    (unless (pichat-llm--nonblank-string-p model)
+      (user-error "An explicit model identity is required"))
+    (when (gethash provider pichat-llm--claimed-providers)
+      (user-error "Native provider object was already used; configure a factory"))
+    (let* ((capabilities
+            (condition-case err
+                (llm-capabilities provider)
+              (error
+               (user-error "Invalid native provider: %s"
+                           (pichat-llm--bounded-error
+                            (error-message-string err))))))
+           (label
+            (condition-case err
+                (or (pichat-llm-provider-spec-label spec)
+                    (llm-name provider))
+              (error
+               (user-error "Invalid native provider: %s"
+                           (pichat-llm--bounded-error
+                            (error-message-string err)))))))
+      (list :provider provider
+            :spec spec
+            :model model
+            :label label
+            :capabilities capabilities
+            :call-wrapper (pichat-llm-provider-spec-call-wrapper spec)
+            :streaming
+            (pcase (pichat-llm-provider-spec-streaming spec)
+              ('auto (and pichat-llm-streaming
+                          (memq 'streaming capabilities)))
+              ((pred null) nil)
+              (_ t))))))
+
+(defun pichat-llm--install-provider (session state prepared)
+  "Install PREPARED provider data into SESSION and STATE."
+  (let ((provider (plist-get prepared :provider))
+        (model (plist-get prepared :model))
+        (label (plist-get prepared :label)))
+    (puthash provider session pichat-llm--claimed-providers)
+    (setf (pichat-llm-state-provider state) provider
+          (pichat-llm-state-provider-label state) label
+          (pichat-llm-state-model state) model
+          (pichat-llm-state-call-wrapper state)
+          (plist-get prepared :call-wrapper)
+          (pichat-llm-state-streaming state)
+          (plist-get prepared :streaming)
+          (pichat-session-model session)
+          (list :id model :name model :provider label))))
+
 (defun pichat-llm--state (session)
   "Return SESSION's validated native backend state."
   (let ((state (pichat-session-backend-state session)))
@@ -320,7 +417,8 @@ GCLOUD defaults to `pichat-llm-vertex-gcloud-executable'."
   "Return a private Pi-shaped message for ROLE and TEXT."
   (append
    (list :role role
-         :content (list (list :type "text" :text (or text ""))))
+         :content (list (list :type "text"
+                                :text (if (stringp text) text ""))))
    (when stop-reason (list :stopReason stop-reason))
    (when error-message (list :errorMessage error-message))))
 
@@ -500,57 +598,15 @@ GCLOUD defaults to `pichat-llm-vertex-gcloud-executable'."
   pichat-backend-llm-capabilities)
 
 (cl-defmethod pichat-backend-start ((_backend (eql llm)) session)
+  (pichat-llm--require-public-api)
   (let* ((state (pichat-llm--state session))
-         (initial-spec (pichat-llm-state-provider-spec state))
-         (produced (pichat-llm--invoke-provider-factory initial-spec))
-         (spec (if (pichat-llm-provider-spec-p produced)
-                   produced
-                 initial-spec))
-         (provider (if (eq spec initial-spec)
-                       produced
-                     (progn
-                       (when (and (pichat-llm-provider-spec-model initial-spec)
-                                  (pichat-llm-provider-spec-model spec)
-                                  (not (equal
-                                        (pichat-llm-provider-spec-model initial-spec)
-                                        (pichat-llm-provider-spec-model spec))))
-                         (user-error
-                          "Model argument does not match the provider factory specification"))
-                       (pichat-llm--invoke-provider-factory spec)))))
-    (unless provider
-      (user-error "Native provider factory returned nil"))
-    (unless (pichat-llm--nonblank-string-p
-             (or (pichat-llm-provider-spec-model spec)
-                 (pichat-llm-provider-spec-model initial-spec)))
-      (user-error "An explicit model identity is required"))
-    (when (gethash provider pichat-llm--claimed-providers)
-      (user-error "Native provider object was already used; configure a factory"))
-    ;; Capability dispatch validates that this is an llm provider without
-    ;; inspecting provider internals.
-    (condition-case err
-        (llm-capabilities provider)
-      (error
-       (user-error "Invalid native provider: %s"
-                   (pichat-llm--bounded-error (error-message-string err)))))
-    (puthash provider session pichat-llm--claimed-providers)
-    (unless (pichat-llm-provider-spec-model spec)
-      (setf (pichat-llm-provider-spec-model spec)
-            (pichat-llm-provider-spec-model initial-spec)))
-    (setf (pichat-llm-state-provider-spec state) spec
-          (pichat-llm-state-provider state) provider
-          (pichat-llm-state-provider-label state)
-          (or (pichat-llm-provider-spec-label spec) (llm-name provider))
-          (pichat-llm-state-model state)
-          (pichat-llm-provider-spec-model spec)
-          (pichat-llm-state-call-wrapper state)
-          (pichat-llm-provider-spec-call-wrapper spec)
-          (pichat-llm-state-streaming state)
-          (pcase (pichat-llm-provider-spec-streaming spec)
-            ('auto (and pichat-llm-streaming
-                        (memq 'streaming (llm-capabilities provider))))
-            ((pred null) nil)
-            (_ t))
-          (pichat-llm-state-alive state) t
+         (source-spec (pichat-llm-state-provider-spec state))
+         (prepared (pichat-llm--prepare-provider source-spec)))
+    ;; Retain SOURCE-SPEC rather than a factory-produced nested specification:
+    ;; every later new conversation must start resolution at the user-owned
+    ;; factory boundary and receive independent provider state.
+    (pichat-llm--install-provider session state prepared)
+    (setf (pichat-llm-state-alive state) t
           (pichat-llm-state-source-generation state) 1
           (pichat-llm-state-run-generation state) 0
           (pichat-llm-state-round-generation state) 0
@@ -562,10 +618,6 @@ GCLOUD defaults to `pichat-llm-vertex-gcloud-executable'."
       (setf (pichat-session-id session) id
             (pichat-session-session-file session) nil
             (pichat-session-persistence session) 'memory
-            (pichat-session-model session)
-            (list :id (pichat-llm-state-model state)
-                  :name (pichat-llm-state-model state)
-                  :provider (pichat-llm-state-provider-label state))
             (pichat-session-state session) 'idle
             (pichat-session-streaming-p session) nil))
     session))
@@ -627,9 +679,13 @@ GCLOUD defaults to `pichat-llm-vertex-gcloud-executable'."
           (if first-p
               (llm-make-chat-prompt
                message :context (pichat-llm-state-context state))
-            (llm-chat-prompt-append-response
-             (pichat-llm-state-prompt state) message)
-            (pichat-llm-state-prompt state)))
+            (progn
+              ;; `llm-chat-prompt-append-response' mutates the retained
+              ;; provider prompt and returns its interaction list; retain the
+              ;; prompt object itself as the value passed to llm APIs.
+              (llm-chat-prompt-append-response
+               (pichat-llm-state-prompt state) message)
+              (pichat-llm-state-prompt state))))
          (run (1+ (or (pichat-llm-state-run-generation state) 0)))
          (round (1+ (or (pichat-llm-state-round-generation state) 0)))
          (submission-id (format "llm-submit-%d-%d" run round))
@@ -740,9 +796,16 @@ GCLOUD defaults to `pichat-llm-vertex-gcloud-executable'."
 (cl-defmethod pichat-backend-new-conversation
   ((_backend (eql llm)) session callback)
   (let* ((state (pichat-llm--state session))
+         (prepared
+          ;; Resolve first.  A bad factory or accidentally reused provider must
+          ;; leave the current conversation, request, and transcript untouched.
+          (pichat-llm--prepare-provider
+           (pichat-llm-state-provider-spec state)))
+         (active (pichat-llm-state-active-run state))
          (request (pichat-llm--invalidate-run state)))
     (pichat-emit session 'session-rebinding :command "new-conversation")
     (pichat-llm--cancel-model-request request)
+    (pichat-llm--install-provider session state prepared)
     (setf (pichat-llm-state-source-generation state)
           (1+ (or (pichat-llm-state-source-generation state) 0))
           (pichat-llm-state-prompt state) nil
@@ -755,9 +818,11 @@ GCLOUD defaults to `pichat-llm-vertex-gcloud-executable'."
           (pichat-session-state session) 'idle
           (pichat-session-id session) (pichat-llm--source-id state))
     (pichat-emit session 'session-state-changed
-                 :state (list :sessionId (pichat-session-id session)))
+                 :state (pichat-llm--state-data session))
     (when callback
-      (funcall callback (list :success t :data (list :cancelled nil)) session))
+      (funcall callback
+               (list :success t :data (list :cancelled (and active t)))
+               session))
     session))
 
 (defun pichat-llm--state-data (session)

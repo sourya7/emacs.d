@@ -179,8 +179,11 @@ from the model name, or change ordinary `M-x pichat`. The native adapter is
 loaded only by this command; Pi-only startup does not require `llm.el`, gcloud,
 or provider configuration.
 
-Configure a fresh provider specification for every conversation. For Codex via
-the separately administered CLIProxyAPI deployment:
+Configure a factory that produces a fresh provider specification for every
+conversation. Starting a new conversation invokes that factory again; PiChat
+rejects reuse of a mutable provider object instead of carrying opaque provider
+state into the new conversation. For Codex via the separately administered
+CLIProxyAPI deployment:
 
 ```elisp
 (setq pichat-llm-provider

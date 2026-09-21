@@ -13,13 +13,21 @@
 (use-package undercover
   :defer t)
 
+;; Optional native PiChat backend.  The package is installed at the fixture-
+;; tested revision but remains unloaded during ordinary Pi-only use.
+(use-package llm
+  :ensure (:host github
+           :repo "ahyatt/llm"
+           :ref "f4c8b2f5ebf25e4957e7f9804f0f8f426755be8d")
+  :defer t)
+
 (use-package pichat
   :ensure `(:type file
             :main ,(my/emacs-main-dir "pichat/pichat.el")
             :files ("*.el"
                     ("bridge" "bridge/pichat-bridge.ts"))
             :inherit nil)
-  :commands (pichat pichat-global pichat-launch pichat-session-manager
+  :commands (pichat pichat-llm pichat-global pichat-launch pichat-session-manager
                     pichat-sessions-browse-files pichat-status
                     pichat-select-model pichat-stop-session
                     pichat-add-reference pichat-smoke-test))

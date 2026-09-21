@@ -28,10 +28,12 @@
                   (session &optional since callback error-callback))
 (declare-function pichat-rpc-get-session-stats "pichat-rpc"
                   (session callback &optional error-callback))
+(declare-function pichat-rpc-set-session-name "pichat-rpc"
+                  (session name &optional callback))
 (declare-function pichat-rpc-cancel-request "pichat-rpc" (session request-id))
 
 (defconst pichat-backend-pi-capabilities
-  '(submit abort state transcript stats
+  '(submit abort state transcript stats image-input
     lifecycle events process transport diagnostics
     queue compact new-conversation naming models thinking commands extension-ui
     session-history saved-sessions archive branching)
@@ -81,6 +83,10 @@
 (cl-defmethod pichat-backend-request-stats
   ((_backend (eql pi)) session callback error-callback)
   (pichat-rpc-get-session-stats session callback error-callback))
+
+(cl-defmethod pichat-backend-set-name
+  ((_backend (eql pi)) session name callback)
+  (pichat-rpc-set-session-name session name callback))
 
 (cl-defmethod pichat-backend-cancel-request
   ((_backend (eql pi)) session request)

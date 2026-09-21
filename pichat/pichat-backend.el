@@ -33,6 +33,10 @@
 (cl-defgeneric pichat-backend-alive-p (backend session)
   "Return non-nil when BACKEND considers SESSION alive.")
 
+(cl-defgeneric pichat-backend-submit-preflight
+    (backend session message images streaming-behavior)
+  "Validate a prompt submission without mutating BACKEND or SESSION.")
+
 (cl-defgeneric pichat-backend-submit
     (backend session message images streaming-behavior callback error-callback)
   "Submit one prompt through BACKEND for SESSION.")
@@ -57,6 +61,9 @@ RETRYING-P distinguishes an active retry delay from an active model run.")
     (backend session callback error-callback)
   "Request usage statistics for SESSION through BACKEND.")
 
+(cl-defgeneric pichat-backend-set-name (backend session name callback)
+  "Set SESSION's local or remote display NAME through BACKEND.")
+
 (cl-defgeneric pichat-backend-cancel-request (backend session request)
   "Cancel one backend-owned REQUEST for SESSION without aborting its run.")
 
@@ -67,6 +74,10 @@ RETRYING-P distinguishes an active retry delay from an active model run.")
   (format "%s" (pichat-backend-id backend)))
 
 (cl-defmethod pichat-backend-capabilities ((_backend t)) nil)
+
+(cl-defmethod pichat-backend-submit-preflight
+  ((_backend t) _session _message _images _streaming-behavior)
+  t)
 
 (defun pichat-session-backend-object (session)
   "Return SESSION's backend object, defaulting legacy sessions to Pi."
@@ -116,10 +127,20 @@ Pi retains its historical key representation for compatibility."
        (pichat-backend-alive-p
         (pichat-session-backend-object session) session)))
 
+(defun pichat-backend-check-submit
+    (session message &optional images streaming-behavior)
+  "Validate submitting MESSAGE and optional IMAGES without side effects."
+  (pichat-backend-require-capability session 'submit "Prompt submission")
+  (when images
+    (pichat-backend-require-capability session 'image-input "Image input"))
+  (pichat-backend-submit-preflight
+   (pichat-session-backend-object session) session message images
+   streaming-behavior))
+
 (defun pichat-backend-submit-prompt
     (session message &optional images streaming-behavior callback error-callback)
   "Submit MESSAGE and optional IMAGES for SESSION through its backend."
-  (pichat-backend-require-capability session 'submit "Prompt submission")
+  (pichat-backend-check-submit session message images streaming-behavior)
   (pichat-backend-submit
    (pichat-session-backend-object session) session message images
    streaming-behavior callback error-callback))
@@ -157,6 +178,12 @@ Pi retains its historical key representation for compatibility."
   (pichat-backend-require-capability session 'stats "Usage statistics")
   (pichat-backend-request-stats
    (pichat-session-backend-object session) session callback error-callback))
+
+(defun pichat-backend-name-session (session name &optional callback)
+  "Set SESSION's display NAME through its backend."
+  (pichat-backend-require-capability session 'naming "Session naming")
+  (pichat-backend-set-name
+   (pichat-session-backend-object session) session name callback))
 
 (defun pichat-backend-cancel-owned-request (session request)
   "Cancel SESSION's backend-owned REQUEST without aborting its active run."

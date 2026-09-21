@@ -1825,10 +1825,8 @@ Signal a user error when thinking control is disabled or unavailable."
      (list (read-string "Session name: " current))))
   (let ((session (pichat-session-current)))
     (unless session (user-error "No PiChat session"))
-    (pichat-backend-require-capability session 'naming "Session naming")
-    (pichat-rpc-set-session-name
-     session
-     name
+    (pichat-backend-name-session
+     session name
      (lambda (_response s)
        (pichat-backend-get-state
         s

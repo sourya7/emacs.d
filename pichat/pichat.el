@@ -2,8 +2,8 @@
 
 ;;; Commentary:
 
-;; PiChat is an Emacs frontend for Pi's JSONL RPC mode.  Pi owns the agent
-;; runtime and session store; Emacs owns UI/editor integration.
+;; PiChat is an Emacs frontend for Pi's JSONL RPC mode and an optional native
+;; llm.el text backend.  Pi remains the default; Emacs owns UI integration.
 
 ;;; Code:
 
@@ -34,6 +34,9 @@
 (defconst pichat-directory
   (file-name-directory (or load-file-name buffer-file-name))
   "Directory containing PiChat Lisp files.")
+
+(declare-function pichat-backend-llm-launch "pichat-backend-llm"
+                  (&optional provider model directory))
 
 (defvar pichat-current-session nil
   "Current PiChat session.")
@@ -422,6 +425,21 @@ LAUNCH-OPTIONS supports `:persistence' and an exact run-local `:model'."
                  (or (pichat-chat-diagnostics-latest-summary session)
                      "see M-x pichat-show-transport-diagnostics"))))
     session))
+
+;;;###autoload
+(defun pichat-llm (&optional provider model)
+  "Open an independent in-memory native chat using PROVIDER and MODEL.
+Interactively, use `pichat-llm-provider' and `pichat-llm-model'.  PROVIDER may
+be an explicit llm.el provider object, a zero-argument factory, or a provider
+specification returned by one of PiChat's mandatory-provider helpers."
+  (interactive)
+  (condition-case err
+      (require 'pichat-backend-llm)
+    (file-missing
+     (user-error
+      "Native PiChat requires optional llm.el %s: %s"
+      "0.32.1" (error-message-string err))))
+  (pichat-backend-llm-launch provider model default-directory))
 
 ;;;###autoload
 (defun pichat-stop-session (&optional session)

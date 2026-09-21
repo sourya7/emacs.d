@@ -53,7 +53,6 @@
            (process (pichat-test--make-unit-process pi-session)))
       (unwind-protect
           (progn
-            (should-not (featurep 'llm))
             (should (eq 'pi (pichat-session-backend-id pi-session)))
             (should (eq 'memory (pichat-session-backend-id memory-session)))
             (should-not (pichat-session-process memory-session))
@@ -116,6 +115,9 @@
               ((symbol-function 'pichat-rpc-get-session-stats)
                (lambda (value callback &optional error-callback)
                  (push (list 'stats value callback error-callback) calls)))
+              ((symbol-function 'pichat-rpc-set-session-name)
+               (lambda (value name &optional callback)
+                 (push (list 'name value name callback) calls)))
               ((symbol-function 'pichat-rpc-cancel-request)
                (lambda (value request)
                  (push (list 'cancel value request) calls))))
@@ -128,10 +130,11 @@
       (pichat-backend-get-state session #'ignore #'ignore)
       (pichat-backend-get-transcript session "cursor" #'ignore #'ignore)
       (pichat-backend-get-stats session #'ignore #'ignore)
+      (pichat-backend-name-session session "name" #'ignore)
       (pichat-backend-cancel-owned-request session "request")
       (pichat-backend-stop-session session))
     (should
-     (equal '(start submit abort abort-retry new state transcript stats cancel stop)
+     (equal '(start submit abort abort-retry new state transcript stats name cancel stop)
             (mapcar #'car (nreverse calls))))))
 
 (ert-deftest pichat-backend-contract-phase1-capability-rejection-is-preflight ()
@@ -187,54 +190,8 @@
             (should-not rpc-called))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
-(ert-deftest pichat-backend-contract-capability-rejection-preserves-draft ()
-  "Unsupported operations fail before side effects or input consumption.
-Reject images without image-input, concurrent submits while busy, and Pi-only
-commands on a memory session.  Exact prompt text and pending attachments remain
-available, with no new journal entry, request, or implicit Pi startup."
-  (ert-skip "TODO Phases 1–3: capability guards through shared input path"))
-
-(ert-deftest pichat-backend-contract-inline-completion-does-not-leak-submission ()
-  "Inline provider callbacks obey the same lifecycle as delayed callbacks.
-Initialize identity and pending state before provider invocation.  Acceptance
-precedes visible user/live events; rejection creates no canonical user entry.
-After inline final success, no pending submission or in-flight attachment
-remains, and a returned handle cannot resurrect the completed run."
-  (ert-skip "TODO Phase 2: mocked-HTTP llm callback fixture"))
-
-(ert-deftest pichat-backend-contract-acceptance-is-not-settlement ()
-  "Acceptance does not clear a running tail or announce the assistant done.
-After acceptance the authoritative user entry exists exactly once.  Tool-only
-model responses do not settle the agent.  On terminal success, error, or abort,
-commit terminal journal entries before exactly one settlement notification.
-A settlement-triggered snapshot must already contain those entries.  An llm
-round callback is not whole-run settlement when PiChat will resubmit the retained
-prompt after tools."
-  (ert-skip "TODO Phases 2/4: llm text and application-owned tool rounds"))
-
-(ert-deftest pichat-backend-contract-cancel-query-is-not-abort-run ()
-  "Cancelling one owned snapshot subscription does not abort the model run.
-Aborting a run invalidates its callbacks and pending tool approvals first,
-then requests transport cancellation.  Late partial/success/error callbacks
-cannot mutate the journal, clear a newer run's handle, or emit settlement."
-  (ert-skip "TODO Phase 2: distinct owned-query and run cancellation fixtures"))
-
-(ert-deftest pichat-backend-contract-source-rebind-rejects-old-callbacks ()
-  "New conversation, source rebind, stop, and chat death invalidate old work.
-Deliver callbacks from the previous source after starting a new source/run;
-new transcript, input, attachments, source generation, and journal are unchanged.
-A callback after buffer death neither recreates the chat nor leaks a timer.
-Separate sessions never share retained llm prompts, provider objects, request
-handles, cumulative stream state, or entry journals."
-  (ert-skip "TODO Phase 2: delayed provider and stale snapshot fixtures"))
-
-(ert-deftest pichat-backend-contract-streaming-chunks-settle-authoritatively ()
-  "Streaming text/reasoning callbacks are cumulative snapshots, not chunks.
-Repeated prefixes replace/diff idempotently; final output may correct the last
-partial snapshot.  Empty output and final success/error callbacks still produce
-exactly one canonical terminal outcome.  Repeated full and cursor snapshots
-project identical settled text without duplicate entries."
-  (ert-skip "TODO Phases 2/3: llm cumulative streams and canonical replay"))
+;; Phase 2 native lifecycle contracts live in
+;; `pichat-test-backend-llm' so Pi-only contract fixtures remain dependency-light.
 
 (ert-deftest pichat-backend-contract-tools-are-approved-correlated-and-bounded ()
   "Tools execute only under the owning session's policy while the run is live.

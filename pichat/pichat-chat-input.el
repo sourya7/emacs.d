@@ -37,6 +37,9 @@
 (defvar-local pichat-chat--history-draft ""
   "Draft saved before navigating prompt history.")
 
+(defvar-local pichat-chat--submission-sequence 0
+  "Monotonic identity source for pre-invocation submission bookkeeping.")
+
 (defvar-local pichat-chat--pending-attachments nil
   "Bounded image records attached to the next prompt.")
 
@@ -57,6 +60,7 @@
   (setq-local pichat-chat--prompt-history nil)
   (setq-local pichat-chat--history-index nil)
   (setq-local pichat-chat--history-draft "")
+  (setq-local pichat-chat--submission-sequence 0)
   (setq-local pichat-chat--pending-attachments nil)
   (setq-local pichat-chat--in-flight-attachments
               (make-hash-table :test #'equal)))
@@ -390,6 +394,10 @@ changed by this operation."
                       "Image-only PiChat prompts are disabled"
                     "Empty prompt")))
     (pichat-attachments-validate-set attachments)
+    ;; Dynamic backend state (busy/uncertain) and image support must be checked
+    ;; before prompt history, editor, or attachment ownership changes.
+    (pichat-backend-check-submit
+     pichat-chat-session message attachments nil)
     (pichat-chat--record-prompt-history message)
     (let* ((buffer (current-buffer))
            (record (list :text text
@@ -398,30 +406,48 @@ changed by this operation."
                          :editor-generation pichat-chat--editor-generation
                          :extension-command-p
                          (pichat-chat-completion-extension-command-p message)))
-           request-id)
+           (placeholder
+            (format "local-submission:%d:%d"
+                    pichat-chat--source-generation
+                    (cl-incf pichat-chat--submission-sequence)))
+           (request-id placeholder))
+      ;; Install recovery ownership before invoking a backend: native providers
+      ;; are allowed to complete or reject inline.
+      (puthash placeholder record pichat-chat--pending-submissions)
+      (puthash placeholder (copy-sequence attachments)
+               pichat-chat--in-flight-attachments)
       (pichat-chat--clear-input)
       (setq pichat-chat--pending-attachments nil)
       (condition-case err
-          (setq request-id
-                (pichat-backend-submit-prompt
-                 pichat-chat-session message
-                 (and attachments
-                      (pichat-attachments-wire-images attachments))
-                 nil
-                 (lambda (response _session)
-                   (pichat-chat--submission-success
-                    buffer request-id response))
-                 (lambda (response _session)
-                   (pichat-chat--submission-failure
-                    buffer request-id response))))
+          (let ((returned
+                 (pichat-backend-submit-prompt
+                  pichat-chat-session message
+                  (and attachments
+                       (pichat-attachments-wire-images attachments))
+                  nil
+                  (lambda (response _session)
+                    (pichat-chat--submission-success
+                     buffer request-id response))
+                  (lambda (response _session)
+                    (pichat-chat--submission-failure
+                     buffer request-id response)))))
+            (when (and (gethash placeholder pichat-chat--pending-submissions)
+                       (null returned))
+              (error "PiChat backend returned no submission identity"))
+            (when (gethash placeholder pichat-chat--pending-submissions)
+              (remhash placeholder pichat-chat--pending-submissions)
+              (remhash placeholder pichat-chat--in-flight-attachments)
+              (setq request-id returned)
+              (puthash request-id record pichat-chat--pending-submissions)
+              (puthash request-id (copy-sequence attachments)
+                       pichat-chat--in-flight-attachments)))
         (error
+         (remhash placeholder pichat-chat--pending-submissions)
+         (remhash placeholder pichat-chat--in-flight-attachments)
          (pichat-chat--set-input-text text)
          (setq pichat-chat--pending-attachments attachments)
          (pichat-chat--refresh-attachment-status)
          (signal (car err) (cdr err))))
-      (puthash request-id record pichat-chat--pending-submissions)
-      (puthash request-id (copy-sequence attachments)
-               pichat-chat--in-flight-attachments)
       (pichat-chat--refresh-attachment-status))))
 
 (provide 'pichat-chat-input)

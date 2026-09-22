@@ -171,7 +171,7 @@ and its generation-scoped enrichment table.
 Canonical transcript and Pi reducer modules remain independent authorities and
 never consume this ephemeral state.
 
-## Native in-memory text chat
+## Native in-memory chat
 
 `M-x pichat-llm` explicitly opens an independent memory-only conversation using
 `llm.el`. It does not start Pi or Node, inspect Pi credentials, infer a provider
@@ -182,21 +182,25 @@ or provider configuration.
 Configure a factory that produces a fresh provider specification for every
 conversation. Starting a new conversation invokes that factory again; PiChat
 rejects reuse of a mutable provider object instead of carrying opaque provider
-state into the new conversation. For Codex via the separately administered
-CLIProxyAPI deployment:
+state into the new conversation. For Codex via a separately administered
+CLIProxyAPI deployment, explicitly configure both the API endpoint and the
+auth-source identity:
 
 ```elisp
-(setq pichat-llm-provider
+(setq pichat-llm-codex-url "https://proxy.example.test/v1/"
+      pichat-llm-codex-auth-host "proxy.example.test"
+      pichat-llm-codex-auth-user "apikey"
+      pichat-llm-provider
       (lambda ()
         (pichat-llm-make-codex-provider "gpt-5.3-codex")))
 ```
 
-The client uses `https://cliproxyapi.sharmaso.com/v1/` and resolves its access
-key lazily from auth-source host `cliproxyapi.sharmaso.com`, user `apikey`.
-PiChat does not start, update, administer, discover, or perform OAuth login to
-the proxy. TLS, remote management, bind policy, and OAuth-file permissions are
-administrator responsibilities. A future self-hosted local service should bind
-only `127.0.0.1`.
+There are no built-in deployment URL or auth-source host defaults. The access
+key is resolved lazily using the configured auth-source host and user. PiChat
+does not start, update, administer, discover, or perform OAuth login to the
+proxy. TLS, remote management, bind policy, and OAuth-file permissions are
+administrator responsibilities. A self-hosted local service should bind only
+`127.0.0.1`.
 
 For Gemini or Claude through Google Vertex AI:
 
@@ -219,15 +223,35 @@ never changes gcloud configuration. The tested `llm.el` 0.32.1 Vertex Gemini
 path is deliberately non-streaming because that release can discard streaming
 chunks without usage metadata; Codex and Vertex Claude use cumulative streaming.
 
-This phase supports multi-turn text, cancellation, new conversations, and local
-names. Provider prompt state and PiChat's authoritative local journal remain
-separate and are never reconstructed from rendered text. Storage is explicitly
-`memory`; no session path is fabricated. Images, reasoning presentation, tools,
-usage statistics, Pi commands/completion, archives, history, branching, setup,
-model controls, and provider migration remain disabled. After an abort or
-provider error, start a new conversation before continuing because the provider
-may have mutated opaque prompt state. No mandatory provider path is claimed as
-live-verified; automated coverage uses offline mocked HTTP and credentials.
+Native sessions support multi-turn text, cumulative reasoning presentation,
+capability-gated image input, cancellation, new conversations, local names, and
+reported token usage. Set `pichat-llm-reasoning` to `none`, `light`, `medium`, or
+`maximum` before launching to request a public llm.el reasoning effort; nil
+retains the provider default. The existing thinking visibility and activity
+folding controls apply to native reasoning, but mutable thinking-level controls
+remain disabled because retained provider state cannot safely migrate settings
+mid-conversation.
+
+Image commands are available only when the concrete provider advertises
+`image-input`. PiChat validates bounded attachment records before clearing the
+editor, converts their base64 payloads to session-owned `llm-media` bytes, and
+keeps bytes out of the local journal and rendered transcript. Rejected requests
+retain the existing prompt and attachment recovery behavior.
+
+Reported input/output counts are accumulated as request usage and shown without
+a context-window percentage. Missing counts remain unknown rather than becoming
+zero; PiChat does not estimate context occupancy. Provider/model labels and
+currently safe capabilities refresh when a new conversation allocates its fresh
+provider.
+
+Provider prompt state and PiChat's authoritative local journal remain separate
+and are never reconstructed from rendered text. Storage is explicitly `memory`;
+no session path is fabricated. Tools, Pi commands/completion, archives, history,
+branching, setup, mutable model controls, and provider migration remain disabled.
+After an abort or provider error, start a new conversation before continuing
+because the provider may have mutated opaque prompt state. No mandatory provider
+path is claimed as live-verified; automated coverage uses offline mocked HTTP
+and credentials.
 
 ## Launching runtimes
 

@@ -24,6 +24,11 @@
 (cl-defgeneric pichat-backend-capabilities (backend)
   "Return operation capability symbols advertised by BACKEND.")
 
+(cl-defgeneric pichat-backend-session-capabilities (backend session)
+  "Return capabilities currently available from BACKEND for SESSION.
+The default is `pichat-backend-capabilities'.  Backends with provider-specific
+features may refine the result without exposing provider objects to the UI.")
+
 (cl-defgeneric pichat-backend-start (backend session)
   "Start BACKEND for SESSION and return SESSION.")
 
@@ -75,6 +80,9 @@ RETRYING-P distinguishes an active retry delay from an active model run.")
 
 (cl-defmethod pichat-backend-capabilities ((_backend t)) nil)
 
+(cl-defmethod pichat-backend-session-capabilities ((backend t) _session)
+  (pichat-backend-capabilities backend))
+
 (cl-defmethod pichat-backend-submit-preflight
   ((_backend t) _session _message _images _streaming-behavior)
   t)
@@ -91,8 +99,8 @@ RETRYING-P distinguishes an active retry delay from an active model run.")
   "Return non-nil when SESSION advertises CAPABILITY."
   (and session
        (memq capability
-             (pichat-backend-capabilities
-              (pichat-session-backend-object session)))))
+             (pichat-backend-session-capabilities
+              (pichat-session-backend-object session) session))))
 
 (defun pichat-backend-require-capability (session capability &optional operation)
   "Require SESSION to advertise CAPABILITY for OPERATION.

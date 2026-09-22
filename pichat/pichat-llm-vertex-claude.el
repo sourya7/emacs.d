@@ -138,11 +138,29 @@ Signal a bounded provider configuration error without retaining command output."
         content))
       ((stringp content)
        (list (list :type "text" :text content)))
+      ((llm-multipart-p content)
+       (mapcar
+        (lambda (part)
+          (cond
+           ((stringp part) (list :type "text" :text part))
+           ((and (llm-media-p part)
+                 (string-prefix-p "image/" (llm-media-mime-type part)))
+            (list :type "image"
+                  :source
+                  (list :type "base64"
+                        :media_type (llm-media-mime-type part)
+                        :data (base64-encode-string
+                               (llm-media-data part) t))))
+           (t
+            (signal 'llm-not-supported
+                    (list "Vertex Claude supports only image media in PiChat")))))
+        (llm-multipart-parts content)))
       (t nil)))))
 
 (cl-defmethod llm-provider-chat-request
   ((_provider pichat-llm-vertex-claude) prompt streaming)
-  (let* ((interactions
+  (let* ((max-tokens (or (llm-chat-prompt-max-tokens prompt) 4096))
+         (interactions
           (seq-remove
            (lambda (interaction)
              (eq (llm-chat-prompt-interaction-role interaction) 'system))
@@ -151,7 +169,7 @@ Signal a bounded provider configuration error without retaining command output."
           (list
            :anthropic_version "vertex-2023-10-16"
            :stream (if streaming t :false)
-           :max_tokens (or (llm-chat-prompt-max-tokens prompt) 4096)
+           :max_tokens max-tokens
            :messages
            (vconcat
             (mapcar
@@ -172,6 +190,26 @@ Signal a bounded provider configuration error without retaining command output."
       (setq request
             (plist-put request :temperature
                        (llm-chat-prompt-temperature prompt))))
+    (when (llm-chat-prompt-reasoning prompt)
+      (setq request
+            (plist-put
+             request :thinking
+             (if (eq (llm-chat-prompt-reasoning prompt) 'none)
+                 '(:type "disabled")
+               (when (<= max-tokens 1024)
+                 (signal 'llm-invalid-argument
+                         '("Vertex Claude reasoning requires max tokens above 1024")))
+               (list
+                :type "enabled"
+                :budget_tokens
+                (pcase (llm-chat-prompt-reasoning prompt)
+                  ('light 1024)
+                  ('medium (max 1024 (min (/ max-tokens 2)
+                                          (1- max-tokens))))
+                  ('maximum (max 1024 (- max-tokens 1024)))
+                  (_
+                   (signal 'llm-invalid-argument
+                           (list "Unknown Vertex Claude reasoning effort")))))))))
     (when (llm-chat-prompt-tools prompt)
       (setq request
             (plist-put
@@ -301,9 +339,8 @@ Signal a bounded provider configuration error without retaining command output."
                                (alist-get 'output_tokens usage)))))))))))
 
 (cl-defmethod llm-capabilities ((_provider pichat-llm-vertex-claude))
-  ;; PiChat Phase 2 intentionally exposes only tested text/reasoning transport.
-  ;; Tool and media capabilities remain gated until their later phases.
-  '(streaming reasoning))
+  ;; Tool use remains gated until PiChat's bounded Phase 4 controller.
+  '(streaming reasoning image-input))
 
 (cl-defmethod llm-name ((_provider pichat-llm-vertex-claude))
   "Vertex Claude")

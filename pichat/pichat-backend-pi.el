@@ -34,7 +34,7 @@
 
 (defconst pichat-backend-pi-capabilities
   '(submit abort state transcript stats image-input
-    lifecycle events process transport diagnostics
+    lifecycle events process transport diagnostics diagnostic-view
     queue compact new-conversation naming models thinking commands extension-ui
     session-history saved-sessions archive branching)
   "Capabilities supplied by the Pi RPC backend.")

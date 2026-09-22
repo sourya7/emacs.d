@@ -404,14 +404,14 @@ never rewritten; configure `pichat-diagnostics-interactive-command' for them."
 
 ;;;###autoload
 (defun pichat-show-transport-diagnostics (&optional session)
-  "Show bounded raw transport diagnostics and recent RPC events for SESSION.
+  "Show bounded raw backend diagnostics and recent events for SESSION.
 Unlike the ordinary chat status, this explicit inspection view may contain
 paths, prompts, command arguments, provider output, and credentials."
   (interactive)
   (let ((session (pichat-session-current session)))
     (unless session (user-error "No PiChat session"))
     (pichat-backend-require-capability
-     session 'diagnostics "Transport diagnostics")
+     session 'diagnostic-view "Diagnostic inspection")
     (let ((buffer (get-buffer-create "*PiChat Transport Diagnostics*"))
           (records (reverse (copy-sequence
                              (pichat-session-diagnostics session))))
@@ -421,19 +421,26 @@ paths, prompts, command arguments, provider output, and credentials."
       (with-current-buffer buffer
         (let ((inhibit-read-only t))
           (erase-buffer)
-          (insert "PiChat transport diagnostics\n\n")
+          (insert "PiChat diagnostics\n\n")
           (insert "WARNING: this explicit view may contain secrets, paths, and prompt content.\n\n")
-          (let ((transport (pichat-session-transport session)))
-            (insert (format "Target: %s\nTransport: %s\nEmacs CWD: %s\nRuntime CWD: %s\nPi executable: %s\n"
-                            (pichat-transport-label transport)
-                            (pichat-transport-kind transport)
+          (if (eq (pichat-session-backend-id session) 'pi)
+              (let ((transport (pichat-session-transport session)))
+                (insert (format "Backend: Pi\nTarget: %s\nTransport: %s\nEmacs CWD: %s\nRuntime CWD: %s\nPi executable: %s\n"
+                                (pichat-transport-label transport)
+                                (pichat-transport-kind transport)
+                                (or (pichat-session-emacs-cwd session) "—")
+                                (or (pichat-session-runtime-cwd session) "—")
+                                (or (pichat-transport-pi-executable transport)
+                                    pichat-pi-executable)))
+                (insert "Configured command:\n"
+                        (pichat-chat-diagnostics--print-value
+                         (pichat-session-rpc-command session)) "\n"))
+            (insert (format "Backend: %s\nDirectory: %s\nModel: %s\n"
+                            (pichat-backend-label
+                             (pichat-session-backend-object session))
                             (or (pichat-session-emacs-cwd session) "—")
-                            (or (pichat-session-runtime-cwd session) "—")
-                            (or (pichat-transport-pi-executable transport)
-                                pichat-pi-executable))))
-          (insert "Configured command:\n"
-                  (pichat-chat-diagnostics--print-value
-                   (pichat-session-rpc-command session)) "\n")
+                            (or (plist-get (pichat-session-model session) :id)
+                                "—"))))
           (insert (format "State: %s\n\n" (pichat-session-state session)))
           (insert (format "Diagnostic records (%d, oldest first):\n" (length records)))
           (if records

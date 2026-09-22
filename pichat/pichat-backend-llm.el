@@ -15,7 +15,9 @@
 (require 'subr-x)
 (require 'url-parse)
 (require 'llm)
+(require 'pichat-attachments)
 (require 'pichat-backend)
+(require 'pichat-chat-diagnostics)
 (require 'pichat-events)
 (require 'pichat-session)
 
@@ -29,10 +31,14 @@
 (declare-function make-llm-vertex "llm-vertex" (&rest args))
 (declare-function pichat-llm-vertex-access-token
                   "pichat-llm-vertex-claude" (gcloud))
+(declare-function pichat-llm-vertex-claude-create
+                  "pichat-llm-vertex-claude" (&rest args))
 (declare-function pichat-chat-open "pichat-chat" (session &optional synchronize))
 (declare-function pichat-register-session "pichat" (session &optional scope))
 (declare-function pichat-forget-session "pichat" (session))
 (declare-function pichat-set-default-session "pichat" (session))
+(declare-function pichat-chat-diagnostics-record "pichat-chat-diagnostics"
+                  (session &rest args))
 
 (defvar pichat-current-session)
 
@@ -43,14 +49,24 @@
 (defconst pichat-llm-tested-version "0.32.1"
   "llm.el release covered by PiChat's offline provider fixtures.")
 
-(defconst pichat-llm-codex-url "https://cliproxyapi.sharmaso.com/v1/"
-  "Authenticated CLIProxyAPI endpoint used by the Codex provider factory.")
+(defcustom pichat-llm-codex-url nil
+  "CLIProxyAPI base URL used by the Codex provider factory.
+Set this explicitly to the API root, including its version path.  PiChat adds a
+trailing slash when needed and does not discover or administer the service."
+  :type '(choice (const :tag "Unset" nil) string)
+  :group 'pichat-llm)
 
-(defconst pichat-llm-codex-auth-host "cliproxyapi.sharmaso.com"
-  "Auth-source host used for the CLIProxyAPI access key.")
+(defcustom pichat-llm-codex-auth-host nil
+  "Auth-source host used for the CLIProxyAPI access key.
+This is independent of `pichat-llm-codex-url' so deployments can use an
+explicit auth-source identity."
+  :type '(choice (const :tag "Unset" nil) string)
+  :group 'pichat-llm)
 
-(defconst pichat-llm-codex-auth-user "apikey"
-  "Auth-source user used for the CLIProxyAPI access key.")
+(defcustom pichat-llm-codex-auth-user "apikey"
+  "Auth-source user used for the CLIProxyAPI access key."
+  :type 'string
+  :group 'pichat-llm)
 
 (defcustom pichat-llm-provider nil
   "Explicit provider object, provider factory, or provider specification.
@@ -79,13 +95,28 @@ Provider specifications may force streaming on or off for a tested protocol."
   :type 'boolean
   :group 'pichat-llm)
 
+(defcustom pichat-llm-reasoning nil
+  "Reasoning effort requested for new native conversations.
+Nil leaves the provider default unchanged.  Other values are public llm.el
+reasoning settings; unsupported providers may ignore them.  PiChat exposes no
+mutable reasoning control for native sessions because changing this retained
+prompt setting mid-conversation cannot be round-tripped safely."
+  :type '(choice (const :tag "Provider default" nil)
+                 (const none) (const light) (const medium) (const maximum))
+  :group 'pichat-llm)
+
 (defcustom pichat-llm-vertex-gcloud-executable "gcloud"
   "Executable used by PiChat Vertex provider factories."
   :type 'file
   :group 'pichat-llm)
 
 (defcustom pichat-llm-error-max-chars 500
-  "Maximum characters retained from a native provider error."
+  "Maximum characters retained in an ordinary native provider error."
+  :type 'integer
+  :group 'pichat-llm)
+
+(defcustom pichat-llm-diagnostic-max-chars 20000
+  "Maximum unredacted provider-error characters retained for explicit inspection."
   :type 'integer
   :group 'pichat-llm)
 
@@ -111,16 +142,22 @@ Provider specifications may force streaming on or off for a tested protocol."
   provider-spec
   provider
   provider-label
+  provider-capabilities
   model
   call-wrapper
   streaming
   context
+  reasoning
   prompt
   journal
   leaf-id
   request
   submission-id
   stream-text
+  stream-reasoning
+  stream-order
+  round-usage
+  usage-rounds
   assistant-started
   continuation-uncertain
   source-generation
@@ -139,8 +176,10 @@ Keys are weak so this safety record does not itself retain provider objects.")
   "Counter used only for human-readable native launch labels.")
 
 (defconst pichat-backend-llm-capabilities
-  '(submit abort state transcript lifecycle events new-conversation naming)
-  "Capabilities exposed by the Phase 2 native text backend.")
+  '(submit abort state transcript stats lifecycle events new-conversation naming
+    diagnostic-view)
+  "Backend-level capabilities exposed by native memory conversations.
+Provider-dependent capabilities such as image input are added per session.")
 
 (defun pichat-llm--nonblank-string-p (value)
   "Return non-nil when VALUE is a nonblank string."
@@ -151,6 +190,8 @@ Keys are weak so this safety record does not itself retain provider objects.")
 Do not silently fall back to private or version-specific implementation
 functions when a future llm.el changes one of these application seams."
   (dolist (function '(llm-make-chat-prompt
+                      llm-make-multipart
+                      make-llm-media
                       llm-chat-prompt-append-response
                       llm-chat-async
                       llm-chat-streaming
@@ -175,23 +216,36 @@ functions when a future llm.el changes one of these application seams."
                 "\\1=[REDACTED]" text)))
     (truncate-string-to-width text pichat-llm-error-max-chars nil nil "…")))
 
-(defun pichat-llm--auth-source-key ()
-  "Return the configured CLIProxyAPI key without caching it in PiChat state."
-  (let ((secret
-         (auth-source-pick-first-password
-          :host pichat-llm-codex-auth-host
-          :user pichat-llm-codex-auth-user)))
-    (unless (pichat-llm--nonblank-string-p secret)
-      (user-error
-       "No CLIProxyAPI key in auth-source for %s/%s"
-       pichat-llm-codex-auth-host pichat-llm-codex-auth-user))
-    secret))
+(defun pichat-llm--auth-source-key (&optional host user)
+  "Return the configured CLIProxyAPI key without caching it in PiChat state.
+HOST and USER default to `pichat-llm-codex-auth-host' and
+`pichat-llm-codex-auth-user'."
+  (let ((host (or host pichat-llm-codex-auth-host))
+        (user (or user pichat-llm-codex-auth-user)))
+    (unless (and (pichat-llm--nonblank-string-p host)
+                 (pichat-llm--nonblank-string-p user))
+      (user-error "CLIProxyAPI auth-source host and user must be configured"))
+    (let ((secret
+           (auth-source-pick-first-password :host host :user user)))
+      (unless (pichat-llm--nonblank-string-p secret)
+        (user-error "No CLIProxyAPI key in auth-source for %s/%s" host user))
+      secret)))
 
 (defun pichat-llm-make-codex-provider (model)
   "Return an explicit provider specification for Codex MODEL via CLIProxyAPI."
   (unless (pichat-llm--nonblank-string-p model)
     (user-error "An explicit Codex model is required"))
-  (let ((model model))
+  (dolist (pair `((url . ,pichat-llm-codex-url)
+                  (auth-host . ,pichat-llm-codex-auth-host)
+                  (auth-user . ,pichat-llm-codex-auth-user)))
+    (unless (pichat-llm--nonblank-string-p (cdr pair))
+      (user-error "CLIProxyAPI %s must be configured" (car pair))))
+  (let ((model model)
+        (url (if (string-suffix-p "/" pichat-llm-codex-url)
+                 pichat-llm-codex-url
+               (concat pichat-llm-codex-url "/")))
+        (auth-host pichat-llm-codex-auth-host)
+        (auth-user pichat-llm-codex-auth-user))
     (pichat-llm-provider-spec-create
      :label "Codex via CLIProxyAPI"
      :model model
@@ -200,8 +254,8 @@ functions when a future llm.el changes one of these application seams."
      (lambda ()
        (require 'llm-openai)
        (make-llm-openai-compatible
-        :url pichat-llm-codex-url
-        :key #'pichat-llm--auth-source-key
+        :url url
+        :key (lambda () (pichat-llm--auth-source-key auth-host auth-user))
         :chat-model model)))))
 
 (defun pichat-llm--gcloud-available-p (executable)
@@ -376,13 +430,20 @@ an existing conversation when provider construction fails."
     (puthash provider session pichat-llm--claimed-providers)
     (setf (pichat-llm-state-provider state) provider
           (pichat-llm-state-provider-label state) label
+          (pichat-llm-state-provider-capabilities state)
+          (copy-sequence (plist-get prepared :capabilities))
           (pichat-llm-state-model state) model
           (pichat-llm-state-call-wrapper state)
           (plist-get prepared :call-wrapper)
           (pichat-llm-state-streaming state)
           (plist-get prepared :streaming)
           (pichat-session-model session)
-          (list :id model :name model :provider label))))
+          (list :id model :name model :provider label
+                :reasoning
+                (and (memq 'reasoning (plist-get prepared :capabilities)) t)
+                :input
+                (when (memq 'image-input (plist-get prepared :capabilities))
+                  '("image"))))))
 
 (defun pichat-llm--state (session)
   "Return SESSION's validated native backend state."
@@ -413,17 +474,45 @@ an existing conversation when provider construction fails."
   (pichat-emit session 'rpc-event :raw raw)
   (pichat-emit session event :raw raw))
 
-(defun pichat-llm--message (role text &optional stop-reason error-message)
-  "Return a private Pi-shaped message for ROLE and TEXT."
+(defun pichat-llm--message-content (text reasoning order images)
+  "Return ordered Pi-shaped content for TEXT, REASONING, ORDER, and IMAGES.
+Image data is deliberately excluded from the journal and rendered transcript."
+  (let (content)
+    (dolist (kind order)
+      (pcase kind
+        ('reasoning
+         (when (and (stringp reasoning) (not (string-empty-p reasoning)))
+           (setq content
+                 (append content
+                         (list (list :type "thinking"
+                                     :thinking reasoning))))))
+        ('text
+         (when (and (stringp text) (not (string-empty-p text)))
+           (setq content
+                 (append content
+                         (list (list :type "text" :text text))))))))
+    (unless (or (member 'text order) (string-empty-p (or text "")))
+      (setq content (append content (list (list :type "text" :text text)))))
+    (dolist (image (append images nil))
+      (setq content
+            (append content
+                    (list (list :type "image"
+                                :mediaType (plist-get image :mimeType))))))
+    (or content (list (list :type "text" :text "")))))
+
+(defun pichat-llm--message
+    (role text &optional stop-reason error-message reasoning order images)
+  "Return a private Pi-shaped message for ROLE and normalized output."
   (append
    (list :role role
-         :content (list (list :type "text"
-                                :text (if (stringp text) text ""))))
+         :content (pichat-llm--message-content
+                   (if (stringp text) text "") reasoning
+                   (or order '(text)) images))
    (when stop-reason (list :stopReason stop-reason))
    (when error-message (list :errorMessage error-message))))
 
 (defun pichat-llm--commit-message
-    (session role text &optional stop-reason error-message)
+    (session role text &optional stop-reason error-message reasoning order images)
   "Commit an immutable local message entry for SESSION."
   (let* ((state (pichat-llm--state session))
          (id (pichat-llm--entry-id state role))
@@ -432,7 +521,8 @@ an existing conversation when provider construction fails."
                 :parentId (pichat-llm-state-leaf-id state)
                 :type "message"
                 :message
-                (pichat-llm--message role text stop-reason error-message))))
+                (pichat-llm--message
+                 role text stop-reason error-message reasoning order images))))
     (setf (pichat-llm-state-journal state)
           (append (pichat-llm-state-journal state) (list entry))
           (pichat-llm-state-leaf-id state) id)
@@ -467,8 +557,8 @@ an existing conversation when provider construction fails."
           (pichat-llm-state-submission-id state) nil)
     request))
 
-(defun pichat-llm--emit-assistant-snapshot (session state text type)
-  "Emit cumulative assistant TEXT for SESSION as Pi-compatible TYPE."
+(defun pichat-llm--emit-assistant-snapshot (session state type)
+  "Emit cumulative assistant STATE for SESSION as Pi-compatible TYPE."
   (unless (pichat-llm-state-assistant-started state)
     (setf (pichat-llm-state-assistant-started state) t)
     (pichat-llm--emit-raw
@@ -479,30 +569,88 @@ an existing conversation when provider construction fails."
    session
    (if (equal type "message_end") 'message-end 'message-update)
    (list :type type
-         :message (pichat-llm--message "assistant" text))))
+         :message
+         (pichat-llm--message
+          "assistant"
+          (or (pichat-llm-state-stream-text state) "") nil nil
+          (pichat-llm-state-stream-reasoning state)
+          (pichat-llm-state-stream-order state)))))
+
+(defun pichat-llm--output-key-kind (key)
+  "Return normalized output kind for multi-output KEY, or nil."
+  (pcase key (:text 'text) (:reasoning 'reasoning) (_ nil)))
+
+(defun pichat-llm--apply-output (state value)
+  "Apply cumulative multi-output VALUE to STATE.
+Absent keys preserve prior snapshots; present string values authoritatively
+replace them.  Return non-nil when visible output changed."
+  (let ((changed nil))
+    (when (listp value)
+      (cl-loop for (key item) on value by #'cddr
+               for kind = (pichat-llm--output-key-kind key)
+               when kind
+               do
+               (when (stringp item)
+                 (unless (memq kind (pichat-llm-state-stream-order state))
+                   (setf (pichat-llm-state-stream-order state)
+                         (append (pichat-llm-state-stream-order state)
+                                 (list kind))))
+                 (pcase kind
+                   ('text
+                    (unless (equal item (pichat-llm-state-stream-text state))
+                      (setf (pichat-llm-state-stream-text state) item
+                            changed t)))
+                   ('reasoning
+                    (unless (equal
+                             item
+                             (pichat-llm-state-stream-reasoning state))
+                      (setf (pichat-llm-state-stream-reasoning state) item
+                            changed t))))))
+      (dolist (pair '((:input-tokens . :inputTokens)
+                      (:output-tokens . :outputTokens)))
+        (let ((value-key (car pair))
+              (usage-key (cdr pair)))
+          (when (and (plist-member value value-key)
+                     (numberp (plist-get value value-key))
+                     (>= (plist-get value value-key) 0))
+            (setf (pichat-llm-state-round-usage state)
+                  (plist-put (pichat-llm-state-round-usage state)
+                             usage-key (plist-get value value-key)))))))
+    changed))
+
+(defun pichat-llm--finish-round-usage (state run)
+  "Commit STATE's reported or explicitly missing usage for RUN."
+  (let* ((usage (pichat-llm-state-round-usage state))
+         (record
+          (append (list :run run
+                        :status (if usage "reported" "missing")
+                        :estimated nil)
+                  usage)))
+    (setf (pichat-llm-state-usage-rounds state)
+          (append (pichat-llm-state-usage-rounds state) (list record)))))
 
 (defun pichat-llm--partial (session run value)
   "Apply cumulative multi-output VALUE for SESSION's RUN."
   (let ((state (pichat-llm--state session)))
     (when (and (pichat-llm--run-current-p state run)
-               (listp value)
-               (plist-member value :text))
-      (let ((text (or (plist-get value :text) "")))
-        (when (and (stringp text)
-                   (not (equal text (pichat-llm-state-stream-text state))))
-          (setf (pichat-llm-state-stream-text state) text)
-          (pichat-llm--emit-assistant-snapshot
-           session state text "message_update"))))))
+               (pichat-llm--apply-output state value))
+      (pichat-llm--emit-assistant-snapshot
+       session state "message_update"))))
 
-(defun pichat-llm--settle (session run text stop-reason &optional error-message)
-  "Commit and settle SESSION's RUN with authoritative TEXT."
+(defun pichat-llm--settle (session run stop-reason &optional error-message)
+  "Commit and settle SESSION's RUN with its authoritative output."
   (let ((state (pichat-llm--state session)))
     (when (and (pichat-llm--run-current-p state run)
                (not (equal run (pichat-llm-state-settled-run state))))
-      (let* ((safe-error
+      (let* ((text (or (pichat-llm-state-stream-text state) ""))
+             (reasoning (pichat-llm-state-stream-reasoning state))
+             (order (pichat-llm-state-stream-order state))
+             (safe-error
               (and error-message (pichat-llm--bounded-error error-message)))
              (message
-              (pichat-llm--message "assistant" text stop-reason safe-error)))
+              (pichat-llm--message
+               "assistant" text stop-reason safe-error reasoning order)))
+        (pichat-llm--finish-round-usage state run)
         (setf (pichat-llm-state-request state) nil
               (pichat-llm-state-submission-id state) nil
               (pichat-llm-state-active-run state) nil
@@ -510,7 +658,7 @@ an existing conversation when provider construction fails."
               (pichat-session-streaming-p session) nil
               (pichat-session-state session) 'idle)
         (pichat-llm--commit-message
-         session "assistant" text stop-reason safe-error)
+         session "assistant" text stop-reason safe-error reasoning order)
         (pichat-llm--emit-raw
          session 'message-end (list :type "message_end" :message message))
         (pichat-llm--emit-raw session 'turn-end '(:type "turn_end"))
@@ -522,17 +670,14 @@ an existing conversation when provider construction fails."
   "Handle final multi-output VALUE for SESSION's RUN."
   (let ((state (pichat-llm--state session)))
     (when (pichat-llm--run-current-p state run)
-      (if (plist-get value :tool-uses)
+      (pichat-llm--apply-output state value)
+      (if (and (listp value) (plist-get value :tool-uses))
           (progn
             (setf (pichat-llm-state-continuation-uncertain state) t)
             (pichat-llm--settle
-             session run (or (pichat-llm-state-stream-text state) "")
-             "error" "Native tools are disabled until PiChat Phase 4"))
-        (let ((text
-               (if (and (listp value) (plist-member value :text))
-                   (or (plist-get value :text) "")
-                 (or (pichat-llm-state-stream-text state) ""))))
-          (pichat-llm--settle session run text "stop"))))))
+             session run "error"
+             "Native tools are disabled until PiChat Phase 4"))
+        (pichat-llm--settle session run "stop")))))
 
 (defun pichat-llm--error (session run type message)
   "Settle SESSION's RUN after provider TYPE and MESSAGE."
@@ -542,23 +687,32 @@ an existing conversation when provider construction fails."
              (pichat-llm--bounded-error
               (format "%s: %s" type message))))
         (setf (pichat-llm-state-continuation-uncertain state) t)
-        (when (pichat-llm--settle
-               session run (or (pichat-llm-state-stream-text state) "")
-               "error" summary)
+        (when (pichat-llm--settle session run "error" summary)
+          (when (fboundp 'pichat-chat-diagnostics-record)
+            (let ((raw
+                   (truncate-string-to-width
+                    (format "%s" message)
+                    pichat-llm-diagnostic-max-chars nil nil "…")))
+              (pichat-chat-diagnostics-record
+               session :origin 'llm-provider :message raw
+               :condition (list type))))
           (pichat-emit session 'error
                        :message summary
                        :diagnostic (list :origin 'llm :summary summary)))))))
 
 (defun pichat-llm--accept-submission
-    (session state run submission-id message callback)
-  "Commit MESSAGE and announce accepted SUBMISSION-ID for SESSION's RUN."
+    (session state run submission-id message images callback)
+  "Commit MESSAGE and IMAGES and announce accepted SUBMISSION-ID for RUN."
   (when (pichat-llm--run-current-p state run)
-    (pichat-llm--commit-message session "user" message)
+    (pichat-llm--commit-message
+     session "user" message nil nil nil '(text) images)
     ;; The submission callback is an acceptance boundary, not run settlement.
     (when callback
       (funcall callback (list :id submission-id :success t) session))
     (when (pichat-llm--run-current-p state run)
-      (let ((raw-message (pichat-llm--message "user" message)))
+      (let ((raw-message
+             (pichat-llm--message
+              "user" message nil nil nil '(text) images)))
         (pichat-llm--emit-raw
          session 'agent-start '(:type "agent_start"))
         (pichat-llm--emit-raw
@@ -597,6 +751,61 @@ an existing conversation when provider construction fails."
 (cl-defmethod pichat-backend-capabilities ((_backend (eql llm)))
   pichat-backend-llm-capabilities)
 
+(cl-defmethod pichat-backend-session-capabilities
+  ((_backend (eql llm)) session)
+  (let* ((state (pichat-llm--state session))
+         (provider-capabilities
+          (pichat-llm-state-provider-capabilities state)))
+    (append pichat-backend-llm-capabilities
+            (when (memq 'image-input provider-capabilities) '(image-input))
+            (when (memq 'reasoning provider-capabilities)
+              '(reasoning-output)))))
+
+(defun pichat-llm--media-parts (images)
+  "Validate wire-format IMAGES and return independent llm media objects."
+  (unless (or (vectorp images) (proper-list-p images))
+    (user-error "Invalid native image attachment set"))
+  (when (> (length images) pichat-attachments-max-count)
+    (user-error "PiChat attachment limit is %d images"
+                pichat-attachments-max-count))
+  (let ((total 0) media)
+    (dolist (image (append images nil) (nreverse media))
+      (let ((type (plist-get image :type))
+            (mime-type (plist-get image :mimeType))
+            (encoded (plist-get image :data))
+            decoded)
+        (unless (and (equal type "image")
+                     (stringp mime-type)
+                     (member mime-type pichat-attachments-allowed-mime-types)
+                     (stringp encoded))
+          (user-error "Invalid native image attachment"))
+        (when (> (length encoded)
+                 (+ 4 (* 4 (/ (+ pichat-attachments-max-file-bytes 2) 3))))
+          (user-error "Encoded native image exceeds the bounded input size"))
+        (setq decoded
+              (condition-case nil
+                  (base64-decode-string encoded)
+                (error (user-error "Invalid native image attachment data"))))
+        (when (zerop (length decoded))
+          (user-error "Native image attachment is empty"))
+        (when (> (length decoded) pichat-attachments-max-file-bytes)
+          (user-error "Native image exceeds the %d byte limit"
+                      pichat-attachments-max-file-bytes))
+        (cl-incf total (length decoded))
+        (when (> total pichat-attachments-max-total-bytes)
+          (user-error "Native image total exceeds the %d byte limit"
+                      pichat-attachments-max-total-bytes))
+        (push (make-llm-media
+               :mime-type mime-type :data (encode-coding-string decoded 'binary))
+              media)))))
+
+(defun pichat-llm--prompt-content (message images)
+  "Return llm prompt content containing MESSAGE and wire-format IMAGES."
+  (if images
+      (apply #'llm-make-multipart
+             (cons message (pichat-llm--media-parts images)))
+    message))
+
 (cl-defmethod pichat-backend-start ((_backend (eql llm)) session)
   (pichat-llm--require-public-api)
   (let* ((state (pichat-llm--state session))
@@ -613,7 +822,13 @@ an existing conversation when provider construction fails."
           (pichat-llm-state-sequence state) 0
           (pichat-llm-state-journal state) nil
           (pichat-llm-state-leaf-id state) nil
-          (pichat-llm-state-continuation-uncertain state) nil)
+          (pichat-llm-state-stream-text state) nil
+          (pichat-llm-state-stream-reasoning state) nil
+          (pichat-llm-state-stream-order state) nil
+          (pichat-llm-state-round-usage state) nil
+          (pichat-llm-state-usage-rounds state) nil
+          (pichat-llm-state-continuation-uncertain state) nil
+          (pichat-session-context-usage session) nil)
     (let ((id (pichat-llm--source-id state)))
       (setf (pichat-session-id session) id
             (pichat-session-session-file session) nil
@@ -631,13 +846,17 @@ an existing conversation when provider construction fails."
         (pichat-llm--cancel-model-request request)
         (when active
           (pichat-llm--commit-message
-           session "assistant" text "aborted" "Session stopped")
+           session "assistant" text "aborted" "Session stopped"
+           (pichat-llm-state-stream-reasoning state)
+           (pichat-llm-state-stream-order state))
           (pichat-llm--emit-raw
            session 'message-end
            (list :type "message_end"
                  :message
                  (pichat-llm--message
-                  "assistant" text "aborted" "Session stopped")))
+                  "assistant" text "aborted" "Session stopped"
+                  (pichat-llm-state-stream-reasoning state)
+                  (pichat-llm-state-stream-order state))))
           (pichat-llm--emit-raw
            session 'agent-settled '(:type "agent_settled")))
         ;; Keep the weak claim while an external reference exists: a stopped
@@ -645,9 +864,13 @@ an existing conversation when provider construction fails."
         (setf (pichat-llm-state-alive state) nil
               (pichat-llm-state-provider state) nil
               (pichat-llm-state-provider-spec state) nil
+              (pichat-llm-state-provider-capabilities state) nil
               (pichat-llm-state-call-wrapper state) nil
               (pichat-llm-state-prompt state) nil
               (pichat-llm-state-stream-text state) nil
+              (pichat-llm-state-stream-reasoning state) nil
+              (pichat-llm-state-stream-order state) nil
+              (pichat-llm-state-round-usage state) nil
               (pichat-session-streaming-p session) nil
               (pichat-session-state session) 'stopped)
         (pichat-emit session 'session-ended :reason 'stopped)))
@@ -662,7 +885,8 @@ an existing conversation when provider construction fails."
     (unless (pichat-llm-state-alive state)
       (user-error "Native PiChat session is stopped"))
     (when images
-      (user-error "Image input is not available for native text chat yet"))
+      ;; Validate the bounded wire records without mutating prompt/session state.
+      (pichat-llm--media-parts images))
     (when (pichat-llm-state-active-run state)
       (user-error "A native PiChat response is already running"))
     (when (pichat-llm-state-continuation-uncertain state)
@@ -671,20 +895,22 @@ an existing conversation when provider construction fails."
     t))
 
 (cl-defmethod pichat-backend-submit
-  ((_backend (eql llm)) session message _images _streaming-behavior
+  ((_backend (eql llm)) session message images _streaming-behavior
    callback error-callback)
   (let* ((state (pichat-llm--state session))
+         (content (pichat-llm--prompt-content message images))
          (first-p (null (pichat-llm-state-prompt state)))
          (prompt
           (if first-p
               (llm-make-chat-prompt
-               message :context (pichat-llm-state-context state))
+               content :context (pichat-llm-state-context state)
+               :reasoning (pichat-llm-state-reasoning state))
             (progn
               ;; `llm-chat-prompt-append-response' mutates the retained
               ;; provider prompt and returns its interaction list; retain the
               ;; prompt object itself as the value passed to llm APIs.
               (llm-chat-prompt-append-response
-               (pichat-llm-state-prompt state) message)
+               (pichat-llm-state-prompt state) content)
               (pichat-llm-state-prompt state))))
          (run (1+ (or (pichat-llm-state-run-generation state) 0)))
          (round (1+ (or (pichat-llm-state-round-generation state) 0)))
@@ -700,6 +926,9 @@ an existing conversation when provider construction fails."
           (pichat-llm-state-submission-id state) submission-id
           (pichat-llm-state-request state) 'starting
           (pichat-llm-state-stream-text state) nil
+          (pichat-llm-state-stream-reasoning state) nil
+          (pichat-llm-state-stream-order state) nil
+          (pichat-llm-state-round-usage state) nil
           (pichat-llm-state-assistant-started state) nil
           (pichat-session-streaming-p session) t
           (pichat-session-state session) 'running)
@@ -762,7 +991,7 @@ an existing conversation when provider construction fails."
           (when (pichat-llm--run-current-p state run)
             (setf (pichat-llm-state-request state) returned)
             (pichat-llm--accept-submission
-             session state run submission-id message callback)
+             session state run submission-id message images callback)
             (dolist (item queued)
               (when (pichat-llm--run-current-p state run)
                 (apply #'deliver (car item) (cdr item))))))))
@@ -780,13 +1009,17 @@ an existing conversation when provider construction fails."
             (pichat-session-streaming-p session) nil
             (pichat-session-state session) 'idle)
       (pichat-llm--commit-message
-       session "assistant" text "aborted" "Request aborted")
+       session "assistant" text "aborted" "Request aborted"
+       (pichat-llm-state-stream-reasoning state)
+       (pichat-llm-state-stream-order state))
       (pichat-llm--emit-raw
        session 'message-end
        (list :type "message_end"
              :message
              (pichat-llm--message
-              "assistant" text "aborted" "Request aborted")))
+              "assistant" text "aborted" "Request aborted"
+              (pichat-llm-state-stream-reasoning state)
+              (pichat-llm-state-stream-order state))))
       (pichat-llm--emit-raw session 'agent-settled '(:type "agent_settled")))
     (when callback
       (funcall callback
@@ -812,8 +1045,13 @@ an existing conversation when provider construction fails."
           (pichat-llm-state-journal state) nil
           (pichat-llm-state-leaf-id state) nil
           (pichat-llm-state-stream-text state) nil
+          (pichat-llm-state-stream-reasoning state) nil
+          (pichat-llm-state-stream-order state) nil
+          (pichat-llm-state-round-usage state) nil
+          (pichat-llm-state-usage-rounds state) nil
           (pichat-llm-state-assistant-started state) nil
           (pichat-llm-state-continuation-uncertain state) nil
+          (pichat-session-context-usage session) nil
           (pichat-session-streaming-p session) nil
           (pichat-session-state session) 'idle
           (pichat-session-id session) (pichat-llm--source-id state))
@@ -845,6 +1083,54 @@ an existing conversation when provider construction fails."
     (pichat-emit session 'session-state-changed
                  :state (plist-get response :data))
     id))
+
+(defun pichat-llm--usage-data (state)
+  "Return explicit reported/missing usage data for STATE."
+  (let* ((rounds (pichat-llm-state-usage-rounds state))
+         (reported
+          (seq-filter
+           (lambda (round) (equal (plist-get round :status) "reported"))
+           rounds))
+         (input-values
+          (cl-loop for round in reported
+                   for value = (plist-get round :inputTokens)
+                   when (numberp value) collect value))
+         (output-values
+          (cl-loop for round in reported
+                   for value = (plist-get round :outputTokens)
+                   when (numberp value) collect value))
+         (input (and input-values (apply #'+ input-values)))
+         (output (and output-values (apply #'+ output-values)))
+         (latest (car (last rounds))))
+    (if (null reported)
+        (list :usageStatus "missing" :contextUsage nil
+              :roundUsage (and latest (copy-tree latest t))
+              :usageRounds (vconcat (copy-tree rounds t)))
+      (list
+       :usageStatus "reported"
+       :roundUsage (copy-tree latest t)
+       :usageRounds (vconcat (copy-tree rounds t))
+       ;; This is accumulated request usage, not current context occupancy.
+       ;; Deliberately omit contextWindow and percent.
+       :contextUsage
+       (list :kind "reported" :scope "accumulatedRequests"
+             :estimated nil :tokens (+ (or input 0) (or output 0))
+             :inputTokens input :outputTokens output
+             :roundCount (length rounds)
+             :reportedRoundCount (length reported))))))
+
+(cl-defmethod pichat-backend-request-stats
+  ((_backend (eql llm)) session callback _error-callback)
+  (let* ((state (pichat-llm--state session))
+         (query
+          (pichat-llm-query-create
+           :id (format "llm-stats-%d" (pichat-llm--next-sequence state))))
+         (data (pichat-llm--usage-data state))
+         (response (list :id (pichat-llm-query-id query)
+                         :success t :data data)))
+    (pichat-session-apply-rpc-stats session data)
+    (when callback (funcall callback response session))
+    query))
 
 (defun pichat-llm--entries-after (journal cursor)
   "Return JOURNAL entries after CURSOR, or the symbol `missing'."
@@ -913,6 +1199,7 @@ DIRECTORY defaults to `default-directory'."
           (pichat-llm-state-create
            :provider-spec spec
            :context pichat-llm-context
+           :reasoning pichat-llm-reasoning
            :source-generation 0
            :run-generation 0
            :round-generation 0

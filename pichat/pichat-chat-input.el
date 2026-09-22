@@ -296,12 +296,18 @@ changed by this operation."
         (pichat-attachments-add pichat-chat--pending-attachments attachment))
   (pichat-chat--refresh-attachment-status))
 
+(defun pichat-chat--require-image-input ()
+  "Require image input before acquiring or consuming attachment data."
+  (unless pichat-chat-session
+    (user-error "No PiChat session for this buffer"))
+  (pichat-backend-require-capability
+   pichat-chat-session 'image-input "Image input"))
+
 ;;;###autoload
 (defun pichat-chat-attach-image-file (path)
   "Attach image PATH to the next PiChat prompt."
   (interactive "fAttach image file: ")
-  (unless pichat-chat-session
-    (user-error "No PiChat session for this buffer"))
+  (pichat-chat--require-image-input)
   (pichat-chat--add-attachment
    (pichat-attachments-read-image-file
     path (pichat-chat--retained-attachments)))
@@ -349,8 +355,7 @@ changed by this operation."
 (defun pichat-chat-paste-clipboard-image ()
   "Attach a bounded image acquired from the system clipboard."
   (interactive)
-  (unless pichat-chat-session
-    (user-error "No PiChat session for this buffer"))
+  (pichat-chat--require-image-input)
   (pichat-chat--add-attachment
    (pichat-attachments-read-clipboard
     (pichat-chat--retained-attachments)))
@@ -360,8 +365,7 @@ changed by this operation."
 (defun pichat-chat-screenshot ()
   "Capture and attach a bounded screenshot."
   (interactive)
-  (unless pichat-chat-session
-    (user-error "No PiChat session for this buffer"))
+  (pichat-chat--require-image-input)
   (pichat-chat--add-attachment
    (pichat-attachments-capture-screenshot
     (pichat-chat--retained-attachments)))

@@ -916,23 +916,44 @@ length change even though the internal edit itself must not become undoable."
    (t (format "%dM" (round (/ count 1000000.0))))))
 
 (defun pichat-chat--format-context-usage (session)
-  "Return compact context usage text for SESSION, or nil when unavailable."
-  (when-let ((usage (pichat-session-context-usage session)))
-    (let* ((tokens (plist-get usage :tokens))
-           (percent (plist-get usage :percent))
-           (window (plist-get usage :contextWindow))
-           (formatted-tokens (pichat-chat--format-token-count tokens))
-           (formatted-window (pichat-chat--format-token-count window))
-           (display (format "%s/%s" formatted-tokens formatted-window))
-           (face (cond
-                  ((and (numberp percent) (> percent 90)) 'error)
-                  ((and (numberp percent) (> percent 70)) 'warning)))
-           (help (format "Context usage: %s of %s tokens%s"
-                         formatted-tokens formatted-window
-                         (if (numberp percent)
-                             (format " (%.1f%%)" percent)
-                           ""))))
-      (propertize display 'help-echo help 'face face))))
+  "Return compact defensible usage text for SESSION, or nil when unavailable."
+  (when-let* ((usage (pichat-session-context-usage session)))
+    (if (equal (plist-get usage :scope) "accumulatedRequests")
+        (let* ((input (plist-get usage :inputTokens))
+               (output (plist-get usage :outputTokens))
+               (rounds (plist-get usage :roundCount))
+               (reported-rounds (plist-get usage :reportedRoundCount))
+               (estimated (eq t (plist-get usage :estimated)))
+               (display
+                (format "↑%s ↓%s%s"
+                        (pichat-chat--format-token-count input)
+                        (pichat-chat--format-token-count output)
+                        (if estimated "~" "")))
+               (help
+                (format "%s accumulated request usage across %s round%s%s; not context-window occupancy"
+                        (if estimated "Estimated" "Reported")
+                        (or rounds "?")
+                        (if (equal rounds 1) "" "s")
+                        (if (and (numberp reported-rounds)
+                                 (not (equal reported-rounds rounds)))
+                            (format " (%d reported usage)" reported-rounds)
+                          ""))))
+          (propertize display 'help-echo help))
+      (let* ((tokens (plist-get usage :tokens))
+             (percent (plist-get usage :percent))
+             (window (plist-get usage :contextWindow))
+             (formatted-tokens (pichat-chat--format-token-count tokens))
+             (formatted-window (pichat-chat--format-token-count window))
+             (display (format "%s/%s" formatted-tokens formatted-window))
+             (face (cond
+                    ((and (numberp percent) (> percent 90)) 'error)
+                    ((and (numberp percent) (> percent 70)) 'warning)))
+             (help (format "Context usage: %s of %s tokens%s"
+                           formatted-tokens formatted-window
+                           (if (numberp percent)
+                               (format " (%.1f%%)" percent)
+                             ""))))
+        (propertize display 'help-echo help 'face face)))))
 
 (defun pichat-chat--mode-line-state-control (state)
   "Return compact mode-line indicator for Pi session STATE."
@@ -1082,7 +1103,7 @@ omitted `xhigh' and `max' levels are unsupported."
   "Return availability state of SESSION's thinking control."
   (let ((model (pichat-session-model session)))
     (cond
-     ((not (pichat-backend-capable-p session 'thinking)) 'unavailable)
+     ((not (pichat-backend-capable-p session 'thinking)) 'unsupported)
      ((not (pichat-session-alive-p session)) 'unavailable)
      ((or (not (listp model)) (not (plist-member model :reasoning)))
       'unavailable)
@@ -1173,7 +1194,7 @@ straightforward to exercise without synthesizing mouse input."
        (pichat-chat--mode-line-control
         ".!" "Pi rejected the last thinking-level request; mouse-1 retries"
         pichat-chat--thinking-mode-line-map))
-      ('disabled nil)
+      ((or 'disabled 'unsupported) nil)
       (_
        (pichat-chat--mode-line-control
         ".?" "Pi thinking control unavailable until model state is known"
@@ -1183,11 +1204,19 @@ straightforward to exercise without synthesizing mouse input."
   "Return compact PiChat mode-line status text."
   (if-let ((s pichat-chat-session))
       (let* ((state (or (pichat-session-state s) 'unknown))
-             (model (or (plist-get (pichat-session-model s) :id)
-                        (plist-get (pichat-session-model s) :modelId)
-                        (plist-get (pichat-session-model s) :name)
+             (model-data (pichat-session-model s))
+             (model (or (plist-get model-data :id)
+                        (plist-get model-data :modelId)
+                        (plist-get model-data :name)
                         "?"))
-             (model-control (pichat-chat--mode-line-model-control s model))
+             (provider (plist-get model-data :provider))
+             (model-label
+              (if (and (not (eq (pichat-session-backend-id s) 'pi))
+                       (stringp provider) (not (string-empty-p provider)))
+                  (format "%s/%s" provider model)
+                model))
+             (model-control
+              (pichat-chat--mode-line-model-control s model-label))
              (thinking-control (pichat-chat--mode-line-thinking-control s))
              (model-thinking (concat model-control (or thinking-control "")))
              (name (pichat-session-name s))

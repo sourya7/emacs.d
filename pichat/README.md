@@ -269,6 +269,50 @@ each run. Abort, stop, and new conversation invalidate queued approvals and late
 callbacks before cancelling the provider request. Side effects completed before
 cancellation cannot be undone.
 
+### Optional native coding tools
+
+PiChat includes a small coding tool module, but merely loading it registers
+nothing. Opt in deliberately before starting a new native conversation:
+
+```elisp
+(require 'pichat-llm-coding-tools)
+(setq pichat-llm-tools (pichat-llm-coding-tools-register))
+```
+
+The returned names are `read`, `ls`, `grep`, `write`, `edit`, and `bash`. Their
+names, argument vocabulary, and model-facing descriptions follow Pi's familiar
+basic-tool conventions where their behavior matches. The descriptions also call
+out PiChat's narrower guarantees: text is UTF-8, `grep` is literal, `write`
+creates new files only, and `bash` always has a timeout. These tools are marked
+native-only and are not advertised through the Pi Emacs-tool bridge.
+
+All paths resolve under the native session's fixed local working directory.
+Relative paths use that root; absolute paths must still remain inside it; symlink
+escapes and remote/TRAMP roots are rejected. Reads, writes, and search have byte,
+line, entry, match, and character bounds controlled by the
+`pichat-llm-coding-tools-*` options. Search skips symbolic links plus configured
+metadata/dependency directories. Binary and invalid UTF-8 files are rejected.
+
+`read`, `ls`, and `grep` are non-mutating under the normal approval policy.
+`write`, `edit`, and `bash` are always classified as potentially mutating and
+therefore require approval unless the user has consciously installed an allow
+rule. `write` atomically creates a new file and refuses overwrite. `edit`
+atomically replaces one exact unique string, optionally checks
+`expectedSha256`, preserves file modes, and rejects modified file-visiting
+buffers. Neither operation silently changes an unsaved Emacs buffer.
+
+`bash` executes through Emacs's configured local shell in the session working
+directory. It is asynchronous, combines stdout/stderr, retains bounded output,
+and enforces `pichat-llm-coding-tools-command-timeout` with an absolute
+`pichat-llm-coding-tools-max-command-timeout`. Abort, stop, and new conversation
+interrupt an executing command and suppress its late callback. As with every
+external process, effects completed before cancellation cannot be undone. No
+arbitrary Emacs Lisp evaluator or unbounded shell tool is provided.
+
+When selected tools provide guidance, PiChat adds their exact working directory
+and safety semantics to the retained prompt's system context. It does not claim
+that Pi skills, context files, prompt templates, or additional tools are present.
+
 ## Launching runtimes
 
 PiChat requires Transient for its advanced launcher. The package requires it

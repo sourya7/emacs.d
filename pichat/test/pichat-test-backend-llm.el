@@ -18,6 +18,7 @@
 (defvar pichat-llm-codex-auth-host)
 (defvar pichat-llm-codex-auth-user)
 (defvar pichat-llm-error-max-chars)
+(defvar pichat-llm-coding-tools-command-timeout)
 (defvar pichat-backend-llm-capabilities)
 (declare-function pichat-test-llm--invoke nil
                   (provider prompt partial-callback final-callback error-callback))
@@ -34,6 +35,8 @@
                   (&optional host user))
 (declare-function pichat-llm--require-public-api "pichat-backend-llm" ())
 (declare-function pichat-llm--usage-data "pichat-backend-llm" (state))
+(declare-function pichat-llm-coding-tools-register
+                  "pichat-llm-coding-tools" ())
 
 (when (pichat-test-llm-available-p)
   (pichat-test-llm-install-offline-parser-shims)
@@ -955,6 +958,71 @@
                 (should-not
                  (pichat-llm-state-pending-tools
                   (pichat-session-backend-state session))))
+            (pichat-backend-stop-session session)))))))
+
+(ert-deftest pichat-backend-llm-coding-tool-context-is-installed-at-start ()
+  "Canonical selected tools add their exact local policy to retained context."
+  (pichat-test-llm--require)
+  (pichat-test-with-clean-state
+    (pichat-test-with-temp-dir directory
+      (let ((default-directory directory))
+        (require 'pichat-llm-coding-tools)
+        (pichat-llm-coding-tools-register)
+        (let* ((provider
+                (make-pichat-test-llm-provider :capabilities '(tool-use)))
+               (session (pichat-test-llm--session provider nil '("read" "edit")))
+               (context
+                (pichat-llm-state-context
+                 (pichat-session-backend-state session))))
+          (unwind-protect
+              (progn
+                (should (string-match-p (regexp-quote directory) context))
+                (should (string-match-p "Use read to examine files" context))
+                (should (string-match-p "oldText must match" context))
+                (should (string-match-p "do not assume Pi skills" context)))
+            (pichat-backend-stop-session session)))))))
+
+(ert-deftest pichat-backend-llm-abort-cancels-asynchronous-tool-process ()
+  "Abort invokes an executing tool's cancellation closure before later effects."
+  (pichat-test-llm--require)
+  (pichat-test-with-clean-state
+    (pichat-test-with-temp-dir directory
+      (let ((default-directory directory)
+            (pichat-approval-policy-file
+             (expand-file-name "approvals.el" directory))
+            (pichat-llm-coding-tools-command-timeout 5))
+        (require 'pichat-llm-coding-tools)
+        (pichat-llm-coding-tools-register)
+        (setq pichat-approval-rules '(("bash" . allow)))
+        (pichat-approval-save)
+        (let* ((provider
+                (make-pichat-test-llm-provider
+                 :capabilities '(tool-use)
+                 :scripts
+                 '(((tools
+                     ("bash"
+                      "sleep 1; printf late > cancelled-by-backend.txt"
+                      5))))))
+               (session (pichat-test-llm--session provider nil '("bash")))
+               (state (pichat-session-backend-state session)))
+          (unwind-protect
+              (progn
+                (pichat-backend-submit-prompt
+                 session "run then abort" nil nil #'ignore #'ignore)
+                (should (eq 'executing
+                            (pichat-llm-tool-invocation-status
+                             (car (pichat-llm-state-round-tools state)))))
+                (pichat-backend-abort-session session)
+                (accept-process-output nil 1.2)
+                (should-not
+                 (file-exists-p
+                  (expand-file-name "cancelled-by-backend.txt" directory)))
+                (should (eq 'cancelled
+                            (pichat-llm-tool-invocation-status
+                             (car (pichat-llm-state-round-tools state)))))
+                (should-not
+                 (pichat-llm-tool-invocation-cancel-function
+                  (car (pichat-llm-state-round-tools state)))))
             (pichat-backend-stop-session session)))))))
 
 (ert-deftest pichat-backend-llm-prompt-undo-isolates-projection ()

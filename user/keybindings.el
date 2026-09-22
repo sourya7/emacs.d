@@ -210,7 +210,9 @@
   "r" 'tab-rename
   "s" 'tab-switcher
   "h" 'tab-previous
-  "l" 'tab-next)
+  "l" 'tab-next
+  ;; kind of odd placement in tab it its intuitive for juijutsu
+  "j" 'majutsu)
 
 (sharmaso/mode-keys
   :keymaps '(emacs-lisp-mode-map lisp-interaction-mode-map)

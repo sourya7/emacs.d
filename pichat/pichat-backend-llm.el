@@ -168,7 +168,7 @@ and its schema must fit PiChat's documented llm.el conversion subset."
 (cl-defstruct (pichat-llm-tool-invocation
                (:constructor pichat-llm-tool-invocation-create))
   "One locally identified native tool invocation."
-  id name args status result is-error callback run round timer)
+  id name args status result is-error callback run round timer cancel-function)
 
 (cl-defstruct (pichat-llm-state
                (:constructor pichat-llm-state-create))
@@ -181,6 +181,7 @@ and its schema must fit PiChat's documented llm.el conversion subset."
   model
   call-wrapper
   streaming
+  base-context
   context
   reasoning
   prompt
@@ -337,6 +338,20 @@ functions when a future llm.el changes one of these application seams."
             (append params
                     (list (intern (concat ":" (pop names))) (pop values)))))
     params))
+
+(defun pichat-llm--context-with-tools (base names directory)
+  "Return BASE plus explicit instructions for tool NAMES in DIRECTORY."
+  (let ((instructions (pichat-tools-instructions names)))
+    (if (null instructions)
+        base
+      (string-join
+       (delq nil
+             (list (and (pichat-llm--nonblank-string-p base) base)
+                   (format
+                    "Selected Emacs tools operate relative to the local working directory %s. Use only the tools actually provided; do not assume Pi skills, context files, arbitrary Lisp evaluation, additional tools, or paths outside this directory."
+                    directory)
+                   (string-join instructions "\n")))
+       "\n\n"))))
 
 (defun pichat-llm--tool-result-text (result)
   "Return bounded provider text for structured tool RESULT."
@@ -781,11 +796,23 @@ Image data is deliberately excluded from the journal and rendered transcript."
   (when (and (pichat-llm--run-current-p
               state (pichat-llm-tool-invocation-run invocation))
              (eq (pichat-llm-tool-invocation-status invocation) 'pending))
-    (let ((result (pichat-tools-call
-                   tool (pichat-llm-tool-invocation-args invocation))))
-      (pichat-llm--finish-tool
-       session state invocation (plist-get result :value)
-       (plist-get result :is-error)))))
+    (setf (pichat-llm-tool-invocation-status invocation) 'executing)
+    (let ((cancel
+           (pichat-tools-call-async
+            tool (pichat-llm-tool-invocation-args invocation)
+            (lambda (result)
+              (when (eq (pichat-llm-tool-invocation-status invocation)
+                        'executing)
+                ;; `pichat-llm--finish-tool' accepts pending invocations.  Move
+                ;; back atomically only for this callback; cancellation changes
+                ;; the state to `cancelled' first and therefore stays inert.
+                (setf (pichat-llm-tool-invocation-status invocation) 'pending)
+                (pichat-llm--finish-tool
+                 session state invocation (plist-get result :value)
+                 (plist-get result :is-error))))
+            session)))
+      (when (eq (pichat-llm-tool-invocation-status invocation) 'executing)
+        (setf (pichat-llm-tool-invocation-cancel-function invocation) cancel)))))
 
 (defun pichat-llm--run-next-approval (session state)
   "Prompt for STATE's oldest queued native tool when SESSION is focused."
@@ -828,13 +855,22 @@ Image data is deliberately excluded from the journal and rendered transcript."
                          session state)))))
 
 (defun pichat-llm--cancel-pending-tools (state)
-  "Cancel approval timers and invalidate pending callbacks in STATE."
-  (dolist (invocation (pichat-llm-state-pending-tools state))
-    (let ((timer (pichat-llm-tool-invocation-timer invocation)))
-      (when (timerp timer) (cancel-timer timer)))
-    (setf (pichat-llm-tool-invocation-status invocation) 'cancelled
-          (pichat-llm-tool-invocation-callback invocation) nil
-          (pichat-llm-tool-invocation-timer invocation) nil))
+  "Cancel approvals/executions and invalidate pending callbacks in STATE."
+  (dolist (invocation
+           (delete-dups
+            (append (pichat-llm-state-round-tools state)
+                    (pichat-llm-state-pending-tools state))))
+    (when (memq (pichat-llm-tool-invocation-status invocation)
+                '(pending executing))
+      (let ((timer (pichat-llm-tool-invocation-timer invocation))
+            (cancel (pichat-llm-tool-invocation-cancel-function invocation)))
+        (when (timerp timer) (cancel-timer timer))
+        (setf (pichat-llm-tool-invocation-status invocation) 'cancelled
+              (pichat-llm-tool-invocation-callback invocation) nil
+              (pichat-llm-tool-invocation-timer invocation) nil
+              (pichat-llm-tool-invocation-cancel-function invocation) nil)
+        (when (functionp cancel)
+          (condition-case nil (funcall cancel) (error nil))))))
   (setf (pichat-llm-state-pending-tools state) nil))
 
 (defun pichat-llm--invoke-tool
@@ -1271,6 +1307,13 @@ When ROUND-COMMITTED is non-nil, tool-round entries and usage already exist."
     ;; every later new conversation must start resolution at the user-owned
     ;; factory boundary and receive independent provider state.
     (pichat-llm--install-provider session state prepared)
+    (let ((base-context (or (pichat-llm-state-base-context state)
+                            (pichat-llm-state-context state))))
+      (setf (pichat-llm-state-base-context state) base-context
+            (pichat-llm-state-context state)
+            (pichat-llm--context-with-tools
+             base-context (pichat-llm-state-tool-names state)
+             (pichat-session-emacs-cwd session))))
     (setf (pichat-llm-state-tools state) tools
           (pichat-llm-state-alive state) t
           (pichat-llm-state-source-generation state) 1
@@ -1683,6 +1726,7 @@ DIRECTORY defaults to `default-directory'."
          (state
           (pichat-llm-state-create
            :provider-spec spec
+           :base-context pichat-llm-context
            :context pichat-llm-context
            :reasoning pichat-llm-reasoning
            :tool-names (copy-sequence pichat-llm-tools)

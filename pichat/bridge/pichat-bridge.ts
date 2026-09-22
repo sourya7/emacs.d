@@ -3,6 +3,7 @@ import { Type, type TSchema } from "typebox";
 
 type PiChatToolDef = { name: string; label?: string; description?: string; parameters?: unknown; mutating?: boolean };
 type PiChatToolsResponse = { protocolVersion?: number; tools?: PiChatToolDef[] };
+type SystemPromptOptions = { selectedTools: string[] };
 
 const PROTOCOL_VERSION = 1;
 const CAPABILITIES = ["tools", "tool-errors", "dynamic-tool-refresh"];
@@ -58,7 +59,7 @@ export default function (pi: ExtensionAPI) {
 		return typeof result === "string" ? result : JSON.stringify(result);
 	}
 
-	async function syncTools(ctx: any) {
+	async function syncTools(ctx: any, systemPromptOptions?: SystemPromptOptions) {
 		if (!(await handshake(ctx))) return;
 		ctx.ui.setStatus(STATUS_KEY, "synchronizing");
 		let raw: string | undefined;
@@ -113,7 +114,15 @@ export default function (pi: ExtensionAPI) {
 			});
 		}
 		const nonPichatActiveTools = pi.getActiveTools().filter((name) => !registeredTools.has(name));
-		pi.setActiveTools([...new Set([...nonPichatActiveTools, ...nextNames])]);
+		const activeTools = [...new Set([...nonPichatActiveTools, ...nextNames])];
+		pi.setActiveTools(activeTools);
+		// Pi 0.86 snapshots the structured prompt options before running
+		// before_agent_start handlers.  Updating only the live active-tool set can
+		// therefore leave this turn's provider tool list at the old snapshot.
+		// Mutating the documented per-turn options keeps the prompt declaration
+		// and executable tool loadout synchronized; older Pi releases still use
+		// setActiveTools above.
+		if (systemPromptOptions) systemPromptOptions.selectedTools = activeTools;
 		ctx.ui.setStatus(STATUS_KEY, `synchronized:${tools.length}`);
 	}
 
@@ -121,5 +130,8 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("pichat-sync-tools", { description: "Synchronize Emacs-defined PiChat tools", handler: async (_args, ctx) => { await syncTools(ctx); } });
 
 	pi.on("session_start", async (_event, ctx) => { await handshake(ctx); await syncTools(ctx); });
-	pi.on("before_agent_start", async (_event, ctx) => { await syncTools(ctx); return undefined; });
+	pi.on("before_agent_start", async (event, ctx) => {
+		await syncTools(ctx, event.systemPromptOptions);
+		return undefined;
+	});
 }

@@ -502,7 +502,8 @@ Chat keys:
 
 - `RET` — send prompt
 - `S-RET` — insert newline
-- `C-c C-k` — abort
+- `C-c C-k` — abort; queued steering and follow-up text is cleared from Pi
+  and prepended to the current editor draft before the run is stopped
 - `C-c C-y` — recover a rejected or ambiguously failed submission, including
   its images
 - `M-x pichat-chat-discard-recoverable-submissions` — discard saved recovery drafts

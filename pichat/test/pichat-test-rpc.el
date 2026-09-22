@@ -598,9 +598,11 @@
                  (lambda (_session type payload callback &optional _error)
                    (push (list type payload callback) calls))))
         (pichat-rpc-set-steering-mode session "all" #'ignore)
-        (pichat-rpc-set-follow-up-mode session "one-at-a-time" #'ignore))
+        (pichat-rpc-set-follow-up-mode session "one-at-a-time" #'ignore)
+        (pichat-rpc-clear-queue session #'ignore #'identity))
       (should (equal '(("set_steering_mode" (:mode "all"))
-                       ("set_follow_up_mode" (:mode "one-at-a-time")))
+                       ("set_follow_up_mode" (:mode "one-at-a-time"))
+                       ("clear_queue" nil))
                      (mapcar (lambda (call) (list (car call) (cadr call)))
                              (nreverse calls)))))))
 

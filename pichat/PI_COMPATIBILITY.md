@@ -1,11 +1,11 @@
 ---
 schema_version: 1
-last_verified_pi: null
-last_verified_pi_commit: null
-last_verified_rpc_doc_blob: null
-last_reviewed_pi: 0.84.4
-last_reviewed_pi_commit: b79e4cc834970cca69daebffab7df1da7d1e52c4
-last_reviewed_rpc_doc_blob: 52dbf884f53c281329e83444574c74c142564181
+last_verified_pi: 0.87.1
+last_verified_pi_commit: f07218c4d4bbc12bef056a7058c3dd49dfe41abe
+last_verified_rpc_doc_blob: ad6ff90e80ba89eb2a42f226c1cbd46bc1818a2f
+last_reviewed_pi: 0.87.1
+last_reviewed_pi_commit: f07218c4d4bbc12bef056a7058c3dd49dfe41abe
+last_reviewed_rpc_doc_blob: ad6ff90e80ba89eb2a42f226c1cbd46bc1818a2f
 ---
 
 # Pi compatibility record
@@ -23,14 +23,13 @@ a version alone cannot distinguish a moved tag or an unchanged RPC document.
 
 ## Current status
 
-- The verified-release watermark has not yet been advanced. Phase 0 baseline
-  runs against Pi 0.85.1 passed with the optional-dependency skips noted below;
-  this scoped backend investigation does not advance compatibility watermarks.
+- Pi 0.87.1 is the latest fully verified release. The complete real-Pi suite
+  passes with only the optional-dependency skips noted below.
 - The persisted-session fixture baseline is Pi 0.80.6; this is fixture provenance,
   not proof that the current complete suite passed on that release.
-- RPC documentation changes through Pi 0.84.4 have been reviewed.
-- The earlier verification attempt against Pi 0.84.4 failed. It remains in the
-  history independently of the later successful baseline runs.
+- RPC documentation changes through Pi 0.87.1 have been reviewed.
+- Earlier failed verification attempts remain in the history independently of
+  later successful runs.
 
 ## RPC change ledger
 
@@ -53,8 +52,11 @@ here. Use one of these dispositions:
 | [`a4475344f`](https://github.com/earendil-works/pi/commit/a4475344fb765850ec5321efe3c67e6f364ead5c) delta-only `message_update` | 0.84.0 | implemented | `pichat/pichat-pi.el` assembles indexed deltas and treats `message_end` as authoritative. Unit and real-Pi tests cover 0.83/0.84 stream equivalence and delta rendering. |
 | [`c93ea6ccf`](https://github.com/earendil-works/pi/commit/c93ea6ccf0a398c293641e8001db06b8f7997c79) streaming usage field | 0.84.2 | compatible-no-change | The top-level field is additive; transcript reduction ignores it without rejecting the event. |
 | [`830a0a59e`](https://github.com/earendil-works/pi/commit/830a0a59e975ed3a4e551be18dc60d45479f5118) tool metadata at `toolcall_start` | 0.84.3 | implemented | Live tool correlation and enrichment are covered by `pichat/test/pichat-test-transcript.el` and `pichat/test/pichat-test-tool-enrichment.el`. |
-| [`a79b37334`](https://github.com/earendil-works/pi/commit/a79b3733421ead0dcea3cbe32247ea2464400dcb) `clear_queue` | 0.84.4 | pending | PiChat has no `clear_queue` wrapper. Decide whether abort should retrieve and restore queued text before claiming this behavior. |
-| [`bea67d90d`](https://github.com/earendil-works/pi/commit/bea67d90d1a74dde8852c63cac72d476013d3879) abort cancels compaction/branch summary and waits for idle | Reviewed in 0.85.1 | compatible-no-change | Phase 0 reviewed the RPC and implementation diff. PiChat retains event-based settlement; `pichat-test-lifecycle.el` covers aborted compaction. No new abort/compaction UI behavior is claimed. |
+| [`a79b37334`](https://github.com/earendil-works/pi/commit/a79b3733421ead0dcea3cbe32247ea2464400dcb) `clear_queue` | 0.84.4 | implemented | Abort clears Pi's queue first and prepends returned steering/follow-up text to the current editor. RPC, fallback, lifecycle, and real-Pi coverage is in `pichat-test-rpc.el`, `pichat-test-lifecycle.el`, and `pichat-test-integration.el`. |
+| [`bea67d90d`](https://github.com/earendil-works/pi/commit/bea67d90d1a74dde8852c63cac72d476013d3879) abort cancels compaction/branch summary and waits for idle | 0.85.0 | compatible-no-change | PiChat retains event-based settlement; `pichat-test-lifecycle.el` covers aborted compaction and the real-Pi abort tests wait for `agent_settled`. |
+| [`9e05370b`](https://github.com/earendil-works/pi/commit/9e05370b298d0a6b8d9bc2c02e4bfae189ef1616) transcript-carried system prompt and tool declarations | 0.86.0 | implemented | The bridge mutates per-turn structured tool selection, and the fake provider replays `toolsAdded`/`toolsRemoved` while retaining the legacy top-level tool fallback. Bridge schema and deactivation integration tests cover both transitions. |
+| [`faa9863c`](https://github.com/earendil-works/pi/commit/faa9863cb8b54689f1d0c2df9dbab1ee1fa9de19) RPC queued messages pass through input handlers | 0.86.0 | compatible-no-change | PiChat uses ordinary `steer` and `follow_up` RPC commands; the real-Pi queue-mode integration test covers their delivery and settlement. |
+| [`25cc5c7bf`](https://github.com/earendil-works/pi/commit/25cc5c7bf4cbc76b2e134c729eb8d57d521ed749) RPC documentation refresh and reference split | 0.87.1 | compatible-no-change | The command, response, and event wire types and RPC implementation are unchanged from 0.86.1. PiChat already uses LF-delimited JSON records, correlates responses by ID, treats prompt success as acceptance rather than completion, and waits for `agent_settled`; the complete 0.87.1 suite exercises these contracts. |
 
 Do not delete rows after implementation. Change their disposition and add the
 implementation and test locations so later upgrades do not rediscover the same
@@ -71,6 +73,10 @@ feature.
 | 2026-09-20 | 0.85.1 | [`d981de12`](https://github.com/earendil-works/pi/commit/d981de1229ef899957bbe968bc8dcda02a21f477) | `pichat/test/run-tests.sh --full` (corrected gptel decision rerun) | **Passed:** 635 passed, 0 unexpected, 11 skips. No production changes; eight skips remain future native-backend contracts. |
 | 2026-09-20 | 0.85.1 | [`d981de12`](https://github.com/earendil-works/pi/commit/d981de1229ef899957bbe968bc8dcda02a21f477) | `pichat/test/run-tests.sh --full` (llm/CLIProxy Phase 0R) | **Failed:** 634 passed, 1 failed, 11 skipped. The timing-sensitive `pichat-consult-archive-process-classifies-caller-and-availability-failures` passed 5/5 focused reruns. |
 | 2026-09-20 | 0.85.1 | [`d981de12`](https://github.com/earendil-works/pi/commit/d981de1229ef899957bbe968bc8dcda02a21f477) | `pichat/test/run-tests.sh --full` (llm/CLIProxy Phase 0R rerun) | **Passed:** 635 passed, 0 unexpected, 11 skips. No production changes; eight skips remain future native-backend contracts. Compatibility watermarks unchanged. |
+| 2026-09-22 | 0.86.1 | [`13cbf77d`](https://github.com/earendil-works/pi/commit/13cbf77df2396303013a41646bcfa77b4271ae56) | `pichat/test/run-tests.sh --full` (initial upgrade run) | **Failed:** 674 expected, 2 failed, 3 optional-dependency skips. The fake provider still expected pre-0.86 top-level provider tools, causing both bridge tool tests to fail. |
+| 2026-09-22 | 0.86.1 | [`13cbf77d`](https://github.com/earendil-works/pi/commit/13cbf77df2396303013a41646bcfa77b4271ae56) | `pichat/test/run-tests.sh --full` | **Passed:** 679 passed, 0 unexpected, 3 optional-dependency skips (two Consult/Embark tests and one Orderless test). |
+| 2026-09-22 | 0.87.1 | [`f07218c4`](https://github.com/earendil-works/pi/commit/f07218c4d4bbc12bef056a7058c3dd49dfe41abe) | `pichat/test/run-tests.sh --full` (initial upgrade run) | **Failed:** 678 expected, 1 failed, 3 optional-dependency skips. Pi 0.87 image normalization rejected the integration test's text placeholder masquerading as PNG. |
+| 2026-09-22 | 0.87.1 | [`f07218c4`](https://github.com/earendil-works/pi/commit/f07218c4d4bbc12bef056a7058c3dd49dfe41abe) | `pichat/test/run-tests.sh --full` | **Passed:** 679 passed, 0 unexpected, 3 optional-dependency skips (two Consult/Embark tests and one Orderless test). The image integration test now supplies a valid PNG fixture. |
 
 A failed attempt is retained because it records what was actually tested, but it
 must never update the `last_verified_*` fields.

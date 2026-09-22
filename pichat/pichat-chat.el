@@ -1622,13 +1622,60 @@ Nested calls in another buffer establish an independent transaction."
            (progn ,@body)
          (pichat-chat--restore-view-state view-state)))))
 
+(defun pichat-chat--restore-cleared-queue (response)
+  "Prepend queued message text from clear-queue RESPONSE to the editor."
+  (let* ((data (plist-get response :data))
+         (messages
+          (cl-remove-if-not
+           (lambda (text)
+             (and (stringp text) (not (string-blank-p text))))
+           (append (plist-get data :steering)
+                   (plist-get data :followUp))))
+         (queued-text (string-join messages "\n\n")))
+    (unless (string-empty-p queued-text)
+      (pichat-chat--set-input-text
+       (string-join
+        (cl-remove-if #'string-blank-p
+                      (list queued-text (pichat-chat--input-text)))
+        "\n\n")))))
+
+(defun pichat-chat--clear-queue-before-abort-success
+    (buffer session response response-session)
+  "Restore RESPONSE's queue in BUFFER, then abort SESSION."
+  (when (and (eq session response-session)
+             (buffer-live-p buffer))
+    (with-current-buffer buffer
+      (when (eq pichat-chat-session session)
+        (pichat-chat--restore-cleared-queue response))))
+  (when (pichat-backend-session-alive-p session)
+    (pichat-backend-abort-session session nil)))
+
+(defun pichat-chat--clear-queue-before-abort-failure
+    (_buffer session _response response-session)
+  "Abort SESSION when its queue could not be cleared."
+  (when (and (eq session response-session)
+             (pichat-backend-session-alive-p session))
+    ;; Pi releases before clear_queue remain usable, but cannot restore queued
+    ;; text before aborting.
+    (pichat-backend-abort-session session nil)))
+
 (defun pichat-chat-abort ()
-  "Abort the current Pi run or active automatic retry delay."
+  "Abort the current run, restoring queued text when supported."
   (interactive)
   (unless pichat-chat-session (user-error "No PiChat session"))
-  (pichat-backend-abort-session
-   pichat-chat-session
-   (pichat-session-retrying-p pichat-chat-session)))
+  (let ((session pichat-chat-session))
+    (cond
+     ((pichat-session-retrying-p session)
+      (pichat-backend-abort-session session t))
+     ((pichat-backend-capable-p session 'queue-clear)
+      (pichat-backend-clear-session-queue
+       session
+       (apply-partially #'pichat-chat--clear-queue-before-abort-success
+                        (current-buffer) session)
+       (apply-partially #'pichat-chat--clear-queue-before-abort-failure
+                        (current-buffer) session)))
+     (t
+      (pichat-backend-abort-session session nil)))))
 
 (defun pichat-chat-steer (message)
   "Queue steering MESSAGE."

@@ -20,6 +20,8 @@
 (declare-function pichat-rpc-abort "pichat-rpc" (session &optional callback))
 (declare-function pichat-rpc-abort-retry "pichat-rpc"
                   (session &optional callback))
+(declare-function pichat-rpc-clear-queue "pichat-rpc"
+                  (session callback &optional error-callback))
 (declare-function pichat-rpc-new-session "pichat-rpc"
                   (session &optional callback parent-session))
 (declare-function pichat-rpc-get-state "pichat-rpc"
@@ -35,7 +37,7 @@
 (defconst pichat-backend-pi-capabilities
   '(submit abort state transcript stats image-input
     lifecycle events process transport diagnostics diagnostic-view
-    queue compact new-conversation naming models thinking commands extension-ui
+    queue queue-clear compact new-conversation naming models thinking commands extension-ui
     session-history saved-sessions archive branching)
   "Capabilities supplied by the Pi RPC backend.")
 
@@ -67,6 +69,10 @@
   (if retrying-p
       (pichat-rpc-abort-retry session callback)
     (pichat-rpc-abort session callback)))
+
+(cl-defmethod pichat-backend-clear-queue
+  ((_backend (eql pi)) session callback error-callback)
+  (pichat-rpc-clear-queue session callback error-callback))
 
 (cl-defmethod pichat-backend-new-conversation
   ((_backend (eql pi)) session callback)

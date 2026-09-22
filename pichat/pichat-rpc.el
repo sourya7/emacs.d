@@ -671,6 +671,11 @@ CB and ERROR-CALLBACK receive (RESPONSE SESSION)."
   "Abort current SESSION run."
   (pichat-rpc-send session "abort" nil cb))
 
+(defun pichat-rpc-clear-queue (session callback &optional error-callback)
+  "Clear SESSION's queued messages and return them to CALLBACK.
+Dispatch failure to optional ERROR-CALLBACK."
+  (pichat-rpc-send session "clear_queue" nil callback error-callback))
+
 (defun pichat-rpc-abort-retry (session &optional cb)
   "Abort SESSION's active automatic retry delay."
   (pichat-rpc-send session "abort_retry" nil cb))

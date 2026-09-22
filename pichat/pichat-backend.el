@@ -50,6 +50,10 @@ features may refine the result without exposing provider objects to the UI.")
   "Abort SESSION through BACKEND.
 RETRYING-P distinguishes an active retry delay from an active model run.")
 
+(cl-defgeneric pichat-backend-clear-queue
+    (backend session callback error-callback)
+  "Clear queued messages for SESSION through BACKEND.")
+
 (cl-defgeneric pichat-backend-new-conversation
     (backend session callback)
   "Start a new conversation for SESSION through BACKEND.")
@@ -158,6 +162,13 @@ Pi retains its historical key representation for compatibility."
   (pichat-backend-require-capability session 'abort "Abort")
   (pichat-backend-abort
    (pichat-session-backend-object session) session retrying-p callback))
+
+(defun pichat-backend-clear-session-queue
+    (session callback &optional error-callback)
+  "Clear SESSION's queued messages through its backend."
+  (pichat-backend-require-capability session 'queue-clear "Queue clearing")
+  (pichat-backend-clear-queue
+   (pichat-session-backend-object session) session callback error-callback))
 
 (defun pichat-backend-start-new-conversation (session &optional callback)
   "Start a new conversation for SESSION through its backend."

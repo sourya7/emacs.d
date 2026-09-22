@@ -7,6 +7,7 @@ import {
   type Context,
   type Model,
   type SimpleStreamOptions,
+  type Tool,
   type ToolCall,
   type Usage,
 } from "@earendil-works/pi-ai";
@@ -106,6 +107,27 @@ function contextString(context: Context): string {
   }
 }
 
+function activeTools(context: Context): Tool[] {
+  if (Array.isArray(context.tools)) return context.tools;
+
+  // Pi 0.86 moved provider tool declarations into transcript system messages.
+  // Replay their deltas while retaining the legacy top-level fallback above so
+  // this deterministic provider can verify both sides of the compatibility
+  // boundary.
+  const tools = new Map<string, Tool>();
+  for (const message of context.messages as any[]) {
+    if (message?.role !== "system") continue;
+    for (const tool of message.toolsAdded ?? []) {
+      if (typeof tool?.name === "string") tools.set(tool.name, tool);
+    }
+    for (const reference of message.toolsRemoved ?? []) {
+      const name = typeof reference === "string" ? reference : reference?.name;
+      if (typeof name === "string") tools.delete(name);
+    }
+  }
+  return [...tools.values()];
+}
+
 function requireExpectedContext(turn: FakeTurn, context: Context) {
   const expected = turn.expectContextIncludes;
   const haystack = contextString(context);
@@ -118,8 +140,9 @@ function requireExpectedContext(turn: FakeTurn, context: Context) {
     }
   }
 
+  const tools = activeTools(context);
   if (turn.expectTool) {
-    const tool = context.tools?.find((candidate) => candidate.name === turn.expectTool?.name);
+    const tool = tools.find((candidate) => candidate.name === turn.expectTool?.name);
     if (!tool) throw new Error(`fake provider expected tool ${turn.expectTool.name}`);
     if (turn.expectTool.parameters && !isDeepStrictEqual(tool.parameters, turn.expectTool.parameters)) {
       throw new Error(
@@ -128,7 +151,7 @@ function requireExpectedContext(turn: FakeTurn, context: Context) {
     }
   }
 
-  if (turn.expectToolAbsent && context.tools?.some((tool) => tool.name === turn.expectToolAbsent)) {
+  if (turn.expectToolAbsent && tools.some((tool) => tool.name === turn.expectToolAbsent)) {
     throw new Error(`fake provider expected tool ${turn.expectToolAbsent} to be inactive`);
   }
 

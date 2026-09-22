@@ -45,6 +45,51 @@
       (should (equal "bounded summary"
                      (pichat-transcript-node-summary node))))))
 
+(ert-deftest pichat-chat-abort-restores-cleared-queue-before-current-draft ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          clear-callback abort-args buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (with-current-buffer buffer
+              (pichat-chat--set-input-text "current draft")
+              (cl-letf (((symbol-function 'pichat-backend-clear-session-queue)
+                         (lambda (_session callback &optional _error-callback)
+                           (setq clear-callback callback)))
+                        ((symbol-function 'pichat-backend-abort-session)
+                         (lambda (&rest args) (setq abort-args args))))
+                (pichat-chat-abort)
+                (should clear-callback)
+                (should-not abort-args)
+                (funcall clear-callback
+                         '(:success t
+                           :data (:steering ("steer one" "steer two")
+                                  :followUp ("follow later")))
+                         session))
+              (should (equal "steer one\n\nsteer two\n\nfollow later\n\ncurrent draft"
+                             (pichat-chat--input-text)))
+              (should (equal (list session nil) abort-args))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-chat-abort-falls-back-when-clear-queue-is-unsupported ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          clear-error-callback abort-args buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (with-current-buffer buffer
+              (cl-letf (((symbol-function 'pichat-backend-clear-session-queue)
+                         (lambda (_session _callback &optional error-callback)
+                           (setq clear-error-callback error-callback)))
+                        ((symbol-function 'pichat-backend-abort-session)
+                         (lambda (&rest args) (setq abort-args args))))
+                (pichat-chat-abort)
+                (funcall clear-error-callback '(:success nil) session))
+              (should (equal (list session nil) abort-args))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
 (ert-deftest pichat-chat-aborted-compaction-does-not-request-sync-or-stats ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)

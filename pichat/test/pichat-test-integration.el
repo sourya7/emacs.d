@@ -598,8 +598,11 @@
             (kill-buffer buffer))))))
 
   (ert-deftest pichat-integration-chat-image-attachment-reaches-real-pi-context ()
-    (let* ((raw "phase-seven-image")
-           (encoded (base64-encode-string raw t)))
+    ;; Pi 0.87 validates and normalizes images before provider dispatch, so use
+    ;; actual PNG bytes rather than the historical text-only placeholder.
+    (let* ((encoded
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+           (raw (base64-decode-string encoded)))
       (pichat-test-with-integration-session
           (session :no-session t
                    :script (list :turns
@@ -612,7 +615,9 @@
               (pichat-chat-stop-session-on-kill nil)
               (path (expand-file-name "phase-seven.png" default-directory))
               buffer)
-          (with-temp-file path (insert raw))
+          (with-temp-file path
+            (set-buffer-multibyte nil)
+            (insert raw))
           (unwind-protect
               (progn
                 (setq buffer (pichat-chat-open session))
@@ -947,6 +952,33 @@
       (pichat-test-rpc-call session "abort")
       (pichat-test-wait-for-raw-event session "agent_settled")
       (should (eq (pichat-session-state session) 'idle))))
+
+  (ert-deftest pichat-integration-chat-abort-restores-and-clears-queued-messages ()
+    (pichat-test-with-integration-session
+        (session :no-session t
+                 :script '(:turns [(:delayMs 1000 :text "slow response")]))
+      (let ((pichat-chat-stop-session-on-kill nil)
+            (settled (pichat-test-count-raw-events session "agent_settled"))
+            buffer)
+        (unwind-protect
+            (progn
+              (setq buffer (pichat-chat-open session))
+              (pichat-test-rpc-call session "prompt" (list :message "slow prompt"))
+              (pichat-test-wait-for-raw-event session "agent_start")
+              (pichat-test-rpc-call session "steer" (list :message "steer again"))
+              (pichat-test-rpc-call session "follow_up" (list :message "follow later"))
+              (with-current-buffer buffer
+                (pichat-chat--set-input-text "current draft")
+                (pichat-chat-abort))
+              (pichat-test-wait-for-raw-event session "agent_settled" 8 settled)
+              (with-current-buffer buffer
+                (should (equal "steer again\n\nfollow later\n\ncurrent draft"
+                               (pichat-chat--input-text)))
+                (should (equal '(0 . 0) pichat-chat--queue-counts)))
+              (let ((state (plist-get (pichat-test-rpc-call session "get_state")
+                                      :data)))
+                (should (= 0 (plist-get state :pendingMessageCount)))))
+          (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
   (ert-deftest pichat-integration-successful-retry-remains-running-until-settled ()
     (pichat-test-with-integration-session

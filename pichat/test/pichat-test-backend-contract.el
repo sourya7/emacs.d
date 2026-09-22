@@ -102,6 +102,9 @@
               ((symbol-function 'pichat-rpc-abort-retry)
                (lambda (value &optional callback)
                  (push (list 'abort-retry value callback) calls)))
+              ((symbol-function 'pichat-rpc-clear-queue)
+               (lambda (value callback &optional error-callback)
+                 (push (list 'clear-queue value callback error-callback) calls)))
               ((symbol-function 'pichat-rpc-new-session)
                (lambda (value &optional callback _parent)
                  (push (list 'new value callback) calls)))
@@ -126,6 +129,7 @@
        session "hello" '((:image t)) 'follow-up #'ignore #'ignore)
       (pichat-backend-abort-session session nil #'ignore)
       (pichat-backend-abort-session session t #'ignore)
+      (pichat-backend-clear-session-queue session #'ignore #'ignore)
       (pichat-backend-start-new-conversation session #'ignore)
       (pichat-backend-get-state session #'ignore #'ignore)
       (pichat-backend-get-transcript session "cursor" #'ignore #'ignore)
@@ -134,7 +138,7 @@
       (pichat-backend-cancel-owned-request session "request")
       (pichat-backend-stop-session session))
     (should
-     (equal '(start submit abort abort-retry new state transcript stats name cancel stop)
+     (equal '(start submit abort abort-retry clear-queue new state transcript stats name cancel stop)
             (mapcar #'car (nreverse calls))))))
 
 (ert-deftest pichat-backend-contract-phase1-capability-rejection-is-preflight ()

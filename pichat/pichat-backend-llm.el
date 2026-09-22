@@ -20,6 +20,7 @@
 (require 'pichat-chat-diagnostics)
 (require 'pichat-events)
 (require 'pichat-session)
+(require 'pichat-tools)
 
 (eval-when-compile
   ;; These documented llm-vertex settings are dynamically bound only after
@@ -41,6 +42,7 @@
                   (session &rest args))
 
 (defvar pichat-current-session)
+(defvar pichat-chat-session)
 
 (defgroup pichat-llm nil
   "Native in-memory llm.el conversations for PiChat."
@@ -120,6 +122,33 @@ prompt setting mid-conversation cannot be round-tripped safely."
   :type 'integer
   :group 'pichat-llm)
 
+(defcustom pichat-llm-tools nil
+  "Names of registered Emacs tools exposed to new native conversations.
+Nil keeps native tools disabled.  Every named tool must already be registered,
+and its schema must fit PiChat's documented llm.el conversion subset."
+  :type '(repeat string)
+  :group 'pichat-llm)
+
+(defcustom pichat-llm-max-rounds 8
+  "Maximum provider rounds in one native agent run."
+  :type 'integer
+  :group 'pichat-llm)
+
+(defcustom pichat-llm-max-tool-calls 32
+  "Maximum Emacs tool invocations in one native agent run."
+  :type 'integer
+  :group 'pichat-llm)
+
+(defcustom pichat-llm-max-tool-output-chars 100000
+  "Maximum aggregate tool-result characters in one native agent run."
+  :type 'integer
+  :group 'pichat-llm)
+
+(defcustom pichat-llm-tool-result-max-chars 20000
+  "Maximum characters returned by one native Emacs tool invocation."
+  :type 'integer
+  :group 'pichat-llm)
+
 (cl-defstruct (pichat-llm-provider-spec
                (:constructor pichat-llm-provider-spec-create))
   "Explicit factory and call policy for one native provider family."
@@ -127,6 +156,7 @@ prompt setting mid-conversation cannot be round-tripped safely."
   label
   model
   call-wrapper
+  capabilities
   (streaming 'auto))
 
 (cl-defstruct (pichat-llm-query
@@ -134,6 +164,11 @@ prompt setting mid-conversation cannot be round-tripped safely."
   "Identity for a local snapshot request; it is not a model request handle."
   id
   cancelled)
+
+(cl-defstruct (pichat-llm-tool-invocation
+               (:constructor pichat-llm-tool-invocation-create))
+  "One locally identified native tool invocation."
+  id name args status result is-error callback run round timer)
 
 (cl-defstruct (pichat-llm-state
                (:constructor pichat-llm-state-create))
@@ -159,6 +194,15 @@ prompt setting mid-conversation cannot be round-tripped safely."
   round-usage
   usage-rounds
   assistant-started
+  tool-names
+  tools
+  round-tools
+  pending-tools
+  tool-sequence
+  run-round-count
+  run-tool-count
+  run-tool-output-chars
+  budget-error
   continuation-uncertain
   source-generation
   run-generation
@@ -190,6 +234,7 @@ Provider-dependent capabilities such as image input are added per session.")
 Do not silently fall back to private or version-specific implementation
 functions when a future llm.el changes one of these application seams."
   (dolist (function '(llm-make-chat-prompt
+                      llm-make-tool
                       llm-make-multipart
                       make-llm-media
                       llm-chat-prompt-append-response
@@ -215,6 +260,97 @@ functions when a future llm.el changes one of these application seams."
                 "\\b\\(api[-_ ]?key\\|access[-_ ]?token\\|password\\)[[:space:]]*[:=][[:space:]]*[^[:space:]]+"
                 "\\1=[REDACTED]" text)))
     (truncate-string-to-width text pichat-llm-error-max-chars nil nil "…")))
+
+(defun pichat-llm--schema-properties (schema)
+  "Return ordered (NAME . SCHEMA) pairs from object SCHEMA."
+  (let ((properties (plist-get schema :properties)) pairs)
+    (unless (or (null properties) (proper-list-p properties))
+      (user-error "Native tool properties must be a plist"))
+    (while properties
+      (let ((name (pop properties))
+            (value (pop properties)))
+        (unless (and (or (keywordp name) (symbolp name) (stringp name))
+                     (listp value))
+          (user-error "Native tool has an invalid property schema"))
+        (push (cons (if (stringp name) name
+                      (string-remove-prefix ":" (symbol-name name)))
+                    value)
+              pairs)))
+    (nreverse pairs)))
+
+(defun pichat-llm--schema-arg (name schema required)
+  "Convert property NAME with SCHEMA and REQUIRED names to an llm argument."
+  (let* ((type-name (plist-get schema :type))
+         (type (and (stringp type-name) (intern type-name)))
+         (items (plist-get schema :items)))
+    (unless (memq type '(string integer number boolean array))
+      (user-error "Native tool argument %s has unsupported type %S" name type-name))
+    (when (and (eq type 'array)
+               (not (and (listp items)
+                         (member (plist-get items :type)
+                                 '("string" "integer" "number" "boolean")))))
+      (user-error "Native tool array %s requires primitive items" name))
+    (dolist (key '(:oneOf :anyOf :allOf :not :patternProperties))
+      (when (plist-member schema key)
+        (user-error "Native tool argument %s uses unsupported schema %s"
+                    name key)))
+    (append
+     (list :name name :type type
+           :optional (not (member name required)))
+     (when (stringp (plist-get schema :description))
+       (list :description (plist-get schema :description)))
+     (when (vectorp (plist-get schema :enum))
+       (list :enum (plist-get schema :enum)))
+     (when items
+       (list :items
+             (list :type (intern (plist-get items :type))))))))
+
+(defun pichat-llm--tool-args (tool)
+  "Convert TOOL's documented JSON Schema subset to llm.el arguments."
+  (let* ((schema (pichat-tool-parameters tool))
+         (required (append (plist-get schema :required) nil)))
+    (unless (and (listp schema) (equal (plist-get schema :type) "object"))
+      (user-error "Native tool %s requires an object parameter schema"
+                  (pichat-tool-name tool)))
+    (when (eq (plist-get schema :additionalProperties) t)
+      (user-error "Native tool %s allows unsupported arbitrary properties"
+                  (pichat-tool-name tool)))
+    (dolist (name required)
+      (unless (stringp name)
+        (user-error "Native tool %s has an invalid required name"
+                    (pichat-tool-name tool))))
+    (let ((properties (pichat-llm--schema-properties schema)))
+      (dolist (name required)
+        (unless (assoc name properties)
+          (user-error "Native tool %s requires unknown property %s"
+                      (pichat-tool-name tool) name)))
+      (mapcar (lambda (property)
+                (pichat-llm--schema-arg
+                 (car property) (cdr property) required))
+              properties))))
+
+(defun pichat-llm--tool-params (names values)
+  "Return keyword plist pairing tool argument NAMES and VALUES."
+  (let (params)
+    (while names
+      (setq params
+            (append params
+                    (list (intern (concat ":" (pop names))) (pop values)))))
+    params))
+
+(defun pichat-llm--tool-result-text (result)
+  "Return bounded provider text for structured tool RESULT."
+  (let* ((value (plist-get result :value))
+         (text
+          (cond
+           ((stringp value) value)
+           ((or (listp value) (vectorp value))
+            (condition-case nil
+                (json-serialize value :false-object :json-false :null-object nil)
+              (error (format "%S" value))))
+           (t (format "%S" value)))))
+    (truncate-string-to-width
+     text pichat-llm-tool-result-max-chars nil nil "…")))
 
 (defun pichat-llm--auth-source-key (&optional host user)
   "Return the configured CLIProxyAPI key without caching it in PiChat state.
@@ -250,6 +386,9 @@ HOST and USER default to `pichat-llm-codex-auth-host' and
      :label "Codex via CLIProxyAPI"
      :model model
      :streaming t
+     ;; llm-openai-compatible only advertises model-catalog capabilities;
+     ;; CLIProxyAPI's Chat Completions tool path is fixture-tested by PiChat.
+     :capabilities '(tool-use)
      :factory
      (lambda ()
        (require 'llm-openai)
@@ -401,6 +540,15 @@ an existing conversation when provider construction fails."
                (user-error "Invalid native provider: %s"
                            (pichat-llm--bounded-error
                             (error-message-string err))))))
+           ;; llm 0.32.1's Vertex provider misspells these two documented
+           ;; capabilities in the plural.  Normalize only that known public
+           ;; result shape; PiChat still uses the provider's public methods.
+           (capabilities
+            (append capabilities
+                    (pichat-llm-provider-spec-capabilities spec)
+                    (when (memq 'tool-uses capabilities) '(tool-use))
+                    (when (memq 'streaming-tool-uses capabilities)
+                      '(streaming-tool-use))))
            (label
             (condition-case err
                 (or (pichat-llm-provider-spec-label spec)
@@ -474,8 +622,8 @@ an existing conversation when provider construction fails."
   (pichat-emit session 'rpc-event :raw raw)
   (pichat-emit session event :raw raw))
 
-(defun pichat-llm--message-content (text reasoning order images)
-  "Return ordered Pi-shaped content for TEXT, REASONING, ORDER, and IMAGES.
+(defun pichat-llm--message-content (text reasoning order images &optional tools)
+  "Return ordered Pi-shaped content for TEXT, REASONING, ORDER, IMAGES and TOOLS.
 Image data is deliberately excluded from the journal and rendered transcript."
   (let (content)
     (dolist (kind order)
@@ -498,21 +646,31 @@ Image data is deliberately excluded from the journal and rendered transcript."
             (append content
                     (list (list :type "image"
                                 :mediaType (plist-get image :mimeType))))))
+    (dolist (invocation tools)
+      (setq content
+            (append
+             content
+             (list (list :type "toolCall"
+                         :id (pichat-llm-tool-invocation-id invocation)
+                         :name (pichat-llm-tool-invocation-name invocation)
+                         :arguments
+                         (copy-tree
+                          (pichat-llm-tool-invocation-args invocation) t))))))
     (or content (list (list :type "text" :text "")))))
 
 (defun pichat-llm--message
-    (role text &optional stop-reason error-message reasoning order images)
+    (role text &optional stop-reason error-message reasoning order images tools)
   "Return a private Pi-shaped message for ROLE and normalized output."
   (append
    (list :role role
          :content (pichat-llm--message-content
                    (if (stringp text) text "") reasoning
-                   (or order '(text)) images))
+                   (or order '(text)) images tools))
    (when stop-reason (list :stopReason stop-reason))
    (when error-message (list :errorMessage error-message))))
 
 (defun pichat-llm--commit-message
-    (session role text &optional stop-reason error-message reasoning order images)
+    (session role text &optional stop-reason error-message reasoning order images tools)
   "Commit an immutable local message entry for SESSION."
   (let* ((state (pichat-llm--state session))
          (id (pichat-llm--entry-id state role))
@@ -522,7 +680,31 @@ Image data is deliberately excluded from the journal and rendered transcript."
                 :type "message"
                 :message
                 (pichat-llm--message
-                 role text stop-reason error-message reasoning order images))))
+                 role text stop-reason error-message reasoning order images tools))))
+    (setf (pichat-llm-state-journal state)
+          (append (pichat-llm-state-journal state) (list entry))
+          (pichat-llm-state-leaf-id state) id)
+    entry))
+
+(defun pichat-llm--commit-tool-result (session invocation)
+  "Commit INVOCATION's immutable tool-result entry for SESSION."
+  (let* ((state (pichat-llm--state session))
+         (id (pichat-llm--entry-id state "tool-result"))
+         (entry
+          (list :id id :parentId (pichat-llm-state-leaf-id state)
+                :type "message"
+                :message
+                (list :role "toolResult"
+                      :toolCallId (pichat-llm-tool-invocation-id invocation)
+                      :toolName (pichat-llm-tool-invocation-name invocation)
+                      :isError
+                      (if (pichat-llm-tool-invocation-is-error invocation)
+                          t :json-false)
+                      :content
+                      (list (list :type "text"
+                                  :text
+                                  (or (pichat-llm-tool-invocation-result invocation)
+                                      "")))))))
     (setf (pichat-llm-state-journal state)
           (append (pichat-llm-state-journal state) (list entry))
           (pichat-llm-state-leaf-id state) id)
@@ -533,6 +715,185 @@ Image data is deliberately excluded from the journal and rendered transcript."
   (and (pichat-llm-state-alive state)
        (equal run (pichat-llm-state-active-run state))
        (= run (pichat-llm-state-run-generation state))))
+
+(defun pichat-llm--chat-focused-p (session)
+  "Return non-nil when SESSION's chat owns the selected focused window."
+  (let ((buffer
+         (seq-find
+          (lambda (candidate)
+            (and (buffer-live-p candidate)
+                 (local-variable-p 'pichat-chat-session candidate)
+                 (eq session
+                     (buffer-local-value 'pichat-chat-session candidate))))
+          (buffer-list))))
+    (and buffer
+         (eq buffer (window-buffer (selected-window)))
+         (or noninteractive (frame-focus-state (selected-frame))))))
+
+(defun pichat-llm--emit-tool-event (session event invocation &optional result)
+  "Emit Pi-compatible tool EVENT for INVOCATION and optional RESULT."
+  (let ((raw
+         (pcase event
+           ('tool-execution-start
+            (list :type "tool_execution_start"
+                  :toolCallId (pichat-llm-tool-invocation-id invocation)
+                  :toolName (pichat-llm-tool-invocation-name invocation)
+                  :args (pichat-llm-tool-invocation-args invocation)))
+           ('tool-execution-end
+            (list :type "tool_execution_end"
+                  :toolCallId (pichat-llm-tool-invocation-id invocation)
+                  :toolName (pichat-llm-tool-invocation-name invocation)
+                  :result
+                  (list :content
+                        (vector (list :type "text" :text (or result ""))))
+                  :isError
+                  (if (pichat-llm-tool-invocation-is-error invocation)
+                      t :json-false))))))
+    (pichat-llm--emit-raw session event raw)))
+
+(defun pichat-llm--finish-tool (session state invocation result is-error)
+  "Finish INVOCATION with RESULT when it still belongs to live STATE."
+  (let ((run (pichat-llm-tool-invocation-run invocation))
+        (callback (pichat-llm-tool-invocation-callback invocation)))
+    (when (and callback
+               (pichat-llm--run-current-p state run)
+               (eq (pichat-llm-tool-invocation-status invocation) 'pending))
+      (let* ((text (pichat-llm--tool-result-text
+                    (list :is-error is-error :value result)))
+             (total (+ (or (pichat-llm-state-run-tool-output-chars state) 0)
+                       (length text))))
+        (when (> total pichat-llm-max-tool-output-chars)
+          (setq text "Tool output budget exhausted"
+                is-error t)
+          (setf (pichat-llm-state-budget-error state)
+                "Native tool output budget exhausted"))
+        (setf (pichat-llm-state-run-tool-output-chars state) total
+              (pichat-llm-tool-invocation-result invocation) text
+              (pichat-llm-tool-invocation-is-error invocation) is-error
+              (pichat-llm-tool-invocation-status invocation) 'done
+              (pichat-llm-tool-invocation-callback invocation) nil)
+        (pichat-llm--emit-tool-event
+         session 'tool-execution-end invocation text)
+        (funcall callback (if is-error (concat "Error: " text) text))))))
+
+(defun pichat-llm--execute-tool (session state invocation tool)
+  "Execute TOOL for INVOCATION if its run remains current."
+  (when (and (pichat-llm--run-current-p
+              state (pichat-llm-tool-invocation-run invocation))
+             (eq (pichat-llm-tool-invocation-status invocation) 'pending))
+    (let ((result (pichat-tools-call
+                   tool (pichat-llm-tool-invocation-args invocation))))
+      (pichat-llm--finish-tool
+       session state invocation (plist-get result :value)
+       (plist-get result :is-error)))))
+
+(defun pichat-llm--run-next-approval (session state)
+  "Prompt for STATE's oldest queued native tool when SESSION is focused."
+  (let ((invocation (car (pichat-llm-state-pending-tools state))))
+    (when invocation
+      (setf (pichat-llm-tool-invocation-timer invocation) nil)
+      (if (not (and (pichat-llm--run-current-p
+                     state (pichat-llm-tool-invocation-run invocation))
+                    (eq (pichat-llm-tool-invocation-status invocation)
+                        'pending)))
+          (setf (pichat-llm-state-pending-tools state)
+                (cdr (pichat-llm-state-pending-tools state)))
+        (if (not (pichat-llm--chat-focused-p session))
+            (setf (pichat-llm-tool-invocation-timer invocation)
+                  (run-at-time 0.1 nil #'pichat-llm--run-next-approval
+                               session state))
+          (let* ((tool (gethash (pichat-llm-tool-invocation-name invocation)
+                                pichat-tools-registry))
+                 (allowed
+                  (and tool
+                       (pichat-approval-prompt
+                        (pichat-tool-name tool)
+                        (pichat-llm-tool-invocation-args invocation)
+                        session))))
+            (setf (pichat-llm-state-pending-tools state)
+                  (cdr (pichat-llm-state-pending-tools state)))
+            (if allowed
+                (pichat-llm--execute-tool session state invocation tool)
+              (pichat-llm--finish-tool
+               session state invocation "Denied by user" t))
+            (pichat-llm--schedule-next-approval session state)))))))
+
+(defun pichat-llm--schedule-next-approval (session state)
+  "Schedule STATE's oldest approval request for focused SESSION."
+  (let ((invocation (car (pichat-llm-state-pending-tools state))))
+    (when (and invocation
+               (null (pichat-llm-tool-invocation-timer invocation)))
+      (setf (pichat-llm-tool-invocation-timer invocation)
+            (run-at-time 0 nil #'pichat-llm--run-next-approval
+                         session state)))))
+
+(defun pichat-llm--cancel-pending-tools (state)
+  "Cancel approval timers and invalidate pending callbacks in STATE."
+  (dolist (invocation (pichat-llm-state-pending-tools state))
+    (let ((timer (pichat-llm-tool-invocation-timer invocation)))
+      (when (timerp timer) (cancel-timer timer)))
+    (setf (pichat-llm-tool-invocation-status invocation) 'cancelled
+          (pichat-llm-tool-invocation-callback invocation) nil
+          (pichat-llm-tool-invocation-timer invocation) nil))
+  (setf (pichat-llm-state-pending-tools state) nil))
+
+(defun pichat-llm--invoke-tool
+    (session state tool arg-names callback values)
+  "Start one async TOOL invocation with VALUES for SESSION and STATE."
+  (let* ((run (pichat-llm-state-active-run state))
+         (count (1+ (or (pichat-llm-state-run-tool-count state) 0)))
+         (invocation
+          (pichat-llm-tool-invocation-create
+           :id (format "native-tool-%d-%d"
+                       run (1+ (or (pichat-llm-state-tool-sequence state) 0)))
+           :name (pichat-tool-name tool)
+           :args (pichat-llm--tool-params arg-names values)
+           :status 'pending :callback callback :run run
+           :round (pichat-llm-state-round-generation state))))
+    (setf (pichat-llm-state-tool-sequence state)
+          (1+ (or (pichat-llm-state-tool-sequence state) 0))
+          (pichat-llm-state-run-tool-count state) count
+          (pichat-llm-state-round-tools state)
+          (append (pichat-llm-state-round-tools state) (list invocation)))
+    (pichat-llm--emit-tool-event session 'tool-execution-start invocation)
+    (if (> count pichat-llm-max-tool-calls)
+        (progn
+          (setf (pichat-llm-state-budget-error state)
+                "Native tool-call budget exhausted")
+          (pichat-llm--finish-tool
+           session state invocation "Tool-call budget exhausted" t))
+      (pcase (pichat-approval-resolve
+              (pichat-tool-name tool) (pichat-tool-mutating-p tool) session)
+        ('allow (pichat-llm--execute-tool session state invocation tool))
+        ('deny (pichat-llm--finish-tool
+                session state invocation "Denied by policy" t))
+        (_
+         (setf (pichat-llm-state-pending-tools state)
+               (append (pichat-llm-state-pending-tools state)
+                       (list invocation)))
+         (pichat-llm--schedule-next-approval session state))))))
+
+(defun pichat-llm--build-tools (session state capabilities)
+  "Build configured llm tools for SESSION and STATE under CAPABILITIES."
+  (when (pichat-llm-state-tool-names state)
+    (unless (memq 'tool-use capabilities)
+      (user-error "Native provider lacks tested tool-use support"))
+    (mapcar
+     (lambda (name)
+       (let ((tool (gethash name pichat-tools-registry)))
+         (unless tool (user-error "Unknown configured Emacs tool: %s" name))
+         (unless (string-match-p "\\`[A-Za-z0-9_-]+\\'" name)
+           (user-error "Native tool name is not provider-safe: %s" name))
+         (let* ((args (pichat-llm--tool-args tool))
+                (arg-names (mapcar (lambda (arg) (plist-get arg :name)) args)))
+           (llm-make-tool
+            :name name :description (pichat-tool-description tool) :args args
+            :async t
+            :function
+            (lambda (callback &rest values)
+              (pichat-llm--invoke-tool
+               session state tool arg-names callback values))))))
+     (pichat-llm-state-tool-names state))))
 
 (defun pichat-llm--call-with-provider-settings (state function)
   "Call FUNCTION through STATE's provider-specific public settings wrapper."
@@ -550,6 +911,7 @@ Image data is deliberately excluded from the journal and rendered transcript."
 (defun pichat-llm--invalidate-run (state)
   "Invalidate STATE's active callbacks before returning its request handle."
   (let ((request (pichat-llm-state-request state)))
+    (pichat-llm--cancel-pending-tools state)
     (setf (pichat-llm-state-run-generation state)
           (1+ (or (pichat-llm-state-run-generation state) 0))
           (pichat-llm-state-active-run state) nil
@@ -637,8 +999,10 @@ replace them.  Return non-nil when visible output changed."
       (pichat-llm--emit-assistant-snapshot
        session state "message_update"))))
 
-(defun pichat-llm--settle (session run stop-reason &optional error-message)
-  "Commit and settle SESSION's RUN with its authoritative output."
+(defun pichat-llm--settle
+    (session run stop-reason &optional error-message round-committed)
+  "Commit and settle SESSION's RUN with its authoritative output.
+When ROUND-COMMITTED is non-nil, tool-round entries and usage already exist."
   (let ((state (pichat-llm--state session)))
     (when (and (pichat-llm--run-current-p state run)
                (not (equal run (pichat-llm-state-settled-run state))))
@@ -650,15 +1014,17 @@ replace them.  Return non-nil when visible output changed."
              (message
               (pichat-llm--message
                "assistant" text stop-reason safe-error reasoning order)))
-        (pichat-llm--finish-round-usage state run)
+        (unless round-committed
+          (pichat-llm--finish-round-usage state run))
         (setf (pichat-llm-state-request state) nil
               (pichat-llm-state-submission-id state) nil
               (pichat-llm-state-active-run state) nil
               (pichat-llm-state-settled-run state) run
               (pichat-session-streaming-p session) nil
               (pichat-session-state session) 'idle)
-        (pichat-llm--commit-message
-         session "assistant" text stop-reason safe-error reasoning order)
+        (unless round-committed
+          (pichat-llm--commit-message
+           session "assistant" text stop-reason safe-error reasoning order))
         (pichat-llm--emit-raw
          session 'message-end (list :type "message_end" :message message))
         (pichat-llm--emit-raw session 'turn-end '(:type "turn_end"))
@@ -666,18 +1032,105 @@ replace them.  Return non-nil when visible output changed."
          session 'agent-settled '(:type "agent_settled"))
         t))))
 
+(defun pichat-llm--settle-budget (session run message)
+  "Commit explicit budget MESSAGE and settle SESSION's RUN."
+  (let ((state (pichat-llm--state session)))
+    (setf (pichat-llm-state-stream-text state) nil
+          (pichat-llm-state-stream-reasoning state) nil
+          (pichat-llm-state-stream-order state) nil)
+    (pichat-llm--commit-message session "assistant" "" "error" message)
+    (pichat-llm--settle session run "error" message t)))
+
+(defun pichat-llm--continue-round (session run)
+  "Issue the next provider round for SESSION's current RUN and retained prompt."
+  (let* ((state (pichat-llm--state session))
+         (rounds (1+ (or (pichat-llm-state-run-round-count state) 0))))
+    (if (> rounds pichat-llm-max-rounds)
+        (progn
+          (setf (pichat-llm-state-budget-error state)
+                "Native provider-round budget exhausted")
+          (pichat-llm--settle-budget
+           session run (pichat-llm-state-budget-error state)))
+      (setf (pichat-llm-state-run-round-count state) rounds
+            (pichat-llm-state-round-generation state)
+            (1+ (or (pichat-llm-state-round-generation state) 0))
+            (pichat-llm-state-request state) 'starting
+            (pichat-llm-state-stream-text state) nil
+            (pichat-llm-state-stream-reasoning state) nil
+            (pichat-llm-state-stream-order state) nil
+            (pichat-llm-state-round-usage state) nil
+            (pichat-llm-state-round-tools state) nil
+            (pichat-llm-state-assistant-started state) nil)
+      (let ((invoking t) queued returned)
+        (cl-labels
+            ((deliver (kind &rest args)
+               (if invoking
+                   (setq queued (append queued (list (cons kind args))))
+                 (pcase kind
+                   ('partial (pichat-llm--partial session run (car args)))
+                   ('final (pichat-llm--final session run (car args)))
+                   ('error (pichat-llm--error
+                            session run (car args) (cadr args)))))))
+          (condition-case err
+              (setq returned
+                    (pichat-llm--call-with-provider-settings
+                     state
+                     (lambda ()
+                       ;; Tool-enabled rounds deliberately use the tested
+                       ;; non-streaming tool-use path in llm 0.32.1.
+                       (llm-chat-async
+                        (pichat-llm-state-provider state)
+                        (pichat-llm-state-prompt state)
+                        (lambda (value) (deliver 'final value))
+                        (lambda (type value) (deliver 'error type value))
+                        t))))
+            (error
+             (setq invoking nil)
+             (pichat-llm--error session run 'error
+                                (error-message-string err))))
+          (setq invoking nil)
+          (when (and (pichat-llm--run-current-p state run) returned)
+            (setf (pichat-llm-state-request state) returned))
+          (when (and (pichat-llm--run-current-p state run)
+                     (null returned) (null queued))
+            (pichat-llm--error
+             session run 'error "Native provider returned no request handle"))
+          (dolist (item queued)
+            (when (pichat-llm--run-current-p state run)
+              (apply #'deliver (car item) (cdr item)))))))))
+
 (defun pichat-llm--final (session run value)
   "Handle final multi-output VALUE for SESSION's RUN."
   (let ((state (pichat-llm--state session)))
     (when (pichat-llm--run-current-p state run)
       (pichat-llm--apply-output state value)
-      (if (and (listp value) (plist-get value :tool-uses))
-          (progn
-            (setf (pichat-llm-state-continuation-uncertain state) t)
-            (pichat-llm--settle
-             session run "error"
-             "Native tools are disabled until PiChat Phase 4"))
-        (pichat-llm--settle session run "stop")))))
+      (let ((tools (pichat-llm-state-round-tools state)))
+        (if tools
+            (progn
+              (pichat-llm--finish-round-usage state run)
+              (pichat-llm--commit-message
+               session "assistant"
+               (or (pichat-llm-state-stream-text state) "")
+               "toolUse" nil
+               (pichat-llm-state-stream-reasoning state)
+               (pichat-llm-state-stream-order state) nil tools)
+              (pichat-llm--emit-raw
+               session 'message-end
+               (list :type "message_end"
+                     :message
+                     (pichat-llm--message
+                      "assistant"
+                      (or (pichat-llm-state-stream-text state) "")
+                      "toolUse" nil
+                      (pichat-llm-state-stream-reasoning state)
+                      (pichat-llm-state-stream-order state) nil tools)))
+              (dolist (invocation tools)
+                (pichat-llm--commit-tool-result session invocation))
+              (if (pichat-llm-state-budget-error state)
+                  (pichat-llm--settle-budget
+                   session run (pichat-llm-state-budget-error state))
+                (pichat-llm--continue-round session run)))
+          (pichat-llm--settle session run "stop"))))))
 
 (defun pichat-llm--error (session run type message)
   "Settle SESSION's RUN after provider TYPE and MESSAGE."
@@ -757,6 +1210,7 @@ replace them.  Return non-nil when visible output changed."
          (provider-capabilities
           (pichat-llm-state-provider-capabilities state)))
     (append pichat-backend-llm-capabilities
+            (when (pichat-llm-state-tools state) '(tools))
             (when (memq 'image-input provider-capabilities) '(image-input))
             (when (memq 'reasoning provider-capabilities)
               '(reasoning-output)))))
@@ -810,12 +1264,15 @@ replace them.  Return non-nil when visible output changed."
   (pichat-llm--require-public-api)
   (let* ((state (pichat-llm--state session))
          (source-spec (pichat-llm-state-provider-spec state))
-         (prepared (pichat-llm--prepare-provider source-spec)))
+         (prepared (pichat-llm--prepare-provider source-spec))
+         (tools (pichat-llm--build-tools
+                 session state (plist-get prepared :capabilities))))
     ;; Retain SOURCE-SPEC rather than a factory-produced nested specification:
     ;; every later new conversation must start resolution at the user-owned
     ;; factory boundary and receive independent provider state.
     (pichat-llm--install-provider session state prepared)
-    (setf (pichat-llm-state-alive state) t
+    (setf (pichat-llm-state-tools state) tools
+          (pichat-llm-state-alive state) t
           (pichat-llm-state-source-generation state) 1
           (pichat-llm-state-run-generation state) 0
           (pichat-llm-state-round-generation state) 0
@@ -827,6 +1284,13 @@ replace them.  Return non-nil when visible output changed."
           (pichat-llm-state-stream-order state) nil
           (pichat-llm-state-round-usage state) nil
           (pichat-llm-state-usage-rounds state) nil
+          (pichat-llm-state-round-tools state) nil
+          (pichat-llm-state-pending-tools state) nil
+          (pichat-llm-state-tool-sequence state) 0
+          (pichat-llm-state-run-round-count state) 0
+          (pichat-llm-state-run-tool-count state) 0
+          (pichat-llm-state-run-tool-output-chars state) 0
+          (pichat-llm-state-budget-error state) nil
           (pichat-llm-state-continuation-uncertain state) nil
           (pichat-session-context-usage session) nil)
     (let ((id (pichat-llm--source-id state)))
@@ -866,6 +1330,8 @@ replace them.  Return non-nil when visible output changed."
               (pichat-llm-state-provider-spec state) nil
               (pichat-llm-state-provider-capabilities state) nil
               (pichat-llm-state-call-wrapper state) nil
+              (pichat-llm-state-tools state) nil
+              (pichat-llm-state-round-tools state) nil
               (pichat-llm-state-prompt state) nil
               (pichat-llm-state-stream-text state) nil
               (pichat-llm-state-stream-reasoning state) nil
@@ -904,7 +1370,8 @@ replace them.  Return non-nil when visible output changed."
           (if first-p
               (llm-make-chat-prompt
                content :context (pichat-llm-state-context state)
-               :reasoning (pichat-llm-state-reasoning state))
+               :reasoning (pichat-llm-state-reasoning state)
+               :tools (pichat-llm-state-tools state))
             (progn
               ;; `llm-chat-prompt-append-response' mutates the retained
               ;; provider prompt and returns its interaction list; retain the
@@ -929,6 +1396,13 @@ replace them.  Return non-nil when visible output changed."
           (pichat-llm-state-stream-reasoning state) nil
           (pichat-llm-state-stream-order state) nil
           (pichat-llm-state-round-usage state) nil
+          (pichat-llm-state-round-tools state) nil
+          (pichat-llm-state-pending-tools state) nil
+          (pichat-llm-state-tool-sequence state) 0
+          (pichat-llm-state-run-round-count state) 1
+          (pichat-llm-state-run-tool-count state) 0
+          (pichat-llm-state-run-tool-output-chars state) 0
+          (pichat-llm-state-budget-error state) nil
           (pichat-llm-state-assistant-started state) nil
           (pichat-session-streaming-p session) t
           (pichat-session-state session) 'running)
@@ -946,7 +1420,8 @@ replace them.  Return non-nil when visible output changed."
                 (pichat-llm--call-with-provider-settings
                  state
                  (lambda ()
-                   (if (pichat-llm-state-streaming state)
+                   (if (and (pichat-llm-state-streaming state)
+                            (null (pichat-llm-state-tools state)))
                        (llm-chat-streaming
                         (pichat-llm-state-provider state) prompt
                         (lambda (value) (deliver 'partial value))
@@ -1034,12 +1509,15 @@ replace them.  Return non-nil when visible output changed."
           ;; leave the current conversation, request, and transcript untouched.
           (pichat-llm--prepare-provider
            (pichat-llm-state-provider-spec state)))
+         (tools (pichat-llm--build-tools
+                 session state (plist-get prepared :capabilities)))
          (active (pichat-llm-state-active-run state))
          (request (pichat-llm--invalidate-run state)))
     (pichat-emit session 'session-rebinding :command "new-conversation")
     (pichat-llm--cancel-model-request request)
     (pichat-llm--install-provider session state prepared)
-    (setf (pichat-llm-state-source-generation state)
+    (setf (pichat-llm-state-tools state) tools
+          (pichat-llm-state-source-generation state)
           (1+ (or (pichat-llm-state-source-generation state) 0))
           (pichat-llm-state-prompt state) nil
           (pichat-llm-state-journal state) nil
@@ -1050,6 +1528,13 @@ replace them.  Return non-nil when visible output changed."
           (pichat-llm-state-round-usage state) nil
           (pichat-llm-state-usage-rounds state) nil
           (pichat-llm-state-assistant-started state) nil
+          (pichat-llm-state-round-tools state) nil
+          (pichat-llm-state-pending-tools state) nil
+          (pichat-llm-state-tool-sequence state) 0
+          (pichat-llm-state-run-round-count state) 0
+          (pichat-llm-state-run-tool-count state) 0
+          (pichat-llm-state-run-tool-output-chars state) 0
+          (pichat-llm-state-budget-error state) nil
           (pichat-llm-state-continuation-uncertain state) nil
           (pichat-session-context-usage session) nil
           (pichat-session-streaming-p session) nil
@@ -1200,6 +1685,7 @@ DIRECTORY defaults to `default-directory'."
            :provider-spec spec
            :context pichat-llm-context
            :reasoning pichat-llm-reasoning
+           :tool-names (copy-sequence pichat-llm-tools)
            :source-generation 0
            :run-generation 0
            :round-generation 0

@@ -339,8 +339,9 @@ Signal a bounded provider configuration error without retaining command output."
                                (alist-get 'output_tokens usage)))))))))))
 
 (cl-defmethod llm-capabilities ((_provider pichat-llm-vertex-claude))
-  ;; Tool use remains gated until PiChat's bounded Phase 4 controller.
-  '(streaming reasoning image-input))
+  ;; Streaming text is supported, but PiChat deliberately uses the adapter's
+  ;; separately fixture-tested non-streaming path for tool-enabled rounds.
+  '(streaming reasoning image-input tool-use))
 
 (cl-defmethod llm-name ((_provider pichat-llm-vertex-claude))
   "Vertex Claude")

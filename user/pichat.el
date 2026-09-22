@@ -32,6 +32,11 @@
                     pichat-select-model pichat-stop-session
                     pichat-add-reference pichat-smoke-test))
 
+(when (not (bound-and-true-p my/is-work-machine))
+  (setq pichat-llm-provider
+        (lambda ()
+          (pichat-llm-make-codex-provider "gpt-5.6-sol"))))
+
 ;; (setq pichat-targets
 ;;       '((lima-devbox
 ;;          :kind ssh

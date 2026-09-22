@@ -78,6 +78,31 @@
             ('partial (when partial-callback
                         (funcall partial-callback (cdr event))))
             ('final (funcall final-callback (cdr event)))
+            ('tools
+             (let* ((calls (cdr event))
+                    (remaining (length calls))
+                    results)
+               (dolist (call calls)
+                 (let* ((name (car call))
+                        (values (cdr call))
+                        (tool
+                         (seq-find
+                          (lambda (candidate)
+                            (equal name (llm-tool-name candidate)))
+                          (llm-chat-prompt-tools prompt))))
+                   (unless tool (error "Missing fixture tool %s" name))
+                   (apply
+                    (llm-tool-function tool)
+                    (append
+                     (list
+                      (lambda (result)
+                        (push (cons name result) results)
+                        (cl-decf remaining)
+                        (when (zerop remaining)
+                          (funcall final-callback
+                                   (list :tool-uses calls
+                                         :tool-results (nreverse results))))))
+                     values))))))
             ('error (apply error-callback (cdr event))))))
       request))
 
@@ -97,8 +122,8 @@
   "Require the native backend for one test."
   (pichat-test-require-llm-backend))
 
-(defun pichat-test-llm--session (provider &optional streaming)
-  "Return a started native session owning PROVIDER."
+(defun pichat-test-llm--session (provider &optional streaming tools)
+  "Return a started native session owning PROVIDER, optionally exposing TOOLS."
   (let* ((spec
           (pichat-llm-provider-spec-create
            :factory (let ((provider provider)) (lambda () provider))
@@ -107,7 +132,8 @@
            :streaming (if (null streaming) 'auto streaming)))
          (state
           (pichat-llm-state-create
-           :provider-spec spec :source-generation 0 :run-generation 0
+           :provider-spec spec :tool-names tools
+           :source-generation 0 :run-generation 0
            :round-generation 0 :sequence 0))
          (session
           (pichat-session-make
@@ -613,6 +639,324 @@
             (should-not (pichat-session-context-usage session)))
         (pichat-backend-stop-session session)))))
 
+(ert-deftest pichat-backend-contract-tools-are-correlated-and-loop-is-bounded ()
+  "Repeated tools retain local identity and continue on the same prompt."
+  (pichat-test-llm--require)
+  (pichat-test-with-clean-state
+    (let ((executions 0))
+      (pichat-define-tool pichat-test-native-echo
+          (:description "Native echo"
+           :parameters
+           (:type "object" :properties
+                  (:value (:type "string" :description "Value"))
+                  :required ["value"] :additionalProperties nil))
+        (cl-incf executions)
+        (concat "native:" (plist-get params :value)))
+      (let* ((provider
+              (make-pichat-test-llm-provider
+               :capabilities '(tool-use)
+               :scripts
+               '(((tools ("pichat-test-native-echo" "same")
+                         ("pichat-test-native-echo" "same")))
+                 ((final . (:text "finished"))))))
+             (session
+              (pichat-test-llm--session
+               provider nil '("pichat-test-native-echo")))
+             (state (pichat-session-backend-state session))
+             (settlements 0))
+        (unwind-protect
+            (progn
+              (pichat-on 'agent-settled
+                         (lambda (&rest _args) (cl-incf settlements)) session)
+              (pichat-backend-submit-prompt
+               session "use tools" nil nil #'ignore #'ignore)
+              (should (= executions 2))
+              (should (= settlements 1))
+              (should (= 2 (length (pichat-test-llm-provider-calls provider))))
+              (should (eq
+                       (plist-get (nth 0 (pichat-test-llm-provider-calls provider))
+                                  :prompt)
+                       (plist-get (nth 1 (pichat-test-llm-provider-calls provider))
+                                  :prompt)))
+              (let* ((journal (pichat-llm-state-journal state))
+                     (tool-message (plist-get (nth 1 journal) :message))
+                     (calls
+                      (seq-filter
+                       (lambda (part)
+                         (equal (plist-get part :type) "toolCall"))
+                       (plist-get tool-message :content))))
+                (should (= 5 (length journal)))
+                (should (= 2 (length calls)))
+                (should-not (equal (plist-get (nth 0 calls) :id)
+                                   (plist-get (nth 1 calls) :id)))
+                (should (equal
+                         (mapcar
+                          (lambda (entry)
+                            (plist-get (plist-get entry :message) :role))
+                          journal)
+                         '("user" "assistant" "toolResult" "toolResult"
+                           "assistant"))))
+              (should (equal (pichat-test-llm--journal-texts session)
+                             '(("user" "use tools")
+                               ("assistant" "")
+                               ("toolResult" "native:same")
+                               ("toolResult" "native:same")
+                               ("assistant" "finished")))))
+          (pichat-backend-stop-session session))))))
+
+(ert-deftest pichat-backend-llm-tool-schema-rejects-before-request ()
+  "Unsupported schemas and provider capabilities fail before model I/O."
+  (pichat-test-llm--require)
+  (pichat-test-with-clean-state
+    (pichat-define-tool pichat-test-native-invalid
+        (:parameters (:type "object" :additionalProperties t))
+      "never")
+    (let ((provider
+           (make-pichat-test-llm-provider :capabilities '(tool-use))))
+      (should-error
+       (pichat-test-llm--session
+        provider nil '("pichat-test-native-invalid"))
+       :type 'user-error)
+      (should-error
+       (pichat-test-llm--session
+        provider nil '("pichat-test-native-unknown"))
+       :type 'user-error)
+      (should-not (pichat-test-llm-provider-calls provider)))
+    (pichat-define-tool pichat-test-native-valid
+        (:parameters (:type "object" :properties nil
+                      :additionalProperties nil))
+      "ok")
+    (let ((provider (make-pichat-test-llm-provider)))
+      (should-error
+       (pichat-test-llm--session
+        provider nil '("pichat-test-native-valid"))
+       :type 'user-error)
+      (should-not (pichat-test-llm-provider-calls provider)))))
+
+(ert-deftest pichat-backend-llm-parallel-tools-complete-out-of-order ()
+  "Immediate tools may finish before an earlier queued approval without mixing IDs."
+  (pichat-test-llm--require)
+  (pichat-test-with-clean-state
+    (pichat-test-with-temp-dir directory
+      (let ((pichat-approval-policy-file
+             (expand-file-name "approvals.el" directory))
+            completions scheduled-function scheduled-args)
+        (pichat-define-tool pichat-test-native-ask
+            (:mutating t :parameters
+             (:type "object" :properties (:value (:type "string"))
+                    :required ["value"] :additionalProperties nil))
+          (push (concat "ask:" (plist-get params :value)) completions)
+          (car completions))
+        (pichat-define-tool pichat-test-native-now
+            (:parameters
+             (:type "object" :properties (:value (:type "string"))
+                    :required ["value"] :additionalProperties nil))
+          (push (concat "now:" (plist-get params :value)) completions)
+          (car completions))
+        (let* ((provider
+                (make-pichat-test-llm-provider
+                 :capabilities '(tool-use)
+                 :scripts
+                 '(((tools ("pichat-test-native-ask" "first")
+                           ("pichat-test-native-now" "second")))
+                   ((final . (:text "ordered"))))))
+               (session
+                (pichat-test-llm--session
+                 provider nil
+                 '("pichat-test-native-ask" "pichat-test-native-now"))))
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (_delay _repeat function &rest args)
+                       (setq scheduled-function function scheduled-args args)
+                       'approval-timer))
+                    ((symbol-function 'pichat-llm--chat-focused-p)
+                     (lambda (_session) t))
+                    ((symbol-function 'pichat-approval-prompt)
+                     (lambda (&rest _args) t)))
+            (unwind-protect
+                (progn
+                  (pichat-backend-submit-prompt
+                   session "parallel" nil nil #'ignore #'ignore)
+                  (should (equal completions '("now:second")))
+                  (should (= 1 (length
+                                (pichat-test-llm-provider-calls provider))))
+                  (apply scheduled-function scheduled-args)
+                  (should (equal completions
+                                 '("ask:first" "now:second")))
+                  (should (= 2 (length
+                                (pichat-test-llm-provider-calls provider))))
+                  (let ((tools
+                         (seq-filter
+                          (lambda (part)
+                            (equal (plist-get part :type) "toolCall"))
+                          (plist-get
+                           (plist-get
+                            (nth 1
+                                 (pichat-llm-state-journal
+                                  (pichat-session-backend-state session)))
+                            :message)
+                           :content))))
+                    (should (= 2 (length tools)))
+                    (should-not (equal (plist-get (nth 0 tools) :id)
+                                       (plist-get (nth 1 tools) :id)))))
+              (pichat-backend-stop-session session))))))))
+
+(ert-deftest pichat-backend-llm-tool-budget-prevents-another-round ()
+  "Tool-call exhaustion settles exactly once without another request."
+  (pichat-test-llm--require)
+  (pichat-test-with-clean-state
+    (pichat-define-tool pichat-test-native-budget
+        (:parameters (:type "object" :properties
+                      (:value (:type "string"))
+                      :required ["value"] :additionalProperties nil))
+      (plist-get params :value))
+    (let* ((pichat-llm-max-tool-calls 1)
+           (provider
+            (make-pichat-test-llm-provider
+             :capabilities '(tool-use)
+             :scripts
+             '(((tools ("pichat-test-native-budget" "one")
+                       ("pichat-test-native-budget" "two"))))))
+           (session
+            (pichat-test-llm--session
+             provider nil '("pichat-test-native-budget")))
+           (settlements 0))
+      (unwind-protect
+          (progn
+            (pichat-on 'agent-settled
+                       (lambda (&rest _args) (cl-incf settlements)) session)
+            (pichat-backend-submit-prompt
+             session "budget" nil nil #'ignore #'ignore)
+            (should (= settlements 1))
+            (should (= 1 (length (pichat-test-llm-provider-calls provider))))
+            (should (eq 'idle (pichat-session-state session)))
+            (should (string-match-p
+                     "budget exhausted"
+                     (format "%S" (pichat-llm-state-journal
+                                    (pichat-session-backend-state session))))))
+        (pichat-backend-stop-session session)))))
+
+(ert-deftest pichat-backend-llm-round-and-output-budgets-stop-loop ()
+  "Round and aggregate output limits each prevent another provider call."
+  (pichat-test-llm--require)
+  (pichat-test-with-clean-state
+    (pichat-define-tool pichat-test-native-limits
+        (:parameters (:type "object" :properties
+                      (:value (:type "string"))
+                      :required ["value"] :additionalProperties nil))
+      (concat "long-output-" (plist-get params :value)))
+    (dolist (limits '((1 100000 "provider-round")
+                      (8 2 "tool output")))
+      (let* ((pichat-llm-max-rounds (nth 0 limits))
+             (pichat-llm-max-tool-output-chars (nth 1 limits))
+             (provider
+              (make-pichat-test-llm-provider
+               :capabilities '(tool-use)
+               :scripts '(((tools ("pichat-test-native-limits" "x"))))))
+             (session
+              (pichat-test-llm--session
+               provider nil '("pichat-test-native-limits"))))
+        (unwind-protect
+            (progn
+              (pichat-backend-submit-prompt
+               session "limits" nil nil #'ignore #'ignore)
+              (should (= 1 (length
+                            (pichat-test-llm-provider-calls provider))))
+              (should (string-match-p
+                       (nth 2 limits)
+                       (downcase
+                        (format "%S"
+                                (pichat-llm-state-journal
+                                 (pichat-session-backend-state session)))))))
+          (pichat-backend-stop-session session))))))
+
+(ert-deftest pichat-backend-llm-denial-and-tool-error-become-results ()
+  "Denied mutations and execution failures are bounded provider results."
+  (pichat-test-llm--require)
+  (pichat-test-with-clean-state
+    (pichat-test-with-temp-dir directory
+      (let ((pichat-approval-policy-file
+             (expand-file-name "approvals.el" directory))
+            (denied-executions 0))
+        (pichat-define-tool pichat-test-native-denied
+            (:mutating t :parameters
+             (:type "object" :properties (:value (:type "string"))
+                    :required ["value"] :additionalProperties nil))
+          (cl-incf denied-executions)
+          "must not run")
+        (pichat-define-tool pichat-test-native-error
+            (:parameters
+             (:type "object" :properties (:value (:type "string"))
+                    :required ["value"] :additionalProperties nil))
+          (error "bounded fixture failure"))
+        (setq pichat-approval-rules
+              '(("pichat-test-native-denied" . deny)))
+        (pichat-approval-save)
+        (let* ((provider
+                (make-pichat-test-llm-provider
+                 :capabilities '(tool-use)
+                 :scripts
+                 '(((tools ("pichat-test-native-denied" "no")
+                           ("pichat-test-native-error" "bad")))
+                   ((final . (:text "after errors"))))))
+               (session
+                (pichat-test-llm--session
+                 provider nil
+                 '("pichat-test-native-denied" "pichat-test-native-error"))))
+          (unwind-protect
+              (progn
+                (pichat-backend-submit-prompt
+                 session "errors" nil nil #'ignore #'ignore)
+                (should (= denied-executions 0))
+                (let ((journal
+                       (format "%S"
+                               (pichat-llm-state-journal
+                                (pichat-session-backend-state session)))))
+                  (should (string-match-p "Denied by policy" journal))
+                  (should (string-match-p "bounded fixture failure" journal)))
+                (should (= 2 (length
+                              (pichat-test-llm-provider-calls provider)))))
+            (pichat-backend-stop-session session)))))))
+
+(ert-deftest pichat-backend-llm-cancelled-approval-has-no-side-effect ()
+  "Abort removes a queued approval and makes its late activation inert."
+  (pichat-test-llm--require)
+  (pichat-test-with-clean-state
+    (let ((executions 0) scheduled-function scheduled-args)
+      (pichat-define-tool pichat-test-native-mutate
+          (:mutating t :parameters
+           (:type "object" :properties (:value (:type "string"))
+                  :required ["value"] :additionalProperties nil))
+        (cl-incf executions)
+        "mutated")
+      (let* ((provider
+              (make-pichat-test-llm-provider
+               :capabilities '(tool-use)
+               :scripts
+               '(((tools ("pichat-test-native-mutate" "value"))))))
+             session)
+        (cl-letf (((symbol-function 'run-at-time)
+                   (lambda (_delay _repeat function &rest args)
+                     (setq scheduled-function function scheduled-args args)
+                     'fixture-timer))
+                  ((symbol-function 'timerp)
+                   (lambda (value) (eq value 'fixture-timer)))
+                  ((symbol-function 'cancel-timer) #'ignore))
+          (setq session
+                (pichat-test-llm--session
+                 provider nil '("pichat-test-native-mutate")))
+          (unwind-protect
+              (progn
+                (pichat-backend-submit-prompt
+                 session "mutate" nil nil #'ignore #'ignore)
+                (should scheduled-function)
+                (pichat-backend-abort-session session)
+                (apply scheduled-function scheduled-args)
+                (should (= executions 0))
+                (should-not
+                 (pichat-llm-state-pending-tools
+                  (pichat-session-backend-state session))))
+            (pichat-backend-stop-session session)))))))
+
 (ert-deftest pichat-backend-llm-prompt-undo-isolates-projection ()
   "Undo edits only the draft after native live and canonical projection."
   (pichat-test-llm--require)
@@ -959,11 +1303,140 @@
                "signature-"
                (plist-get (aref assistant-content 0) :signature))))))
 
-(defun pichat-test-llm--session-from-spec (spec)
-  "Return a started native session using provider SPEC."
+(defun pichat-test-llm--openai-tool-response (&optional suffix)
+  "Return one OpenAI-compatible native tool call fixture using SUFFIX."
+  (json-parse-string
+   (format
+    "{\"choices\":[{\"message\":{\"content\":\"\",\"tool_calls\":[{\"id\":\"codex-call%s\",\"type\":\"function\",\"function\":{\"name\":\"pichat-test-provider-tool\",\"arguments\":\"{\\\"value\\\":\\\"codex%s\\\"}\"}}]}}]}"
+    (or suffix "") (or suffix ""))
+   :object-type 'alist :array-type 'array))
+
+(defun pichat-test-llm--gemini-tool-response (&optional suffix)
+  "Return one Vertex Gemini native tool call fixture using SUFFIX."
+  (json-parse-string
+   (format
+    "{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"functionCall\":{\"name\":\"pichat-test-provider-tool\",\"args\":{\"value\":\"gemini%s\"}},\"thoughtSignature\":\"tool-signature%s\"}]}}]}"
+    (or suffix "") (or suffix ""))
+   :object-type 'alist :array-type 'array))
+
+(defun pichat-test-llm--claude-tool-response (&optional suffix)
+  "Return one Vertex Claude native tool call fixture using SUFFIX."
+  (json-parse-string
+   (format
+    "{\"content\":[{\"type\":\"tool_use\",\"id\":\"claude-call%s\",\"name\":\"pichat-test-provider-tool\",\"input\":{\"value\":\"claude%s\"}}],\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}"
+    (or suffix "") (or suffix ""))
+   :object-type 'alist :array-type 'array))
+
+(ert-deftest pichat-backend-llm-mandatory-provider-tool-round-fixtures ()
+  "Codex, Gemini, and Claude execute two offline tool rounds then prose."
+  (pichat-test-llm--require)
+  (require 'llm-openai)
+  (require 'llm-vertex)
+  (require 'pichat-llm-vertex-claude)
+  (pichat-test-with-clean-state
+    (pichat-define-tool pichat-test-provider-tool
+        (:parameters (:type "object" :properties
+                      (:value (:type "string"))
+                      :required ["value"] :additionalProperties nil))
+      (concat "provider-result:" (plist-get params :value)))
+    (let ((llm-warn-on-nonfree nil)
+          (pichat-llm-codex-url "https://proxy.example.test/v1")
+          (pichat-llm-codex-auth-host "proxy.example.test")
+          (pichat-llm-codex-auth-user "fixture")
+          calls)
+      (cl-letf (((symbol-function 'auth-source-pick-first-password)
+                 (lambda (&rest _args) "fixture-key"))
+                ((symbol-function 'llm-request-plz-async)
+                 (lambda (url &rest args)
+                   (push (cons url args) calls)
+                   (funcall
+                    (plist-get args :on-success)
+                    (pcase (length calls)
+                      (1 (pichat-test-llm--openai-tool-response "-1"))
+                      (2 (pichat-test-llm--openai-tool-response "-2"))
+                      (_ (pichat-test-llm--openai-response "codex done"))))
+                   (make-pichat-test-llm-request))))
+        (let* ((spec (pichat-llm-make-codex-provider "codex-model"))
+               (_ (setf (pichat-llm-provider-spec-streaming spec) nil))
+               (session
+                (pichat-test-llm--session-from-spec
+                 spec '("pichat-test-provider-tool"))))
+          (unwind-protect
+              (pichat-backend-submit-prompt
+               session "tool" nil nil #'ignore #'ignore)
+            (pichat-backend-stop-session session))))
+      (setq calls (nreverse calls))
+      (should (= 3 (length calls)))
+      (should (string-match-p
+               "codex-call"
+               (format "%S" (plist-get (cdr (nth 1 calls)) :data)))))
+    (let (calls)
+      (cl-letf (((symbol-function 'executable-find)
+                 (lambda (_name) "/offline/gcloud"))
+                ((symbol-function 'shell-command-to-string)
+                 (lambda (_command) "fixture-token\n"))
+                ((symbol-function 'llm-request-plz-async)
+                 (lambda (url &rest args)
+                   (push (cons url args) calls)
+                   (funcall
+                    (plist-get args :on-success)
+                    (pcase (length calls)
+                      (1 (pichat-test-llm--gemini-tool-response "-1"))
+                      (2 (pichat-test-llm--gemini-tool-response "-2"))
+                      (_ (pichat-test-llm--gemini-response "gemini done"))))
+                   (make-pichat-test-llm-request))))
+        (let ((session
+               (pichat-test-llm--session-from-spec
+                (pichat-llm-make-vertex-gemini-provider
+                 "project" "region" "gemini-2.5-pro" "offline-gcloud")
+                '("pichat-test-provider-tool"))))
+          (unwind-protect
+              (pichat-backend-submit-prompt
+               session "tool" nil nil #'ignore #'ignore)
+            (pichat-backend-stop-session session))))
+      (setq calls (nreverse calls))
+      (should (= 3 (length calls)))
+      (should (string-match-p
+               "tool-signature"
+               (format "%S" (plist-get (cdr (nth 1 calls)) :data)))))
+    (let (calls)
+      (cl-letf (((symbol-function 'executable-find)
+                 (lambda (_name) "/offline/gcloud"))
+                ((symbol-function 'process-file)
+                 (lambda (&rest _args) (insert "fixture-token\n") 0))
+                ((symbol-function 'llm-request-plz-async)
+                 (lambda (url &rest args)
+                   (push (cons url args) calls)
+                   (funcall
+                    (plist-get args :on-success)
+                    (pcase (length calls)
+                      (1 (pichat-test-llm--claude-tool-response "-1"))
+                      (2 (pichat-test-llm--claude-tool-response "-2"))
+                      (_ (pichat-test-llm--claude-response "claude done"))))
+                   (make-pichat-test-llm-request))))
+        (let* ((spec
+                (pichat-llm-make-vertex-claude-provider
+                 "project" "region" "claude-model" "offline-gcloud"))
+               (_ (setf (pichat-llm-provider-spec-streaming spec) nil))
+               (session
+                (pichat-test-llm--session-from-spec
+                 spec '("pichat-test-provider-tool"))))
+          (unwind-protect
+              (pichat-backend-submit-prompt
+               session "tool" nil nil #'ignore #'ignore)
+            (pichat-backend-stop-session session))))
+      (setq calls (nreverse calls))
+      (should (= 3 (length calls)))
+      (should (string-match-p
+               "claude-call"
+               (format "%S" (plist-get (cdr (nth 1 calls)) :data)))))))
+
+(defun pichat-test-llm--session-from-spec (spec &optional tools)
+  "Return a started native session using provider SPEC and optional TOOLS."
   (let* ((state
           (pichat-llm-state-create
-           :provider-spec spec :source-generation 0 :run-generation 0
+           :provider-spec spec :tool-names tools
+           :source-generation 0 :run-generation 0
            :round-generation 0 :sequence 0))
          (session
           (pichat-session-make

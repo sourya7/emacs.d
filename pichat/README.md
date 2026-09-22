@@ -246,12 +246,28 @@ provider.
 
 Provider prompt state and PiChat's authoritative local journal remain separate
 and are never reconstructed from rendered text. Storage is explicitly `memory`;
-no session path is fabricated. Tools, Pi commands/completion, archives, history,
+no session path is fabricated. Pi commands/completion, archives, history,
 branching, setup, mutable model controls, and provider migration remain disabled.
 After an abort or provider error, start a new conversation before continuing
 because the provider may have mutated opaque prompt state. No mandatory provider
 path is claimed as live-verified; automated coverage uses offline mocked HTTP
 and credentials.
+
+Native Emacs tools are an explicit opt-in. Set `pichat-llm-tools` to names already
+registered in `pichat-tools-registry` before launching a new conversation. PiChat
+accepts object schemas with declared primitive or primitive-array properties,
+required names, descriptions, and enums; arbitrary properties, composition, and
+nested object arguments are rejected before model I/O. Tool-enabled rounds use
+the tested non-streaming `tool-use` provider path in llm.el 0.32.1, even when
+ordinary prose streams.
+
+Mutating tools reuse the approval policy and wait in a serialized queue until
+their owning chat is selected and focused. Denials and execution failures become
+bounded tool results. `pichat-llm-max-rounds`, `pichat-llm-max-tool-calls`,
+`pichat-llm-max-tool-output-chars`, and `pichat-llm-tool-result-max-chars` bound
+each run. Abort, stop, and new conversation invalidate queued approvals and late
+callbacks before cancelling the provider request. Side effects completed before
+cancellation cannot be undone.
 
 ## Launching runtimes
 

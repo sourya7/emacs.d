@@ -65,6 +65,31 @@ produce its existing error response."
                   name (pichat-tool-mutating-p tool) session))))
     (error nil)))
 
+(defun pichat-tools-call (tool params)
+  "Call registered TOOL with structured PARAMS and return a result plist.
+The returned plist contains =:is-error= and =:value=.  Approval is deliberately
+outside this function so transports can apply their own asynchronous gate."
+  (unless (pichat-tool-p tool)
+    (error "Invalid Emacs tool"))
+  (condition-case err
+      (list :is-error nil
+            :value (funcall (pichat-tool-function tool) params))
+    (error
+     (list :is-error t :value (error-message-string err)))))
+
+(defun pichat-tools-result-wire (result)
+  "Convert structured tool RESULT into the existing bridge wire object."
+  (let ((value (plist-get result :value)))
+    (append
+     (when (plist-get result :is-error) (list :isError t))
+     (cond
+      ((stringp value)
+       (list :content (vector (list :type "text" :text value))))
+      ((listp value) value)
+      (t
+       (list :content
+             (vector (list :type "text" :text (format "%S" value)))))))))
+
 (defun pichat-tools-execute-json (json &optional session)
   "Execute tool call described by JSON for optional SESSION and return JSON."
   (let* ((req (json-parse-string json :object-type 'plist :array-type 'list
@@ -73,22 +98,13 @@ produce its existing error response."
          (params (plist-get req :params))
          (tool (gethash name pichat-tools-registry)))
     (unless tool (error "Unknown Emacs tool: %s" name))
-    (if (not (pichat-approval-approve-p
-              name (pichat-tool-mutating-p tool) params session))
-        (json-serialize (list :isError t :content (vector (list :type "text" :text "Denied by user")))
-                        :false-object :json-false :null-object nil)
-      (condition-case err
-          (let ((result (funcall (pichat-tool-function tool) params)))
-          (json-serialize
-           (cond
-            ((stringp result) (list :content (vector (list :type "text" :text result))))
-            ((listp result) result)
-            (t (list :content (vector (list :type "text" :text (format "%S" result))))))
-           :false-object :json-false :null-object nil))
-      (error
-       (json-serialize (list :isError t
-                             :content (vector (list :type "text" :text (error-message-string err))))
-                       :false-object :json-false :null-object nil))))))
+    (json-serialize
+     (if (pichat-approval-approve-p
+          name (pichat-tool-mutating-p tool) params session)
+         (pichat-tools-result-wire (pichat-tools-call tool params))
+       (list :isError t
+             :content (vector (list :type "text" :text "Denied by user"))))
+     :false-object :json-false :null-object nil)))
 
 (pichat-define-tool echo (:label "Echo" :description "Echo input from Emacs" :parameters (:type "object" :additionalProperties t))
   (format "%S" params))

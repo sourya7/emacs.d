@@ -193,13 +193,8 @@
 ;; Phase 2 native lifecycle contracts live in
 ;; `pichat-test-backend-llm' so Pi-only contract fixtures remain dependency-light.
 
-(ert-deftest pichat-backend-contract-tools-are-approved-correlated-and-bounded ()
-  "Tools execute only under the owning session's policy while the run is live.
-Repeated equal tool calls receive different local IDs; out-of-order completions
-retain their own arguments/results.  Denial becomes a result, not execution.
-Cancellation during approval and exhausted round/call budgets cause no further
-side effects or model calls.  Continuation reuses the prompt without a user turn."
-  (ert-skip "TODO Phase 4: asynchronous tools, approvals, and bounded loop"))
+;; Native tool contracts are activated in `pichat-test-backend-llm', where the
+;; pinned real llm.el lifecycle and deterministic provider fixture are available.
 
 (provide 'pichat-test-backend-contract)
 ;;; pichat-test-backend-contract.el ends here

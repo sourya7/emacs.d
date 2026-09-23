@@ -1744,5 +1744,40 @@
                    (pichat-session-backend-state session))))))
       (should-not (memq session (pichat-session-list))))))
 
+(ert-deftest pichat-native-launch-manager-retains-stopped-journal-without-pi ()
+  (pichat-test-llm--require)
+  (pichat-test-with-clean-state
+    (let* ((provider (make-pichat-test-llm-provider
+                      :streaming t :scripts '(((final . (:text "native reply"))))))
+           (pichat-llm-provider
+            (lambda () (pichat-llm-provider-spec-create
+                     :factory (lambda () provider) :label "offline"
+                     :model "offline-model" :streaming t)))
+           (pichat-llm-model nil)
+           (session nil)
+           (buffer nil))
+      (unwind-protect
+          (cl-letf (((symbol-function 'pichat--project-root)
+                     (lambda (&rest _) default-directory))
+                    ((symbol-function 'pichat-start-session)
+                     (lambda (&rest _) (ert-fail "native launch started Pi")))
+                    ((symbol-function 'pichat-rpc-get-tree)
+                     (lambda (&rest _) (ert-fail "native preview requested Pi"))))
+            (setq session (pichat--open-launch-profile
+                           '(:backend llm :reuse preferred) default-directory)
+                  buffer (pichat-session-buffer session))
+            (should (pichat-session-default-p session))
+            (pichat-test-llm--send buffer "native prompt")
+            (pichat-backend-stop-session session)
+            (pichat-clear-default-session session)
+            (let ((snapshot (pichat-session-manager--snapshot-from-chat session)))
+              (should (= 2 (length (plist-get snapshot :path))))
+              (should (equal "memory"
+                             (pichat-session-manager--persistence-label session)))))
+        (when (and session (pichat-session-alive-p session))
+          (pichat-backend-stop-session session))
+        (when (buffer-live-p buffer)
+          (let ((pichat-chat-stop-session-on-kill nil)) (kill-buffer buffer)))))))
+
 (provide 'pichat-test-backend-llm)
 ;;; pichat-test-backend-llm.el ends here

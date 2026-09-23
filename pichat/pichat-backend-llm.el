@@ -1710,11 +1710,12 @@ When ROUND-COMMITTED is non-nil, tool-round entries and usage already exist."
     (setf (pichat-llm-query-cancelled request) t))
   request)
 
-(defun pichat-backend-llm-launch (&optional provider model directory)
-  "Start and display an independent native conversation.
+(defun pichat-backend-llm-launch (&optional provider model directory scope display-function)
+  "Start and display a native conversation.
 PROVIDER is an explicit provider object, zero-argument factory, or
 `pichat-llm-provider-spec'.  MODEL is required for bare objects/factories.
-DIRECTORY defaults to `default-directory'."
+DIRECTORY defaults to `default-directory'.  Optional SCOPE supplies an
+immutable owner scope; DISPLAY-FUNCTION opens the exact new session."
   (let* ((spec (pichat-llm--normalize-provider-spec provider model))
          (directory
           (file-name-as-directory
@@ -1725,7 +1726,9 @@ DIRECTORY defaults to `default-directory'."
                         (file-name-nondirectory
                          (directory-file-name directory))
                         launch-id))
-         (scope (list scope-key directory label))
+         (scope (or scope (list scope-key directory label)))
+         (scope-key (car scope))
+         (label (nth 2 scope))
          (state
           (pichat-llm-state-create
            :provider-spec spec
@@ -1755,7 +1758,7 @@ DIRECTORY defaults to `default-directory'."
           (pichat-backend-start-session session)
           (pichat-register-session session scope)
           (setq pichat-current-session session)
-          (pichat-chat-open session t)
+          (funcall (or display-function #'pichat-chat-open) session)
           session)
       (error
        (when (pichat-session-alive-p session)

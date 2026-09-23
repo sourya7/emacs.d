@@ -66,7 +66,7 @@
         (should (memq session (pichat-session-list)))))))
 
 (ert-deftest pichat-launch-profile-defaults-are-orthogonal-and-explicit ()
-  (should (equal '(:scope current :target inferred :reuse preferred
+  (should (equal '(:backend pi :scope current :target inferred :reuse preferred
                    :persistence persistent :model default
                    :display-function pichat-chat-open)
                  (pichat--normalize-launch-profile nil)))
@@ -502,6 +502,59 @@
         (call-interactively #'pichat))
       (should opened)
       (should-not started))))
+
+(ert-deftest pichat-launch-native-reuses-only-native-preferred-scope ()
+  (pichat-test-with-clean-state
+    (let (pi native launched displayed)
+      (cl-letf (((symbol-function 'pichat--project-root)
+                 (lambda (&rest _) "/tmp/project/"))
+                ((symbol-function 'pichat-backend-llm-launch)
+                 (lambda (_provider _model directory scope _display)
+                   (should (equal directory "/tmp/project/"))
+                   (setq launched (1+ (or launched 0)))
+                   (let ((session (pichat-session-make
+                                   :backend 'llm :state 'idle :cwd directory
+                                   :backend-state 'fixture)))
+                     (pichat-register-session session scope)
+                     session)))
+                ((symbol-function 'pichat-session-alive-p) (lambda (_) t))
+                ((symbol-function 'pichat-backend-get-state)
+                 (lambda (&rest _) nil)))
+        (setq pi (pichat-session-make :cwd "/tmp/project/"))
+        (pichat-register-session pi '("project|local|/tmp/project/"
+                                      "/tmp/project/" "project"))
+        (pichat-set-default-session pi)
+        (dotimes (_ 2)
+          (setq native (pichat--open-launch-profile
+                        '(:backend llm :display-function ignore)
+                        "/tmp/project/")))
+        (should (= 1 launched))
+        (should (pichat-session-default-p native))
+        (should (pichat-session-default-p pi))
+        (should (eq pi (pichat-session-for-directory "/tmp/project/")))))))
+
+(ert-deftest pichat-launch-native-manager-scope-does-not-infer-pi-target ()
+  (let (captured)
+    (cl-letf (((symbol-function 'pichat--open-launch-profile)
+               (lambda (profile &rest _) (setq captured profile)))
+              ((symbol-function 'pichat-transport-resolve)
+               (lambda (&rest _) (ert-fail "native scope inferred Pi target"))))
+      (pichat-launch-execute
+       '("--native")
+       (list :current-scope-function (lambda () (ert-fail "Pi scope selected"))
+             :native-scope-function
+             (lambda () '("project|local|/tmp/native/" "/tmp/native/" "native"))))
+      (should (equal '("project|local|/tmp/native/" "/tmp/native/" "native")
+                     (plist-get captured :scope))))))
+
+(ert-deftest pichat-launch-native-rejects-pi-switches-before-start ()
+  (dolist (profile '((:backend llm :target local)
+                     (:backend llm :persistence ephemeral)
+                     (:backend llm :model prompt)))
+    (should-error (pichat--normalize-launch-profile profile) :type 'user-error))
+  (should (eq 'llm (plist-get
+                     (pichat--launch-profile-from-arguments '("--native"))
+                     :backend))))
 
 (provide 'pichat-test-launch)
 ;;; pichat-test-launch.el ends here

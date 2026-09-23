@@ -136,14 +136,14 @@
              (columns (mapcar #'substring-no-properties
                               (append (cadr entry) nil))))
         (should (equal (pichat-session-runtime-id session) (car entry)))
-        (should (equal '("★" "8ab3111a" "idle" "file" "emacs.mine"
+        (should (equal '("★" "8ab3111a" "idle" "pi" "file" "emacs.mine"
                          "local" "openai/gpt-5.4" "Improve session manager")
                        columns)))
       (cl-letf (((symbol-function 'pop-to-buffer) (lambda (&rest _args) nil)))
         (setq buffer (pichat-session-manager)))
       (unwind-protect
           (with-current-buffer buffer
-            (should (equal '("" "ID" "Status" "Store" "Project" "Target" "Model" "Session")
+            (should (equal '("" "ID" "Status" "Backend" "Store" "Project" "Target" "Model" "Session")
                            (mapcar #'car (append tabulated-list-format nil))))
             (should (equal '("Project")
                            (list (car tabulated-list-sort-key)))))
@@ -155,7 +155,7 @@
                    :owner-scope-key "global"
                    :owner-scope-label "global"))
          (columns (append (cadr (pichat-session-manager--entry session)) nil)))
-    (should (equal '("" "—" "starting" "file" "global" "local" "—" "—") columns))))
+    (should (equal '("" "—" "starting" "pi" "file" "global" "local" "—" "—") columns))))
 
 (ert-deftest pichat-session-manager-status-marks-pending-user-input-minimally ()
   (pichat-test-with-unit-session (session proc)
@@ -229,8 +229,8 @@
           (append (cadr (pichat-session-manager--entry persistent)) nil))
          (ephemeral-columns
           (append (cadr (pichat-session-manager--entry ephemeral)) nil)))
-    (should (equal "file" (nth 3 persistent-columns)))
-    (should (equal "none" (nth 3 ephemeral-columns)))))
+    (should (equal "file" (nth 4 persistent-columns)))
+    (should (equal "none" (nth 4 ephemeral-columns)))))
 
 (ert-deftest pichat-session-manager-new-prompts-for-and-remembers-project ()
   (let ((project-prompter (lambda () "/tmp/recent-project/"))
@@ -739,6 +739,68 @@
       (should (equal "switch failed" (plist-get failure :error)))
       (should-not (pichat-session-by-runtime-id
                    (pichat-session-runtime-id session))))))
+
+(ert-deftest pichat-session-manager-memory-preview-never-requests-pi ()
+  (let* ((session (pichat-session-make
+                   :backend 'llm :state 'stopped :persistence 'memory
+                   :id "native-1" :model '(:provider "vertex" :id "gemini")
+                   :cwd "/tmp/project/"))
+         (data '(:entries ((:id "u1" :type "message" :message
+                              (:role "user" :content "hello")))
+                 :leafId "u1"))
+         (manager (generate-new-buffer " *native-manager-preview*")))
+    (unwind-protect
+        (with-current-buffer manager
+          (pichat-session-manager-mode)
+          (cl-letf (((symbol-function 'pichat-backend-get-transcript)
+                     (lambda (_session _cursor callback _failure)
+                       (funcall callback (list :data data) session)))
+                    ((symbol-function 'pichat-rpc-get-tree)
+                     (lambda (&rest _) (ert-fail "native preview must not request Pi"))))
+            (let* ((row (append (cadr (pichat-session-manager--entry session)) nil))
+                   (snapshot (pichat-session-manager--cached-preview session)))
+              (should (equal "llm" (nth 3 row)))
+              (should (equal "memory" (nth 4 row)))
+              (should (equal "native" (nth 6 row)))
+              (should (plist-get snapshot :path))
+              (pichat-session-manager--render-preview session snapshot)
+              (with-current-buffer pichat-session-manager-preview-buffer-name
+                (should (string-match-p "Backend: llm" (buffer-string)))
+                (should (string-match-p "memory (no resumable file)"
+                                        (buffer-string)))))))
+      (when (buffer-live-p manager) (kill-buffer manager))
+      (when (get-buffer pichat-session-manager-preview-buffer-name)
+        (kill-buffer pichat-session-manager-preview-buffer-name)))))
+
+(ert-deftest pichat-session-manager-native-actions-stay-on-selected-backend ()
+  (let ((session (pichat-session-make
+                  :backend 'llm :persistence 'memory :name "before"
+                  :owner-scope-key "project|local|/tmp/project/"
+                  :owner-scope-label "project" :owner-directory "/tmp/project/"))
+        profile named renewed)
+    (cl-letf (((symbol-function 'pichat-session-manager--session-at-point)
+               (lambda () session))
+              ((symbol-function 'pichat--open-launch-profile)
+               (lambda (value &optional _directory) (setq profile value)))
+              ((symbol-function 'pichat-backend-name-session)
+               (lambda (_session value &optional _callback) (setq named value)))
+              ((symbol-function 'pichat-backend-start-new-conversation)
+               (lambda (_session &optional _callback) (setq renewed t)))
+              ((symbol-function 'pichat-session-alive-p) (lambda (_) t))
+              ((symbol-function 'pichat-note-session-updated) #'ignore)
+              ((symbol-function 'pichat-session-manager-refresh) #'ignore)
+              ((symbol-function 'read-string)
+               (lambda (_prompt &optional initial &rest _) (should (equal initial "before")) "after"))
+              ((symbol-function 'yes-or-no-p) (lambda (_) t))
+              ((symbol-function 'pichat-start-session)
+               (lambda (&rest _) (ert-fail "native action started Pi"))))
+      (pichat-session-manager-new-in-scope)
+      (should (eq 'llm (plist-get profile :backend)))
+      (should (eq 'new (plist-get profile :reuse)))
+      (pichat-session-manager-name)
+      (should (equal named "after"))
+      (pichat-session-manager-new-conversation)
+      (should renewed))))
 
 (provide 'pichat-test-session-manager)
 ;;; pichat-test-session-manager.el ends here

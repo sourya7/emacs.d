@@ -25,6 +25,9 @@
 (declare-function pichat-start-session "pichat"
                   (&optional cwd scope launch-options))
 (declare-function pichat-launch "pichat" (&optional context))
+(declare-function pichat--open-launch-profile "pichat" (profile &optional directory))
+(declare-function pichat-note-session-updated "pichat" (session))
+(declare-function pichat-llm-state-provider-label "pichat-backend-llm" (state))
 (declare-function pichat-stop-session "pichat" (&optional session))
 (declare-function pichat-forget-session "pichat" (session))
 (declare-function pichat-set-default-session "pichat" (session))
@@ -173,7 +176,8 @@ or Bufferlo dependency."
 
 (defun pichat-session-manager--persistence-label (session)
   "Return compact persistence label for SESSION from launch metadata."
-  (if (eq (pichat-session-persistence session) 'ephemeral) "none" "file"))
+  (pcase (pichat-session-persistence session)
+    ('memory "memory") ('ephemeral "none") (_ "file")))
 
 (defun pichat-session-manager--status-label (session)
   "Return cached runtime Status for SESSION with a pending-input marker."
@@ -193,7 +197,8 @@ or Bufferlo dependency."
 (defun pichat-session-manager--target-label (session)
   "Return compact target label for SESSION."
   (pichat-session-manager--shorten
-   (pichat-transport-label (pichat-session-transport session)) 16))
+   (if (eq (pichat-session-backend-id session) 'llm)
+       "native" (pichat-transport-label (pichat-session-transport session))) 16))
 
 (defun pichat-session-manager--entry (session)
   "Return one tabulated-list row for SESSION from cached state."
@@ -203,6 +208,7 @@ or Bufferlo dependency."
     (pichat-session-manager--preferred-marker session)
     (pichat-session-manager--short-id (pichat-session-id session))
     (pichat-session-manager--status-label session)
+    (symbol-name (pichat-session-backend-id session))
     (pichat-session-manager--persistence-label session)
     (pichat-session-manager--project-label session)
     (pichat-session-manager--target-label session)
@@ -277,12 +283,22 @@ or Bufferlo dependency."
 
 (defun pichat-session-manager--snapshot-from-chat (session)
   "Return a reusable settled chat snapshot for SESSION, or nil."
-  (when-let* ((cache (pichat-chat-canonical-entry-cache session)))
-    (condition-case nil
-        (pichat-sessions-preview-active-snapshot-from-entries
-         (pichat-pi-entry-cache-active-branch cache)
-         (pichat-entry-cache-leaf-id cache))
-      (error nil))))
+  (condition-case nil
+      (if (eq (pichat-session-backend-id session) 'llm)
+          ;; The local journal survives stop; no RPC, prompt internals, or
+          ;; provider access is needed to preview a retained memory session.
+          (let (data)
+            (pichat-backend-get-transcript
+             session nil (lambda (response _session)
+                           (setq data (plist-get response :data))) nil)
+            (when data
+              (pichat-sessions-preview-active-snapshot-from-entries
+               (plist-get data :entries) (plist-get data :leafId))))
+        (when-let* ((cache (pichat-chat-canonical-entry-cache session)))
+          (pichat-sessions-preview-active-snapshot-from-entries
+           (pichat-pi-entry-cache-active-branch cache)
+           (pichat-entry-cache-leaf-id cache))))
+    (error nil)))
 
 (defun pichat-session-manager--cached-preview (session &optional rpc-only)
   "Return a reusable preview snapshot for SESSION.
@@ -290,10 +306,11 @@ When RPC-ONLY is non-nil, ignore the manager cache but still reuse the exact
 canonical chat cache while an RPC refresh is pending."
   (let* ((token (pichat-session-manager--preview-source-token session))
          (cached (and (not rpc-only)
+                      (eq (pichat-session-backend-id session) 'pi)
                       (gethash token pichat-session-manager--preview-cache)))
          (snapshot (or cached
                        (pichat-session-manager--snapshot-from-chat session))))
-    (when snapshot
+    (when (and snapshot (eq (pichat-session-backend-id session) 'pi))
       (puthash token snapshot pichat-session-manager--preview-cache))
     snapshot))
 
@@ -331,8 +348,18 @@ canonical chat cache while an RPC refresh is pending."
                         (pichat-session-runtime-id session)))
         (insert (format "Preferred: %s\n"
                         (if (pichat-session-default-p session) "yes" "no")))
-        (insert (format "Pi ID: %s\n"
+        (insert (format "%s ID: %s\n"
+                        (if (eq (pichat-session-backend-id session) 'pi)
+                            "Pi" "Memory")
                         (or (pichat-session-id session) "—")))
+        (insert (format "Backend: %s\n"
+                        (pichat-session-backend-id session)))
+        (when (eq (pichat-session-backend-id session) 'llm)
+          (insert (format "Provider: %s\n"
+                          (or (and (pichat-session-backend-state session)
+                                   (pichat-llm-state-provider-label
+                                    (pichat-session-backend-state session)))
+                              "—"))))
         (insert (format "Model: %s\n"
                         (pichat-session-manager--preview-model-name session)))
         (insert (format "Scope: %s\n"
@@ -351,9 +378,10 @@ canonical chat cache while an RPC refresh is pending."
                           (or (pichat-session-runtime-cwd session) "—"))))
         (insert
          (format "Persistence: %s\n"
-                 (if (eq (pichat-session-persistence session) 'ephemeral)
-                     "none (--no-session)"
-                   "persisted source file")))
+                 (pcase (pichat-session-persistence session)
+                   ('memory "memory (no resumable file)")
+                   ('ephemeral "none (--no-session)")
+                   (_ "persisted source file"))))
         (insert (format "Runtime source: %s\n"
                         (or (pichat-session-session-file session) "—")))
         (when-let* ((emacs-source (pichat-session-emacs-session-file session)))
@@ -459,6 +487,9 @@ canonical chat cache while an RPC refresh is pending."
                          '(running compacting retrying))))
     (setq pichat-session-manager--preview-runtime-id runtime-id)
     (cond
+     ((eq (pichat-session-backend-id session) 'llm)
+      (pichat-session-manager--cancel-preview-request)
+      (pichat-session-manager--render-preview session snapshot))
      ((not (pichat-backend-capable-p session 'session-history))
       (pichat-session-manager--cancel-preview-request)
       (pichat-session-manager--render-preview
@@ -679,6 +710,18 @@ of the persistent project list."
                   (pichat-transport-id transport) directory)
           directory label)))
 
+(defun pichat-session-manager--read-native-launch-scope ()
+  "Read a local owner scope without Pi target inference."
+  (let ((directory (file-name-as-directory
+                    (expand-file-name
+                     (pichat-session-manager--read-project-directory)))))
+    (when (file-remote-p directory)
+      (user-error "Native memory sessions require a local directory"))
+    (list (format "project|local|%s" directory) directory
+          (format "%s@%s"
+                  (file-name-nondirectory (directory-file-name directory))
+                  (substring (md5 directory) 0 8)))))
+
 (defun pichat-session-manager-launch ()
   "Open the shared PiChat launch Transient with manager display policy."
   (interactive)
@@ -688,6 +731,8 @@ of the persistent project list."
          :display-function #'pichat-session-manager--display
          :current-scope-function
          #'pichat-session-manager--read-launch-scope
+         :native-scope-function
+         #'pichat-session-manager--read-native-launch-scope
          :manager t)))
 
 (defun pichat-session-manager--owner-directory (session)
@@ -707,12 +752,38 @@ of the persistent project list."
   (interactive)
   (let* ((session (pichat-session-manager--session-at-point))
          (directory (pichat-session-manager--owner-directory session)))
-    (pichat-backend-require-capability
-     session 'transport "Starting another Pi runtime in this scope")
     (unless directory (user-error "Selected runtime has no owner directory"))
-    (pichat-session-manager--start-in-directory
-     directory (pichat-session-manager--owner-scope session)
-     (pichat-session-transport session))))
+    (if (eq (pichat-session-backend-id session) 'llm)
+        (pichat--open-launch-profile
+         (list :backend 'llm :scope (pichat-session-manager--owner-scope session)
+               :reuse 'new
+               :display-function #'pichat-session-manager--display)
+         directory)
+      (pichat-session-manager--start-in-directory
+       directory (pichat-session-manager--owner-scope session)
+       (pichat-session-transport session)))))
+
+(defun pichat-session-manager-name ()
+  "Name the selected session through its backend."
+  (interactive)
+  (let ((session (pichat-session-manager--session-at-point)))
+    (pichat-backend-name-session
+     session (read-string "Session name: " (pichat-session-name session)))
+    (pichat-note-session-updated session)
+    (pichat-session-manager-refresh)))
+
+(defun pichat-session-manager-new-conversation ()
+  "Begin a new conversation on the selected live native memory session."
+  (interactive)
+  (let ((session (pichat-session-manager--session-at-point)))
+    (unless (eq (pichat-session-backend-id session) 'llm)
+      (user-error "Use the chat's new-session command for Pi"))
+    (unless (pichat-session-alive-p session)
+      (user-error "Stopped memory sessions cannot start new conversations"))
+    (when (yes-or-no-p "Replace this memory conversation with a new one? ")
+      (pichat-backend-start-new-conversation session)
+      (pichat-note-session-updated session)
+      (pichat-session-manager-refresh))))
 
 (defun pichat-session-manager-browse-saved ()
   "Load a selected saved source in a new independent runtime.
@@ -785,6 +856,8 @@ working directory determines the new runtime's project and display routing."
     (define-key map (kbd "C-o") #'pichat-session-manager-toggle-preview)
     (define-key map (kbd "n") #'pichat-session-manager-new)
     (define-key map (kbd "N") #'pichat-session-manager-new-in-scope)
+    (define-key map (kbd "e") #'pichat-session-manager-name)
+    (define-key map (kbd "C") #'pichat-session-manager-new-conversation)
     (define-key map (kbd "+") #'pichat-session-manager-launch)
     (define-key map (kbd "b") #'pichat-session-manager-browse-saved)
     (define-key map (kbd "k") #'pichat-session-manager-stop)
@@ -805,7 +878,8 @@ RET opens the exact selected runtime.  C-o toggles a bounded active-branch
 preview which follows the selected row.  n starts an independent runtime in a
 known project or manually chosen directory; N uses the selected owner scope; +
 opens the full launch menu; b loads a saved source into a new runtime.  k stops,
-d forgets a stopped runtime, m makes a live runtime the scope default, D shows
+d forgets a stopped runtime, e names a session, C begins a new native
+conversation, m makes a live runtime the scope default, D shows
 diagnostics, g refreshes, and q buries this buffer.
 Killing this buffer never stops or forgets a runtime."
   (setq-local default-directory
@@ -819,6 +893,7 @@ Killing this buffer never stops or forgets a runtime."
               [("" 1 nil)
                ("ID" 9 t)
                ("Status" 11 t)
+               ("Backend" 8 t)
                ("Store" 6 t)
                ("Project" 18 t)
                ("Target" 16 t)

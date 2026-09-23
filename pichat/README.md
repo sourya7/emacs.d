@@ -223,6 +223,15 @@ never changes gcloud configuration. The tested `llm.el` 0.32.1 Vertex Gemini
 path is deliberately non-streaming because that release can discard streaming
 chunks without usage metadata; Codex and Vertex Claude use cumulative streaming.
 
+The advanced `pichat-launch` menu offers `a` for native memory sessions,
+composable with `g` (global scope) and `n` (independent). Without `n`, it
+reuses a preferred native session for the selected local scope, independently
+of the preferred Pi runtime. Target, ephemeral storage, and Pi model-picker
+switches are invalid with native launch. Ordinary `pichat` remains Pi-only.
+Install optional `llm.el` 0.32.1 and configure `pichat-llm-provider` before
+selecting native; Pi-only use does not load llm. Provider factories above are
+resolved when a native conversation starts, not when the menu opens.
+
 Native sessions support multi-turn text, cumulative reasoning presentation,
 capability-gated image input, cancellation, new conversations, local names, and
 reported token usage. Set `pichat-llm-reasoning` to `none`, `light`, `medium`, or
@@ -445,7 +454,12 @@ safely inject `--no-session` or `--model` into an arbitrary wrapper command.
 ## Global runtime-session manager
 
 `M-x pichat-session-manager` opens one global `*PiChat Sessions*` buffer for all
-retained PiChat RPC runtimes across project and global scopes. A runtime is the
+retained Pi and native memory sessions across project and global scopes.
+The table identifies backend (`pi` or `llm`), storage (`file`, `none`, or
+`memory`), and provider/model. Native previews read their own local journal,
+including after stop; redraw does not contact providers or Pi. Open, stop,
+forget, naming, and new conversation use the owning backend. Archive, history,
+fork/clone, transport diagnostics, and Pi setup remain Pi-only. A runtime is the
 Emacs-side process/session object; the persisted Pi source loaded into it may
 change after new-session, switch, fork, or clone operations. Manager rows use an
 immutable Emacs runtime identity, so such source changes do not replace or
@@ -474,12 +488,15 @@ Manager keys:
 - `C-o` — toggle a bounded active-branch preview which follows the selected row;
 - `n` — start an independent runtime in a recent known project, with an
   explicit manual-directory fallback;
-- `N` — start one in the selected runtime's immutable owner scope;
+- `N` — start one in the selected runtime's immutable owner scope (same backend;
+  native uses the currently configured provider factory);
 - `+` — open the shared launch Transient; current scope prompts for an exact
   project/directory and global scope does not;
 - `b` — search saved sessions and open the selection in a new runtime associated
   with its recorded project (using archive-backed Consult when available, with
   the basic file picker as fallback);
+- `e` — name the selected session through its backend;
+- `C` — start a new conversation on the selected live native memory session;
 - `k` — stop only the selected live runtime;
 - `d` — forget and clean up a stopped or failed runtime;
 - `m` — make the selected live runtime preferred for its owner scope;

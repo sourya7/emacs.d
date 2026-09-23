@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/elpaca-unlock-sources [--dry-run] [--source-dir PATH]
+
+Reattach detached Elpaca Git source repositories to their sole local branch so
+that commands such as `elpaca-update-all` can use the branch's upstream.
+
+The script refuses to switch repositories with tracked modifications or with
+anything other than one local branch. If a branch has no upstream, the script
+sets it when exactly one matching remote branch can be identified.
+
+Options:
+  --dry-run          Report changes without modifying repositories
+  --source-dir PATH  Elpaca sources directory
+                     (default: PROJECT/.local/elpaca/sources)
+  -h, --help         Show this help
+EOF
+}
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+project_root=$(cd -- "$script_dir/.." && pwd -P)
+source_dir="$project_root/.local/elpaca/sources"
+dry_run=false
+
+while (($#)); do
+  case $1 in
+    --dry-run)
+      dry_run=true
+      shift
+      ;;
+    --source-dir)
+      [[ $# -ge 2 ]] || { echo "--source-dir requires a path" >&2; exit 2; }
+      source_dir=$2
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+[[ -d $source_dir ]] || { echo "Elpaca source directory not found: $source_dir" >&2; exit 1; }
+
+reattached=0
+already_attached=0
+failed=0
+upstreams_set=0
+
+shopt -s nullglob
+for repo in "$source_dir"/*; do
+  [[ -d $repo ]] || continue
+  git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || continue
+
+  package=${repo##*/}
+  branch=$(git -C "$repo" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+
+  if [[ -z $branch ]]; then
+    if [[ -n $(git -C "$repo" status --porcelain --untracked-files=no) ]]; then
+      echo "ERROR: $package has tracked modifications; refusing to switch branches" >&2
+      ((failed += 1))
+      continue
+    fi
+
+    mapfile -t branches < <(git -C "$repo" for-each-ref \
+      --format='%(refname:short)' refs/heads)
+    if ((${#branches[@]} != 1)); then
+      echo "ERROR: $package is detached and has ${#branches[@]} local branches; cannot choose safely" >&2
+      ((failed += 1))
+      continue
+    fi
+
+    branch=${branches[0]}
+    if $dry_run; then
+      echo "Would reattach $package to $branch"
+    elif git -C "$repo" switch "$branch"; then
+      echo "Reattached $package to $branch"
+    else
+      echo "ERROR: failed to reattach $package to $branch" >&2
+      ((failed += 1))
+      continue
+    fi
+    ((reattached += 1))
+  else
+    ((already_attached += 1))
+  fi
+
+  if git -C "$repo" rev-parse --verify --quiet "${branch}@{upstream}" >/dev/null; then
+    continue
+  fi
+
+  mapfile -t upstreams < <(
+    for remote in $(git -C "$repo" remote); do
+      if git -C "$repo" show-ref --verify --quiet "refs/remotes/$remote/$branch"; then
+        printf '%s/%s\n' "$remote" "$branch"
+      fi
+    done
+  )
+
+  upstream=""
+  if printf '%s\n' "${upstreams[@]}" | grep -Fxq "origin/$branch"; then
+    upstream="origin/$branch"
+  elif ((${#upstreams[@]} == 1)); then
+    upstream=${upstreams[0]}
+  fi
+
+  if [[ -z $upstream ]]; then
+    echo "ERROR: $package branch $branch has no upstream and no unique matching remote branch" >&2
+    ((failed += 1))
+  elif $dry_run; then
+    echo "Would set $package branch $branch upstream to $upstream"
+    ((upstreams_set += 1))
+  elif git -C "$repo" branch --set-upstream-to="$upstream" "$branch" >/dev/null; then
+    echo "Set $package branch $branch upstream to $upstream"
+    ((upstreams_set += 1))
+  else
+    echo "ERROR: failed to set $package branch $branch upstream to $upstream" >&2
+    ((failed += 1))
+  fi
+done
+
+printf 'Elpaca sources: %d reattached, %d already attached, %d upstreams set, %d errors.\n' \
+  "$reattached" "$already_attached" "$upstreams_set" "$failed"
+
+((failed == 0))

@@ -1009,6 +1009,35 @@
             (should (member "ls" (pichat-llm-state-tool-names state))))
         (pichat-backend-stop-session session)))))
 
+(ert-deftest pichat-backend-llm-omitted-native-search-args-keep-defaults ()
+  "Positional nils from llm.el must not become supplied optional keys."
+  (pichat-test-llm--require)
+  (pichat-test-with-clean-state
+    (require 'pichat-llm-coding-tools)
+    (pichat-llm-coding-tools-register)
+    (let* ((tool (gethash "grep" pichat-tools-registry))
+           (args (pichat-llm--tool-args tool))
+           (values (mapcar (lambda (arg)
+                             (pcase (plist-get arg :name)
+                               ("patterns" ["one" "two"])
+                               ("regex" t)
+                               (_ nil)))
+                           args))
+           (params (pichat-llm--tool-params args values)))
+      (should (equal (pichat-llm-search-tools--patterns params)
+                     '("one" "two")))
+      (should-not (plist-member params :pattern))
+      (should-not (plist-member params :limit))
+      (should-not (plist-member params :context))
+      (should-not (plist-member params :literal))
+      (should (eq (plist-get params :regex) t))
+      (should (equal (pichat-llm--tool-params
+                      args (mapcar (lambda (arg)
+                                     (when (equal (plist-get arg :name) "pattern")
+                                       "one"))
+                                   args))
+                     '(:pattern "one"))))))
+
 (ert-deftest pichat-backend-llm-abort-cancels-asynchronous-tool-process ()
   "Abort invokes an executing tool's cancellation closure before later effects."
   (pichat-test-llm--require)

@@ -356,7 +356,11 @@ final structured tool result.  Return a cancellation closure."
          (expanded (expand-file-name requested tool-root))
          (directory-p (file-directory-p expanded))
          (target (pichat-llm-search-tools--resolve requested directory-p))
-         (literal (pichat-llm-search-tools--boolean params :literal "literal" t))
+         (literal (if (pichat-llm-search-tools--boolean
+                       params :regex "regex" nil)
+                      nil
+                    (pichat-llm-search-tools--boolean
+                     params :literal "literal" t)))
          (ignore-case (pichat-llm-search-tools--boolean
                        params :ignoreCase "ignoreCase" nil))
          (hidden (pichat-llm-search-tools--boolean params :hidden "hidden" nil))

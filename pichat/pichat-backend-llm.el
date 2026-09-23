@@ -330,14 +330,18 @@ functions when a future llm.el changes one of these application seams."
                  (car property) (cdr property) required))
               properties))))
 
-(defun pichat-llm--tool-params (names values)
-  "Return keyword plist pairing tool argument NAMES and VALUES."
+(defun pichat-llm--tool-params (args values)
+  "Return a plist pairing tool ARGS and VALUES.
+llm.el passes nil for omitted optional arguments, so do not turn those
+positions into present keys.  It also turns JSON false into nil, so optional
+boolean switches must use false as their default at this boundary."
   (let (params)
-    (while names
-      (setq params
-            (append params
-                    (list (intern (concat ":" (pop names))) (pop values)))))
-    params))
+    (dolist (arg args params)
+      (let ((value (pop values))
+            (name (plist-get arg :name)))
+        (when (or value (not (plist-get arg :optional)))
+          (setq params (append params
+                               (list (intern (concat ":" name)) value))))))))
 
 (defun pichat-llm--context-with-tools (base names directory)
   "Return BASE plus explicit instructions for tool NAMES in DIRECTORY."
@@ -874,7 +878,7 @@ Image data is deliberately excluded from the journal and rendered transcript."
   (setf (pichat-llm-state-pending-tools state) nil))
 
 (defun pichat-llm--invoke-tool
-    (session state tool arg-names callback values)
+    (session state tool args callback values)
   "Start one async TOOL invocation with VALUES for SESSION and STATE."
   (let* ((run (pichat-llm-state-active-run state))
          (count (1+ (or (pichat-llm-state-run-tool-count state) 0)))
@@ -883,7 +887,7 @@ Image data is deliberately excluded from the journal and rendered transcript."
            :id (format "native-tool-%d-%d"
                        run (1+ (or (pichat-llm-state-tool-sequence state) 0)))
            :name (pichat-tool-name tool)
-           :args (pichat-llm--tool-params arg-names values)
+           :args (pichat-llm--tool-params args values)
            :status 'pending :callback callback :run run
            :round (pichat-llm-state-round-generation state))))
     (setf (pichat-llm-state-tool-sequence state)
@@ -920,15 +924,14 @@ Image data is deliberately excluded from the journal and rendered transcript."
          (unless tool (user-error "Unknown configured Emacs tool: %s" name))
          (unless (string-match-p "\\`[A-Za-z0-9_-]+\\'" name)
            (user-error "Native tool name is not provider-safe: %s" name))
-         (let* ((args (pichat-llm--tool-args tool))
-                (arg-names (mapcar (lambda (arg) (plist-get arg :name)) args)))
+         (let ((args (pichat-llm--tool-args tool)))
            (llm-make-tool
             :name name :description (pichat-tool-description tool) :args args
             :async t
             :function
             (lambda (callback &rest values)
               (pichat-llm--invoke-tool
-               session state tool arg-names callback values))))))
+               session state tool args callback values))))))
      (pichat-llm-state-tool-names state))))
 
 (defun pichat-llm--call-with-provider-settings (state function)

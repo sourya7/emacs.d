@@ -312,15 +312,17 @@ sorting.
 
 ```elisp
 (:patterns ["llm-chat-async" "llm-chat-streaming"]
- :path "pichat" :glob "*.el" :literal t :ignoreCase nil
- :context 2 :hidden nil :limit 100)
+ :path "pichat" :glob "*.el" :context 2 :limit 100)
 ```
 
 Array patterns have OR semantics and a line matching several patterns counts
-once. Matching is literal by default; set `literal` to nil for ripgrep regex
-syntax. `glob` uses ripgrep's documented file-filter semantics. Context lines
-use `path-line-text`, matches use `path:line:text`, and `--` separates disjoint
-groups. The global limit counts matching lines, not context. A named in-root
+once. Matching is literal by default; set `regex` to true for ripgrep regex
+syntax. Direct callers of the underlying search function can still use
+`:literal nil`. The native llm.el bridge cannot distinguish an omitted optional
+boolean from JSON false, so its advertised option uses the positive `regex`
+switch instead. `glob` uses ripgrep's documented file-filter semantics.
+Context lines use `path-line-text`, matches use `path:line:text`, and `--`
+separates disjoint groups. The global limit counts matching lines, not context. A named in-root
 regular file is searched even when recursive ignore discovery would omit it.
 Successful empty searches return `[no files found]` or `[no matches]`; limits,
 timeouts, invalid expressions, missing executables, parser failures, and process

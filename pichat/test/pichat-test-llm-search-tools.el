@@ -92,6 +92,10 @@
                       "grep" '(:pattern "beta [0-9]+" :literal nil))))
           (should-not (plist-get regex :is-error))
           (should (string-match-p "beta 42" (plist-get regex :value))))
+        (let ((regex (pichat-test-search--call
+                      "grep" '(:pattern "beta [0-9]+" :regex t))))
+          (should-not (plist-get regex :is-error))
+          (should (string-match-p "beta 42" (plist-get regex :value))))
         (let ((none (pichat-test-search--call
                      "grep" '(:pattern "ABSENT"))))
           (should-not (plist-get none :is-error))

@@ -35,7 +35,7 @@
 (when (not (bound-and-true-p my/is-work-machine))
   (setq pichat-llm-provider
         (lambda ()
-          (pichat-llm-make-codex-provider "gpt-5.6-sol")))
+          (pichat-llm-make-codex-provider "gpt-6-sol")))
 
   ;; Register and expose the native coding tools when the backend loads.
   (with-eval-after-load 'pichat-backend-llm

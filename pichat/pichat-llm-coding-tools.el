@@ -506,7 +506,7 @@ retain the tool list advertised when they were created."
          :mutating-p nil :async-p t :native-only-p t)
         (pichat-tool-create
          :name "grep" :label "grep"
-         :description "Search file contents with ripgrep. Provide exactly one of legacy pattern or patterns; patterns are ORed. Literal matching is the default; set literal=false for ripgrep regex syntax. path may be a file or directory. glob uses ripgrep file-glob semantics. hidden retains ignore rules. Matching lines, context, and output are globally bounded."
+         :description "Search file contents with ripgrep. Provide exactly one of legacy pattern or patterns; patterns are ORed. Literal matching is the default; set regex=true for ripgrep regex syntax. path may be a file or directory. glob uses ripgrep file-glob semantics. hidden retains ignore rules. Matching lines, context, and output are globally bounded."
          :parameters
          '(:type "object" :additionalProperties :json-false
            :properties
@@ -514,13 +514,13 @@ retain the tool list advertised when they were created."
             :patterns (:type "array" :items (:type "string") :description "One or more non-empty OR patterns; mutually exclusive with pattern")
             :path (:type "string" :description "File or directory; defaults to the working directory")
             :glob (:type "string" :description "Optional ripgrep file-filter glob")
-            :literal (:type "boolean" :description "Use literal matching; defaults to true")
+            :regex (:type "boolean" :description "Use ripgrep regex syntax; defaults to false")
             :ignoreCase (:type "boolean" :description "Case-insensitive matching; defaults to false")
             :context (:type "integer" :description "Bounded lines before and after matches")
             :hidden (:type "boolean" :description "Include hidden files while retaining ignore rules")
             :limit (:type "integer" :description "Global matching-line limit; positive and bounded")))
          :function #'pichat-llm-search-tools-grep
-         :instructions "Use grep to search contents and combine related patterns in one call. OR semantics apply to patterns. Literal search is the default; set literal=false for regex. No matches is successful. It runs rg directly, keeps repository ignore rules, does not follow symbolic links, and needs no approval under the normal policy."
+         :instructions "Use grep to search contents and combine related patterns in one call. OR semantics apply to patterns. Literal search is the default; set regex=true for regex. No matches is successful. It runs rg directly, keeps repository ignore rules, does not follow symbolic links, and needs no approval under the normal policy."
          :mutating-p nil :async-p t :native-only-p t)
         (pichat-tool-create
          :name "write" :label "write"

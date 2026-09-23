@@ -172,6 +172,26 @@
                            diagnostics)))
     (should-not (string-match-p "must-not-render" (format "%S" transcript)))))
 
+(ert-deftest pichat-pi-canonical-transcript-ignores-persisted-system-messages ()
+  (let* ((entries
+          '((:type "message" :id "system" :parentId nil
+             :message
+             (:role "system" :content ""
+              :sections (:preamble "internal prompt" :tools "internal tools")
+              :toolsAdded ((:name "read"))))
+            (:type "message" :id "user" :parentId "system"
+             :message (:role "user" :content "Visible prompt."))))
+         (cache (pichat-pi-entry-cache-full
+                 "system-message-session" nil entries "user"))
+         (transcript (pichat-pi-build-canonical-transcript cache)))
+    (should (equal '("user")
+                   (mapcar #'pichat-transcript-node-key
+                           (pichat-transcript-nodes transcript))))
+    (should-not (pichat-transcript-diagnostics transcript))
+    (should-not (string-match-p (regexp-opt '("internal prompt"
+                                               "internal tools"))
+                                (format "%S" transcript)))))
+
 (ert-deftest pichat-pi-canonical-transcript-supports-sanitized-legacy-shape ()
   (let* ((fixture (pichat-test-read-json-fixture
                    "canonical-session-legacy.json"))

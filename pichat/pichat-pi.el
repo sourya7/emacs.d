@@ -303,7 +303,8 @@ DIAGNOSE is called with category, entry id, and bounded source type."
                   (when (eq t (plist-get message :display))
                     (append-message entry 'custom (plist-get message :content)
                                     (plist-get message :customType))))
-                 ((or "compactionSummary" "branchSummary" "bashExecution") nil)
+                 ((or "system" "compactionSummary" "branchSummary"
+                      "bashExecution") nil)
                  (_ (diagnose 'unknown-message-role entry-id role)))))
             ((or "custom_message" "customMessage")
              (when (eq t (plist-get entry :display))

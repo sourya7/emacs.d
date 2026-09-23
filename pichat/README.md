@@ -279,39 +279,91 @@ nothing. Opt in deliberately before starting a new native conversation:
 (setq pichat-llm-tools (pichat-llm-coding-tools-register))
 ```
 
-The returned names are `read`, `ls`, `grep`, `write`, `edit`, and `bash`. Their
-names, argument vocabulary, and model-facing descriptions follow Pi's familiar
-basic-tool conventions where their behavior matches. The descriptions also call
-out PiChat's narrower guarantees: text is UTF-8, `grep` is literal, `write`
-creates new files only, and `bash` always has a timeout. These tools are marked
-native-only and are not advertised through the Pi Emacs-tool bridge.
+The returned default names are `read`, `find`, `grep`, `write`, `edit`, `bash`,
+and `ls`. Registration and selection are separate:
+calling the registration function does not rewrite another explicit
+`pichat-llm-tools` value. A conversation retains the tools advertised when it
+was created, so start a fresh native conversation after changing the selection.
+These tools are never advertised through the Pi Emacs-tool bridge.
+
+`find` requires [fd](https://github.com/sharkdp/fd), and `grep` requires
+[ripgrep](https://github.com/BurntSushi/ripgrep). PiChat resolves the customizable
+`pichat-llm-search-tools-fd-executable` and
+`pichat-llm-search-tools-rg-executable` through `exec-path`; a missing bare `fd`
+also tries the distribution name `fdfind`. It never installs a binary or falls
+back to shell search. Both tools execute the resolved program directly with an
+internal option allowlist. They are constrained search adapters, not an OS
+sandbox and not protection against hostile concurrent filesystem replacement.
+
+`find` locates regular files using a basename glob:
+
+```elisp
+;; Tool arguments: pattern and path are optional.
+(:pattern "*backend*.el" :path "pichat" :hidden nil :limit 100)
+```
+
+The default pattern is `*` and the default path is the conversation working
+directory. `hidden` includes hidden files but retains ignore rules. Results are
+relative traversal-order paths; early truncation does not promise global
+sorting.
+
+`grep` accepts a file or directory and either legacy `pattern` or a nonempty
+`patterns` array, but never both:
+
+```elisp
+(:patterns ["llm-chat-async" "llm-chat-streaming"]
+ :path "pichat" :glob "*.el" :literal t :ignoreCase nil
+ :context 2 :hidden nil :limit 100)
+```
+
+Array patterns have OR semantics and a line matching several patterns counts
+once. Matching is literal by default; set `literal` to nil for ripgrep regex
+syntax. `glob` uses ripgrep's documented file-filter semantics. Context lines
+use `path-line-text`, matches use `path:line:text`, and `--` separates disjoint
+groups. The global limit counts matching lines, not context. A named in-root
+regular file is searched even when recursive ignore discovery would omit it.
+Successful empty searches return `[no files found]` or `[no matches]`; limits,
+timeouts, invalid expressions, missing executables, parser failures, and process
+failures remain distinguishable.
 
 All paths resolve under the native session's fixed local working directory.
-Relative paths use that root; absolute paths must still remain inside it; symlink
-escapes and remote/TRAMP roots are rejected. Reads, writes, and search have byte,
-line, entry, match, and character bounds controlled by the
-`pichat-llm-coding-tools-*` options. Search skips symbolic links plus configured
-metadata/dependency directories. Binary and invalid UTF-8 files are rejected.
+Relative paths use that root; absolute paths must still remain inside it;
+traversal, search roots containing symlinks, and remote/TRAMP roots are rejected.
+fd and rg do not follow recursive symlinks. Repository-local ignore rules remain
+active, while ripgrep configuration and global ignore configuration are
+disabled; configured metadata/dependency directory exclusions also apply.
+Search output is UTF-8: binary files are left to ripgrep's normal binary skip,
+and a matching record containing invalid UTF-8 makes the invocation fail rather
+than silently replacing bytes. Paths and line text escape control characters.
+Timeout, pattern, parser-record, result, context, and retained-output bounds are
+controlled by the `pichat-llm-search-tools-*` and
+`pichat-llm-coding-tools-max-output-chars` options.
 
-`read`, `ls`, and `grep` are non-mutating under the normal approval policy.
-`write`, `edit`, and `bash` are always classified as potentially mutating and
-therefore require approval unless the user has consciously installed an allow
-rule. `write` atomically creates a new file and refuses overwrite. `edit`
-atomically replaces one exact unique string, optionally checks
-`expectedSha256`, preserves file modes, and rejects modified file-visiting
-buffers. Neither operation silently changes an unsaved Emacs buffer.
+`read`, `find`, `grep`, and `ls` are non-mutating under the normal approval
+policy, so routine repository exploration needs no prompt. Explicit
+user deny/ask rules still apply. `write`, `edit`, and `bash` retain their
+potentially-mutating classification and require approval unless the user has
+consciously installed an allow rule. `write` atomically creates a new file and
+refuses overwrite. `edit` atomically replaces one exact unique string,
+optionally checks `expectedSha256`, preserves file modes, and rejects modified
+file-visiting buffers. Neither operation silently changes an unsaved Emacs
+buffer.
 
-`bash` executes through Emacs's configured local shell in the session working
-directory. It is asynchronous, combines stdout/stderr, retains bounded output,
-and enforces `pichat-llm-coding-tools-command-timeout` with an absolute
-`pichat-llm-coding-tools-max-command-timeout`. Abort, stop, and new conversation
-interrupt an executing command and suppress its late callback. As with every
-external process, effects completed before cancellation cannot be undone. No
-arbitrary Emacs Lisp evaluator or unbounded shell tool is provided.
+`bash` remains available for builds, tests, and commands not covered by the
+structured tools. It executes through Emacs's configured local shell in the
+session working directory, combines stdout/stderr, retains bounded output, and
+enforces `pichat-llm-coding-tools-command-timeout` with an absolute
+`pichat-llm-coding-tools-max-command-timeout`. It may have arbitrary side
+effects and remains approval-gated. Abort, stop, and new conversation interrupt
+an executing command and suppress its late callback. Effects completed before
+cancellation cannot be undone. No arbitrary Emacs Lisp evaluator or unbounded
+shell tool is provided.
 
-When selected tools provide guidance, PiChat adds their exact working directory
-and safety semantics to the retained prompt's system context. It does not claim
-that Pi skills, context files, prompt templates, or additional tools are present.
+Selected tools add their exact working directory and safety semantics to the
+retained prompt. Guidance tells the model to use `find` for filenames, batch
+related content patterns in `grep`, and use `read` for detailed inspection; it
+does not claim that Pi skills, context files, prompt templates, or additional
+tools are present.
 
 ## Launching runtimes
 

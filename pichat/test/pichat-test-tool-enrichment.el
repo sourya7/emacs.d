@@ -116,6 +116,19 @@
    (equal '(:status unavailable)
           (pichat-tool-enrichment-infer-old-text-location "" "some text"))))
 
+(ert-deftest pichat-tool-enrichment-renders-find-and-multi-pattern-search-titles ()
+  (let ((find (pichat-tool-enrichment-build
+               "find" "find" '(:pattern "*backend*.el" :path "pichat")))
+        (grep (pichat-tool-enrichment-build
+               "grep" "grep" '(:patterns ["one" "two" "three"]
+                                 :path "pichat" :glob "*.el"))))
+    (should (eq 'search (plist-get find :kind)))
+    (should (equal "*backend*.el in pichat" (plist-get find :title)))
+    (should (eq 'search (plist-get grep :kind)))
+    (should (equal "3 patterns in pichat · *.el" (plist-get grep :title)))
+    (should (equal ["one" "two" "three"]
+                   (plist-get (plist-get grep :arguments) :patterns)))))
+
 (ert-deftest pichat-tool-enrichment-build-does-not-touch-filesystem ()
   (cl-letf (((symbol-function 'file-attributes)
              (lambda (&rest _) (error "filesystem access")))

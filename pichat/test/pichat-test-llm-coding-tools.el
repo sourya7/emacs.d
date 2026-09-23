@@ -45,9 +45,11 @@
   "Loading is inert; explicit registration returns the selectable bounded set."
   (pichat-test-with-clean-state
     (should-not (gethash "read" pichat-tools-registry))
-    (should (equal '("read" "ls" "grep" "write" "edit" "bash")
+    (should (equal '("read" "find" "grep" "write" "edit" "bash" "ls")
                    pichat-llm-coding-tool-names))
-    (should (equal pichat-llm-coding-tool-names
+    (should (equal '("read" "find" "grep" "write" "edit" "bash" "ls")
+                   pichat-llm-coding-tool-default-names))
+    (should (equal pichat-llm-coding-tool-default-names
                    (pichat-llm-coding-tools-register)))
     (dolist (name pichat-llm-coding-tool-names)
       (let ((tool (gethash name pichat-tools-registry)))
@@ -55,13 +57,19 @@
         (should (stringp (pichat-tool-instructions tool)))
         (should-not (eq t (plist-get (pichat-tool-parameters tool)
                                      :additionalProperties)))))
-    (should-not (pichat-tool-mutating-p
-                 (gethash "read" pichat-tools-registry)))
+    (dolist (name '("read" "find" "grep" "ls"))
+      (should-not (pichat-tool-mutating-p
+                   (gethash name pichat-tools-registry))))
+    (should (pichat-tool-async-p (gethash "find" pichat-tools-registry)))
+    (should (pichat-tool-async-p (gethash "grep" pichat-tools-registry)))
     (should (pichat-tool-mutating-p
              (gethash "write" pichat-tools-registry)))
     (should (pichat-tool-mutating-p
              (gethash "edit" pichat-tools-registry)))
     (should (pichat-tool-async-p (gethash "bash" pichat-tools-registry)))
+    (should (eq 'allow (pichat-approval-resolve "find" nil)))
+    (should (eq 'allow (pichat-approval-resolve "grep" nil)))
+    (should (eq 'ask (pichat-approval-resolve "bash" t)))
     (should (string-match-p
              "Use offset/limit"
              (pichat-tool-description (gethash "read" pichat-tools-registry))))
@@ -86,9 +94,7 @@
       (let ((default-directory dir)
             (pichat-llm-coding-tools-max-output-chars 10000)
             (pichat-llm-coding-tools-max-read-lines 2)
-            (pichat-llm-coding-tools-max-directory-entries 2)
-            (pichat-llm-coding-tools-max-search-files 2)
-            (pichat-llm-coding-tools-max-search-matches 1))
+            (pichat-llm-coding-tools-max-directory-entries 2))
         (pichat-llm-coding-tools-register)
         (make-directory (expand-file-name "sub" dir))
         (write-region "alpha\nneedle one\nomega\n" nil
@@ -101,17 +107,20 @@
                      "read" '(:path "a.txt" :offset 2 :limit 99)))
               (listing (pichat-test-coding-tool--value
                         "ls" '(:path "." :limit 99)))
-              (search (pichat-test-coding-tool--value
-                       "grep"
-                       '(:path "." :pattern "needle"
-                         :limit 99))))
+              (search-result (pichat-test-coding-tool--call-async
+                              "grep"
+                              '(:path "." :pattern "needle"
+                                :limit 1)))
+              search)
+          (should-not (plist-get search-result :is-error))
+          (setq search (plist-get search-result :value))
           (should (string-search "needle one\nomega" read))
           (should-not (string-match-p "alpha" read))
           (should (string-match-p "entry limit reached" listing))
           (should (= 1 (length (seq-filter
                                 (lambda (line) (string-match-p ":.*needle" line))
                                 (split-string search "\n" t)))))
-          (should (string-match-p "search limit reached" search)))))))
+          (should (string-match-p "matching-line limit reached" search)))))))
 
 (ert-deftest pichat-llm-coding-tools-confine-paths-and-reject-remote-or-binary ()
   "Traversal, escaping symlinks, remote roots, and non-UTF-8 input fail safely."
@@ -333,11 +342,14 @@
     (pichat-test-require-llm-backend)
     (pichat-llm-coding-tools-register)
     (let ((context (pichat-llm--context-with-tools
-                    "User context" '("read" "edit")
+                    "User context" '("read" "find" "grep" "edit" "bash")
                     "/tmp/project/")))
       (should (string-match-p "User context" context))
       (should (string-match-p (regexp-quote "/tmp/project/") context))
-      (should (string-match-p "read" context))
+      (should (string-match-p "Use find to locate" context))
+      (should (string-match-p "combine related patterns" context))
+      (should (string-match-p "No matches is successful" context))
+      (should (string-match-p "Prefer find/grep" context))
       (should (string-match-p "requires approval" context))
       (should (string-match-p "do not assume Pi skills" context)))))
 

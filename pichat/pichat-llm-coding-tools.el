@@ -39,21 +39,6 @@
   :type 'integer
   :group 'pichat-llm-coding-tools)
 
-(defcustom pichat-llm-coding-tools-max-search-files 1000
-  "Maximum regular files examined by one text-search call."
-  :type 'integer
-  :group 'pichat-llm-coding-tools)
-
-(defcustom pichat-llm-coding-tools-max-search-matches 200
-  "Maximum matching lines returned by one text-search call."
-  :type 'integer
-  :group 'pichat-llm-coding-tools)
-
-(defcustom pichat-llm-coding-tools-max-search-paths 10000
-  "Maximum filesystem entries examined by one text-search call."
-  :type 'integer
-  :group 'pichat-llm-coding-tools)
-
 (defcustom pichat-llm-coding-tools-command-timeout 30
   "Default timeout in seconds for the bounded bash tool."
   :type 'integer
@@ -71,8 +56,12 @@
   :group 'pichat-llm-coding-tools)
 
 (defconst pichat-llm-coding-tool-names
-  '("read" "ls" "grep" "write" "edit" "bash")
-  "Names registered by `pichat-llm-coding-tools-register'.")
+  '("read" "find" "grep" "write" "edit" "bash" "ls")
+  "Complete tool inventory registered by `pichat-llm-coding-tools-register'.")
+
+(defconst pichat-llm-coding-tool-default-names
+  '("read" "find" "grep" "write" "edit" "bash" "ls")
+  "Default names returned by `pichat-llm-coding-tools-register'.")
 
 (defun pichat-llm-coding-tools--positive-limit (value maximum label &optional default)
   "Validate VALUE as a positive integer bounded by MAXIMUM for LABEL.
@@ -287,75 +276,6 @@ Apply MODES when non-nil.  OVERWRITE must be non-nil to replace PATH."
              (string-join lines "\n")
              (if truncated "\n[entry limit reached]" "")))))
 
-(defun pichat-llm-coding-tools--search-file (path pattern remaining)
-  "Return up to REMAINING matching lines in PATH for literal PATTERN."
-  (condition-case nil
-      (let* ((bytes (pichat-llm-coding-tools--read-bytes path))
-             (text (pichat-llm-coding-tools--decode-text bytes path))
-             (regexp (regexp-quote pattern))
-             matches)
-        (cl-loop for line in (split-string text "\n" nil)
-                 for number from 1
-                 when (string-match-p regexp line)
-                 do (push (format "%s:%d:%s"
-                                  (pichat-llm-coding-tools--relative path)
-                                  number
-                                  (truncate-string-to-width line 500 nil nil "…"))
-                          matches)
-                 when (>= (length matches) remaining)
-                 return nil)
-        (nreverse matches))
-    (error nil)))
-
-(defun pichat-llm-coding-tools-search-text (params)
-  "Recursively search bounded local UTF-8 files using PARAMS."
-  (let* ((pattern (pichat-llm-coding-tools--required-string
-                   params :pattern "Pattern" t))
-         (requested (or (plist-get params :path) "."))
-         (root (pichat-llm-coding-tools--resolve requested t t))
-         (file-limit pichat-llm-coding-tools-max-search-files)
-         (match-limit (pichat-llm-coding-tools--positive-limit
-                       (plist-get params :limit)
-                       pichat-llm-coding-tools-max-search-matches "Limit"
-                       pichat-llm-coding-tools-max-search-matches))
-         (queue (list root))
-         (files 0)
-         (paths 0)
-         matches
-         limited)
-    (while (and queue (< files file-limit)
-                (< paths pichat-llm-coding-tools-max-search-paths)
-                (< (length matches) match-limit))
-      (let ((directory (pop queue)))
-        (catch 'limit
-          (dolist (entry (sort (directory-files
-                                directory t directory-files-no-dot-files-regexp t)
-                               #'string-lessp))
-            (when (or (>= files file-limit)
-                      (>= paths pichat-llm-coding-tools-max-search-paths)
-                      (>= (length matches) match-limit))
-              (setq limited t)
-              (throw 'limit nil))
-            (cl-incf paths)
-            (cond
-             ((file-symlink-p entry) nil)
-             ((file-directory-p entry)
-              (unless (member (file-name-nondirectory entry)
-                              pichat-llm-coding-tools-search-skip-directories)
-                (setq queue (append queue (list entry)))))
-             ((file-regular-p entry)
-              (cl-incf files)
-              (let ((found (pichat-llm-coding-tools--search-file
-                            entry pattern (- match-limit (length matches)))))
-                (setq matches (append matches found)))))))))
-    (when (or queue (>= files file-limit)
-              (>= paths pichat-llm-coding-tools-max-search-paths)
-              (>= (length matches) match-limit))
-      (setq limited t))
-    (pichat-llm-coding-tools--bounded-output
-     (concat (if matches (string-join matches "\n") "[no matches]")
-             (when limited "\n[search limit reached]")))))
-
 (defun pichat-llm-coding-tools-write-file (params)
   "Create one new UTF-8 file described by PARAMS."
   (let* ((requested (pichat-llm-coding-tools--required-string
@@ -537,11 +457,13 @@ process commands.  Fall back to `sh' only when no shell is configured."
             (when (timerp timer) (cancel-timer timer))
             (pichat-llm-coding-tools--stop-process process)))))))
 
+(require 'pichat-llm-search-tools)
+
 (defun pichat-llm-coding-tools-register ()
-  "Explicitly register the bounded native coding tool set.
-Return a fresh list suitable for `pichat-llm-tools'.  Registration alone does
-not add a tool to an existing or future native conversation; the names must
-still be selected explicitly."
+  "Explicitly register the bounded native coding tool inventory.
+Return a fresh default list suitable for `pichat-llm-tools'.
+Registration never rewrites an existing explicit selection, and conversations
+retain the tool list advertised when they were created."
   (dolist
       (tool
        (list
@@ -570,18 +492,36 @@ still be selected explicitly."
          :instructions "ls is non-recursive and marks directories with / and symbolic links with @."
          :mutating-p nil :native-only-p t)
         (pichat-tool-create
-         :name "grep" :label "grep"
-         :description "Search UTF-8 file contents for a literal string. Returns matching lines with relative file paths and line numbers. Output is bounded by file, match, line-length, and character limits."
+         :name "find" :label "find"
+         :description "Locate regular files by basename glob using fd. pattern defaults to '*'; path defaults to the working directory. hidden includes hidden files without disabling ignore rules. Results are traversal-order, bounded, and relative to the working directory."
          :parameters
          '(:type "object" :additionalProperties :json-false
            :properties
-           (:pattern (:type "string" :description "Literal text to find")
+           (:pattern (:type "string" :description "Optional basename glob; defaults to *")
             :path (:type "string" :description "Directory path; defaults to the working directory")
-            :limit (:type "integer" :description "Maximum matching lines"))
-           :required ["pattern"])
-         :function #'pichat-llm-coding-tools-search-text
-         :instructions "grep performs literal, recursive UTF-8 search with explicit file and match limits; it skips symbolic links and configured dependency directories."
-         :mutating-p nil :native-only-p t)
+            :hidden (:type "boolean" :description "Include hidden files while retaining ignore rules")
+            :limit (:type "integer" :description "Maximum files; positive and bounded")))
+         :function #'pichat-llm-search-tools-find
+         :instructions "Use find to locate regular files by basename glob. It runs fd directly, keeps repository ignore rules, does not follow symbolic links, and needs no approval under the normal policy."
+         :mutating-p nil :async-p t :native-only-p t)
+        (pichat-tool-create
+         :name "grep" :label "grep"
+         :description "Search file contents with ripgrep. Provide exactly one of legacy pattern or patterns; patterns are ORed. Literal matching is the default; set literal=false for ripgrep regex syntax. path may be a file or directory. glob uses ripgrep file-glob semantics. hidden retains ignore rules. Matching lines, context, and output are globally bounded."
+         :parameters
+         '(:type "object" :additionalProperties :json-false
+           :properties
+           (:pattern (:type "string" :description "Legacy single pattern; mutually exclusive with patterns")
+            :patterns (:type "array" :items (:type "string") :description "One or more non-empty OR patterns; mutually exclusive with pattern")
+            :path (:type "string" :description "File or directory; defaults to the working directory")
+            :glob (:type "string" :description "Optional ripgrep file-filter glob")
+            :literal (:type "boolean" :description "Use literal matching; defaults to true")
+            :ignoreCase (:type "boolean" :description "Case-insensitive matching; defaults to false")
+            :context (:type "integer" :description "Bounded lines before and after matches")
+            :hidden (:type "boolean" :description "Include hidden files while retaining ignore rules")
+            :limit (:type "integer" :description "Global matching-line limit; positive and bounded")))
+         :function #'pichat-llm-search-tools-grep
+         :instructions "Use grep to search contents and combine related patterns in one call. OR semantics apply to patterns. Literal search is the default; set literal=false for regex. No matches is successful. It runs rg directly, keeps repository ignore rules, does not follow symbolic links, and needs no approval under the normal policy."
+         :mutating-p nil :async-p t :native-only-p t)
         (pichat-tool-create
          :name "write" :label "write"
          :description "Create a new UTF-8 text file atomically. The parent directory must already exist, and this guarded tool refuses to overwrite an existing file."
@@ -621,10 +561,10 @@ still be selected explicitly."
             :timeout (:type "number" :description "Timeout in seconds; bounded and optional"))
            :required ["command"])
          :function #'pichat-llm-coding-tools-bash
-         :instructions "Use bash for bounded non-interactive commands when read, ls, grep, write, or edit is not a better fit. bash always requires approval, has a mandatory timeout, and may have arbitrary side effects."
+         :instructions "Use bash for builds, tests, and other bounded non-interactive commands when read, find, grep, ls, write, or edit is not a better fit. Prefer find/grep for routine searches. bash always requires approval, has a mandatory timeout, and may have arbitrary side effects."
          :mutating-p t :async-p t :native-only-p t)))
     (pichat-tools-register tool))
-  (copy-sequence pichat-llm-coding-tool-names))
+  (copy-sequence pichat-llm-coding-tool-default-names))
 
 (provide 'pichat-llm-coding-tools)
 ;;; pichat-llm-coding-tools.el ends here

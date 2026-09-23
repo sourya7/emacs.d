@@ -40,6 +40,8 @@ heuristics are used.  Classification affects presentation only."
     (:offset :offset)
     (:command :command :cmd)
     (:pattern :pattern :search :search_term :searchTerm)
+    (:patterns :patterns)
+    (:glob :glob)
     (:url :url :uri)
     (:query :query)
     (:old-text :old-text :oldText :old_text)
@@ -202,10 +204,25 @@ Return a plist whose :status is `unique', `not-found', `non-unique', or
              (path path)
              (t name)))
       ('search
-       (let ((pattern (plist-get args :pattern)))
-         (if (pichat-tool-enrichment--nonempty-string-p pattern)
-             (format "%s in %s" pattern (or (plist-get args :path) "."))
-           name)))
+       (let* ((pattern (plist-get args :pattern))
+              (patterns (plist-get args :patterns))
+              (path (or (plist-get args :path) "."))
+              (glob (plist-get args :glob)))
+         (cond
+          ((and (member (downcase (or name "")) '("grep"))
+                (or (listp patterns) (vectorp patterns))
+                (> (length patterns) 0))
+           (pichat-tool-enrichment--truncate
+            (format "%d pattern%s in %s%s"
+                    (length patterns) (if (= (length patterns) 1) "" "s")
+                    path (if (pichat-tool-enrichment--nonempty-string-p glob)
+                             (format " · %s" glob) ""))
+            100))
+          ((or (pichat-tool-enrichment--nonempty-string-p pattern)
+               (equal (downcase (or name "")) "find"))
+           (pichat-tool-enrichment--truncate
+            (format "%s in %s" (or pattern "*") path) 100))
+          (t name))))
       ('fetch (or (plist-get args :url) (plist-get args :query) name))
       (_
        (if-let ((value (pichat-tool-enrichment--first-string-value args)))

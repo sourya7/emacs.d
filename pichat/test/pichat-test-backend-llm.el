@@ -991,6 +991,24 @@
                 (should (string-match-p "do not assume Pi skills" context)))
             (pichat-backend-stop-session session)))))))
 
+(ert-deftest pichat-backend-llm-default-coding-tools-advertise-seven-valid-schemas ()
+  "A new native session captures all seven defaults, including array grep args."
+  (pichat-test-llm--require)
+  (pichat-test-with-clean-state
+    (require 'pichat-llm-coding-tools)
+    (let* ((selected (pichat-llm-coding-tools-register))
+           (provider (make-pichat-test-llm-provider :capabilities '(tool-use)))
+           (session (pichat-test-llm--session provider nil selected))
+           (state (pichat-session-backend-state session)))
+      (unwind-protect
+          (progn
+            (should (equal '("read" "find" "grep" "write" "edit" "bash" "ls")
+                           selected))
+            (should (equal selected (pichat-llm-state-tool-names state)))
+            (should (= 7 (length (pichat-llm-state-tools state))))
+            (should (member "ls" (pichat-llm-state-tool-names state))))
+        (pichat-backend-stop-session session)))))
+
 (ert-deftest pichat-backend-llm-abort-cancels-asynchronous-tool-process ()
   "Abort invokes an executing tool's cancellation closure before later effects."
   (pichat-test-llm--require)

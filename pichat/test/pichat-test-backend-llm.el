@@ -21,7 +21,8 @@
 (defvar pichat-llm-coding-tools-command-timeout)
 (defvar pichat-backend-llm-capabilities)
 (declare-function pichat-test-llm--invoke nil
-                  (provider prompt partial-callback final-callback error-callback))
+                  (provider prompt mode partial-callback final-callback
+                            error-callback))
 (declare-function pichat-llm-provider-spec-create "pichat-backend-llm"
                   (&rest args))
 (declare-function pichat-llm-make-codex-provider "pichat-backend-llm" (model))
@@ -63,13 +64,13 @@
     (setf (pichat-test-llm-request-cancelled request) t))
 
   (defun pichat-test-llm--invoke
-      (provider prompt partial-callback final-callback error-callback)
-    "Run PROVIDER's next script against callbacks for PROMPT."
+      (provider prompt mode partial-callback final-callback error-callback)
+    "Run PROVIDER's next script in MODE against callbacks for PROMPT."
     (let ((request (make-pichat-test-llm-request))
           (script (pop (pichat-test-llm-provider-scripts provider))))
       (setf (pichat-test-llm-provider-calls provider)
             (append (pichat-test-llm-provider-calls provider)
-                    (list (list :prompt prompt :request request))))
+                    (list (list :prompt prompt :request request :mode mode))))
       (if (eq script 'delayed)
           (setf (pichat-test-llm-provider-pending provider)
                 (append
@@ -113,13 +114,14 @@
     ((provider pichat-test-llm-provider) prompt partial-callback
      response-callback error-callback &optional _multi-output)
     (pichat-test-llm--invoke
-     provider prompt partial-callback response-callback error-callback))
+     provider prompt 'streaming partial-callback response-callback
+     error-callback))
 
   (cl-defmethod llm-chat-async
     ((provider pichat-test-llm-provider) prompt response-callback error-callback
      &optional _multi-output)
     (pichat-test-llm--invoke
-     provider prompt nil response-callback error-callback)))
+     provider prompt 'async nil response-callback error-callback)))
 
 (defun pichat-test-llm--require ()
   "Require the native backend for one test."
@@ -416,10 +418,13 @@
             (should (equal (pichat-test-llm--journal-texts session)
                            '(("user" "first") ("assistant" "corrected")
                              ("user" "second") ("assistant" ""))))
-            (let ((prompts
-                   (mapcar (lambda (call) (plist-get call :prompt))
-                           (pichat-test-llm-provider-calls provider))))
-              (should (eq (car prompts) (cadr prompts))))
+            (let ((calls (pichat-test-llm-provider-calls provider)))
+              (should (equal (mapcar (lambda (call) (plist-get call :mode))
+                                     calls)
+                             '(streaming streaming)))
+              (let ((prompts
+                     (mapcar (lambda (call) (plist-get call :prompt)) calls)))
+                (should (eq (car prompts) (cadr prompts)))))
             (let* ((usage
                     (pichat-llm--usage-data
                      (pichat-session-backend-state session)))
@@ -657,7 +662,7 @@
         (concat "native:" (plist-get params :value)))
       (let* ((provider
               (make-pichat-test-llm-provider
-               :capabilities '(tool-use)
+               :streaming t :capabilities '(tool-use)
                :scripts
                '(((tools ("pichat-test-native-echo" "same")
                          ("pichat-test-native-echo" "same")))
@@ -676,6 +681,10 @@
               (should (= executions 2))
               (should (= settlements 1))
               (should (= 2 (length (pichat-test-llm-provider-calls provider))))
+              (should (equal
+                       (mapcar (lambda (call) (plist-get call :mode))
+                               (pichat-test-llm-provider-calls provider))
+                       '(async async)))
               (should (eq
                        (plist-get (nth 0 (pichat-test-llm-provider-calls provider))
                                   :prompt)

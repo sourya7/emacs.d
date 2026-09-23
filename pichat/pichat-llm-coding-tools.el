@@ -432,6 +432,25 @@ Apply MODES when non-nil.  OVERWRITE must be non-nil to replace PATH."
     (ignore-errors (interrupt-process process))
     (ignore-errors (delete-process process))))
 
+(defun pichat-llm-coding-tools--shell-executable ()
+  "Return the configured local shell as an executable file name.
+Resolve a bare `shell-file-name' through `exec-path', as Emacs does for
+process commands.  Fall back to `sh' only when no shell is configured."
+  (let* ((configured
+          (and (stringp shell-file-name)
+               (not (string-empty-p shell-file-name))
+               shell-file-name))
+         (shell
+          (cond
+           ((null configured) (executable-find "sh"))
+           ((file-name-absolute-p configured) configured)
+           ((file-name-directory configured) (expand-file-name configured))
+           (t (executable-find configured)))))
+    (unless (and shell (file-regular-p shell) (file-executable-p shell))
+      (user-error "Configured Emacs shell is unavailable%s"
+                  (if configured (format ": %s" configured) "")))
+    shell))
+
 (defun pichat-llm-coding-tools-bash (params callback)
   "Run the bounded asynchronous shell command in PARAMS and call CALLBACK."
   (let* ((command (pichat-llm-coding-tools--required-string
@@ -439,10 +458,7 @@ Apply MODES when non-nil.  OVERWRITE must be non-nil to replace PATH."
          (timeout (pichat-llm-coding-tools--timeout
                    (plist-get params :timeout)))
          (root (pichat-llm-coding-tools--root))
-         (shell (or (and (stringp shell-file-name) shell-file-name)
-                    (executable-find "sh"))))
-    (unless (and shell (file-executable-p shell))
-      (user-error "Configured Emacs shell is unavailable"))
+         (shell (pichat-llm-coding-tools--shell-executable)))
     (let ((default-directory root)
           (output "")
           (total 0)

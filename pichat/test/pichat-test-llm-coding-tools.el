@@ -283,6 +283,31 @@
           (should (string-match-p "timed out after 1 second"
                                   (plist-get timeout :value))))))))
 
+(ert-deftest pichat-llm-coding-tools-bash-resolves-bare-emacs-shell-name ()
+  "A configured shell name is found through exec-path before execution."
+  (pichat-test-with-clean-state
+    (pichat-test-with-temp-dir dir
+      (let* ((default-directory dir)
+             (shell (or (executable-find "sh")
+                        (ert-fail "Test requires a local sh executable")))
+             (shell-file-name "fixture-shell"))
+        (pichat-llm-coding-tools-register)
+        (cl-letf (((symbol-function 'executable-find)
+                   (lambda (name)
+                     (and (equal name "fixture-shell") shell))))
+          (let ((result (pichat-test-coding-tool--call-async
+                         "bash" '(:command "printf resolved"))))
+            (should-not (plist-get result :is-error))
+            (should (equal (plist-get result :value) "resolved"))))
+        (let ((shell-file-name "missing-fixture-shell"))
+          (cl-letf (((symbol-function 'executable-find) (lambda (_name) nil)))
+            (let ((result (pichat-test-coding-tool--call-async
+                           "bash" '(:command "printf unreachable"))))
+              (should (plist-get result :is-error))
+              (should (string-match-p
+                       "Configured Emacs shell is unavailable: missing-fixture-shell"
+                       (plist-get result :value))))))))))
+
 (ert-deftest pichat-llm-coding-tools-bash-cancellation-stops-side-effects ()
   "Cancelling an executing command suppresses its callback and later mutation."
   (pichat-test-with-clean-state

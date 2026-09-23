@@ -59,7 +59,7 @@
 (defun pichat-test-sessions-preview--kill-buffers ()
   "Kill Phase 6 auxiliary buffers when present."
   (dolist (name '("*PiChat Branch Preview*" "*PiChat Session Entry*"))
-    (when-let ((buffer (get-buffer name)))
+    (when-let* ((buffer (get-buffer name)))
       (kill-buffer buffer))))
 
 (defmacro pichat-test-sessions-preview--with-history (&rest body)

@@ -303,7 +303,7 @@ When LIMIT is non-nil, copy at most LIMIT leading characters."
 (defun pichat-rpc--process-sentinel (process event)
   "Handle PROCESS lifecycle EVENT and clean its hidden transport buffers."
   (unless (process-live-p process)
-    (when-let ((session (process-get process 'pichat-session)))
+    (when-let* ((session (process-get process 'pichat-session)))
       (when (timerp (pichat-session-rpc-ready-timer session))
         (cancel-timer (pichat-session-rpc-ready-timer session)))
       (setf (pichat-session-rpc-ready-timer session) nil
@@ -334,7 +334,7 @@ When LIMIT is non-nil, copy at most LIMIT leading characters."
                      :reason reason :event (string-trim event)
                      :diagnostic diagnostic)))
     (dolist (buffer (list (process-buffer process)
-                          (when-let ((session (process-get process 'pichat-session)))
+                          (when-let* ((session (process-get process 'pichat-session)))
                             (pichat-session-stderr-buffer session))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
@@ -343,7 +343,7 @@ When LIMIT is non-nil, copy at most LIMIT leading characters."
   "Handle PROCESS output CHUNK.
 Records are split only on LF, preserving JSON strings containing Unicode line
 separator characters.  A trailing CR is stripped for CRLF compatibility."
-  (when-let ((session (process-get process 'pichat-session)))
+  (when-let* ((session (process-get process 'pichat-session)))
     (pichat-rpc--mark-ready session process)
     (let ((buf (concat (or (pichat-session-rpc-receive-buffer session) "") chunk))
           line)
@@ -406,7 +406,7 @@ separator characters.  A trailing CR is stripped for CRLF compatibility."
 
 (defun pichat-rpc--cancel-pending-timer (pending)
   "Cancel PENDING request timeout timer, if any."
-  (when-let ((timer (pichat-rpc--pending-timer pending)))
+  (when-let* ((timer (pichat-rpc--pending-timer pending)))
     (when (timerp timer)
       (cancel-timer timer))))
 
@@ -424,7 +424,7 @@ separator characters.  A trailing CR is stripped for CRLF compatibility."
 
 (defun pichat-rpc-cancel-request (session id)
   "Silently cancel pending request ID and its timer in SESSION."
-  (when-let ((pending (and id
+  (when-let* ((pending (and id
                            (gethash id
                                     (pichat-session-pending-responses
                                      session)))))
@@ -434,7 +434,7 @@ separator characters.  A trailing CR is stripped for CRLF compatibility."
 
 (defun pichat-rpc--timeout-request (session id)
   "Fail pending request ID in SESSION because it timed out."
-  (when-let ((pending (gethash id (pichat-session-pending-responses session))))
+  (when-let* ((pending (gethash id (pichat-session-pending-responses session))))
     (remhash id (pichat-session-pending-responses session))
     (let* ((response (list :type "response"
                            :id id
@@ -490,7 +490,7 @@ FAILURE-KIND is the machine-readable local failure cause."
         (remhash id (pichat-session-pending-responses session))
         (pichat-rpc--cancel-pending-timer pending)
         (pichat-emit session 'response-received :response response)
-        (when-let ((error-callback
+        (when-let* ((error-callback
                     (pichat-rpc--pending-error-callback pending)))
           (funcall error-callback response session))))))
 

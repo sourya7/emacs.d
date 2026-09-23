@@ -196,7 +196,7 @@ When PROMPT is non-nil, always ask."
       (condition-case nil
           (progn
             (compilation-goto-error)
-            (when-let ((file (buffer-file-name)))
+            (when-let* ((file (buffer-file-name)))
               (setq location
                     (pichat-reference--format-location
                      file (line-number-at-pos nil t) nil nil diagnostic))))

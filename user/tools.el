@@ -296,7 +296,7 @@ changes its HTML markup."
     ;; Main web results: .search-result -> .__sri_title_link / .__sri-desc
     (dolist (el (my/kagi--by-class dom "search-result"))
       (when (< (length results) limit)
-        (when-let ((r (my/kagi--result-from-link
+        (when-let* ((r (my/kagi--result-from-link
                        el (car (my/kagi--by-class el "__sri_title_link")))))
           (push r results))))
     ;; Grouped sub-results: .sr-group .__srgi -> .__srgi-title a / .__sri-desc
@@ -304,7 +304,7 @@ changes its HTML markup."
       (dolist (el (my/kagi--by-class group "__srgi"))
         (when (< (length results) limit)
           (let ((tc (car (my/kagi--by-class el "__srgi-title"))))
-            (when-let ((r (my/kagi--result-from-link
+            (when-let* ((r (my/kagi--result-from-link
                            el (and tc (car (dom-by-tag tc 'a))))))
               (push r results))))))
     (nreverse results)))

@@ -169,7 +169,7 @@
       '(""
         "%b"
         (:eval
-         (when-let ((project-name (my/frame-title-project-name)))
+         (when-let* ((project-name (my/frame-title-project-name)))
            (unless (string= "-" project-name)
              (format (if (buffer-modified-p) " ◉ %s" "  ●  %s - Emacs") project-name))))))
 

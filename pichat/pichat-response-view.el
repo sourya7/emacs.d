@@ -142,9 +142,9 @@
   "Return the inert subset of ATTRIBUTES permitted for TAG."
   (pcase tag
     ('a (delq nil
-              (list (when-let ((href (alist-get 'href attributes)))
+              (list (when-let* ((href (alist-get 'href attributes)))
                       (and (stringp href) (cons 'href href)))
-                    (when-let ((title (alist-get 'title attributes)))
+                    (when-let* ((title (alist-get 'title attributes)))
                       (and (stringp title) (cons 'title title))))))
     ((or 'th 'td)
      (delq nil

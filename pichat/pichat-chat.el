@@ -604,7 +604,7 @@ Use its scope label as a unique provisional identity until Pi reports an id."
 
 (defun pichat-chat--rename-buffer-maybe (&optional session)
   "Rename the current chat buffer to match SESSION's compact identity."
-  (when-let ((s (or session pichat-chat-session)))
+  (when-let* ((s (or session pichat-chat-session)))
     (let ((name (pichat-chat-buffer-name s)))
       (unless (string= (buffer-name) name)
         (rename-buffer name t)))))
@@ -626,7 +626,7 @@ Use its scope label as a unique provisional identity until Pi reports an id."
 
 (defun pichat-chat--refresh-slash-commands (&optional session)
   "Refresh source-scoped slash commands for SESSION."
-  (when-let ((session (or session pichat-chat-session)))
+  (when-let* ((session (or session pichat-chat-session)))
     (pichat-chat-completion-refresh
      session pichat-chat--source-generation
      (pichat-chat--completion-source-key) (current-buffer))))
@@ -658,7 +658,7 @@ Use its scope label as a unique provisional identity until Pi reports an id."
   "Release boundary markers owned by live FRAGMENTS or current state."
   (dolist (fragment (or fragments pichat-chat--live-projection-fragments))
     (dolist (key '(:start :end))
-      (when-let ((marker (plist-get fragment key)))
+      (when-let* ((marker (plist-get fragment key)))
         (when (markerp marker) (set-marker marker nil))))))
 
 (defun pichat-chat--live-tool-view-key (tool-id)
@@ -803,7 +803,7 @@ arrived, so no later state-change event would otherwise trigger initial sync."
       (pichat-chat--refresh-slash-commands session)
       (when synchronize
         (pichat-chat--request-sync t))
-      (when-let ((diagnostic (pichat-chat-diagnostics-latest session)))
+      (when-let* ((diagnostic (pichat-chat-diagnostics-latest session)))
         (pichat-chat--set-status
          (if (eq 'rpc-parse (plist-get diagnostic :origin))
              'rpc-parse
@@ -1060,7 +1060,7 @@ non-nil for a successful RPC response, and RESPONSE is the response plist."
 (defun pichat-chat--refresh-stats (&optional session reason)
   "Schedule cached stats refresh for SESSION at lifecycle REASON.
 REASON is one of `state', `turn', `compaction', or `settled'."
-  (when-let ((s (or session pichat-chat-session)))
+  (when-let* ((s (or session pichat-chat-session)))
     (when (and (eq s pichat-chat-session)
                (pichat-session-alive-p s)
                (pichat-backend-capable-p s 'stats))
@@ -1363,7 +1363,7 @@ editable by the user."
 
 (defun pichat-chat--logical-anchor-at (position)
   "Return a stable transcript anchor for POSITION, or nil."
-  (when-let ((key (get-text-property position 'pichat-node-key)))
+  (when-let* ((key (get-text-property position 'pichat-node-key)))
     (let* ((candidate (previous-single-property-change
                        position 'pichat-node-key nil (point-min)))
            (start (if (and candidate
@@ -1394,7 +1394,7 @@ editable by the user."
 
 (defun pichat-chat--property-anchor-at (position property)
   "Return PROPERTY's value and local offset at POSITION, or nil."
-  (when-let ((value (get-text-property position property)))
+  (when-let* ((value (get-text-property position property)))
     (let* ((candidate (previous-single-property-change
                        position property nil (point-min)))
            (start (if (and candidate
@@ -1429,9 +1429,9 @@ MATCHER compares each property value with ANCHOR's saved value and defaults to
 
 (defun pichat-chat--tool-id-anchor-at (position)
   "Return the tool-call ID and local tool offset at POSITION, or nil."
-  (when-let ((anchor (pichat-chat--property-anchor-at
+  (when-let* ((anchor (pichat-chat--property-anchor-at
                       position 'pichat-tool-key)))
-    (when-let ((tool-id (cdr-safe (car anchor))))
+    (when-let* ((tool-id (cdr-safe (car anchor))))
       (list tool-id (cadr anchor)))))
 
 (defun pichat-chat--tool-id-anchor-position (anchor)
@@ -1519,7 +1519,7 @@ LIVE-START and LIVE-END describe the replaceable live region before an edit."
 
 (defun pichat-chat--release-view-anchor (anchor)
   "Release the temporary marker owned by ANCHOR."
-  (when-let ((marker (plist-get anchor :fallback)))
+  (when-let* ((marker (plist-get anchor :fallback)))
     (set-marker marker nil)))
 
 (defun pichat-chat--window-following-p (window)
@@ -1559,7 +1559,7 @@ LIVE-START and LIVE-END describe the replaceable live region before an edit."
 
 (defun pichat-chat--release-view-state (state)
   "Release all temporary markers owned by view STATE."
-  (when-let ((anchor (plist-get state :buffer-point)))
+  (when-let* ((anchor (plist-get state :buffer-point)))
     (pichat-chat--release-view-anchor anchor))
   (dolist (snapshot (plist-get state :windows))
     (pichat-chat--release-view-anchor (plist-get snapshot :point))
@@ -1568,7 +1568,7 @@ LIVE-START and LIVE-END describe the replaceable live region before an edit."
 (defun pichat-chat--restore-view-state (state)
   "Restore per-window cursor, viewport, and follow behavior from STATE."
   (unwind-protect
-      (when-let ((buffer (plist-get state :buffer)))
+      (when-let* ((buffer (plist-get state :buffer)))
         (when (buffer-live-p buffer)
           (with-current-buffer buffer
             (if (null (plist-get state :windows))
@@ -2395,7 +2395,7 @@ parent retain their independent explicit state."
 
 (defun pichat-chat--node-end-position (key start end)
   "Return the end of node KEY between START and END, or nil."
-  (when-let ((position (text-property-any start end 'pichat-node-key key)))
+  (when-let* ((position (text-property-any start end 'pichat-node-key key)))
     (or (next-single-property-change position 'pichat-node-key nil end)
         end)))
 
@@ -2497,7 +2497,7 @@ canonical keys as part of the projection transaction."
                 (delq nil
                       (mapcar
                        (lambda (marker)
-                         (when-let ((position (marker-position marker)))
+                         (when-let* ((position (marker-position marker)))
                            (cons marker position)))
                        (list pichat-chat--status-start pichat-chat--status-end
                              pichat-chat--widget-start pichat-chat--widget-end
@@ -3008,7 +3008,7 @@ mutated.  SECOND wins if a transient tool id collides with a canonical id."
 (defun pichat-chat--project-live-tail ()
   "Project the current normalized live draft into its dedicated region.
 Return non-nil when a changed candidate commits."
-  (when-let ((candidate (pichat-chat--build-live-candidate)))
+  (when-let* ((candidate (pichat-chat--build-live-candidate)))
     (let ((fingerprint (plist-get candidate :fingerprint)))
       (unless (pichat-chat--live-fingerprints-equal-p
                fingerprint pichat-chat--live-projection-fingerprint)
@@ -3047,7 +3047,7 @@ Stale generations and events without a tool call id are ignored."
           ;; The pure enrichment merge intentionally rebuilds from accumulated
           ;; identity/arguments.  Preserve the already normalized terminal
           ;; shell observation before considering this possibly stale event.
-          (when-let ((outcome (plist-get old :shell-outcome)))
+          (when-let* ((outcome (plist-get old :shell-outcome)))
             (setq record (plist-put record :shell-outcome outcome)))
           (setq record
                 (pichat-shell-presentation-observe record raw)
@@ -3169,7 +3169,7 @@ Stale generations and events without a tool call id are ignored."
     (setq pichat-chat--sync-in-flight nil
           pichat-chat--sync-in-flight-full-p nil
           pichat-chat--sync-request-id nil)
-    (when-let ((pending pichat-chat--sync-pending))
+    (when-let* ((pending pichat-chat--sync-pending))
       (setq pichat-chat--sync-pending nil)
       (pichat-chat--request-sync (eq pending 'full)))))
 
@@ -3407,7 +3407,7 @@ BASE-CACHE is the cache captured by the incremental request."
              (remhash state-key pichat-chat--activity-view-states)
            (puthash state-key present pichat-chat--activity-view-states))
          (signal (car err) (cdr err))))
-      (when-let ((new (gethash group-key pichat-chat--activity-blocks)))
+      (when-let* ((new (gethash group-key pichat-chat--activity-blocks)))
         (goto-char (marker-position (plist-get new :start)))))))
 
 ;;;###autoload
@@ -3489,9 +3489,9 @@ BASE-CACHE is the cache captured by the incremental request."
                         (format ": %s" reason) "")))
       (find-file path)
       (goto-char (point-min))
-      (when-let ((line (plist-get record :line)))
+      (when-let* ((line (plist-get record :line)))
         (forward-line (1- line)))
-      (when-let ((column (plist-get record :column)))
+      (when-let* ((column (plist-get record :column)))
         (move-to-column (1- column))))))
 
 (defun pichat-chat--copy-tool-location (path-only-p)

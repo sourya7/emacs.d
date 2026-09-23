@@ -485,7 +485,7 @@ runtime never marks its own project as current."
 
 (defun pichat-consult--candidate-annotation (candidate)
   "Return aligned display metadata for archive session CANDIDATE."
-  (when-let ((record (pichat-consult--candidate-record candidate)))
+  (when-let* ((record (pichat-consult--candidate-record candidate)))
     (let* ((identity (pichat-consult--candidate-identity record))
            (time (pichat-consult--short-time
                   (plist-get record :latest-activity-at)))
@@ -638,7 +638,7 @@ runtime never marks its own project as current."
     (insert (format "Resolution: %s\nFork evidence: %s\n"
                     (plist-get relation :parent-resolution)
                     (pichat-consult--fork-evidence-description relation)))
-    (when-let ((reference (plist-get relation :parent-reference-path)))
+    (when-let* ((reference (plist-get relation :parent-reference-path)))
       (insert (format "Parent reference: %s\n" reference)))))
 
 (defun pichat-consult--render-preview
@@ -1294,7 +1294,7 @@ Embark `j' loads and jumps, and Embark `r' also shows relations."
    capability 'projects (list :loadable-only t :limit 200)
    (lambda (projects)
      (condition-case nil
-         (when-let ((project (pichat-consult--select-project projects)))
+         (when-let* ((project (pichat-consult--select-project projects)))
            (pichat-consult--run-project-search
             capability project initial selection-function))
        (quit nil)))

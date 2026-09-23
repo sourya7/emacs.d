@@ -24,7 +24,7 @@
 
 (defun my/project-find-go-module (directory)
   "Return a project rooted at the nearest go.mod above DIRECTORY."
-  (when-let ((root (locate-dominating-file directory "go.mod")))
+  (when-let* ((root (locate-dominating-file directory "go.mod")))
     (cons 'go-module root)))
 
 (cl-defmethod project-root ((project (head go-module)))

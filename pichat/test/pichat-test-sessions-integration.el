@@ -76,7 +76,7 @@ SESSION-ID defaults to a stable Phase 11 fixture identity."
   (dolist (name '("*PiChat Session History*"
                   "*PiChat Branch Preview*"
                   "*PiChat Session Entry*"))
-    (when-let ((buffer (get-buffer name)))
+    (when-let* ((buffer (get-buffer name)))
       (kill-buffer buffer))))
 
 (defun pichat-test-sessions-integration--wait-for-chat-source
@@ -312,9 +312,9 @@ SESSION-ID defaults to a stable Phase 11 fixture identity."
                 (when session
                   (ignore-errors (pichat-stop-session session))
                   (ignore-errors (pichat-forget-session session))
-                  (when-let ((process (pichat-session-process session)))
+                  (when-let* ((process (pichat-session-process session)))
                     (when (process-live-p process) (delete-process process))
-                    (when-let ((buffer (process-buffer process)))
+                    (when-let* ((buffer (process-buffer process)))
                       (when (buffer-live-p buffer) (kill-buffer buffer))))))))))))
 
   (ert-deftest pichat-integration-independent-runtimes-isolate-switch-and-stop ()
@@ -395,9 +395,9 @@ SESSION-ID defaults to a stable Phase 11 fixture identity."
                     (when session
                       (ignore-errors (pichat-stop-session session))
                       (ignore-errors (pichat-forget-session session))
-                      (when-let ((process (pichat-session-process session)))
+                      (when-let* ((process (pichat-session-process session)))
                         (when (process-live-p process) (delete-process process))
-                        (when-let ((buffer (process-buffer process)))
+                        (when-let* ((buffer (process-buffer process)))
                           (when (buffer-live-p buffer) (kill-buffer buffer)))))))))))))))
 
 (provide 'pichat-test-sessions-integration)

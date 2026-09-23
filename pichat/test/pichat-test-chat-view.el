@@ -54,7 +54,7 @@
 
 (defun pichat-test-chat-view--anchor-at (position)
   "Return the observable node key and offset at POSITION."
-  (when-let ((key (get-text-property position 'pichat-node-key)))
+  (when-let* ((key (get-text-property position 'pichat-node-key)))
     (let* ((candidate (previous-single-property-change
                        (1+ position) 'pichat-node-key nil (point-min)))
            (start (if (and candidate
@@ -831,7 +831,7 @@
           buffer expected-anchor)
       (unwind-protect
           (save-window-excursion
-            (when-let ((details (get-buffer details-buffer-name)))
+            (when-let* ((details (get-buffer details-buffer-name)))
               (kill-buffer details))
             (setq buffer (pichat-chat-open session))
             (pichat-rpc--process-filter
@@ -858,7 +858,7 @@
               (should (equal expected-anchor
                              (pichat-test-chat-view--anchor-at (point))))))
         (when (buffer-live-p buffer) (kill-buffer buffer))
-        (when-let ((details (get-buffer details-buffer-name)))
+        (when-let* ((details (get-buffer details-buffer-name)))
           (kill-buffer details))))))
 
 (provide 'pichat-test-chat-view)

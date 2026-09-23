@@ -330,7 +330,7 @@ represented by an empty segment list and empty Markdown.  Return nil when no
 assistant response exists."
   (unless (pichat-transcript-p transcript)
     (user-error "No synchronized PiChat transcript to select from"))
-  (when-let ((node (pichat-chat-navigation--assistant-node
+  (when-let* ((node (pichat-chat-navigation--assistant-node
                     transcript preferred-node-key)))
     (let ((segments
            (cl-loop for content in (pichat-transcript-node-content node)

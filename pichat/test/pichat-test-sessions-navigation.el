@@ -148,7 +148,7 @@
 
 (defun pichat-test-sessions-navigation--kill-history-buffer ()
   "Kill the shared history buffer when present."
-  (when-let ((buffer (get-buffer "*PiChat Session History*")))
+  (when-let* ((buffer (get-buffer "*PiChat Session History*")))
     (kill-buffer buffer)))
 
 (ert-deftest pichat-sessions-refresh-newest-callback-wins ()

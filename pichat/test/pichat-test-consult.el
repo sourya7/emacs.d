@@ -461,7 +461,7 @@
         events state)
     (puthash "session-1" nil context-cache)
     (puthash "session-1" nil info-cache)
-    (when-let ((buffer (get-buffer preview-name)))
+    (when-let* ((buffer (get-buffer preview-name)))
       (kill-buffer buffer))
     (unwind-protect
         (cl-letf (((symbol-function 'consult--buffer-preview)
@@ -489,7 +489,7 @@
                                (list 'preview nil)
                                (list 'exit nil)
                                (list 'return nil)))))
-      (when-let ((buffer (get-buffer preview-name)))
+      (when-let* ((buffer (get-buffer preview-name)))
         (kill-buffer buffer)))))
 
 (ert-deftest pichat-consult-relation-preview-resolves-nested-and-unresolved-targets ()
@@ -518,7 +518,7 @@
          (preview-name "*PiChat Saved Session Preview*") state)
     (puthash "child" nil context-cache)
     (puthash "child" nil info-cache)
-    (when-let ((buffer (get-buffer preview-name))) (kill-buffer buffer))
+    (when-let* ((buffer (get-buffer preview-name))) (kill-buffer buffer))
     (unwind-protect
         (cl-letf (((symbol-function 'consult--buffer-preview)
                    (lambda () (lambda (&rest _args))))
@@ -543,7 +543,7 @@
                                     (buffer-string)))
             (should (string-match-p "Resolution: missing" (buffer-string))))
           (funcall state 'exit nil))
-      (when-let ((buffer (get-buffer preview-name))) (kill-buffer buffer)))))
+      (when-let* ((buffer (get-buffer preview-name))) (kill-buffer buffer)))))
 
 (ert-deftest pichat-consult-preview-shows-summary-before-and-evidence-after-info ()
   (let ((buffer (generate-new-buffer " *pichat-consult-preview-relations*"))

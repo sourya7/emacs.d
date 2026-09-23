@@ -29,13 +29,13 @@
         (name "*PiChat Path Mappings*"))
     (unwind-protect
         (progn
-          (when-let ((buffer (get-buffer name))) (kill-buffer buffer))
+          (when-let* ((buffer (get-buffer name))) (kill-buffer buffer))
           (cl-letf (((symbol-function 'pop-to-buffer) #'ignore))
             (pichat-path-validate-mappings))
           (with-current-buffer name
             (should (derived-mode-p 'pichat-view-mode))
             (should buffer-read-only)))
-      (when-let ((buffer (get-buffer name))) (kill-buffer buffer)))))
+      (when-let* ((buffer (get-buffer name))) (kill-buffer buffer)))))
 
 (provide 'pichat-test-view-modes)
 ;;; pichat-test-view-modes.el ends here

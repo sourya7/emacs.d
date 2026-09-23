@@ -357,7 +357,7 @@
                        (regexp-quote "/tmp/pi-full-output")
                        (buffer-string)))))
         (when (buffer-live-p buffer) (kill-buffer buffer))
-        (when-let ((details-buffer (get-buffer details-buffer-name)))
+        (when-let* ((details-buffer (get-buffer details-buffer-name)))
           (kill-buffer details-buffer))))))
 
 (ert-deftest pichat-chat-canonical-shell-without-live-enrichment-uses-command-layout ()

@@ -123,7 +123,7 @@
 
 (defun pichat-session-emacs-session-file (session)
   "Return SESSION's runtime source path translated for Emacs, or nil."
-  (when-let ((path (pichat-session-session-file session)))
+  (when-let* ((path (pichat-session-session-file session)))
     (if (fboundp 'pichat-path-resolve-from-runtime)
         (plist-get
          (pichat-path-resolve-from-runtime

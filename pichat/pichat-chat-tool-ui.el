@@ -27,9 +27,9 @@
 (defun pichat-chat-tool-ui-release-block (block)
   "Release markers and overlay owned by BLOCK."
   (dolist (key '(:start :end))
-    (when-let ((marker (plist-get block key)))
+    (when-let* ((marker (plist-get block key)))
       (when (markerp marker) (set-marker marker nil))))
-  (when-let ((overlay (plist-get block :overlay)))
+  (when-let* ((overlay (plist-get block :overlay)))
     (when (overlayp overlay) (delete-overlay overlay))
     (setf (plist-get block :overlay) nil)))
 
@@ -117,18 +117,18 @@ choices; LIVE-DRAFT determines whether incomplete live tools are settled."
 
 (defun pichat-chat-tool-ui-location-string (record)
   "Return RECORD's host location as a concise string, or nil."
-  (when-let ((path (plist-get record :host-path)))
+  (when-let* ((path (plist-get record :host-path)))
     (concat path
-            (when-let ((line (plist-get record :line)))
+            (when-let* ((line (plist-get record :line)))
               (format ":%d" line))
-            (when-let ((column (plist-get record :column)))
+            (when-let* ((column (plist-get record :column)))
               (format ":%d" column)))))
 
 (defun pichat-chat-tool-ui-decorate-block (block enrichments generation)
   "Add derived actionable location presentation to BLOCK.
 ENRICHMENTS is scoped to GENERATION.  The overlay changes only presentation;
 the underlying canonical/live source text and block display state are intact."
-  (when-let ((old (plist-get block :overlay)))
+  (when-let* ((old (plist-get block :overlay)))
     (when (overlayp old) (delete-overlay old))
     (setf (plist-get block :overlay) nil))
   (let* ((raw (plist-get block :raw))
@@ -219,7 +219,7 @@ creates block records, markers, and overlays; rendered text is never edited."
              (next (or (next-single-property-change
                         pos 'pichat-tool-key nil end) end)))
         (when tool-key
-          (when-let ((tool (pichat-chat-tool-ui--canonical-tool
+          (when-let* ((tool (pichat-chat-tool-ui--canonical-tool
                             transcript tool-key)))
             (let* ((tool-id (pichat-transcript-content-tool-call-id tool))
                    (block
@@ -422,7 +422,7 @@ buffer-edit and view-preservation mechanics."
 
 (defun pichat-chat-tool-ui-render-block (block context)
   "Re-render BLOCK according to its display state using CONTEXT."
-  (when-let ((overlay (plist-get block :overlay)))
+  (when-let* ((overlay (plist-get block :overlay)))
     (when (overlayp overlay) (delete-overlay overlay))
     (setf (plist-get block :overlay) nil))
   (let* ((raw (plist-get block :raw))
@@ -530,7 +530,7 @@ buffer-edit and view-preservation mechanics."
         (if-let ((location
                   (pichat-chat-tool-ui-location-string enrichment)))
             (format "Location: %s\n" location)
-          (when-let ((reason (plist-get enrichment :unavailable-reason)))
+          (when-let* ((reason (plist-get enrichment :unavailable-reason)))
             (format "Location: [unavailable: %s]\n" reason)))))
      "\nArgs:\n" (pichat-render-tool-args (plist-get raw :args))
      "\n\nOutput:\n" (or (plist-get block :full-text) "")
@@ -540,7 +540,7 @@ buffer-edit and view-preservation mechanics."
           (truncate-string-to-width
            (pichat-render-tool-args (plist-get auxiliary :details))
            4000 nil nil "…")
-          (when-let ((path (plist-get auxiliary :full-output-path)))
+          (when-let* ((path (plist-get auxiliary :full-output-path)))
             (concat "\nFull output: "
                     (truncate-string-to-width path 1000 nil nil "…"))))
        "[non-persisted execution details unavailable]"))))

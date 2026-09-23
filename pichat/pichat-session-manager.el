@@ -277,7 +277,7 @@ or Bufferlo dependency."
 
 (defun pichat-session-manager--snapshot-from-chat (session)
   "Return a reusable settled chat snapshot for SESSION, or nil."
-  (when-let ((cache (pichat-chat-canonical-entry-cache session)))
+  (when-let* ((cache (pichat-chat-canonical-entry-cache session)))
     (condition-case nil
         (pichat-sessions-preview-active-snapshot-from-entries
          (pichat-pi-entry-cache-active-branch cache)
@@ -356,7 +356,7 @@ canonical chat cache while an RPC refresh is pending."
                    "persisted source file")))
         (insert (format "Runtime source: %s\n"
                         (or (pichat-session-session-file session) "—")))
-        (when-let ((emacs-source (pichat-session-emacs-session-file session)))
+        (when-let* ((emacs-source (pichat-session-emacs-session-file session)))
           (unless (equal emacs-source (pichat-session-session-file session))
             (insert (format "Emacs source: %s\n"
                             (abbreviate-file-name emacs-source)))))
@@ -618,7 +618,7 @@ canonical chat cache while an RPC refresh is pending."
   (when (timerp pichat-session-manager--refresh-timer)
     (cancel-timer pichat-session-manager--refresh-timer))
   (setq pichat-session-manager--refresh-timer nil)
-  (when-let ((preview (get-buffer pichat-session-manager-preview-buffer-name)))
+  (when-let* ((preview (get-buffer pichat-session-manager-preview-buffer-name)))
     (kill-buffer preview)))
 
 (defun pichat-session-manager--session-at-point ()
@@ -655,7 +655,7 @@ Use the configured `project-prompter', whose default offers known projects and
 an explicit manual-directory choice.  Move a selected real project to the front
 of the persistent project list."
   (let ((directory (funcall project-prompter)))
-    (when-let ((project (project-current nil directory)))
+    (when-let* ((project (project-current nil directory)))
       (project-remember-project project))
     directory))
 
@@ -749,7 +749,7 @@ working directory determines the new runtime's project and display routing."
   (let ((session (pichat-session-manager--session-at-point)))
     (when (pichat-session-alive-p session)
       (user-error "Stop the PiChat runtime before forgetting it"))
-    (when-let ((buffer (pichat-session-buffer session)))
+    (when-let* ((buffer (pichat-session-buffer session)))
       (when (buffer-live-p buffer)
         (setf (pichat-session-buffer session) nil)
         (let ((pichat-chat-stop-session-on-kill nil))

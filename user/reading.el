@@ -71,7 +71,7 @@ Optional argument NEW-WINDOW is passed to the browser function."
   (defun my/elfeed-copy-entry-title ()
     "Copy the title of the Elfeed entry at point."
     (interactive)
-    (when-let ((entry (elfeed-search-selected :ignore-region)))
+    (when-let* ((entry (elfeed-search-selected :ignore-region)))
       (let ((title (or (elfeed-meta entry :title)
                        (elfeed-entry-title entry))))
         (kill-new title)

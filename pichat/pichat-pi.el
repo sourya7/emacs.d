@@ -617,11 +617,11 @@ When provided, STATUS becomes the new tool status."
              (pichat-pi--live-diagnose draft 'invalid-assistant-delta nil type)
            (pcase type
              ("text_start"
-              (when-let ((node (pichat-pi--live-stream-node draft type)))
+              (when-let* ((node (pichat-pi--live-stream-node draft type)))
                 (pichat-pi--live-ensure-stream-content
                  draft node index 'prose type)))
              ("thinking_start"
-              (when-let ((node (pichat-pi--live-stream-node draft type)))
+              (when-let* ((node (pichat-pi--live-stream-node draft type)))
                 (pichat-pi--live-ensure-stream-content
                  draft node index 'thinking type)))
              (_ (pichat-pi--live-stream-tool draft event))))))

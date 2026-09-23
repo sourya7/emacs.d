@@ -80,7 +80,7 @@
             (should-not (pichat-session-alive-p memory-session))
             (should (eq 'stopped (pichat-session-state memory-session))))
         (when (process-live-p process) (delete-process process))
-        (when-let ((buffer (process-buffer process)))
+        (when-let* ((buffer (process-buffer process)))
           (when (buffer-live-p buffer) (kill-buffer buffer)))))))
 
 (ert-deftest pichat-backend-contract-pi-delegates-shared-operations ()

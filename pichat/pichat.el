@@ -90,7 +90,7 @@ The bridge is disabled by default until implemented/tested."
 (defun pichat--project-root (&optional directory)
   "Return project root for DIRECTORY, or nil outside projects."
   (let ((default-directory (file-name-as-directory (or directory default-directory))))
-    (when-let ((project (project-current nil)))
+    (when-let* ((project (project-current nil)))
       (file-name-as-directory (expand-file-name (project-root project))))))
 
 (defun pichat--scope-for-directory (&optional directory force-global target-id)

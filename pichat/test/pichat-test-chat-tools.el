@@ -119,7 +119,7 @@
           buffer)
       (unwind-protect
           (progn
-            (when-let ((details-buffer (get-buffer details-buffer-name)))
+            (when-let* ((details-buffer (get-buffer details-buffer-name)))
               (kill-buffer details-buffer))
             (setq buffer (pichat-chat-open session))
             (pichat-rpc--process-filter
@@ -147,7 +147,7 @@
                 (should (string-match-p
                          (regexp-quote "/sanitized/output.txt") text)))))
         (when (buffer-live-p buffer) (kill-buffer buffer))
-        (when-let ((details-buffer (get-buffer details-buffer-name)))
+        (when-let* ((details-buffer (get-buffer details-buffer-name)))
           (kill-buffer details-buffer))))))
 
 (ert-deftest pichat-chat-tool-location-overlay-preserves-source-and-fold-state ()

@@ -470,7 +470,7 @@
           (with-current-buffer pichat-session-manager-preview-buffer-name
             (should (string-match-p "Persistence: none (--no-session)"
                                     (buffer-string)))))
-      (when-let ((buffer
+      (when-let* ((buffer
                   (get-buffer pichat-session-manager-preview-buffer-name)))
         (kill-buffer buffer)))))
 

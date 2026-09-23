@@ -79,7 +79,7 @@
 
 (defun my/pichat-project-tab-name (session)
   "Return the configured project-tab name for SESSION's owner directory."
-  (when-let ((directory (pichat-session-owner-directory session)))
+  (when-let* ((directory (pichat-session-owner-directory session)))
     (unless (or (equal (pichat-session-owner-scope-key session) "global")
                 (string-prefix-p
                  "global|" (or (pichat-session-owner-scope-key session) "")))

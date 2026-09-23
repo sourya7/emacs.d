@@ -213,7 +213,7 @@
                        (error "Stop after environment capture"))))
             (should-error (pichat-diagnostics-open-interactive-pi))
             (should (equal "interactive" captured)))
-        (when-let ((buffer (get-buffer "*PiChat Pi Setup*")))
+        (when-let* ((buffer (get-buffer "*PiChat Pi Setup*")))
           (kill-buffer buffer))))))
 
 (ert-deftest pichat-diagnostics-probe-applies-extra-pi-environment ()

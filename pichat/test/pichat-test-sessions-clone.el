@@ -176,7 +176,7 @@
               (should (eq session opened-session))
               (should synchronize)
               (should (eq focused (get-buffer " *pichat-new-clone-chat*"))))
-          (when-let ((buffer (get-buffer " *pichat-new-clone-chat*")))
+          (when-let* ((buffer (get-buffer " *pichat-new-clone-chat*")))
             (kill-buffer buffer)))))))
 
 (provide 'pichat-test-sessions-clone)

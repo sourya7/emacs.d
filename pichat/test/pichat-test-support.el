@@ -103,9 +103,9 @@
 
 (defun pichat-test-reset-globals ()
   "Reset mutable PiChat global state between tests."
-  (when-let ((manager (get-buffer "*PiChat Sessions*")))
+  (when-let* ((manager (get-buffer "*PiChat Sessions*")))
     (kill-buffer manager))
-  (when-let ((preview (get-buffer "*PiChat Runtime Preview*")))
+  (when-let* ((preview (get-buffer "*PiChat Runtime Preview*")))
     (kill-buffer preview))
   (setq pichat-current-session nil)
   (when (boundp 'pichat--manual-session-counter)
@@ -176,7 +176,7 @@ When PROCESS-VAR is non-nil, also create a live inert process."
                  (progn ,@body)
                (when (process-live-p ,process-var)
                  (delete-process ,process-var))
-               (when-let ((buf (process-buffer ,process-var)))
+               (when-let* ((buf (process-buffer ,process-var)))
                  (when (buffer-live-p buf) (kill-buffer buf))))
           `(progn ,@body)))))
 
@@ -393,9 +393,9 @@ provider.  SETTINGS, when non-nil, is written to the isolated Pi agent dir."
                        (pichat-test-assert-provider-script-consumed status-file)))
                  (when ,session-var
                    (ignore-errors (pichat-rpc-stop ,session-var))
-                   (when-let ((proc (pichat-session-process ,session-var)))
+                   (when-let* ((proc (pichat-session-process ,session-var)))
                      (when (process-live-p proc) (delete-process proc))
-                     (when-let ((buf (process-buffer proc)))
+                     (when-let* ((buf (process-buffer proc)))
                        (when (buffer-live-p buf) (kill-buffer buf)))))))))))))
 
 (provide 'pichat-test-support)

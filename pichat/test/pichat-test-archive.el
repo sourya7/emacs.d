@@ -464,7 +464,7 @@
           (should-not (pichat-session-rpc-send-queue session)))
       (when session (ignore-errors (pichat-rpc-stop session)))
       (when (and process (process-live-p process)) (delete-process process))
-      (when-let ((buffer (and process (process-buffer process))))
+      (when-let* ((buffer (and process (process-buffer process))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
 (provide 'pichat-test-archive)

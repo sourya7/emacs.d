@@ -46,7 +46,7 @@
 
 (defun pichat-chat-activity-ui--source-anchor (group)
   "Return GROUP's first-member source anchor."
-  (when-let ((first (car (pichat-activity-group-members group))))
+  (when-let* ((first (car (pichat-activity-group-members group))))
     (list 'source (pichat-activity-member-source-key first))))
 
 (defun pichat-chat-activity-ui--tool-source-keys (group)
@@ -89,7 +89,7 @@ source positions handles provisional-to-durable tool-ID refinement."
          (direct-keys (delete-dups (list live-key source-key)))
          direct matches)
     (dolist (key direct-keys)
-      (when-let ((state (gethash key view-states)))
+      (when-let* ((state (gethash key view-states)))
         (when (pichat-chat-activity-ui--state-extends-group-p state group)
           (unless direct (setq direct (cons key state))))))
     (or direct
@@ -112,7 +112,7 @@ source positions handles provisional-to-durable tool-ID refinement."
   "Return the explicit live view for GROUP without mutating VIEW-STATES.
 A live group may only extend its prior source evidence.  A source-anchored
 choice also follows thought-only activity when it gains its first tool."
-  (when-let ((entry (pichat-chat-activity-ui--compatible-live-state
+  (when-let* ((entry (pichat-chat-activity-ui--compatible-live-state
                      view-states generation group)))
     (plist-get (cdr entry) :view)))
 
@@ -156,7 +156,7 @@ GENERATION, VIEW-STATES, LIVE-DRAFT, and POLICY resolve source-local state."
                 (pichat-activity-item-group tail))))
          views)
     (dolist (group groups)
-      (when-let ((view (pichat-chat-activity-ui-explicit-view
+      (when-let* ((view (pichat-chat-activity-ui-explicit-view
                         view-states generation group live-p)))
         (push (cons (pichat-activity-group-key group) view) views)))
     (list :presentation presentation
@@ -201,7 +201,7 @@ GENERATION, VIEW-STATES, LIVE-DRAFT, and POLICY resolve source-local state."
 (defun pichat-chat-activity-ui-release-block (block)
   "Release markers owned by activity BLOCK."
   (dolist (key '(:start :end))
-    (when-let ((marker (plist-get block key)))
+    (when-let* ((marker (plist-get block key)))
       (when (markerp marker) (set-marker marker nil)))))
 
 (defun pichat-chat-activity-ui-release-blocks (blocks)
@@ -283,7 +283,7 @@ LIVE-P and GENERATION determine each block's explicit view-state key."
   (let (next)
     (maphash
      (lambda (_key block)
-       (when-let ((start (marker-position (plist-get block :start))))
+       (when-let* ((start (marker-position (plist-get block :start))))
          (when (and (> start position) (or (null next) (< start next)))
            (setq next start))))
      blocks)
@@ -294,7 +294,7 @@ LIVE-P and GENERATION determine each block's explicit view-state key."
   (let (previous)
     (maphash
      (lambda (_key block)
-       (when-let ((start (marker-position (plist-get block :start))))
+       (when-let* ((start (marker-position (plist-get block :start))))
          (when (and (< start position)
                     (or (null previous) (> start previous)))
            (setq previous start))))
@@ -324,7 +324,7 @@ state migrates to the durable tool anchor after the first tool appears."
             (direct-keys (delete-dups (list live-key source-key)))
             direct matches state-entry)
        (dolist (key direct-keys)
-         (when-let ((state (gethash key view-states)))
+         (when-let* ((state (gethash key view-states)))
            (when (and (null direct)
                       (pichat-chat-activity-ui--state-extends-evidence-p
                        state (plist-get block :tool-ids)

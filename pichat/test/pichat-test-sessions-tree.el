@@ -315,7 +315,7 @@ PARENT-ID is deliberately raw protocol metadata; model parents come from nesting
             (should (string-match-p "Entry:" (buffer-string)))
             (should (string-match-p "Node:" (buffer-string)))
             (should-not (string-match-p "deep-parent-0" (buffer-string)))))
-      (when-let ((buffer (get-buffer details-buffer-name)))
+      (when-let* ((buffer (get-buffer details-buffer-name)))
         (kill-buffer buffer)))))
 
 (ert-deftest pichat-sessions-tree-model-skips-invalid-duplicates-and-nesting-cycles ()

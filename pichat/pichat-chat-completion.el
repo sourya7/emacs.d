@@ -148,7 +148,7 @@ unavailable."
 
 (defun pichat-chat-completion--annotation (name)
   "Return source and description annotation for command NAME."
-  (when-let ((command
+  (when-let* ((command
               (cl-find name pichat-chat-completion--commands
                        :key (lambda (item) (plist-get item :name))
                        :test #'equal)))

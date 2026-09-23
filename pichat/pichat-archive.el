@@ -234,7 +234,7 @@ helper remain directly readable."
 
 (defun pichat-archive-invalidate (capability)
   "Invalidate CAPABILITY without affecting unrelated PiChat sessions."
-  (when-let ((session (plist-get capability :session)))
+  (when-let* ((session (plist-get capability :session)))
     (when (eq capability (gethash session pichat-archive--capability-cache))
       (remhash session pichat-archive--capability-cache))))
 
@@ -732,7 +732,7 @@ CALLBACK receives normalized data.  ERROR-CALLBACK receives a structured error."
   "Cancel or supersede the current archive capability discovery."
   (interactive)
   (cl-incf pichat-archive--discovery-sequence)
-  (when-let ((cancel pichat-archive--active-discovery-cancel))
+  (when-let* ((cancel pichat-archive--active-discovery-cancel))
     (setq pichat-archive--active-discovery-cancel nil)
     (funcall cancel)))
 

@@ -497,7 +497,7 @@ Only IDs present in NODES are included."
                (message (plist-get entry :message))
                (tool-id (and (string= (plist-get node :role) "toolResult")
                              (plist-get message :toolCallId))))
-          (when-let ((call (and tool-id (gethash tool-id tool-calls))))
+          (when-let* ((call (and tool-id (gethash tool-id tool-calls))))
             (setq node (plist-put node :tool-call call))
             (puthash id node nodes))))
       (when (and leaf-id (not (gethash leaf-id nodes)))
@@ -647,7 +647,7 @@ The current leaf is retained as a deterministic active-position fallback."
                 (plist-get entry :label)))
          call-values)
     (dolist (call (append (plist-get node :tool-calls)
-                          (when-let ((call (plist-get node :tool-call)))
+                          (when-let* ((call (plist-get node :tool-call)))
                             (list call))))
       (push (plist-get call :name) call-values)
       (push (pichat-render-tool-args (plist-get call :arguments)) call-values))
@@ -848,7 +848,7 @@ This works at beginning of line, end of line, and on the terminating newline."
 
 (defun pichat-sessions--track-selection ()
   "Track the stable history row selected by point."
-  (when-let ((id (pichat-sessions--entry-id-at-point)))
+  (when-let* ((id (pichat-sessions--entry-id-at-point)))
     (setq pichat-sessions--selected-id id)))
 
 (defun pichat-sessions--nearest-visible-id (model projection id)
@@ -1268,7 +1268,7 @@ to that visible entry after the tree is synchronized."
 
 (defun pichat-sessions--file-signature (file)
   "Return modification-time and size signature for FILE."
-  (when-let ((attributes (file-attributes file)))
+  (when-let* ((attributes (file-attributes file)))
     (list (file-attribute-modification-time attributes)
           (file-attribute-size attributes))))
 
@@ -1519,7 +1519,7 @@ non-minibuffer buffer."
           (pichat-backend-require-capability
            session 'saved-sessions "Saved-session switching"))
          (session-cwd
-          (when-let ((host-cwd (plist-get cwd-resolution :path)))
+          (when-let* ((host-cwd (plist-get cwd-resolution :path)))
             (file-name-as-directory (expand-file-name host-cwd))))
          (cwd-unmapped-p
           (and cwd-resolution
@@ -1579,7 +1579,7 @@ runtime."
   (let* ((runtime-file (pichat-sessions--runtime-file file source-session))
          (cwd-resolution (pichat-sessions--host-cwd-resolution cwd source-session))
          (session-cwd
-          (when-let ((host-cwd (plist-get cwd-resolution :path)))
+          (when-let* ((host-cwd (plist-get cwd-resolution :path)))
             (file-name-as-directory (expand-file-name host-cwd))))
          (start-directory
           (file-name-as-directory
@@ -1597,7 +1597,7 @@ runtime."
              (setq finished t)
              (when (pichat-session-alive-p session)
                (ignore-errors (pichat-stop-session session)))
-             (when-let ((buffer (pichat-session-buffer session)))
+             (when-let* ((buffer (pichat-session-buffer session)))
                (when (buffer-live-p buffer)
                  (let ((pichat-chat-stop-session-on-kill nil))
                    (kill-buffer buffer))))
@@ -1620,7 +1620,7 @@ runtime."
                ;; its handlers, and it contains metadata rather than entries.
                ;; Explicitly request the authoritative transcript just as the
                ;; ordinary saved-session switch path does.
-               (when-let ((buffer (pichat-session-buffer response-session)))
+               (when-let* ((buffer (pichat-session-buffer response-session)))
                  (when (buffer-live-p buffer)
                    (with-current-buffer buffer
                      (when (fboundp 'pichat-chat-repaint)
@@ -1737,7 +1737,7 @@ provide an explicitly trusted host-local capability.  BASIC, missing UI/runtime
 capability, or any archive availability failure uses the synchronous JSONL file
 picker.  Discovery never starts a Pi process solely for browsing."
   (interactive "P")
-  (when-let ((session (pichat-session-current)))
+  (when-let* ((session (pichat-session-current)))
     (pichat-backend-require-capability
      session 'saved-sessions "Saved-session browsing"))
   (if (or basic
@@ -1797,7 +1797,7 @@ Loading a relation uses the ordinary saved-session switch transaction."
 
 (defun pichat-sessions--entry-for-id (id)
   "Return entry for row ID."
-  (when-let ((node (gethash id pichat-sessions--nodes)))
+  (when-let* ((node (gethash id pichat-sessions--nodes)))
     (pichat-sessions--node-entry node)))
 
 (defun pichat-sessions--user-message-entry-p (entry)

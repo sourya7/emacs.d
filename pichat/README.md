@@ -218,10 +218,20 @@ For Gemini or Claude through Google Vertex AI:
 ```
 
 Vertex authentication invokes the explicitly configured
-`pichat-llm-vertex-gcloud-executable` for a short-lived access token. PiChat
-never changes gcloud configuration. The tested `llm.el` 0.32.1 Vertex Gemini
-path is deliberately non-streaming because that release can discard streaming
-chunks without usage metadata; Codex and Vertex Claude use cumulative streaming.
+`pichat-llm-vertex-gcloud-executable` with
+`gcloud auth application-default print-access-token`. Run
+`gcloud auth application-default login` first; the separate `gcloud auth login`
+account is not used. Set `GOOGLE_APPLICATION_CREDENTIALS` when using an
+explicit ADC file, and ensure Emacs inherits the same HOME, CLOUDSDK_CONFIG,
+and Google Cloud environment as the working Pi process. PiChat forwards the
+ADC quota project (`quota_project_id` in the ADC file, or
+`GOOGLE_CLOUD_QUOTA_PROJECT`) as `x-goog-user-project`; override it with
+`pichat-llm-vertex-quota-project` if necessary. A quota project is distinct
+from the project in the Vertex URL. PiChat never changes gcloud configuration.
+This CLI-based ADC path requires gcloud and does not implement the full Google
+SDK ADC chain used by Pi. The tested `llm.el` 0.32.1 Vertex Gemini path is
+deliberately non-streaming because that release can discard streaming chunks
+without usage metadata; Codex and Vertex Claude use cumulative streaming.
 
 The advanced `pichat-launch` menu offers `a` for native memory sessions,
 composable with `g` (global scope) and `n` (independent). Without `n`, it

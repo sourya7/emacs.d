@@ -15,11 +15,12 @@
 (require 'llm-provider-utils)
 (require 'llm-request-plz)
 (require 'plz-event-source)
+(require 'pichat-llm-vertex-auth)
 
 (cl-defstruct (pichat-llm-vertex-claude
                (:include llm-standard-chat-provider)
                (:constructor pichat-llm-vertex-claude-create
-                             (&key project region model token-function
+                             (&key project region model token-function quota-project
                                    default-chat-temperature
                                    default-chat-max-tokens
                                    default-chat-non-standard-params)))
@@ -28,35 +29,9 @@
   region
   model
   token-function
+  quota-project
   token
   pending-multi-turn)
-
-(defun pichat-llm-vertex-access-token (gcloud)
-  "Return a short-lived Vertex access token using GCLOUD.
-Signal a bounded provider configuration error without retaining command output."
-  (unless (and (stringp gcloud) (not (string-blank-p gcloud)))
-    (signal 'llm-provider-unconfigured
-            '("A gcloud executable is required for Vertex authentication")))
-  (with-temp-buffer
-    (let ((status (condition-case err
-                      (process-file gcloud nil t nil
-                                    "auth" "print-access-token")
-                    (file-missing
-                     (signal 'llm-provider-unconfigured
-                             (list "The configured gcloud executable is unavailable")))
-                    (error
-                     (signal 'llm-provider-error
-                             (list (format "Vertex authentication failed: %s"
-                                           (error-message-string err))))))))
-      (unless (and (integerp status) (zerop status))
-        (signal 'llm-provider-error
-                (list (format "Vertex authentication failed (gcloud exit %s)"
-                              status))))
-      (let ((token (string-trim (buffer-string))))
-        (when (string-empty-p token)
-          (signal 'llm-provider-error
-                  '("Vertex authentication returned an empty access token")))
-        token))))
 
 (defun pichat-llm-vertex-claude--validate (provider)
   "Validate required configuration on PROVIDER."
@@ -82,8 +57,12 @@ Signal a bounded provider configuration error without retaining command output."
 
 (cl-defmethod llm-provider-headers
   ((provider pichat-llm-vertex-claude))
-  `(("Authorization" .
-     ,(concat "Bearer " (pichat-llm-vertex-claude-token provider)))))
+  (append
+   `(("Authorization" .
+      ,(concat "Bearer " (pichat-llm-vertex-claude-token provider))))
+   (when-let* ((quota (pichat-llm-vertex-quota-project
+                       (pichat-llm-vertex-claude-quota-project provider))))
+     `(("x-goog-user-project" . ,quota)))))
 
 (defun pichat-llm-vertex-claude--url (provider method)
   "Return PROVIDER's regional Vertex URL ending in METHOD."

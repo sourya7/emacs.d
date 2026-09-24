@@ -1283,11 +1283,12 @@
     ;; Gemini snapshots documented global settings for each request.
     (cl-letf (((symbol-function 'executable-find)
                (lambda (_name) "/offline/gcloud"))
-              ((symbol-function 'shell-command-to-string)
-               (lambda (command)
-                 (should (string-prefix-p
-                          "offline-gcloud auth print-access-token" command))
-                 "offline-vertex-token\n"))
+              ((symbol-function 'process-file)
+               (lambda (_program _in _destination _display &rest args)
+                 (should (equal args '("auth" "application-default"
+                                       "print-access-token")))
+                 (insert "offline-vertex-token\n")
+                 0))
               ((symbol-function 'llm-request-plz-async)
                (lambda (url &rest args)
                  (push (cons url args) gemini-calls)
@@ -1345,7 +1346,8 @@
                (lambda (_name) "/offline/gcloud"))
               ((symbol-function 'process-file)
                (lambda (_program _in _destination _display &rest args)
-                 (should (equal args '("auth" "print-access-token")))
+                 (should (equal args '("auth" "application-default"
+                                       "print-access-token")))
                  (insert "offline-claude-token\n")
                  0))
               ((symbol-function 'llm-request-plz-async)
@@ -1427,6 +1429,81 @@
                "signature-"
                (plist-get (aref assistant-content 0) :signature))))))
 
+(ert-deftest pichat-backend-llm-vertex-adc-auth-and-quota-project ()
+  "Both Vertex providers use ADC and propagate its quota project."
+  (pichat-test-llm--require)
+  (require 'pichat-llm-vertex-auth)
+  (require 'pichat-llm-vertex-claude)
+  (let* ((directory (make-temp-file "pichat-adc-" t))
+         (adc (expand-file-name "application_default_credentials.json" directory))
+         (process-environment (copy-sequence process-environment))
+         (calls 0))
+    (unwind-protect
+        (progn
+          (with-temp-file adc
+            (insert "{\"quota_project_id\":\"quota-project\"}"))
+          (setenv "GOOGLE_APPLICATION_CREDENTIALS" adc)
+          (setenv "GOOGLE_CLOUD_QUOTA_PROJECT" nil)
+          (cl-letf (((symbol-function 'process-file)
+                     (lambda (_program _in _destination _display &rest args)
+                       (should (equal args '("auth" "application-default"
+                                             "print-access-token")))
+                       (cl-incf calls)
+                       (insert "adc-token\n")
+                       0))
+                    ((symbol-function 'shell-command-to-string)
+                     (lambda (&rest _) (ert-fail "CLI login must not be used"))))
+            (let ((gemini (pichat-llm-vertex-gemini-create
+                           :project "project" :chat-model "gemini-2.5-pro"
+                           :gcloud "gcloud"))
+                  (claude (pichat-llm-vertex-claude-create
+                           :project "project" :region "region" :model "claude"
+                           :token-function (lambda ()
+                                             (pichat-llm-vertex-access-token
+                                              "gcloud")))))
+              (llm-provider-request-prelude gemini)
+              (llm-provider-request-prelude gemini)
+              (llm-provider-request-prelude claude)
+              (should (= calls 2))
+              ;; The optional llm-vertex struct is loaded at test runtime.
+              (eval (list 'setf
+                          (list 'llm-vertex-key-gentime (list 'quote gemini))
+                          (list 'quote (time-subtract
+                                        (current-time) (seconds-to-time 3100)))))
+              (llm-provider-request-prelude gemini)
+              (should (= calls 3))
+              (dolist (provider (list gemini claude))
+                (should (equal (cdr (assoc "Authorization"
+                                           (llm-provider-headers provider)))
+                               "Bearer adc-token"))
+                (should (equal (cdr (assoc "x-goog-user-project"
+                                           (llm-provider-headers provider)))
+                               "quota-project")))
+              (setenv "GOOGLE_CLOUD_QUOTA_PROJECT" "env-quota")
+              (should (equal (pichat-llm-vertex-quota-project) "env-quota"))
+              (should (equal (pichat-llm-vertex-quota-project "explicit-quota")
+                             "explicit-quota"))
+              (should (equal (cdr (assoc "x-goog-user-project"
+                                         (llm-provider-headers gemini)))
+                             "env-quota")))))
+      (delete-directory directory t))))
+
+(ert-deftest pichat-backend-llm-vertex-adc-errors-do-not-leak-output ()
+  "A failed ADC command must not expose its potentially sensitive output."
+  (pichat-test-llm--require)
+  (require 'pichat-llm-vertex-auth)
+  (cl-letf (((symbol-function 'process-file)
+             (lambda (&rest _) (insert "sensitive-token-or-error") 1)))
+    (let ((message (condition-case err
+                       (pichat-llm-vertex-access-token "gcloud")
+                     (llm-provider-error (error-message-string err)))))
+      (should (stringp message))
+      (should-not (string-match-p "sensitive" message))))
+  (cl-letf (((symbol-function 'process-file)
+             (lambda (&rest _) (insert "  \n") 0)))
+    (should-error (pichat-llm-vertex-access-token "gcloud")
+                  :type 'llm-provider-error)))
+
 (defun pichat-test-llm--openai-tool-response (&optional suffix)
   "Return one OpenAI-compatible native tool call fixture using SUFFIX."
   (json-parse-string
@@ -1497,8 +1574,11 @@
     (let (calls)
       (cl-letf (((symbol-function 'executable-find)
                  (lambda (_name) "/offline/gcloud"))
-                ((symbol-function 'shell-command-to-string)
-                 (lambda (_command) "fixture-token\n"))
+                ((symbol-function 'process-file)
+                 (lambda (_program _in _destination _display &rest args)
+                   (should (equal args '("auth" "application-default"
+                                         "print-access-token")))
+                   (insert "fixture-token\n") 0))
                 ((symbol-function 'llm-request-plz-async)
                  (lambda (url &rest args)
                    (push (cons url args) calls)
@@ -1527,7 +1607,10 @@
       (cl-letf (((symbol-function 'executable-find)
                  (lambda (_name) "/offline/gcloud"))
                 ((symbol-function 'process-file)
-                 (lambda (&rest _args) (insert "fixture-token\n") 0))
+                 (lambda (_program _in _destination _display &rest args)
+                   (should (equal args '("auth" "application-default"
+                                         "print-access-token")))
+                   (insert "fixture-token\n") 0))
                 ((symbol-function 'llm-request-plz-async)
                  (lambda (url &rest args)
                    (push (cons url args) calls)

@@ -23,15 +23,15 @@
 (require 'pichat-tools)
 
 (eval-when-compile
-  ;; These documented llm-vertex settings are dynamically bound only after
-  ;; the provider module has defined them at runtime.
-  (defvar llm-vertex-gcloud-region)
-  (defvar llm-vertex-gcloud-binary))
+  ;; The documented llm-vertex region setting is dynamically bound only
+  ;; after the provider module has defined it at runtime.
+  (defvar llm-vertex-gcloud-region))
 
 (declare-function make-llm-openai-compatible "llm-openai" (&rest args))
-(declare-function make-llm-vertex "llm-vertex" (&rest args))
+(declare-function pichat-llm-vertex-gemini-create
+                  "pichat-llm-vertex-auth" (&rest args))
 (declare-function pichat-llm-vertex-access-token
-                  "pichat-llm-vertex-claude" (gcloud))
+                  "pichat-llm-vertex-auth" (gcloud))
 (declare-function pichat-llm-vertex-claude-create
                   "pichat-llm-vertex-claude" (&rest args))
 (declare-function pichat-chat-open "pichat-chat" (session &optional synchronize))
@@ -108,8 +108,15 @@ prompt setting mid-conversation cannot be round-tripped safely."
   :group 'pichat-llm)
 
 (defcustom pichat-llm-vertex-gcloud-executable "gcloud"
-  "Executable used by PiChat Vertex provider factories."
+  "Executable used to obtain Google Application Default Credentials tokens."
   :type 'file
+  :group 'pichat-llm)
+
+(defcustom pichat-llm-vertex-quota-project nil
+  "Optional quota project for native Vertex requests.
+When nil, use GOOGLE_CLOUD_QUOTA_PROJECT or the ADC file's quota_project_id.
+This may differ from the project used in the Vertex request URL."
+  :type '(choice (const :tag "Use ADC" nil) string)
   :group 'pichat-llm)
 
 (defcustom pichat-llm-error-max-chars 500
@@ -442,15 +449,16 @@ GCLOUD defaults to `pichat-llm-vertex-gcloud-executable'."
      :streaming nil
      :call-wrapper
      (lambda (function)
-       (let ((llm-vertex-gcloud-region region)
-             (llm-vertex-gcloud-binary gcloud))
+       (let ((llm-vertex-gcloud-region region))
          (funcall function)))
      :factory
      (lambda ()
        (unless (pichat-llm--gcloud-available-p gcloud)
          (user-error "Configured gcloud executable is unavailable: %s" gcloud))
-       (require 'llm-vertex)
-       (make-llm-vertex :project project :chat-model model)))))
+       (require 'pichat-llm-vertex-auth)
+       (pichat-llm-vertex-gemini-create
+        :project project :chat-model model :gcloud gcloud
+        :quota-project pichat-llm-vertex-quota-project)))))
 
 (defun pichat-llm-make-vertex-claude-provider
     (project region model &optional gcloud)
@@ -476,6 +484,7 @@ GCLOUD defaults to `pichat-llm-vertex-gcloud-executable'."
         :project project
         :region region
         :model model
+        :quota-project pichat-llm-vertex-quota-project
         :token-function
         (lambda () (pichat-llm-vertex-access-token gcloud)))))))
 

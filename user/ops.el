@@ -35,5 +35,18 @@
   (detached-session-directory (my/emacs-local-dir "detached/sessions"))
   (detached-terminal-data-command system-type))
 
+(use-package agent-shell
+  :defer t
+  :custom
+  (agent-shell-session-strategy 'prompt)
+  (agent-shell-context-sources '(region error))
+  (agent-shell-session-restore-visibility 'full)
+  (agent-shell-permission-responder-function #'agent-shell-permission-allow-always)
+  :config
+  (if my/is-work-machine
+      (setq agent-shell-preferred-agent-config 'claude-code)
+      (setq agent-shell-preferred-agent-config 'pi))
+  (setq agent-shell-anthropic-claude-environment (agent-shell-make-environment-variables :inherit-env t)))
+
 (provide 'user/ops)
 ;;; ops.el ends here

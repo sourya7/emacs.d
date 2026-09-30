@@ -1,9 +1,8 @@
-;;; pichat-test-backend-contract.el --- Native backend contract targets -*- lexical-binding: t; -*-
+;;; pichat-test-backend-contract.el --- Backend contract tests -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Backend-neutral targets activated with the phase that implements them.  Later
-;; targets use mocked HTTP around the real pinned llm lifecycle and the shared
-;; chat path.  Codex proxy and Vertex protocol fixtures remain offline.
+;; A fake non-process backend exercises the shared capability and lifecycle
+;; boundary without requiring an external provider.
 
 ;;; Code:
 (require 'pichat-test-support)
@@ -193,12 +192,6 @@
              :type 'user-error)
             (should-not rpc-called))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
-
-;; Phase 2 native lifecycle contracts live in
-;; `pichat-test-backend-llm' so Pi-only contract fixtures remain dependency-light.
-
-;; Native tool contracts are activated in `pichat-test-backend-llm', where the
-;; pinned real llm.el lifecycle and deterministic provider fixture are available.
 
 (provide 'pichat-test-backend-contract)
 ;;; pichat-test-backend-contract.el ends here

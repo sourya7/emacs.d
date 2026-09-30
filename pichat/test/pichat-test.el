@@ -12,9 +12,6 @@
 (require 'pichat-test-support)
 
 (require 'pichat-test-backend-contract)
-(require 'pichat-test-backend-llm)
-(require 'pichat-test-llm-coding-tools)
-(require 'pichat-test-llm-search-tools)
 (require 'pichat-test-rpc)
 (require 'pichat-test-transport)
 (require 'pichat-test-launch)

@@ -927,11 +927,6 @@
                   "elpaca-menu-lock-file" :id llama :type git
                   :protocol https :inherit t :depth treeless :ref
                   "cfea618f14bc8317f8e4947fe10000b229b9a447"))
- (llm :source "elpaca-menu-lock-file" :recipe
-      (:package "llm" :repo "ahyatt/llm" :tar "0.32.1" :host github
-                :files ("*" (:exclude ".git")) :source "GNU ELPA" :id
-                llm :ref "9ac4111020babe5996c87ddb60d62b9cfcea28c1"
-                :type git :protocol https :inherit t :depth treeless))
  (load-relative :source "elpaca-menu-lock-file" :recipe
                 (:package "load-relative" :fetcher github :repo
                           "rocky/emacs-load-relative" :files

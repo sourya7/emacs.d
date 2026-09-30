@@ -113,10 +113,10 @@ than losing the response.
 
 ## Module dependency direction
 
-`pichat-backend.el` defines the optional backend contract, capability checks,
-and backend-qualified scope identity without requiring Pi RPC or any native LLM
-library. Sessions own a backend object and opaque backend state; legacy and
-ordinary sessions default to `pi`. `pichat-backend-pi.el` is a thin delegation
+`pichat-backend.el` defines the backend contract, capability checks,
+and backend-qualified scope identity without requiring Pi RPC. Sessions own a
+backend object and opaque backend state; legacy and ordinary sessions default
+to `pi`. `pichat-backend-pi.el` is a thin delegation
 to the existing RPC functions. Shared lifecycle, prompt, abort, state,
 transcript, stats, and owned-request cancellation paths dispatch through this
 boundary, while Pi-only controls are rejected by capability checks before side
@@ -170,221 +170,6 @@ consumes only normalized archive records. The chat layer owns event orchestratio
 and its generation-scoped enrichment table.
 Canonical transcript and Pi reducer modules remain independent authorities and
 never consume this ephemeral state.
-
-## Native in-memory chat
-
-`M-x pichat-llm` explicitly opens an independent memory-only conversation using
-`llm.el`. It does not start Pi or Node, inspect Pi credentials, infer a provider
-from the model name, or change ordinary `M-x pichat`. The native adapter is
-loaded only by this command; Pi-only startup does not require `llm.el`, gcloud,
-or provider configuration.
-
-Configure a factory that produces a fresh provider specification for every
-conversation. Starting a new conversation invokes that factory again; PiChat
-rejects reuse of a mutable provider object instead of carrying opaque provider
-state into the new conversation. For Codex via a separately administered
-CLIProxyAPI deployment, explicitly configure both the API endpoint and the
-auth-source identity:
-
-```elisp
-(setq pichat-llm-codex-url "https://proxy.example.test/v1/"
-      pichat-llm-codex-auth-host "proxy.example.test"
-      pichat-llm-codex-auth-user "apikey"
-      pichat-llm-provider
-      (lambda ()
-        (pichat-llm-make-codex-provider "gpt-5.3-codex")))
-```
-
-There are no built-in deployment URL or auth-source host defaults. The access
-key is resolved lazily using the configured auth-source host and user. PiChat
-does not start, update, administer, discover, or perform OAuth login to the
-proxy. TLS, remote management, bind policy, and OAuth-file permissions are
-administrator responsibilities. A self-hosted local service should bind only
-`127.0.0.1`.
-
-For Gemini or Claude through Google Vertex AI:
-
-```elisp
-(setq pichat-llm-provider
-      (lambda ()
-        (pichat-llm-make-vertex-gemini-provider
-         "project-id" "us-east5" "gemini-2.5-pro")))
-
-;; Or:
-(setq pichat-llm-provider
-      (lambda ()
-        (pichat-llm-make-vertex-claude-provider
-         "project-id" "us-east5" "claude-sonnet-4-5@20250929")))
-```
-
-Vertex authentication invokes the explicitly configured
-`pichat-llm-vertex-gcloud-executable` with
-`gcloud auth application-default print-access-token`. Run
-`gcloud auth application-default login` first; the separate `gcloud auth login`
-account is not used. Set `GOOGLE_APPLICATION_CREDENTIALS` when using an
-explicit ADC file, and ensure Emacs inherits the same HOME, CLOUDSDK_CONFIG,
-and Google Cloud environment as the working Pi process. PiChat forwards the
-ADC quota project (`quota_project_id` in the ADC file, or
-`GOOGLE_CLOUD_QUOTA_PROJECT`) as `x-goog-user-project`; override it with
-`pichat-llm-vertex-quota-project` if necessary. A quota project is distinct
-from the project in the Vertex URL. PiChat never changes gcloud configuration.
-This CLI-based ADC path requires gcloud and does not implement the full Google
-SDK ADC chain used by Pi. The tested `llm.el` 0.32.1 Vertex Gemini path is
-deliberately non-streaming because that release can discard streaming chunks
-without usage metadata; Codex and Vertex Claude use cumulative streaming.
-
-The advanced `pichat-launch` menu offers `a` for native memory sessions,
-composable with `g` (global scope) and `n` (independent). Without `n`, it
-reuses a preferred native session for the selected local scope, independently
-of the preferred Pi runtime. Target, ephemeral storage, and Pi model-picker
-switches are invalid with native launch. Ordinary `pichat` remains Pi-only.
-Install optional `llm.el` 0.32.1 and configure `pichat-llm-provider` before
-selecting native; Pi-only use does not load llm. Provider factories above are
-resolved when a native conversation starts, not when the menu opens.
-
-Native sessions support multi-turn text, cumulative reasoning presentation,
-capability-gated image input, cancellation, new conversations, local names, and
-reported token usage. Set `pichat-llm-reasoning` to `none`, `light`, `medium`, or
-`maximum` before launching to request a public llm.el reasoning effort; nil
-retains the provider default. The existing thinking visibility and activity
-folding controls apply to native reasoning, but mutable thinking-level controls
-remain disabled because retained provider state cannot safely migrate settings
-mid-conversation.
-
-Image commands are available only when the concrete provider advertises
-`image-input`. PiChat validates bounded attachment records before clearing the
-editor, converts their base64 payloads to session-owned `llm-media` bytes, and
-keeps bytes out of the local journal and rendered transcript. Rejected requests
-retain the existing prompt and attachment recovery behavior.
-
-Reported input/output counts are accumulated as request usage and shown without
-a context-window percentage. Missing counts remain unknown rather than becoming
-zero; PiChat does not estimate context occupancy. Provider/model labels and
-currently safe capabilities refresh when a new conversation allocates its fresh
-provider.
-
-Provider prompt state and PiChat's authoritative local journal remain separate
-and are never reconstructed from rendered text. Storage is explicitly `memory`;
-no session path is fabricated. Pi commands/completion, archives, history,
-branching, setup, mutable model controls, and provider migration remain disabled.
-After an abort or provider error, start a new conversation before continuing
-because the provider may have mutated opaque prompt state. No mandatory provider
-path is claimed as live-verified; automated coverage uses offline mocked HTTP
-and credentials.
-
-Native Emacs tools are an explicit opt-in. Set `pichat-llm-tools` to names already
-registered in `pichat-tools-registry` before launching a new conversation. PiChat
-accepts object schemas with declared primitive or primitive-array properties,
-required names, descriptions, and enums; arbitrary properties, composition, and
-nested object arguments are rejected before model I/O. Tool-enabled rounds use
-the tested non-streaming `tool-use` provider path in llm.el 0.32.1, even when
-ordinary prose streams.
-
-Mutating tools reuse the approval policy and wait in a serialized queue until
-their owning chat is selected and focused. Denials and execution failures become
-bounded tool results. `pichat-llm-max-rounds`, `pichat-llm-max-tool-calls`,
-`pichat-llm-max-tool-output-chars`, and `pichat-llm-tool-result-max-chars` bound
-each run. Abort, stop, and new conversation invalidate queued approvals and late
-callbacks before cancelling the provider request. Side effects completed before
-cancellation cannot be undone.
-
-### Optional native coding tools
-
-PiChat includes a small coding tool module, but merely loading it registers
-nothing. Opt in deliberately before starting a new native conversation:
-
-```elisp
-(require 'pichat-llm-coding-tools)
-(setq pichat-llm-tools (pichat-llm-coding-tools-register))
-```
-
-The returned default names are `read`, `find`, `grep`, `write`, `edit`, `bash`,
-and `ls`. Registration and selection are separate:
-calling the registration function does not rewrite another explicit
-`pichat-llm-tools` value. A conversation retains the tools advertised when it
-was created, so start a fresh native conversation after changing the selection.
-These tools are never advertised through the Pi Emacs-tool bridge.
-
-`find` requires [fd](https://github.com/sharkdp/fd), and `grep` requires
-[ripgrep](https://github.com/BurntSushi/ripgrep). PiChat resolves the customizable
-`pichat-llm-search-tools-fd-executable` and
-`pichat-llm-search-tools-rg-executable` through `exec-path`; a missing bare `fd`
-also tries the distribution name `fdfind`. It never installs a binary or falls
-back to shell search. Both tools execute the resolved program directly with an
-internal option allowlist. They are constrained search adapters, not an OS
-sandbox and not protection against hostile concurrent filesystem replacement.
-
-`find` locates regular files using a basename glob:
-
-```elisp
-;; Tool arguments: pattern and path are optional.
-(:pattern "*backend*.el" :path "pichat" :hidden nil :limit 100)
-```
-
-The default pattern is `*` and the default path is the conversation working
-directory. `hidden` includes hidden files but retains ignore rules. Results are
-relative traversal-order paths; early truncation does not promise global
-sorting.
-
-`grep` accepts a file or directory and either legacy `pattern` or a nonempty
-`patterns` array, but never both:
-
-```elisp
-(:patterns ["llm-chat-async" "llm-chat-streaming"]
- :path "pichat" :glob "*.el" :context 2 :limit 100)
-```
-
-Array patterns have OR semantics and a line matching several patterns counts
-once. Matching is literal by default; set `regex` to true for ripgrep regex
-syntax. Direct callers of the underlying search function can still use
-`:literal nil`. The native llm.el bridge cannot distinguish an omitted optional
-boolean from JSON false, so its advertised option uses the positive `regex`
-switch instead. `glob` uses ripgrep's documented file-filter semantics.
-Context lines use `path-line-text`, matches use `path:line:text`, and `--`
-separates disjoint groups. The global limit counts matching lines, not context. A named in-root
-regular file is searched even when recursive ignore discovery would omit it.
-Successful empty searches return `[no files found]` or `[no matches]`; limits,
-timeouts, invalid expressions, missing executables, parser failures, and process
-failures remain distinguishable.
-
-All paths resolve under the native session's fixed local working directory.
-Relative paths use that root; absolute paths must still remain inside it;
-traversal, search roots containing symlinks, and remote/TRAMP roots are rejected.
-fd and rg do not follow recursive symlinks. Repository-local ignore rules remain
-active, while ripgrep configuration and global ignore configuration are
-disabled; configured metadata/dependency directory exclusions also apply.
-Search output is UTF-8: binary files are left to ripgrep's normal binary skip,
-and a matching record containing invalid UTF-8 makes the invocation fail rather
-than silently replacing bytes. Paths and line text escape control characters.
-Timeout, pattern, parser-record, result, context, and retained-output bounds are
-controlled by the `pichat-llm-search-tools-*` and
-`pichat-llm-coding-tools-max-output-chars` options.
-
-`read`, `find`, `grep`, and `ls` are non-mutating under the normal approval
-policy, so routine repository exploration needs no prompt. Explicit
-user deny/ask rules still apply. `write`, `edit`, and `bash` retain their
-potentially-mutating classification and require approval unless the user has
-consciously installed an allow rule. `write` atomically creates a new file and
-refuses overwrite. `edit` atomically replaces one exact unique string,
-optionally checks `expectedSha256`, preserves file modes, and rejects modified
-file-visiting buffers. Neither operation silently changes an unsaved Emacs
-buffer.
-
-`bash` remains available for builds, tests, and commands not covered by the
-structured tools. It executes through Emacs's configured local shell in the
-session working directory, combines stdout/stderr, retains bounded output, and
-enforces `pichat-llm-coding-tools-command-timeout` with an absolute
-`pichat-llm-coding-tools-max-command-timeout`. It may have arbitrary side
-effects and remains approval-gated. Abort, stop, and new conversation interrupt
-an executing command and suppress its late callback. Effects completed before
-cancellation cannot be undone. No arbitrary Emacs Lisp evaluator or unbounded
-shell tool is provided.
-
-Selected tools add their exact working directory and safety semantics to the
-retained prompt. Guidance tells the model to use `find` for filenames, batch
-related content patterns in `grep`, and use `read` for detailed inspection; it
-does not claim that Pi skills, context files, prompt templates, or additional
-tools are present.
 
 ## Launching runtimes
 
@@ -463,13 +248,10 @@ safely inject `--no-session` or `--model` into an arbitrary wrapper command.
 
 ## Global runtime-session manager
 
-`M-x pichat-session-manager` opens one global `*PiChat Sessions*` buffer for all
-retained Pi and native memory sessions across project and global scopes.
-The table identifies backend (`pi` or `llm`), storage (`file`, `none`, or
-`memory`), and provider/model. Native previews read their own local journal,
-including after stop; redraw does not contact providers or Pi. Open, stop,
-forget, naming, and new conversation use the owning backend. Archive, history,
-fork/clone, transport diagnostics, and Pi setup remain Pi-only. A runtime is the
+`M-x pichat-session-manager` opens one global `*PiChat Sessions*` buffer for
+retained Pi runtimes across project and global scopes. The table identifies
+backend (`pi`), storage (`file` or `none`), and model. Redraw does not contact
+Pi. Open, stop, forget, and naming use the owning backend. A runtime is the
 Emacs-side process/session object; the persisted Pi source loaded into it may
 change after new-session, switch, fork, or clone operations. Manager rows use an
 immutable Emacs runtime identity, so such source changes do not replace or
@@ -498,15 +280,13 @@ Manager keys:
 - `C-o` — toggle a bounded active-branch preview which follows the selected row;
 - `n` — start an independent runtime in a recent known project, with an
   explicit manual-directory fallback;
-- `N` — start one in the selected runtime's immutable owner scope (same backend;
-  native uses the currently configured provider factory);
+- `N` — start one in the selected runtime's immutable owner scope;
 - `+` — open the shared launch Transient; current scope prompts for an exact
   project/directory and global scope does not;
 - `b` — search saved sessions and open the selection in a new runtime associated
   with its recorded project (using archive-backed Consult when available, with
   the basic file picker as fallback);
 - `e` — name the selected session through its backend;
-- `C` — start a new conversation on the selected live native memory session;
 - `k` — stop only the selected live runtime;
 - `d` — forget and clean up a stopped or failed runtime;
 - `m` — make the selected live runtime preferred for its owner scope;

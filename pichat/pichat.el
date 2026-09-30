@@ -2,8 +2,7 @@
 
 ;;; Commentary:
 
-;; PiChat is an Emacs frontend for Pi's JSONL RPC mode and an optional native
-;; llm.el text backend.  Pi remains the default; Emacs owns UI integration.
+;; PiChat is an Emacs frontend for Pi's JSONL RPC mode.
 
 ;;; Code:
 
@@ -34,9 +33,6 @@
 (defconst pichat-directory
   (file-name-directory (or load-file-name buffer-file-name))
   "Directory containing PiChat Lisp files.")
-
-(declare-function pichat-backend-llm-launch "pichat-backend-llm"
-                  (&optional provider model directory scope display-function))
 
 (defvar pichat-current-session nil
   "Current PiChat session.")
@@ -288,7 +284,7 @@ session over the global `pichat-current-session'."
                       'preferred)))
          (display-function (or (plist-get profile :display-function)
                                #'pichat-chat-open)))
-    (unless (memq backend '(pi llm))
+    (unless (eq backend 'pi)
       (user-error "Invalid PiChat backend: %S" backend))
     (unless (or (memq scope '(current global))
                 (pichat--exact-scope-p scope))
@@ -305,11 +301,6 @@ session over the global `pichat-current-session'."
       (user-error "Invalid PiChat model policy: %S" model))
     (unless (functionp display-function)
       (user-error "Invalid PiChat display function: %S" display-function))
-    (when (and (eq backend 'llm)
-               (or (not (eq target 'inferred))
-                   (not (eq persistence 'persistent))
-                   (not (eq model 'default))))
-      (user-error "Native memory launch does not support Pi target, persistence, or model selection"))
     (when (and (eq reuse 'preferred)
                (or (eq persistence 'ephemeral)
                    (eq model 'prompt)
@@ -350,9 +341,7 @@ Return the exact runtime synchronously when its model is already known.
 Prompted-model profiles first select a model asynchronously and return nil."
   (let* ((profile (pichat--normalize-launch-profile profile))
          (model (plist-get profile :model)))
-    (if (eq (plist-get profile :backend) 'llm)
-        (pichat--open-native-launch-profile profile directory)
-      (if (eq model 'prompt)
+    (if (eq model 'prompt)
         (progn
           (pichat--select-model-before-launch profile directory)
           nil)
@@ -380,45 +369,7 @@ Prompted-model profiles first select a model asynchronously and return nil."
                session display-function))
           (setq pichat-current-session session)
           (pichat--display-and-synchronize-session session display-function))
-        session)))))
-
-(defun pichat--native-launch-scope (scope directory)
-  "Resolve native SCOPE without consulting Pi transport or starting Pi."
-  (let* ((directory (file-name-as-directory
-                     (expand-file-name (or directory default-directory))))
-         (root (and (eq scope 'current) (pichat--project-root directory))))
-    (cond
-     ((pichat--exact-scope-p scope)
-      (when (file-remote-p (nth 1 scope))
-        (user-error "Native memory sessions require a local directory"))
-      scope)
-     ((file-remote-p directory)
-      (user-error "Native memory sessions require a local directory"))
-     (root (list (format "project|local|%s" root) root
-                 (format "%s@%s" (pichat--directory-basename root)
-                         (substring (md5 root) 0 8))))
-     (t (list "global|local" (file-name-as-directory
-                              (expand-file-name pichat-global-directory))
-              "global")))))
-
-(defun pichat--open-native-launch-profile (profile directory)
-  "Open a native memory session according to PROFILE and DIRECTORY."
-  (let* ((scope (pichat--native-launch-scope
-                 (plist-get profile :scope) directory))
-         (key (car scope))
-         (session (and (eq (plist-get profile :reuse) 'preferred)
-                       (gethash (list 'llm key) pichat--sessions-by-scope))))
-    (unless (and session (pichat-session-alive-p session))
-      (when session (pichat-clear-default-session session))
-      (require 'pichat-backend-llm)
-      (setq session (pichat-backend-llm-launch
-                     nil nil (nth 1 scope) scope
-                     (plist-get profile :display-function)))
-      (when (eq (plist-get profile :reuse) 'preferred)
-        (pichat-set-default-session session)))
-    (setq pichat-current-session session)
-    (pichat--display-and-synchronize-session
-     session (plist-get profile :display-function))))
+        session))))
 
 ;;;###autoload
 (defun pichat-start-session (&optional cwd scope launch-options)
@@ -474,21 +425,6 @@ LAUNCH-OPTIONS supports `:persistence' and an exact run-local `:model'."
                  (or (pichat-chat-diagnostics-latest-summary session)
                      "see M-x pichat-show-transport-diagnostics"))))
     session))
-
-;;;###autoload
-(defun pichat-llm (&optional provider model)
-  "Open an independent in-memory native chat using PROVIDER and MODEL.
-Interactively, use `pichat-llm-provider' and `pichat-llm-model'.  PROVIDER may
-be an explicit llm.el provider object, a zero-argument factory, or a provider
-specification returned by one of PiChat's mandatory-provider helpers."
-  (interactive)
-  (condition-case err
-      (require 'pichat-backend-llm)
-    (file-missing
-     (user-error
-      "Native PiChat requires optional llm.el %s: %s"
-      "0.32.1" (error-message-string err))))
-  (pichat-backend-llm-launch provider model default-directory))
 
 ;;;###autoload
 (defun pichat-stop-session (&optional session)
@@ -934,14 +870,15 @@ This is the first implementation check; it does not send an LLM prompt."
 
 (defun pichat--launch-profile-from-arguments (arguments &optional context)
   "Convert Transient ARGUMENTS and optional CONTEXT to a launch profile."
-  (let* ((backend (if (member "--native" arguments) 'llm 'pi))
-         (global-p (member "--global" arguments))
+  (when (member "--native" arguments)
+    (user-error "Native PiChat launch is no longer supported"))
+  (let* ((global-p (member "--global" arguments))
          (ephemeral-p (member "--ephemeral" arguments))
          (prompt-p (member "--model" arguments))
          (independent-p (or (member "--new" arguments)
                             ephemeral-p prompt-p)))
     (pichat--normalize-launch-profile
-     (list :backend backend
+     (list :backend 'pi
            :scope (if global-p 'global 'current)
            :target (pichat--launch-target-argument arguments)
            :reuse (if independent-p 'new 'preferred)
@@ -954,8 +891,7 @@ This is the first implementation check; it does not send an LLM prompt."
   "Return a concise description of normalized launch PROFILE."
   (format "Launch: %s · %s · %s · %s · %s model"
           (if (eq (plist-get profile :scope) 'global) "global" "current")
-          (if (eq (plist-get profile :backend) 'llm)
-              "native memory" (plist-get profile :target))
+          (plist-get profile :target)
           (if (eq (plist-get profile :reuse) 'new)
               "independent" "preferred")
           (if (eq (plist-get profile :persistence) 'ephemeral)
@@ -982,14 +918,11 @@ This is the first implementation check; it does not send an LLM prompt."
     (when (and (eq (plist-get profile :scope) 'current)
                (functionp (plist-get context :current-scope-function)))
       (let ((selected-scope
-             (funcall (or (and (eq (plist-get profile :backend) 'llm)
-                                (plist-get context :native-scope-function))
-                           (plist-get context :current-scope-function)))))
+             (funcall (plist-get context :current-scope-function))))
         (setq profile
               (plist-put
                profile :scope
-               (if (or (eq (plist-get profile :target) 'inferred)
-                       (eq (plist-get profile :backend) 'llm))
+               (if (eq (plist-get profile :target) 'inferred)
                    selected-scope
                  (pichat--scope-for-directory
                   (nth 1 selected-scope) nil
@@ -1003,7 +936,6 @@ This is the first implementation check; it does not send an LLM prompt."
   [["Scope"
     ("g" "Global" "--global")]
    ["Runtime"
-    ("a" "Native llm (memory)" "--native")
     ("n" "Independent runtime" "--new")
     ("t" "Target" "--target="
      :choices pichat--launch-target-choices)]

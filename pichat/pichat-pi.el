@@ -415,6 +415,7 @@ When provided, STATUS becomes the new tool status."
       (setq tool
             (pichat-transcript-content-create
              :kind 'tool :index 0 :tool-call-id tool-id
+             :parent-tool-call-id (plist-get raw :parentToolCallId)
              :name (plist-get raw :toolName)
              :arguments (copy-tree (plist-get raw :args) t)
              :status (or status 'incomplete)))
@@ -425,6 +426,9 @@ When provided, STATUS becomes the new tool status."
         :kind 'tool
         :key (pichat-live-draft-next-key draft "unattached-tool")
         :content (list tool))))
+    (when (plist-get raw :parentToolCallId)
+      (setf (pichat-transcript-content-parent-tool-call-id tool)
+            (plist-get raw :parentToolCallId)))
     (when (plist-get raw :toolName)
       (setf (pichat-transcript-content-name tool)
             (plist-get raw :toolName)))
@@ -751,7 +755,10 @@ Return DRAFT for convenient reducer composition."
               (pichat-transcript-content-tool-call-id tool))
              (pichat-transcript-content-is-error tool) is-error
              (pichat-transcript-content-status tool)
-             (if attached (if is-error 'error 'done) 'orphan))
+             (if (or attached
+                     (pichat-transcript-content-parent-tool-call-id tool))
+                 (if is-error 'error 'done)
+               'orphan))
        (unless attached
          (pichat-pi--live-ensure-unattached-tool draft tool))))
     ("compaction_end"

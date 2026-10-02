@@ -516,6 +516,43 @@
                   (pichat-transcript-node-kind
                    (car (pichat-live-draft-nodes draft))))))))
 
+(ert-deftest pichat-live-draft-nested-tool-completes-without-assistant-declaration ()
+  (let ((draft (pichat-live-draft-empty 6)))
+    (pichat-pi-live-draft-apply
+     draft
+     '(:type "message_start"
+       :message (:role "assistant"
+                 :content ((:type "toolCall" :id "outer" :name "codemode"
+                            :arguments (:code "tools.read({path: 'a'})"))))))
+    (pichat-pi-live-draft-apply
+     draft
+     '(:type "tool_execution_start" :toolCallId "outer/1"
+       :parentToolCallId "outer" :toolName "read" :args (:path "a")))
+    (pichat-pi-live-draft-apply
+     draft
+     '(:type "tool_execution_end" :toolCallId "outer/1"
+       :parentToolCallId "outer" :toolName "read" :isError nil
+       :result (:content ((:type "text" :text "file contents")))))
+    (let ((nested (gethash "outer/1" (pichat-live-draft-tools draft))))
+      (should (equal "outer" (pichat-transcript-content-parent-tool-call-id nested)))
+      (should (eq 'done (pichat-transcript-content-status nested)))
+      (should (equal "file contents"
+                     (pichat-transcript-content-text
+                      (car (pichat-transcript-content-output nested)))))
+      (pichat-pi-live-draft-apply draft '(:type "agent_settled"))
+      (should (eq 'done (pichat-transcript-content-status nested))))))
+
+(ert-deftest pichat-live-draft-unfinished-nested-tool-is-incomplete ()
+  (let ((draft (pichat-live-draft-empty 7)))
+    (pichat-pi-live-draft-apply
+     draft
+     '(:type "tool_execution_start" :toolCallId "outer/1"
+       :parentToolCallId "outer" :toolName "read" :args (:path "a")))
+    (pichat-pi-live-draft-apply draft '(:type "agent_settled"))
+    (should (eq 'incomplete
+                (pichat-transcript-content-status
+                 (gethash "outer/1" (pichat-live-draft-tools draft)))))))
+
 (ert-deftest pichat-live-draft-settlement-marks-unresolved-tools-incomplete ()
   (let ((draft (pichat-live-draft-empty 4)))
     (pichat-pi-live-draft-apply

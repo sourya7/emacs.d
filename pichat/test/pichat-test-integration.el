@@ -9,6 +9,65 @@
 (require 'pichat-test-support)
 
 (when pichat-test-include-integration
+  (ert-deftest pichat-integration-codemode-nested-tool-completes-live ()
+    (pichat-test-with-integration-session
+        (session :no-session t :tools "codemode,read"
+                 :extensions (list "builtin:codemode")
+                 :settings '(:codemode (:mode "only"))
+                 :script '(:turns [(:toolCall
+                                    (:id "codemode-1" :name "codemode"
+                                     :arguments
+                                     (:code "const result = await tools.read({path: 'sample.txt'}); text(result);")))
+                                   (:expectContextIncludes "nested contents"
+                                    :delayMs 800 :text "nested call complete")]))
+      (let ((pichat-chat-stop-session-on-kill nil)
+            buffer)
+        (unwind-protect
+            (progn
+              (with-temp-file (expand-file-name "sample.txt" project-dir)
+                (insert "nested contents"))
+              (setq buffer (pichat-chat-open session))
+              (let ((settled (pichat-test-count-raw-events session "agent_settled")))
+                (with-current-buffer buffer
+                  (goto-char (point-max))
+                  (insert "run codemode")
+                  (pichat-chat-send-input))
+                (pichat-test-wait-until
+                 (lambda ()
+                   (with-current-buffer buffer
+                     (let ((nested (gethash "codemode-1/1"
+                                            (pichat-live-draft-tools
+                                             pichat-chat--live-draft))))
+                       (and nested
+                            (eq 'done (pichat-transcript-content-status nested))
+                            (equal "codemode-1"
+                                   (pichat-transcript-content-parent-tool-call-id nested))))))
+                 12 "completed nested tool in the live draft")
+                (pichat-test-wait-for-raw-event session "agent_settled" 15 settled))
+              (let* ((events (pichat-test-recent-rpc-events session))
+                     (nested-start
+                      (cl-find-if
+                       (lambda (event)
+                         (and (equal "tool_execution_start" (plist-get event :type))
+                              (equal "codemode-1" (plist-get event :parentToolCallId))))
+                       events))
+                     (nested-end
+                      (cl-find-if
+                       (lambda (event)
+                         (and (equal "tool_execution_end" (plist-get event :type))
+                              (equal (plist-get nested-start :toolCallId)
+                                     (plist-get event :toolCallId))))
+                       events)))
+                (should nested-start)
+                (should (equal "read" (plist-get nested-start :toolName)))
+                (should nested-end)
+                (should (equal "codemode-1" (plist-get nested-end :parentToolCallId)))
+                (should-not (plist-get nested-end :isError)))
+              (with-current-buffer buffer
+                (should (string-match-p "nested call complete"
+                                        (pichat-test-buffer-text buffer)))))
+          (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
   (ert-deftest pichat-integration-mutation-timing-requires-pre-execution-hook ()
     (let* ((specs
             '((:id "immediate-1" :mode "immediate"

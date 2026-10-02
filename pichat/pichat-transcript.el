@@ -54,6 +54,7 @@
   text
   media-type
   tool-call-id
+  parent-tool-call-id
   name
   arguments
   status

@@ -331,12 +331,13 @@ have been seen."
     (should (= 0 (or (plist-get status :unexpectedCalls) 0)))))
 
 (cl-defmacro pichat-test-with-integration-session
-    ((session-var &key script no-session extensions settings) &rest body)
+    ((session-var &key script no-session extensions settings tools) &rest body)
   "Start real Pi RPC bound to SESSION-VAR and run BODY.
 SCRIPT is a Lisp object encoded as the fake provider script JSON.
 When NO-SESSION is nil, persistent sessions are enabled in an isolated dir.
 EXTENSIONS is a list of additional extension file paths loaded after the fake
-provider.  SETTINGS, when non-nil, is written to the isolated Pi agent dir."
+provider.  SETTINGS, when non-nil, is written to the isolated Pi agent dir.
+TOOLS, when non-nil, selects explicit Pi tools instead of disabling built-ins."
   (declare (indent 1))
   `(progn
      (pichat-test-require-pi)
@@ -360,12 +361,13 @@ provider.  SETTINGS, when non-nil, is written to the isolated Pi agent dir."
                                    "--mode" "rpc"
                                    "--offline"
                                    "--no-approve"
-                                   "--no-builtin-tools"
                                    "--no-context-files"
                                    "--no-skills"
                                    "--no-prompt-templates"
                                    "--no-themes"
                                    "--no-extensions")
+                             (if ,tools (list "--tools" ,tools)
+                               (list "--no-builtin-tools"))
                              (when ,no-session (list "--no-session"))
                              (unless ,no-session (list "--session-dir" session-dir))
                              (list "-e" pichat-test-fake-provider-extension)

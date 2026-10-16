@@ -170,7 +170,7 @@ When PROMPT is non-nil, always ask."
   "Return reference text for the active region in the current buffer."
   (let ((beg (region-beginning))
         (end (region-end)))
-    (if-let ((file (buffer-file-name)))
+    (if-let* ((file (buffer-file-name)))
         (pcase-let ((`(,start . ,finish) (pichat-reference--line-range beg end)))
           (pichat-reference--format-reference-block
            (list (pichat-reference--format-location

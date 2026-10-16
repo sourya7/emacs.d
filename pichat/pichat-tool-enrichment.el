@@ -225,7 +225,7 @@ Return a plist whose :status is `unique', `not-found', `non-unique', or
           (t name))))
       ('fetch (or (plist-get args :url) (plist-get args :query) name))
       (_
-       (if-let ((value (pichat-tool-enrichment--first-string-value args)))
+       (if-let* ((value (pichat-tool-enrichment--first-string-value args)))
            (format "%s %s" (or name "tool")
                    (pichat-tool-enrichment--truncate value 60))
          name)))))

@@ -71,7 +71,7 @@ to `bury'.  Return BUFFER after selecting its display window."
 When BUFFER is dead, select FALLBACK-WINDOW if it is still live."
   (cond
    ((buffer-live-p buffer)
-    (if-let ((window (get-buffer-window buffer t)))
+    (if-let* ((window (get-buffer-window buffer t)))
         (select-window window)
       (pop-to-buffer buffer)))
    ((window-live-p fallback-window)

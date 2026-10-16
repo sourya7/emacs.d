@@ -527,7 +527,7 @@ buffer-edit and view-preservation mechanics."
            (format "Command (non-interactive):\n%s\n"
                    (or (pichat-shell-presentation-command enrichment)
                        "[command unavailable]"))))
-        (if-let ((location
+        (if-let* ((location
                   (pichat-chat-tool-ui-location-string enrichment)))
             (format "Location: %s\n" location)
           (when-let* ((reason (plist-get enrichment :unavailable-reason)))

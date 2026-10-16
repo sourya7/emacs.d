@@ -151,7 +151,7 @@ The longest matching normalized project prefix wins."
    ((or (eq target-id 'local) (equal target-id "local"))
     pichat-transport-local)
    (target-id
-    (if-let ((entry (pichat-transport--target-entry target-id)))
+    (if-let* ((entry (pichat-transport--target-entry target-id)))
         (pichat-transport--configured entry)
       (user-error "Unknown PiChat target: %s" target-id)))
    ((file-remote-p directory)

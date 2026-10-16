@@ -340,7 +340,7 @@ identities."
              (format "%s%s"
                      (or (plist-get entry :modelId)
                          (plist-get entry :model) "model")
-                     (if-let ((provider (plist-get entry :provider)))
+                     (if-let* ((provider (plist-get entry :provider)))
                          (format " via %s" provider)
                        "")))
             ("thinking_level_change"
@@ -369,7 +369,7 @@ identities."
                  (plist-get entry :text)
                  type)))))
     (pichat-sessions--shorten
-     (if-let ((label (plist-get node :label)))
+     (if-let* ((label (plist-get node :label)))
          (format "[%s] %s" label summary)
        summary))))
 
@@ -1492,7 +1492,7 @@ mappings are configured."
          (resolution
           (pichat-path-resolve-to-runtime
            file (and session (pichat-session-path-context session)))))
-    (if-let ((runtime-file (plist-get resolution :path)))
+    (if-let* ((runtime-file (plist-get resolution :path)))
         runtime-file
       (user-error "Saved session path is not covered by pichat-path-mappings: %s"
                   file))))
@@ -2113,7 +2113,7 @@ canonical entry cache."
         (format "%s%s"
                 (or (plist-get entry :modelId)
                     (plist-get entry :model) "unknown")
-                (if-let ((provider (plist-get entry :provider)))
+                (if-let* ((provider (plist-get entry :provider)))
                     (format " via %s" provider)
                   ""))))
       ("thinking_level_change"

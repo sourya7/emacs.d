@@ -670,7 +670,7 @@ and SUBJECT describe a relation-picker target when present."
       (when info
         (insert (format "Fork evidence: %s%s\n"
                         (plist-get info :fork-point-status)
-                        (if-let ((position (plist-get info :fork-position)))
+                        (if-let* ((position (plist-get info :fork-position)))
                             (format " (%s)" position) ""))))
       (insert (format "Project: %s\nMatches: %s\nSession: %s\n"
                       (abbreviate-file-name (or (plist-get record :cwd) ""))

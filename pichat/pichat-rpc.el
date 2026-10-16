@@ -276,7 +276,7 @@ SESSION in `error' state rather than being confused with a Pi RPC response."
   (setf (pichat-session-stop-requested-p session) t
         (pichat-session-rpc-ready-timer session) nil
         (pichat-session-rpc-send-queue session) nil)
-  (if-let ((proc (pichat-session-process session)))
+  (if-let* ((proc (pichat-session-process session)))
       (if (process-live-p proc)
           ;; The process sentinel emits `session-ended'.
           (delete-process proc)
@@ -412,7 +412,7 @@ separator characters.  A trailing CR is stripped for CRLF compatibility."
 
 (defun pichat-rpc--dispatch-failure (session response pending)
   "Dispatch failed RESPONSE for PENDING request in SESSION."
-  (if-let ((error-callback (pichat-rpc--pending-error-callback pending)))
+  (if-let* ((error-callback (pichat-rpc--pending-error-callback pending)))
       (funcall error-callback response session)
     (let ((diagnostic (plist-get response :pichat-diagnostic)))
       (pichat-emit session 'error

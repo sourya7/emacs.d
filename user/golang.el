@@ -35,7 +35,7 @@
 
 (defun my/go-project-root ()
   "Return the current Go module or project root."
-  (if-let ((project (project-current nil)))
+  (if-let* ((project (project-current nil)))
       (project-root project)
     default-directory))
 

@@ -88,7 +88,7 @@ When EXPLICIT-P is nil, a nil MAPPINGS value uses the compatibility global."
 (defun pichat-path-to-runtime (path &optional context)
   "Translate Emacs PATH to a Pi runtime path using optional CONTEXT."
   (let ((mappings (pichat-path--context-mappings context)))
-    (if-let ((mapping (pichat--mapping-match path mappings #'car)))
+    (if-let* ((mapping (pichat--mapping-match path mappings #'car)))
         (pichat--replace-prefix path (car mapping) (cdr mapping))
       path)))
 
@@ -96,7 +96,7 @@ When EXPLICIT-P is nil, a nil MAPPINGS value uses the compatibility global."
 (defun pichat-path-from-runtime (path &optional context)
   "Translate Pi runtime PATH to an Emacs path using optional CONTEXT."
   (let ((mappings (pichat-path--context-mappings context)))
-    (if-let ((mapping (pichat--runtime-mapping-match path mappings t)))
+    (if-let* ((mapping (pichat--runtime-mapping-match path mappings t)))
         (concat (directory-file-name (car mapping))
                 (substring path (length (directory-file-name (cdr mapping)))))
       path)))

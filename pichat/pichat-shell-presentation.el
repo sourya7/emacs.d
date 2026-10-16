@@ -123,7 +123,7 @@ Terminal specific outcomes cannot be erased by stale running updates."
     ('success "completed")
     ('exit (format "exit %s" (plist-get outcome :exit-code)))
     ('signal (format "signal %s" (plist-get outcome :signal)))
-    ('timeout (if-let ((duration (plist-get outcome :duration)))
+    ('timeout (if-let* ((duration (plist-get outcome :duration)))
                   (format "timed out after %ss" duration)
                 "timed out"))
     ('tool-error "tool error")

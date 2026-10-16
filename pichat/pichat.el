@@ -98,7 +98,7 @@ When FORCE-GLOBAL is non-nil, use the selected target's global scope."
                       (pichat-transport-resolve directory target-id)))
          (transport-id (format "%s" (pichat-transport-id transport))))
     (if (not force-global)
-        (if-let ((root (pichat--project-root directory)))
+        (if-let* ((root (pichat--project-root directory)))
             (let ((label (format "%s@%s" (pichat--directory-basename root)
                                  (substring (md5 root) 0 8))))
               (list (format "project|%s|%s" transport-id root) root label))
@@ -861,7 +861,7 @@ This is the first implementation check; it does not send an LLM prompt."
 
 (defun pichat--launch-target-argument (arguments)
   "Return normalized target selected in Transient ARGUMENTS."
-  (if-let ((argument
+  (if-let* ((argument
             (cl-find-if (lambda (value)
                           (string-prefix-p "--target=" value))
                         arguments)))

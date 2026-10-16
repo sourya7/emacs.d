@@ -1202,7 +1202,7 @@ straightforward to exercise without synthesizing mouse input."
 
 (defun pichat-chat--mode-line-status ()
   "Return compact PiChat mode-line status text."
-  (if-let ((s pichat-chat-session))
+  (if-let* ((s pichat-chat-session))
       (let* ((state (or (pichat-session-state s) 'unknown))
              (model-data (pichat-session-model s))
              (model (or (plist-get model-data :id)
@@ -1469,7 +1469,7 @@ LIVE-START and LIVE-END describe the replaceable live region before an edit."
 
 (defun pichat-chat--pre-prompt-limit ()
   "Return the last safe position before editable prompt text."
-  (if-let ((prompt (and (markerp pichat-chat--prompt-start)
+  (if-let* ((prompt (and (markerp pichat-chat--prompt-start)
                         (marker-position pichat-chat--prompt-start))))
       (max (point-min) (1- prompt))
     (point-max)))
@@ -3414,7 +3414,7 @@ BASE-CACHE is the cache captured by the incremental request."
 (defun pichat-chat-next-activity ()
   "Move point to the next visible activity group header."
   (interactive)
-  (if-let ((next (pichat-chat-activity-ui-next-position
+  (if-let* ((next (pichat-chat-activity-ui-next-position
                   pichat-chat--activity-blocks (point))))
       (goto-char next)
     (user-error "No next activity group")))
@@ -3423,7 +3423,7 @@ BASE-CACHE is the cache captured by the incremental request."
 (defun pichat-chat-previous-activity ()
   "Move point to the previous visible activity group header."
   (interactive)
-  (if-let ((previous (pichat-chat-activity-ui-previous-position
+  (if-let* ((previous (pichat-chat-activity-ui-previous-position
                       pichat-chat--activity-blocks (point))))
       (goto-char previous)
     (user-error "No previous activity group")))
@@ -3436,7 +3436,7 @@ BASE-CACHE is the cache captured by the incremental request."
 (defun pichat-chat-next-tool ()
   "Move point to next tool block."
   (interactive)
-  (if-let ((next (pichat-chat-tool-ui-next-position
+  (if-let* ((next (pichat-chat-tool-ui-next-position
                   pichat-chat--tool-blocks (point))))
       (goto-char next)
     (user-error "No next tool block")))
@@ -3445,7 +3445,7 @@ BASE-CACHE is the cache captured by the incremental request."
 (defun pichat-chat-previous-tool ()
   "Move point to previous tool block."
   (interactive)
-  (if-let ((previous (pichat-chat-tool-ui-previous-position
+  (if-let* ((previous (pichat-chat-tool-ui-previous-position
                       pichat-chat--tool-blocks (point))))
       (goto-char previous)
     (user-error "No previous tool block")))
@@ -3485,7 +3485,7 @@ BASE-CACHE is the cache captured by the incremental request."
     (let ((path (plist-get record :host-path)))
       (unless path
         (user-error "Tool location unavailable%s"
-                    (if-let ((reason (plist-get record :unavailable-reason)))
+                    (if-let* ((reason (plist-get record :unavailable-reason)))
                         (format ": %s" reason) "")))
       (find-file path)
       (goto-char (point-min))
@@ -3503,7 +3503,7 @@ BASE-CACHE is the cache captured by the incremental request."
                   (pichat-chat-tool-ui-location-string record))))
       (unless text
         (user-error "Tool location unavailable%s"
-                    (if-let ((reason (plist-get record :unavailable-reason)))
+                    (if-let* ((reason (plist-get record :unavailable-reason)))
                         (format ": %s" reason) "")))
       (kill-new text)
       (message "Copied tool %s: %s"
@@ -4152,7 +4152,7 @@ Return non-nil only when the projected status value changes."
 (defun pichat-chat-next-user-turn ()
   "Move point to the next logical user message."
   (interactive)
-  (if-let ((position (pichat-chat--user-turn-position 1)))
+  (if-let* ((position (pichat-chat--user-turn-position 1)))
       (goto-char position)
     (user-error "No next user turn")))
 
@@ -4160,7 +4160,7 @@ Return non-nil only when the projected status value changes."
 (defun pichat-chat-previous-user-turn ()
   "Move point to the previous logical user message."
   (interactive)
-  (if-let ((position (pichat-chat--user-turn-position -1)))
+  (if-let* ((position (pichat-chat--user-turn-position -1)))
       (goto-char position)
     (user-error "No previous user turn")))
 

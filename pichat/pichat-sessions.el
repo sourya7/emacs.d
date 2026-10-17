@@ -79,7 +79,7 @@ rows."
 
 (defvar-local pichat-sessions--folded nil)
 
-(defvar-local pichat-sessions--filter 'default)
+(defvar-local pichat-sessions--filter 'no-tools)
 
 (defvar-local pichat-sessions--query nil)
 

@@ -55,6 +55,15 @@
     (pichat-sessions--tree-model-from-data
      (list :tree nodes :leafId "user"))))
 
+(ert-deftest pichat-sessions-history-starts-without-tool-results ()
+  (with-temp-buffer
+    (pichat-sessions-mode)
+    (should (eq pichat-sessions--filter 'no-tools))
+    (should-not (member "tool-result"
+                        (pichat-test-sessions-visibility--ids
+                         (pichat-test-sessions-visibility--fixture)
+                         pichat-sessions--filter)))))
+
 (ert-deftest pichat-sessions-visibility-matches-exact-filter-matrix ()
   (let ((model (pichat-test-sessions-visibility--fixture)))
     (should

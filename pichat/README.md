@@ -601,7 +601,7 @@ the active leaf in the current file. `clone` likewise creates and rebinds to a
 new session, always from Pi's current active branch rather than the selected
 history row.
 
-Session History filters cycle with `F` in this order:
+Session History starts with the `no-tools` filter. Filters cycle with `F` in this order:
 
 - `default` — conversation entries and tool results, without bookkeeping rows;
 - `no-tools` — `default` without tool-result rows;

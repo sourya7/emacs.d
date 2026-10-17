@@ -1,0 +1,165 @@
+;;; pichat-test-artifacts.el --- Settled artifact tests -*- lexical-binding: t; -*-
+;;; Code:
+(require 'ert)
+(require 'cl-lib)
+(require 'pichat-artifacts)
+(require 'pichat-chat-artifacts)
+(require 'pichat-artifacts-embark)
+
+(ert-deftest pichat-artifacts-fences-preserve-body-and-info ()
+  (let* ((source "before `inline`\n~~~~js extra\na\n\n~~~~\n```\n```\n~~~oops\n")
+         (blocks (cl-remove-if-not (lambda (a) (eq (pichat-artifact-type a) 'code))
+                                   (pichat-artifacts-parse source))))
+    (should (= 2 (length blocks)))
+    (should (equal "a\n\n" (pichat-artifact-payload (car blocks))))
+    (should (equal "js" (pichat-artifact-metadata (car blocks))))
+    (should (equal "~~~~js extra\na\n\n~~~~\n" (pichat-artifact-source (car blocks))))
+    (should (equal "" (pichat-artifact-payload (cadr blocks))))
+    (should (eq (pichat-artifacts-at blocks (pichat-artifact-start (car blocks)))
+                (car blocks)))))
+
+(ert-deftest pichat-artifacts-nested-and-ambiguous-syntax ()
+  (let* ((source "```sh\n[x](file:///bad)\n```\n| h | v |\n| --- | --- |\n| [x](https://ok) | `a|b` |\n\\(x+y\\) $12 and $x$\n")
+         (artifacts (pichat-artifacts-parse source))
+         (link (cl-find 'link artifacts :key #'pichat-artifact-type)))
+    (should (= 1 (cl-count 'link artifacts :key #'pichat-artifact-type)))
+    (should (equal "https://ok" (pichat-artifact-payload link)))
+    (should (eq 'link (pichat-artifact-type
+                       (pichat-artifacts-at artifacts (pichat-artifact-start link)))))
+    (should (= 1 (cl-count 'table artifacts :key #'pichat-artifact-type)))
+    (should (= 2 (cl-count 'latex artifacts :key #'pichat-artifact-type)))))
+
+(ert-deftest pichat-artifacts-prose-bounds-and-source-rebind ()
+  (with-temp-buffer
+    (pichat-chat-mode)
+    (let ((inhibit-read-only t) (pichat-chat--inhibit-edit-guard t))
+      (insert (propertize "```sh\necho hi\n```\n" 'pichat-prose t
+                          'pichat-node-role 'assistant 'pichat-node-key 'a))
+      (insert (propertize "```sh\nbad\n```\n" 'pichat-prose t
+                          'pichat-node-role 'user 'pichat-node-key 'b))
+      (set-marker pichat-chat--canonical-start (point-min))
+      (set-marker pichat-chat--canonical-end (point-max)))
+    (let ((items (pichat-chat-artifacts-all)))
+      (should (= 1 (length items)))
+      (should (equal "echo hi\n" (pichat-artifact-payload (caar items))))
+      (should (pichat-chat-artifacts-valid-bounds (caar items)))
+      (cl-incf pichat-chat--source-generation)
+      (should-not (pichat-chat-artifacts-valid-bounds (caar items))))))
+
+(ert-deftest pichat-artifacts-embark-target-has-flat-highlight-bounds ()
+  (with-temp-buffer
+    (pichat-chat-mode)
+    (let ((inhibit-read-only t) (pichat-chat--inhibit-edit-guard t))
+      (insert (propertize "~~~js\nconsole.log(1);\n~~~\n" 'pichat-prose t
+                          'pichat-node-role 'assistant 'pichat-node-key 'a))
+      (set-marker pichat-chat--canonical-start (point-min))
+      (set-marker pichat-chat--canonical-end (point-max)))
+    (goto-char (point-min))
+    (let* ((found (pichat-artifacts-embark-target))
+           ;; Embark takes (cdr (cdr FOUND)) as its :bounds value.
+           (bounds (cddr found))
+           (overlay (make-overlay (car bounds) (cdr bounds))))
+      (unwind-protect
+          (progn
+            (should (eq (car found) 'pichat-code-block))
+            (should (equal bounds (cons (point-min) (point-max))))
+            (should (pichat-artifact-p (get-text-property 0 'pichat-artifact
+                                                        (cadr found))))
+            (should (equal (buffer-substring-no-properties
+                            (overlay-start overlay) (overlay-end overlay))
+                           "~~~js\nconsole.log(1);\n~~~\n")))
+        (delete-overlay overlay)))))
+
+(ert-deftest pichat-artifacts-embark-actions-capture-payload-and-reject-unsafe-url ()
+  (let* ((code (car (pichat-artifacts-parse "```python\na\n```\n")))
+         (target (propertize (pichat-artifact-source code) 'pichat-artifact code))
+         (rpc-called nil))
+    (cl-letf (((symbol-function 'pichat-rpc-request)
+               (lambda (&rest _) (setq rpc-called t))))
+      (pichat-artifacts-embark-copy-body target)
+      (should (equal "a\n" (current-kill 0)))
+      (pichat-artifacts-embark-copy-source target)
+      (should (equal "```python\na\n```\n" (current-kill 0)))
+      (should-not rpc-called)))
+  (let* ((link (car (pichat-artifacts-parse "[x](javascript:alert)")))
+         (target (propertize (pichat-artifact-source link) 'pichat-artifact link))
+         (opened nil))
+    (cl-letf (((symbol-function 'browse-url) (lambda (&rest _) (setq opened t))))
+      (should-error (pichat-artifacts-embark-open-link target) :type 'user-error)
+      (should-not opened))))
+
+(ert-deftest pichat-artifacts-runner-selection-and-rejections ()
+  (require 'pichat-artifact-runner)
+  (should (eq 'javascript (car (pichat-artifact-runner-select "js"))))
+  (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "shell")))
+    (should (eq 'shell (car (pichat-artifact-runner-select "unknown")))))
+  (should-error (pichat-artifact-runner-run "" "sh" "/ssh:invalid:/tmp/")
+                :type 'user-error)
+  (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil)))
+    (should-error (pichat-artifact-runner-run "" "sh" temporary-file-directory)
+                  :type 'user-error)))
+
+(ert-deftest pichat-artifacts-runner-argv-cwd-and-script-cleanup-with-stubs ()
+  (require 'pichat-artifact-runner)
+  (let (argv cwd output script buffer)
+    (cl-letf (((symbol-function 'executable-find) (lambda (_) "/stub/sh"))
+              ((symbol-function 'make-process)
+               (lambda (&rest args)
+                 (setq argv (plist-get args :command)
+                       output (plist-get args :buffer)
+                       cwd default-directory
+                       script (cadr argv))
+                 nil))
+              ((symbol-function 'run-at-time) (lambda (&rest _) nil))
+              ((symbol-function 'pop-to-buffer) (lambda (&rest _) nil)))
+      (setq buffer (pichat-artifact-runner-run "echo stub\n" "sh"
+                                                 temporary-file-directory))
+      (unwind-protect
+          (progn
+            (should (equal (car argv) "/stub/sh"))
+            (should (equal cwd temporary-file-directory))
+            (should (eq output buffer))
+            (should (equal (with-temp-buffer
+                             (insert-file-contents script)
+                             (buffer-string)) "echo stub\n"))
+            (with-current-buffer buffer
+              (should (string-match-p "Submitted code:" (buffer-string)))
+              (should (string-match-p "stdout/stderr:" (buffer-string)))))
+        (when (buffer-live-p buffer) (kill-buffer buffer)))
+      (should-not (file-exists-p script)))))
+
+(ert-deftest pichat-artifacts-runner-output-limit-and-timeout-with-stubs ()
+  (require 'pichat-artifact-runner)
+  (with-temp-buffer
+    (let ((buffer (current-buffer)) (stops 0))
+      (setq-local pichat-artifact-runner--output-start (point-min))
+      (cl-letf (((symbol-function 'process-buffer) (lambda (_) buffer))
+                ((symbol-function 'process-live-p) (lambda (_) t))
+                ((symbol-function 'delete-process) (lambda (_) (cl-incf stops))))
+        (let ((pichat-artifact-runner-output-limit 4))
+          (pichat-artifact-runner--filter 'stub "abcdef")
+          (should (string-match-p "abcd\n\\[Output limit reached\\]" (buffer-string)))
+          (should (= stops 1)))
+        (pichat-artifact-runner--timeout 'stub)
+        (should (= stops 2))
+        (should (string-match-p "\\[Timed out\\]" (buffer-string)))))))
+
+(ert-deftest pichat-artifacts-avy-cancellation-preserves-point ()
+  (with-temp-buffer
+    (pichat-chat-mode)
+    (let ((inhibit-read-only t) (pichat-chat--inhibit-edit-guard t))
+      (insert (propertize "```sh\necho ok\n```\n" 'pichat-prose t
+                          'pichat-node-role 'assistant 'pichat-node-key 'a))
+      (set-marker pichat-chat--canonical-start (point-min))
+      (set-marker pichat-chat--canonical-end (point-max)))
+    (goto-char (point-max))
+    (let ((origin (point)) (acted nil))
+      (cl-letf (((symbol-function 'require) (lambda (&rest _) t))
+                ((symbol-function 'avy-process) (lambda (&rest _) nil))
+                ((symbol-function 'embark-act) (lambda (&rest _) (setq acted t)))
+                ((symbol-function 'window-end) (lambda (&rest _) (point-max))))
+        (pichat-chat-select-visible-artifact))
+      (should (= origin (point)))
+      (should-not acted))))
+(provide 'pichat-test-artifacts)
+;;; pichat-test-artifacts.el ends here

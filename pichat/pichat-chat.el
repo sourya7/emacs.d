@@ -68,7 +68,7 @@ When nil, C-c C-c sends and RET inserts a newline."
                  (const :tag "Header, args, and output" output))
   :group 'pichat)
 
-(defcustom pichat-chat-activity-group-display 'latest
+(defcustom pichat-chat-activity-group-display 'collapsed
   "Default disclosure policy for agent activity groups.
 `latest' expands only current live tail activity, `collapsed' folds every
 group, and `expanded' opens every group.  Explicit per-group choices override

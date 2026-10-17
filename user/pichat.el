@@ -150,6 +150,11 @@
   "x r" '(pichat-add-reference :which-key "Add reference")
   "x S" '(pichat-smoke-test :which-key "Smoke test"))
 
+;; Optional artifact adapter: PiChat itself has no Embark/Avy dependency.
+(with-eval-after-load 'pichat-chat
+  (require 'pichat-chat-artifacts)
+  (require 'pichat-artifacts-embark))
+
 (with-eval-after-load 'pichat
   (sharmaso/mode-keys
     :keymaps 'pichat-chat-mode-map
@@ -166,6 +171,7 @@
     "]" '(pichat-sessions-forward-to-fork :which-key "Forward to fork")
     "z" '(pichat-chat-toggle-tool-at-point :which-key "Cycle tool display")
     "d" '(pichat-chat-show-tool-details :which-key "Tool details")
+    "A" '(pichat-chat-select-visible-artifact :which-key "Select artifact")
     "J" '(pichat-chat-next-tool :which-key "Next tool")
     "K" '(pichat-chat-previous-tool :which-key "Previous tool")
     "x" '(pichat-command-run :which-key "Command picker")

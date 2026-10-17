@@ -111,6 +111,44 @@ HTML parsing, sanitization, or SHR rendering fails—or the required conversion
 support is unavailable—the view shows a labelled exact-Markdown fallback rather
 than losing the response.
 
+## Settled chat artifacts
+
+In a chat, put point on a settled assistant prose artifact and invoke Embark
+(`SPC a` in this configuration). `SPC m A` (or
+`M-x pichat-chat-select-visible-artifact`) places Avy hints on visible artifact
+starts and opens the selected artifact's Embark menu. Cancelling Avy leaves the
+prompt and point untouched. Active regions take precedence; prompts, tool
+output, streaming prose, and rendered response views are not targeted. The
+optional integration lives in `user/pichat.el` and requires Embark and Avy; the
+PiChat package does not require either.
+
+- Complete backtick/tilde fences of at least three characters: `c` copies the
+  exact body (default), `f` copies the exact fenced source, `e` opens a separate
+  editable buffer, `r` explicitly runs the body. Fence lines are included in
+  selection, not in the body. Unclosed and cross-prose fences are ignored.
+- Simple `[label](destination)` links: `o` opens only `http`, `https`, or
+  `mailto` by default (shared with the rendered-view scheme setting); `c`
+  copies and `?` inspects the destination. Complex nested/escaped Markdown
+  links are deliberately not recognized.
+- Pipe tables with a Markdown alignment row and equal-width rows: `c` copies
+  exact source; `p` opens a read-only source preview. Escaped pipes and simple
+  backtick code spans are counted as cell contents; ambiguous tables are ignored.
+- Single-line `$...$`, `$$...$$`, `\\(...\\)`, and `\\[...\\]`: `c` copies
+  exact LaTeX; `p` opens a read-only source preview, not a TeX renderer.
+  Currency-like dollar amounts are excluded conservatively.
+
+Run supports Python (`python`, `python3`, `py` -> `python3`), JavaScript
+(`javascript`, `js`, `node` -> `node`), and shell (`sh`, `shell`, `bash` ->
+`sh`). Missing or unknown language prompts for a runner. Execution uses a
+local temporary script in the chat's local working directory, with explicit
+argv, bounded output (`pichat-artifact-runner-output-limit`) and timeout
+(`pichat-artifact-runner-timeout`). Remote working directories are rejected.
+The result buffer shows submitted code, executable/arguments, cwd, merged
+stdout/stderr, and exit status. Killing the buffer stops the run and removes
+the temporary script. **This is not a sandbox:** model code can access files,
+credentials, and the network or modify your system. Pi tool permissions do not
+apply to code launched from Emacs. Only choose `r` for code you trust.
+
 ## Module dependency direction
 
 `pichat-backend.el` defines the backend contract, capability checks,

@@ -30,18 +30,27 @@
 (defun pichat-artifacts-embark-copy-source (target)
   "Copy exact Markdown TARGET."
   (kill-new (pichat-artifact-source (pichat-artifacts-embark--descriptor target))))
+(defun pichat-artifacts-embark--code-mode (language)
+  "Return a major mode for fence LANGUAGE, or `text-mode' if unknown.
+Use `markdown-mode's customizable language mapping when available."
+  (or (and (not (string-empty-p language))
+           (require 'markdown-mode nil t)
+           (markdown-get-lang-mode language))
+      (pcase language
+        ((or "python" "python3" "py") (and (fboundp 'python-mode) 'python-mode))
+        ((or "javascript" "js" "node") (and (fboundp 'js-mode) 'js-mode))
+        ((or "sh" "shell" "bash") (and (fboundp 'sh-mode) 'sh-mode))
+        ((or "elisp" "emacs-lisp") 'emacs-lisp-mode))
+      'text-mode))
+
 (defun pichat-artifacts-embark-edit (target)
-  "Open code TARGET in a separate editable buffer."
+  "Open code TARGET in a separate buffer with its fence language's mode."
   (let* ((artifact (pichat-artifacts-embark--descriptor target))
          (language (downcase (or (pichat-artifact-metadata artifact) "")))
          (buffer (generate-new-buffer "*PiChat Code Edit*")))
     (with-current-buffer buffer
       (insert (pichat-artifact-payload artifact))
-      (funcall (pcase language
-                 ((or "python" "python3" "py") (if (fboundp 'python-mode) #'python-mode #'text-mode))
-                 ((or "javascript" "js" "node") (if (fboundp 'js-mode) #'js-mode #'text-mode))
-                 ((or "sh" "shell" "bash") (if (fboundp 'sh-mode) #'sh-mode #'text-mode))
-                 (_ #'text-mode))))
+      (funcall (pichat-artifacts-embark--code-mode language)))
     (pop-to-buffer buffer)))
 (defun pichat-artifacts-embark-run (target)
   "Explicitly execute code TARGET outside Pi's tool permission boundary."

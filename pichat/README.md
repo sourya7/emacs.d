@@ -124,8 +124,13 @@ PiChat package does not require either.
 
 - Complete backtick/tilde fences of at least three characters: `c` copies the
   exact body (default), `f` copies the exact fenced source, `e` opens a separate
-  editable buffer, `r` explicitly runs the body. Fence lines are included in
-  selection, not in the body. Unclosed and cross-prose fences are ignored.
+  editable buffer using the fence language's mode, and `r` explicitly runs the
+  body. Mode selection uses `markdown-code-lang-modes` and
+  `markdown-get-lang-mode` when available, with built-in Python, JavaScript,
+  shell, and Emacs Lisp aliases as fallbacks; unknown languages use `text-mode`.
+  This only selects an editing mode; it does not add an execution runner.
+  Fence lines are included in selection, not in the body. Unclosed and
+  cross-prose fences are ignored.
 - Simple `[label](destination)` links: `o` opens only `http`, `https`, or
   `mailto` by default (shared with the rendered-view scheme setting); `c`
   copies and `?` inspects the destination. Complex nested/escaped Markdown

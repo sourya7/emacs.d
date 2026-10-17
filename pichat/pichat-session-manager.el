@@ -370,7 +370,9 @@ canonical chat cache while an RPC refresh is pending."
           (unless (equal emacs-source (pichat-session-session-file session))
             (insert (format "Emacs source: %s\n"
                             (abbreviate-file-name emacs-source)))))
-        (insert "q close · g refresh · RET in manager opens chat\n")
+        (insert (if (pichat-view-evil-normal-p)
+                    "q close · g r refresh · RET in manager opens chat\n"
+                  "q close · g refresh · RET in manager opens chat\n"))
         (when note
           (insert (propertize (concat "\n" note "\n") 'face 'shadow)))
         (insert "\n" (propertize "Recent active branch" 'face 'bold) "\n\n")
@@ -816,7 +818,7 @@ working directory determines the new runtime's project and display routing."
   "Keymap for `pichat-session-manager-mode'.")
 
 (define-derived-mode pichat-session-manager-mode tabulated-list-mode
-  "PiChat-Sessions"
+  "PiChat-Runtimes"
   "Manage every retained PiChat RPC runtime from one global buffer.
 
 RET opens the exact selected runtime.  C-o toggles a bounded active-branch

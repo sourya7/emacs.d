@@ -83,7 +83,7 @@ overlaid buffer display. The snapshot concatenates that response's exact prose
 segments in source order and excludes thinking, tool calls, and tool output. A
 response with no prose opens an explicit empty-response view.
 
-Rendered response keys are:
+Native Emacs response-view keys are:
 
 - `g` — explicitly refresh and rerender the same canonical response at the
   current window width
@@ -91,6 +91,8 @@ Rendered response keys are:
 - `w` — copy the snapshot's exact canonical Markdown
 - `q` — close the response view
 - `RET`, `w`, or `?` on a rendered link — open, copy, or describe its destination
+  (in Evil Normal state, `w` and `?` keep Vim word motion and backward search;
+  copy the link using the local `SPC m y` menu or its `M-x` command)
 
 Response views are snapshots and do not update automatically while an assistant
 streams. Refresh and return validate both the source identity and assistant node;
@@ -145,6 +147,10 @@ PiChat package does not require either.
 - Single-line `$...$`, `$$...$$`, `\\(...\\)`, and `\\[...\\]`: `c` copies
   exact LaTeX; `p` opens a read-only source preview, not a TeX renderer.
   Currency-like dollar amounts are excluded conservatively.
+
+Table and LaTeX previews retain their appropriate Markdown or plain-text
+presentation; `q` closes the preview and returns to its origin without leaving
+another copy behind. The separate code-edit buffer remains an ordinary editor.
 
 Run supports Python (`python`, `python3`, `py` -> `python3`), JavaScript
 (`javascript`, `js`, `node` -> `node`), and shell (`sh`, `shell`, `bash` ->
@@ -385,6 +391,30 @@ bindings:
 details, diagnostics, and report buffers. Configuring that parent does not alter
 unrelated `special-mode` buffers. Non-Evil users need no additional setup.
 
+For Vim-first navigation, the optional `pichat-evil.el` layer keeps those views
+and the runtime manager in Evil Normal state while preserving their native
+Emacs keymaps for other users:
+
+```elisp
+(with-eval-after-load 'pichat
+  (require 'pichat-evil)
+  (pichat-evil-setup))
+```
+
+This repository enables that layer in `user/pichat.el`. In chat, Normal-state
+`RET` retains Evil's movement; enter Insert state to send with `RET`, or use
+`C-c C-c` / `SPC m s` from either state. In read-only views, `q` uses the
+PiChat-specific close/return policy instead of Evil Collection's generic
+`quit-window`. History uses `j/k` for entries, `RET` to jump, `za` to fold,
+`zv` to preview, and `gr` to refresh. The runtime manager uses `RET` to open,
+`zv` to toggle its preview, and `gr` to refresh. Runtime and response previews
+also use `gr` to refresh. The local
+`SPC m` menus provide preview, details, and other PiChat actions without
+taking over Vim's `/`, `n/N`, `v`, `f`, `t`, or `C-o` in Normal state. Consult's
+`C-o` preview remains a minibuffer control. The single-key lists below describe
+native Emacs bindings; the Evil-specific keys above and `SPC m` menus apply
+when this optional layer is enabled.
+
 ## Local verification
 
 This repo loads PiChat through `user/pichat.el`.
@@ -408,7 +438,7 @@ Commands:
 
 Chat keys:
 
-- `RET` — send prompt
+- `RET` — send prompt in Emacs state or Evil Insert state; in Evil Normal state, move as usual
 - `S-RET` — insert newline
 - `C-c C-k` — abort; queued steering and follow-up text is cleared from Pi
   and prepended to the current editor draft before the run is stopped
@@ -674,7 +704,9 @@ Additional chat keys:
   submitting, close compose, and return to the corresponding prompt position
 - `C-c C-k` in compose — discard the compose editor without changing the prompt
 - Compose editors are never silently reassigned after target-buffer death or
-  source rebinding; failed replacement leaves their text intact
+  source rebinding; failed replacement leaves their text intact. Applying or
+  cancelling closes only the owned editor display, leaving later changes to
+  unrelated windows alone
 - `M-x pichat-chat-export-transcript-to-markdown` — export authoritative
   canonical transcript model data, including complete canonical tool output,
   without reading rendered, folded, or truncated buffer text

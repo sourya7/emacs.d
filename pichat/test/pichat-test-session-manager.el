@@ -460,6 +460,26 @@
               (should (string-match-p "Fix the parser" text))
               (should (string-match-p "Working on the parser now" text)))))))))
 
+(ert-deftest pichat-session-manager-preview-quit-releases-owned-side-window ()
+  (pichat-test-with-clean-state
+    (save-window-excursion
+      (delete-other-windows)
+      (let ((manager (get-buffer-create pichat-session-manager-buffer-name)))
+        (with-current-buffer manager (pichat-session-manager-mode))
+        (switch-to-buffer manager)
+        (cl-letf (((symbol-function 'pichat-session-manager--preview-selected)
+                   #'ignore))
+          (with-current-buffer manager
+            (pichat-session-manager-toggle-preview)))
+        (let ((preview (get-buffer pichat-session-manager-preview-buffer-name)))
+          (should (get-buffer-window preview))
+          (select-window (get-buffer-window preview))
+          (with-current-buffer preview
+            (pichat-session-manager-preview-quit))
+          (should (eq manager (window-buffer (selected-window))))
+          (with-current-buffer manager
+            (should-not pichat-session-manager--preview-window)))))))
+
 (ert-deftest pichat-session-manager-preview-shows-ephemeral-launch-metadata ()
   (let ((session (pichat-session-make
                   :cwd "/tmp/project/" :persistence 'ephemeral)))

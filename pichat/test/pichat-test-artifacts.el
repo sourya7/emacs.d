@@ -162,6 +162,7 @@
           (should aligned)
           (should (equal (buffer-string) source))
           (should (eq (with-current-buffer preview major-mode) 'markdown-mode))
+          (should (with-current-buffer preview pichat-artifacts-preview-mode))
           (should (with-current-buffer preview buffer-read-only))
           (should (equal (pichat-artifact-source artifact) source)))
       (when (buffer-live-p preview) (kill-buffer preview))
@@ -183,9 +184,31 @@
           (pichat-artifacts-embark-preview target)
           (with-current-buffer preview
             (should (derived-mode-p 'special-mode))
+            (should pichat-artifacts-preview-mode)
             (should (equal (buffer-string) source))
             (should buffer-read-only)))
       (when (buffer-live-p preview) (kill-buffer preview)))))
+
+(ert-deftest pichat-artifact-preview-quit-kills-snapshot-and-returns ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let* ((source "$x+y$")
+           (artifact (car (pichat-artifacts-parse source)))
+           (target (propertize source 'pichat-artifact artifact))
+           (origin (generate-new-buffer " *pichat-artifact-origin*"))
+           preview)
+      (unwind-protect
+          (progn
+            (switch-to-buffer origin)
+            (setq preview (pichat-artifacts-embark-preview target))
+            (should (pichat-view-presentation preview))
+            (with-current-buffer preview
+              (should (eq (key-binding (kbd "q")) #'pichat-view-quit))
+              (pichat-view-quit))
+            (should-not (buffer-live-p preview))
+            (should (eq origin (window-buffer (selected-window)))))
+        (dolist (buffer (list origin preview))
+          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
 
 (ert-deftest pichat-artifacts-runner-selection-and-rejections ()
   (require 'pichat-artifact-runner)

@@ -201,11 +201,28 @@
   (pichat-response-view--render-faced-tag
    #'shr-tag-table dom 'pichat-response-view-table-face))
 
+(declare-function evil-forward-word-begin "evil-commands" (count &optional bigword))
+(declare-function evil-search-backward "evil-commands" ())
+
+(defun pichat-response-view-link-word-or-copy ()
+  "Keep Vim word motion on a link, or copy its URL in Emacs state."
+  (interactive)
+  (if (pichat-view-evil-normal-p)
+      (call-interactively #'evil-forward-word-begin)
+    (pichat-response-view-copy-link-at-point)))
+
+(defun pichat-response-view-link-search-or-describe ()
+  "Keep Vim backward search on a link, or describe it in Emacs state."
+  (interactive)
+  (if (pichat-view-evil-normal-p)
+      (call-interactively #'evil-search-backward)
+    (pichat-response-view-describe-link-at-point)))
+
 (defvar pichat-response-view-link-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'pichat-response-view-open-link-at-point)
-    (define-key map (kbd "w") #'pichat-response-view-copy-link-at-point)
-    (define-key map (kbd "?") #'pichat-response-view-describe-link-at-point)
+    (define-key map (kbd "w") #'pichat-response-view-link-word-or-copy)
+    (define-key map (kbd "?") #'pichat-response-view-link-search-or-describe)
     map)
   "Keymap attached to rendered response links.")
 
@@ -222,8 +239,8 @@
        `(pichat-response-view-url ,url
          keymap ,pichat-response-view-link-map
          help-echo ,(if (pichat-response-view--safe-url-p url)
-                        "RET: open; w: copy URL; ?: describe URL"
-                      "Opening disabled; w: copy URL; ?: describe URL")
+                        "RET: open; w/?: Vim motions (Evil) or copy/describe (Emacs)"
+                      "Opening disabled; w/?: Vim motions (Evil) or copy/describe (Emacs)")
          mouse-face highlight))
       (unless (pichat-response-view--safe-url-p url)
         (remove-text-properties start (point) '(shr-url nil follow-link nil))

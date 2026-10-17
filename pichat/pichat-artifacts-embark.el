@@ -5,7 +5,20 @@
 (require 'pichat-chat-artifacts)
 (require 'pichat-artifact-runner)
 (require 'pichat-response-view)
+(require 'pichat-view)
 (require 'browse-url)
+
+(defvar pichat-artifacts-preview-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "q") #'pichat-view-quit)
+    map)
+  "Keymap for read-only PiChat artifact previews.")
+
+(define-minor-mode pichat-artifacts-preview-mode
+  "Give artifact previews PiChat's owned view lifecycle and quit binding.
+A minor mode retains `markdown-mode' for aligned table previews."
+  :lighter ""
+  :keymap pichat-artifacts-preview-mode-map)
 
 (defun pichat-artifacts-embark-target ()
   "Return a typed target for the settled PiChat artifact at point."
@@ -107,13 +120,12 @@ Only the private preview buffer is changed; the captured source stays exact."
                  (insert (pichat-artifact-source artifact)))
                (message "PiChat table alignment unavailable: %s"
                         (error-message-string error-data))))
-            (use-local-map (copy-keymap (current-local-map)))
-            (local-set-key (kbd "q") #'quit-window)
             (setq buffer-read-only t))
         (special-mode))
+      (pichat-artifacts-preview-mode 1)
       (goto-char (point-min))
       (set-buffer-modified-p nil))
-    (pop-to-buffer buffer)))
+    (pichat-view-display buffer nil 'kill)))
 
 (defvar-keymap pichat-code-block-map
   :doc "PiChat code block actions."

@@ -56,6 +56,7 @@
 (require 'pichat-test-artifacts)
 (require 'pichat-test-view-modes)
 (require 'pichat-test-view-lifecycle)
+(require 'pichat-test-evil)
 (require 'pichat-test-sessions-integration)
 (require 'pichat-test-integration)
 

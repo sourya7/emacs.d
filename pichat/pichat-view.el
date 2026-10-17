@@ -24,6 +24,12 @@
 (defvar-local pichat-view--presentation nil
   "Presentation currently owned by this auxiliary view buffer.")
 
+(defun pichat-view-evil-normal-p ()
+  "Return non-nil when the current buffer uses Evil Normal state."
+  (and (bound-and-true-p evil-local-mode)
+       (boundp 'evil-state)
+       (eq evil-state 'normal)))
+
 (defun pichat-view-capture-origin ()
   "Capture the live non-minibuffer origin at command invocation time.
 The returned value is opaque and may be passed to `pichat-view-display'."

@@ -123,7 +123,7 @@
                                           (nth 2 arguments))))))
         (should (equal (list second "/fixture/second")
                        (pichat-sessions--choose-basic-file))))
-      (should (equal "Pi session: " (nth 0 read-arguments)))
+      (should (equal "Pi saved session: " (nth 0 read-arguments)))
       (should (eq t (nth 3 read-arguments)))
       ;; Each file is parsed once while choices are built.  Looking up the
       ;; selected CWD must reuse the cached summary rather than parse again.

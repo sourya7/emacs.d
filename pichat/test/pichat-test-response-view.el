@@ -53,9 +53,27 @@
     (should (eq (lookup-key pichat-response-view-link-map (kbd "RET"))
                 #'pichat-response-view-open-link-at-point))
     (should (eq (lookup-key pichat-response-view-link-map (kbd "w"))
-                #'pichat-response-view-copy-link-at-point))
+                #'pichat-response-view-link-word-or-copy))
     (should (eq (lookup-key pichat-response-view-link-map (kbd "?"))
-                #'pichat-response-view-describe-link-at-point))))
+                #'pichat-response-view-link-search-or-describe))))
+
+(ert-deftest pichat-response-view-link-map-retains-emacs-actions ()
+  (with-temp-buffer
+    (pichat-response-view-mode)
+    (let ((inhibit-read-only t))
+      (insert (propertize "link" 'pichat-response-view-url
+                          "https://example.test" 'keymap
+                          pichat-response-view-link-map)))
+    (goto-char (point-min))
+    (let (copied described)
+      (cl-letf (((symbol-function 'pichat-response-view-copy-link-at-point)
+                 (lambda () (setq copied t)))
+                ((symbol-function 'pichat-response-view-describe-link-at-point)
+                 (lambda () (setq described t))))
+        (call-interactively (key-binding (kbd "w")))
+        (call-interactively (key-binding (kbd "?"))))
+      (should copied)
+      (should described))))
 
 (ert-deftest pichat-response-view-renders-reflowed-structured-html-with-faces ()
   (let ((pichat-response-view-convert-function

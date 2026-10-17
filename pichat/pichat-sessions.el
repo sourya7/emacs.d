@@ -793,9 +793,9 @@ Linear links reuse their parent's branch context and add no indentation."
            'default
          'pichat-sessions-bookkeeping-face))))
 
-(defun pichat-sessions--render-entry-line (model id prefix folded)
+(defun pichat-sessions--render-entry-line (model id prefix folded &optional evil-normal-p)
   "Insert one property-bearing history row for ID from MODEL using PREFIX.
-FOLDED records collapsed branch segments."
+FOLDED records collapsed branch segments.  EVIL-NORMAL-P selects matching help."
   (let* ((node (pichat-sessions--model-node model id))
          (entry (plist-get node :entry))
          (active (pichat-sessions--model-active-p model id))
@@ -811,13 +811,17 @@ FOLDED records collapsed branch segments."
     (insert (propertize line
                         'pichat-session-entry-id id
                         'mouse-face 'highlight
-                        'help-echo "RET: jump to active chat entry; v: preview; f: fork; d: details"
+                        'help-echo
+                        (if evil-normal-p
+                            "RET: jump; z v: preview; other actions: M-x"
+                          "RET: jump to active chat entry; v: preview; f: fork; d: details")
                         'face (pichat-sessions--entry-face node)))
     (insert "\n")))
 
-(defun pichat-sessions--render-model (model filter query folded)
+(defun pichat-sessions--render-model (model filter query folded &optional evil-normal-p)
   "Return a temporary buffer containing projected MODEL.
-The header displays FILTER and optional QUERY; FOLDED controls segment marks."
+The header displays FILTER and optional QUERY; FOLDED controls segment marks.
+EVIL-NORMAL-P selects the matching key legend for the owning history view."
   (let ((rendered (generate-new-buffer " *pichat-history-render*")))
     (condition-case error-data
         (with-current-buffer rendered
@@ -826,12 +830,15 @@ The header displays FILTER and optional QUERY; FOLDED controls segment marks."
                           (if query (format "  query: %s" query) "")
                           (length (pichat-sessions--model-ordered-ids model))
                           (if pichat-sessions--stale-p "  [stale]" "")))
-          (insert "RET jump to chat · f fork · v preview · TAB fold · n/p move · M-n/M-p branch\n")
-          (insert "/ search · F filter · g refresh · d details · C clone · b browse · q chat · ? help\n\n")
+          (if evil-normal-p
+              (insert "RET jump · z v preview · z a fold · j/k entries · M-n/M-p branch\n"
+                      "/ Vim search · g r refresh · q chat · other actions: M-x (SPC m when configured)\n\n")
+            (insert "RET jump to chat · f fork · v preview · TAB fold · n/p move · M-n/M-p branch\n"
+                    "/ search · F filter · g refresh · d details · C clone · b browse · q chat · ? help\n\n"))
           (let ((prefixes (pichat-sessions--tree-prefixes model)))
             (dolist (id (pichat-sessions--model-ordered-ids model))
               (pichat-sessions--render-entry-line
-               model id (gethash id prefixes) folded)))
+               model id (gethash id prefixes) folded evil-normal-p)))
           rendered)
       (error
        (kill-buffer rendered)
@@ -933,7 +940,8 @@ Restore SELECTED-ID or a deterministic visible fallback and install FOLDED."
            model pichat-sessions--filter pichat-sessions--query folded))
          (rendered (pichat-sessions--render-model
                     projection pichat-sessions--filter
-                    pichat-sessions--query folded)))
+                    pichat-sessions--query folded
+                    (pichat-view-evil-normal-p))))
     (unwind-protect
         (pichat-sessions--install-model
          model projection session rendered selected-id folded)
@@ -1656,7 +1664,7 @@ runtime."
          (choices (pichat-sessions--file-choices files root)))
     (unless choices
       (user-error "No Pi session files found under %s" root))
-    (let* ((choice (completing-read "Pi session: "
+    (let* ((choice (completing-read "Pi saved session: "
                                     (pichat-sessions--completion-table choices)
                                     nil t))
            (entry (assoc choice choices))
@@ -2171,7 +2179,9 @@ runtime-manager previews."
     (insert (format "Status: %s\n"
                     (pichat-sessions--preview-status-label
                      pichat-sessions-preview--status)))
-    (insert "f fork · t history · d details · q close\n\n")
+    (insert (if (pichat-view-evil-normal-p)
+                "q close · fork / history / details: M-x (SPC m when configured)\n\n"
+              "f fork · t history · d details · q close\n\n"))
     (let ((selected-position
            (pichat-sessions-insert-preview-path
             pichat-sessions-preview--path
@@ -2451,7 +2461,8 @@ constructs or sends a source path.  Use `pichat-sessions-browse-files' instead."
     (unless id (user-error "No entry at point"))
     (unless (pichat-sessions--user-message-entry-p entry)
       (user-error
-       "Select a user prompt to fork; press v to preview this branch"))
+       "Select a user prompt to fork; press %s to preview this branch"
+       (if (pichat-view-evil-normal-p) "z v" "v")))
     (unless (pichat-sessions--fork-source-current-p
              pichat-sessions-session pichat-sessions--source-token
              pichat-sessions--stale-p)
@@ -2495,7 +2506,8 @@ constructs or sends a source path.  Use `pichat-sessions-browse-files' instead."
     (let ((position (pichat-sessions--chat-entry-position chat-buffer id)))
       (unless position
         (user-error
-         "Entry is not in the active transcript; press v to preview its branch"))
+         "Entry is not in the active transcript; press %s to preview its branch"
+         (if (pichat-view-evil-normal-p) "z v" "v")))
       (with-current-buffer chat-buffer
         (goto-char position))
       (pichat-view-complete chat-buffer origin)

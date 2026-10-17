@@ -1237,7 +1237,7 @@ SELECTION-FUNCTION, when non-nil, receives the selected saved FILE and CWD."
              (lambda (lines)
                (pichat-consult--decode-candidates
                 lines capability browse-context))))
-           :prompt (format "Pi sessions [%s] [RET %s, C-o preview, C-c C-r relations]: "
+           :prompt (format "Pi saved sessions [%s] [RET %s, C-o preview, C-c C-r relations]: "
                            (if cwd (abbreviate-file-name cwd) scope-label)
                            (if selection-function "open" "load"))
            :lookup #'consult--lookup-candidate

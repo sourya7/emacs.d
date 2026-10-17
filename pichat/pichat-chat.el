@@ -4227,12 +4227,13 @@ and finally the prompt while Pi is running."
               (length raw)))
            (text-and-point
             (pichat-chat-navigation--trimmed-text-and-point raw raw-point)))
-      (pop-to-buffer
+      (pichat-view-display
        (pichat-chat-navigation-open-compose
         (current-buffer) #'pichat-chat--replace-from-compose
         (car text-and-point) (cdr text-and-point)
         (pichat-chat--compose-source-token)
-        #'pichat-chat--compose-source-valid-p)))))
+        #'pichat-chat--compose-source-valid-p)
+       nil 'kill))))
 
 (defun pichat-chat--response-view-refresh (response)
   "Return a refreshed canonical RESPONSE or reject stale source identity."

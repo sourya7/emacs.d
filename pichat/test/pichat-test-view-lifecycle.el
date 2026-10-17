@@ -162,5 +162,28 @@
         (dolist (buffer (list chat history))
           (when (buffer-live-p buffer) (kill-buffer buffer)))))))
 
+(ert-deftest pichat-compose-cancel-preserves-later-window-changes ()
+  (pichat-test-view--with-windows
+    (let ((chat (generate-new-buffer " *pichat-compose-chat*"))
+          (unrelated (generate-new-buffer " *pichat-compose-unrelated*"))
+          (display-buffer-overriding-action
+           (pichat-test-view--pop-up-action))
+          compose)
+      (unwind-protect
+          (progn
+            (switch-to-buffer chat)
+            (setq compose
+                  (pichat-chat-navigation-open-compose
+                   chat #'ignore "unsent draft" 0))
+            (pichat-view-display compose nil 'kill)
+            (set-window-buffer (split-window (get-buffer-window chat)) unrelated)
+            (with-current-buffer compose
+              (pichat-chat-compose-cancel))
+            (should-not (buffer-live-p compose))
+            (should (get-buffer-window unrelated))
+            (should (eq chat (window-buffer (selected-window)))))
+        (dolist (buffer (list chat unrelated compose))
+          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
 (provide 'pichat-test-view-lifecycle)
 ;;; pichat-test-view-lifecycle.el ends here

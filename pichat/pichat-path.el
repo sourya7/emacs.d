@@ -169,7 +169,7 @@ When EXPLICIT-P is nil, a nil MAPPINGS value uses the compatibility global."
                                 (pichat-path-from-runtime runtime-sample context)))))
           (insert "No mappings configured; local paths are used unchanged.\n"))
         (pichat-view-mode))
-      (pop-to-buffer (current-buffer)))))
+      (pichat-view-display (current-buffer) nil 'bury))))
 
 (provide 'pichat-path)
 ;;; pichat-path.el ends here

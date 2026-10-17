@@ -117,12 +117,11 @@
 ;;       '(("/home/mojo/.config/emacs.mine" . "/workspace")))
 
 (with-eval-after-load 'evil
-  ;; Editable PiChat buffers start in Normal state.  Read-only views use Emacs
-  ;; state so their documented single-key commands override Evil keys.
-  (evil-set-initial-state 'pichat-chat-mode 'normal)
-  (evil-set-initial-state 'pichat-chat-compose-mode 'normal)
-  (evil-set-initial-state 'pichat-view-mode 'normal)
-  (evil-set-initial-state 'pichat-session-manager-mode 'emacs))
+  ;; The package retains native Emacs bindings; this optional layer gives
+  ;; PiChat's read-only views and runtime manager intentional Evil bindings.
+  (with-eval-after-load 'pichat
+    (require 'pichat-evil)
+    (pichat-evil-setup)))
 
 (with-eval-after-load 'pichat
   (general-define-key
@@ -177,7 +176,44 @@
     "x" '(pichat-command-run :which-key "Command picker")
     "o" '(pichat-chat-compact :which-key "Compact")
     "f" '(pichat-chat-follow-up :which-key "Follow up")
-    "S" '(pichat-chat-steer :which-key "Steer")))
+    "S" '(pichat-chat-steer :which-key "Steer"))
+  (sharmaso/mode-keys
+    :keymaps 'pichat-sessions-mode-map
+    "/" '(pichat-sessions-search :which-key "Search history metadata")
+    "F" '(pichat-sessions-cycle-filter :which-key "Cycle history filter")
+    "v" '(pichat-sessions-preview-branch-at-point :which-key "Preview branch")
+    "f" '(pichat-sessions-fork-at-point :which-key "Fork at entry")
+    "C" '(pichat-sessions-clone-current :which-key "Clone current branch")
+    "d" '(pichat-sessions-show-details-at-point :which-key "Entry details")
+    "b" '(pichat-sessions-browse-files :which-key "Browse saved sessions")
+    "r" '(pichat-sessions-list-refresh :which-key "Refresh history"))
+  (sharmaso/mode-keys
+    :keymaps 'pichat-session-manager-mode-map
+    "v" '(pichat-session-manager-toggle-preview :which-key "Toggle preview")
+    "n" '(pichat-session-manager-new :which-key "New runtime")
+    "N" '(pichat-session-manager-new-in-scope :which-key "New in owner scope")
+    "l" '(pichat-session-manager-launch :which-key "Launch runtime")
+    "b" '(pichat-session-manager-browse-saved :which-key "Open saved independently")
+    "e" '(pichat-session-manager-name :which-key "Name session")
+    "k" '(pichat-session-manager-stop :which-key "Stop runtime")
+    "d" '(pichat-session-manager-forget :which-key "Forget stopped runtime")
+    "m" '(pichat-session-manager-make-default :which-key "Make preferred")
+    "D" '(pichat-session-manager-diagnostics :which-key "Diagnostics")
+    "r" '(pichat-session-manager-refresh :which-key "Refresh runtimes"))
+  (sharmaso/mode-keys
+    :keymaps 'pichat-sessions-preview-mode-map
+    "f" '(pichat-sessions-preview-fork :which-key "Fork branch")
+    "d" '(pichat-sessions-preview-show-details :which-key "Entry details")
+    "t" '(pichat-sessions-preview-return-to-history :which-key "Return to history"))
+  (sharmaso/mode-keys
+    :keymaps 'pichat-session-manager-preview-mode-map
+    "r" '(pichat-session-manager-preview-refresh :which-key "Refresh preview"))
+  (sharmaso/mode-keys
+    :keymaps 'pichat-response-view-mode-map
+    "r" '(pichat-response-view-refresh :which-key "Refresh response")
+    "t" '(pichat-response-view-return-to-origin :which-key "Return to response")
+    "w" '(pichat-response-view-copy-markdown :which-key "Copy Markdown")
+    "y" '(pichat-response-view-copy-link-at-point :which-key "Copy link URL")))
 
 (global-set-key (kbd "C-c p c") #'pichat)
 (global-set-key (kbd "C-c p m") #'pichat-session-manager)

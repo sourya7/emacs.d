@@ -13,6 +13,7 @@
 (require 'cl-lib)
 (require 'json)
 (require 'subr-x)
+(require 'pichat-view)
 (require 'pichat-transcript)
 
 (defun pichat-chat-navigation--property-run-start (position property limit)
@@ -111,9 +112,6 @@ no hash-table ordering affects the result."
 (defvar-local pichat-chat-compose-target-valid-function nil
   "Function called in the target buffer with the captured source token.")
 
-(defvar-local pichat-chat-compose-origin-window-configuration nil
-  "Window configuration to restore after applying or cancelling composition.")
-
 (defvar pichat-chat-compose-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map text-mode-map)
@@ -176,32 +174,21 @@ remain separate so they cannot be silently reassigned."
       (setq-local pichat-chat-compose-replace-function replace-function)
       (setq-local pichat-chat-compose-target-token target-token)
       (setq-local pichat-chat-compose-target-valid-function
-                  target-valid-function)
-      ;; Refresh the return destination each time an existing editor is opened.
-      (setq-local pichat-chat-compose-origin-window-configuration
-                  (current-window-configuration)))
+                  target-valid-function))
     buffer))
 
 (defun pichat-chat-navigation--compose-close-and-return (buffer target point)
-  "Kill compose BUFFER, restore its origin, and focus TARGET at POINT."
-  (let ((configuration
-         (buffer-local-value
-          'pichat-chat-compose-origin-window-configuration buffer)))
-    (with-current-buffer buffer
-      (set-buffer-modified-p nil))
-    (kill-buffer buffer)
-    (when (and (window-configuration-p configuration)
-               (frame-live-p (window-configuration-frame configuration)))
-      (set-window-configuration configuration))
-    (let ((window (get-buffer-window target t)))
-      (if (window-live-p window)
-          (progn
-            (select-window window)
-            (with-current-buffer target
-              (goto-char point)
-              (set-window-point window point)))
-        (pop-to-buffer target)
-        (goto-char point)))))
+  "Close compose BUFFER without reverting unrelated windows; focus TARGET at POINT."
+  (with-current-buffer buffer
+    (set-buffer-modified-p nil))
+  (pichat-view-complete target buffer)
+  ;; Direct callers may have created an editor without presenting it.
+  (when (buffer-live-p buffer)
+    (kill-buffer buffer))
+  (with-current-buffer target
+    (goto-char point)
+    (when-let* ((window (get-buffer-window target t)))
+      (set-window-point window point))))
 
 ;;;###autoload
 (defun pichat-chat-compose-apply ()

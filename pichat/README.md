@@ -424,8 +424,8 @@ This repo loads PiChat through `user/pichat.el`.
 Exact tested Pi releases and previously reviewed upstream RPC changes are
 recorded in [`PI_COMPATIBILITY.md`](./PI_COMPATIBILITY.md). Before testing an
 upgrade, run `pichat/test/report-upstream-rpc-changes.sh` to list changes to
-Pi's [`rpc.md`](https://github.com/earendil-works/pi/commits/main/packages/coding-agent/docs/rpc.md)
-since the recorded review watermark. Compatibility is advanced only after the
+Pi's RPC overview, command, and event documentation since the recorded review
+watermark. Compatibility is advanced only after the
 complete real-Pi suite passes; see [`TESTING_GUIDELINES.md`](./TESTING_GUIDELINES.md).
 
 Commands:
@@ -483,9 +483,8 @@ Chat keys:
   the override. A complete `pichat-rpc-command` remains authoritative and
   disables model selection, but does not prevent clearing the override
 - Click the model ID in the compact `MODEL.THINKING` mode-line control — change
-  the active runtime's model through Pi RPC. In the installed Pi 0.83,
-  `set_model` also writes that choice as Pi's global default for future
-  processes. Use the `m` switch in `pichat-launch` when the selection must be
+  the active runtime's model through Pi RPC. Pi's `set_model` also writes that
+  choice as its global default for future processes. Use the `m` switch in `pichat-launch` when the selection must be
   run-local. Model availability comes from the current Pi runtime's cached
   snapshot and does not force a catalog refresh
 - Click the thinking suffix in that control (for example, `.H`) — cycle Pi's

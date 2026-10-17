@@ -141,13 +141,17 @@
       (let ((record (pichat-chat--remove-submission-state
                      request-id response)))
         (pichat-chat--refresh-attachment-status)
-        ;; Pi acknowledges extension commands only after their handlers return.
-        ;; They do not necessarily emit an agent settlement or custom message,
-        ;; so restore the editor at this command-completion boundary.
-        (when (and (plist-get record :extension-command-p)
-                   (= (plist-get record :source-generation)
-                      pichat-chat--source-generation))
-          (pichat-chat--insert-prompt))))))
+        ;; Handled prompts (including input handlers without a slash command)
+        ;; may never emit agent_settled.  Older Pi releases omit disposition;
+        ;; retain the cached extension-command fallback for those responses.
+        (let ((disposition (plist-get (plist-get response :data) :disposition)))
+          (when (and record
+                     (or (equal disposition "handled")
+                         (and (null disposition)
+                              (plist-get record :extension-command-p)))
+                     (= (plist-get record :source-generation)
+                        pichat-chat--source-generation))
+            (pichat-chat--insert-prompt)))))))
 
 (defun pichat-chat--attachment-ids (attachments)
   "Return identities from ATTACHMENTS."

@@ -62,6 +62,7 @@
                 (should (equal "read" (plist-get nested-start :toolName)))
                 (should nested-end)
                 (should (equal "codemode-1" (plist-get nested-end :parentToolCallId)))
+                (should (numberp (plist-get nested-end :durationMs)))
                 (should-not (plist-get nested-end :isError)))
               (with-current-buffer buffer
                 (should (string-match-p "nested call complete"
@@ -533,10 +534,20 @@
       (pichat-test-rpc-call session "set_steering_mode" (list :mode "all"))
       (pichat-test-rpc-call session "set_follow_up_mode" (list :mode "one-at-a-time"))
       (let ((settled (pichat-test-count-raw-events session "agent_settled")))
-        (pichat-test-rpc-call session "prompt" (list :message "initial prompt"))
+        (should (equal "started"
+                       (plist-get (plist-get
+                                   (pichat-test-rpc-call
+                                    session "prompt" (list :message "initial prompt"))
+                                   :data) :disposition)))
         (pichat-test-wait-for-raw-event session "agent_start")
-        (pichat-test-rpc-call session "steer" (list :message "steer message"))
-        (pichat-test-rpc-call session "follow_up" (list :message "follow-up message"))
+        (dolist (command '(("steer" . "steer message")
+                           ("follow_up" . "follow-up message")))
+          (should (equal "queued"
+                         (plist-get (plist-get
+                                     (pichat-test-rpc-call
+                                      session (car command)
+                                      (list :message (cdr command)))
+                                     :data) :disposition))))
         (pichat-test-wait-for-raw-event session "agent_settled" 8 settled))
       (let* ((state (plist-get (pichat-test-rpc-call session "get_state") :data))
              (messages (plist-get (plist-get
@@ -549,6 +560,28 @@
         (should (equal "all" (plist-get state :steeringMode)))
         (should (equal "one-at-a-time" (plist-get state :followUpMode)))
         (should (equal '("initial prompt" "steer message" "follow-up message") users)))))
+
+  (ert-deftest pichat-integration-prompt-disposition-reports-queued-during-run ()
+    (pichat-test-with-integration-session
+        (session :no-session t
+                 :script '(:turns [(:text "first" :delayMs 700)
+                                   (:expectContextIncludes "queued prompt"
+                                    :text "second")]))
+      (let ((settled (pichat-test-count-raw-events session "agent_settled")))
+        (should (equal "started"
+                       (plist-get (plist-get
+                                   (pichat-test-rpc-call
+                                    session "prompt" (list :message "first prompt"))
+                                   :data) :disposition)))
+        (pichat-test-wait-for-raw-event session "agent_start")
+        (should (equal "queued"
+                       (plist-get (plist-get
+                                   (pichat-test-rpc-call
+                                    session "prompt"
+                                    (list :message "queued prompt"
+                                          :streamingBehavior "followUp"))
+                                   :data) :disposition)))
+        (pichat-test-wait-for-raw-event session "agent_settled" 8 settled))))
 
   (ert-deftest pichat-integration-simple-prompt-streams-through-real-pi ()
     (pichat-test-with-integration-session
@@ -1009,7 +1042,8 @@
       (pichat-test-rpc-call session "prompt" (list :message "slow prompt"))
       (pichat-test-wait-for-raw-event session "agent_start")
       (pichat-test-rpc-call session "abort")
-      (pichat-test-wait-for-raw-event session "agent_settled")
+      (let ((settled (pichat-test-wait-for-raw-event session "agent_settled")))
+        (should (eq t (plist-get settled :aborted))))
       (should (eq (pichat-session-state session) 'idle))))
 
   (ert-deftest pichat-integration-chat-abort-restores-and-clears-queued-messages ()
@@ -1275,6 +1309,43 @@
               (with-current-buffer buffer
                 (should (equal "working"
                                (gethash "pichat-test" pichat-chat--extension-statuses)))))
+          (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+  (ert-deftest pichat-integration-input-handler-dispositions-and-chat-recovery ()
+    (pichat-test-with-integration-session
+        (session :no-session t
+                 :extensions (list pichat-test-rpc-extension)
+                 :script '(:turns []))
+      (let ((pichat-chat-stop-session-on-kill nil)
+            buffer)
+        (unwind-protect
+            (progn
+              (dolist (command '("prompt" "steer" "follow_up"))
+                (should (equal "handled"
+                               (plist-get
+                                (plist-get
+                                 (pichat-test-rpc-call
+                                  session command
+                                  (list :message "pichat-test-consumed-input"))
+                                 :data) :disposition))))
+              (setq buffer (pichat-chat-open session))
+              (with-current-buffer buffer
+                (goto-char (point-max))
+                (insert "pichat-test-consumed-input")
+                (pichat-chat-send-input)
+                (should-not (pichat-chat--prompt-live-p)))
+              (pichat-test-wait-until
+               (lambda ()
+                 (with-current-buffer buffer
+                   (pichat-chat--prompt-live-p)))
+               nil "prompt restored after input handler consumed it")
+              (with-current-buffer buffer
+                (should (string-empty-p (pichat-chat--input-text))))
+              (should-not
+               (cl-find-if
+                (lambda (event)
+                  (equal "agent_settled" (plist-get event :type)))
+                (pichat-session-event-log session))))
           (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
   (ert-deftest pichat-integration-notify-only-extension-command-restores-chat-prompt ()

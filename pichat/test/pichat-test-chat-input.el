@@ -92,6 +92,59 @@
               (should (string-empty-p (pichat-chat--input-text)))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+(ert-deftest pichat-chat-handled-input-handler-restores-prompt-without-settlement ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          buffer success-callback)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (cl-letf (((symbol-function 'pichat-rpc-prompt)
+                       (lambda (_session _message &optional _images _behavior
+                                success _error)
+                         (setq success-callback success)
+                         "handled-input")))
+              (with-current-buffer buffer
+                (goto-char (point-max))
+                (insert "ordinary input consumed by handler")
+                (pichat-chat-send-input)
+                (should-not (pichat-chat--prompt-live-p))))
+            (funcall success-callback
+                     '(:id "handled-input" :success t
+                       :data (:disposition "handled")) session)
+            (with-current-buffer buffer
+              (should (pichat-chat--prompt-live-p))
+              (should (string-empty-p (pichat-chat--input-text)))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-chat-started-or-queued-response-does-not-restore-prompt ()
+  (dolist (disposition '("started" "queued"))
+    (pichat-test-with-unit-session (session proc)
+      (let ((pichat-chat-stop-session-on-kill nil)
+            buffer success-callback)
+        (unwind-protect
+            (progn
+              (setq buffer (pichat-chat-open session))
+              (cl-letf (((symbol-function 'pichat-rpc-prompt)
+                         (lambda (_session _message &optional _images _behavior
+                                  success _error)
+                           (setq success-callback success)
+                           "accepted-input")))
+                (with-current-buffer buffer
+                  ;; A stale command cache must not override Pi's disposition.
+                  (setq pichat-chat-completion--status 'ready
+                        pichat-chat-completion--commands
+                        '((:name "cached" :source "extension")))
+                  (goto-char (point-max))
+                  (insert "/cached")
+                  (pichat-chat-send-input)))
+              (funcall success-callback
+                       (list :id "accepted-input" :success t
+                             :data (list :disposition disposition)) session)
+              (with-current-buffer buffer
+                (should-not (pichat-chat--prompt-live-p))))
+          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
 (ert-deftest pichat-chat-rejected-submission-restores-unchanged-empty-editor ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)

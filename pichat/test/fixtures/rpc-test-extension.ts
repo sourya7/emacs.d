@@ -9,6 +9,13 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
  * APIs.
  */
 export default function (pi: ExtensionAPI) {
+  pi.on("input", (event) => {
+    if (event.source === "rpc" && event.text === "pichat-test-consumed-input") {
+      return { action: "handled" };
+    }
+    return { action: "continue" };
+  });
+
   pi.registerCommand("pichat-test-input", {
     description: "Emit a deterministic input UI request",
     handler: async (_args, ctx) => {

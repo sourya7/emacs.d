@@ -5,15 +5,17 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 compatibility_file="$repo_root/pichat/PI_COMPATIBILITY.md"
 upstream_url="https://github.com/earendil-works/pi.git"
 rpc_path="packages/coding-agent/docs/rpc.md"
+rpc_paths=("$rpc_path" "packages/coding-agent/docs/rpc-commands.md"
+           "packages/coding-agent/docs/json.md")
 temporary_checkout=""
 
 usage() {
   cat <<'EOF'
 usage: pichat/test/report-upstream-rpc-changes.sh [OLD_REF] [NEW_REF]
 
-Report upstream rpc.md commits between two Pi refs. With no OLD_REF, use the
-last_reviewed_pi value in pichat/PI_COMPATIBILITY.md. With no NEW_REF, use the
-version reported by pi --version.
+Report upstream RPC overview, command, and event doc commits between two Pi refs.
+With no OLD_REF, use last_reviewed_pi from pichat/PI_COMPATIBILITY.md.
+With no NEW_REF, use the version reported by pi --version.
 
 Set PI_UPSTREAM_DIR to an existing full Pi git checkout to avoid a temporary
 network clone. Set PI_EXECUTABLE to select a Pi executable.
@@ -121,13 +123,13 @@ if ! git -C "$upstream_dir" merge-base --is-ancestor "$old_commit" "$new_commit"
 fi
 
 changes="$(git -C "$upstream_dir" log --reverse \
-  --format='%H%x09%cs%x09%s' "$old_commit..$new_commit" -- "$rpc_path")"
+  --format='%H%x09%cs%x09%s' "$old_commit..$new_commit" -- "${rpc_paths[@]}")"
 
 echo
 if [[ -z "$changes" ]]; then
-  echo "No upstream rpc.md commits occur in this range."
+  echo "No upstream RPC documentation commits occur in this range."
 else
-  echo "Upstream rpc.md commits requiring ledger dispositions:"
+  echo "Upstream RPC documentation commits requiring ledger dispositions:"
   echo
   while IFS=$'\t' read -r commit date subject; do
     printf -- '- %s [%s](https://github.com/earendil-works/pi/commit/%s) %s\n' \

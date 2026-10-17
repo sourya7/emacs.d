@@ -122,10 +122,11 @@ Before testing a newer Pi release:
 1. Run `pichat/test/report-upstream-rpc-changes.sh`. By default it compares the
    recorded `last_reviewed_pi` with the installed `pi --version`; explicit old
    and new refs are also accepted. Set `PI_UPSTREAM_DIR` to reuse a full local
-   checkout of the upstream Pi repository.
-2. Give every reported `packages/coding-agent/docs/rpc.md` commit a disposition
-   in the compatibility ledger. Inspect the implementation diff too when the
-   documentation alone does not establish client impact.
+   checkout of the upstream Pi repository. The report scans `rpc.md`,
+   `rpc-commands.md`, and `json.md`; watermark blob IDs identify `rpc.md`.
+2. Give every reported RPC overview, command, or event-document commit a
+   disposition in the compatibility ledger. Inspect the implementation diff
+   too when the documentation alone does not establish client impact.
 3. Add or activate focused tests for behavior PiChat implements.
 4. Run `pichat/test/run-tests.sh --full` against the exact target release.
 5. Append the result to the verification history. Advance `last_verified_pi`

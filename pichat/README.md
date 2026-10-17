@@ -131,8 +131,12 @@ PiChat package does not require either.
   copies and `?` inspects the destination. Complex nested/escaped Markdown
   links are deliberately not recognized.
 - Pipe tables with a Markdown alignment row and equal-width rows: `c` copies
-  exact source; `p` opens a read-only source preview. Escaped pipes and simple
-  backtick code spans are counted as cell contents; ambiguous tables are ignored.
+  exact source; `p` opens a separate, read-only `markdown-mode` buffer and runs
+  `markdown-table-align` on its display copy. The preview adds missing outer
+  pipes when needed; it never changes the chat or the source copied by `c`.
+  Without `markdown-mode`, or if alignment fails, the preview retains exact
+  source instead. Escaped pipes and simple backtick code spans are counted as
+  cell contents; ambiguous tables are ignored.
 - Single-line `$...$`, `$$...$$`, `\\(...\\)`, and `\\[...\\]`: `c` copies
   exact LaTeX; `p` opens a read-only source preview, not a TeX renderer.
   Currency-like dollar amounts are excluded conservatively.

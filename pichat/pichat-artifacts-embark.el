@@ -61,13 +61,49 @@
     (unless (pichat-response-view--safe-url-p url)
       (user-error "PiChat will not open URL scheme: %s" url))
     (browse-url url)))
+(defun pichat-artifacts-embark--prepare-table ()
+  "Add outer pipes where needed so `markdown-table-align' sees the table.
+Only the private preview buffer is changed; the captured source stays exact."
+  (goto-char (point-min))
+  (while (not (eobp))
+    (unless (looking-at-p "[ \t]*|") (insert "|"))
+    (end-of-line)
+    (unless (save-excursion
+              (skip-chars-backward " \t" (line-beginning-position))
+              (eq (char-before) ?|))
+      (insert "|"))
+    (forward-line 1)))
+
 (defun pichat-artifacts-embark-preview (target)
-  "Open inert, read-only exact-source preview of TARGET."
+  "Open read-only TARGET preview, aligning tables with `markdown-mode'."
   (let* ((artifact (pichat-artifacts-embark--descriptor target))
+         (table (eq (pichat-artifact-type artifact) 'table))
          (buffer (generate-new-buffer (format "*PiChat %s Preview*" (pichat-artifact-type artifact)))))
     (with-current-buffer buffer
       (insert (pichat-artifact-source artifact))
-      (special-mode))
+      (if (and table (require 'markdown-mode nil t))
+          (progn
+            (markdown-mode)
+            (condition-case error-data
+                (progn
+                  (pichat-artifacts-embark--prepare-table)
+                  (goto-char (point-min))
+                  (font-lock-ensure)
+                  (unless (markdown-table-at-point-p)
+                    (error "markdown-mode does not recognize this table"))
+                  (markdown-table-align))
+              (error
+               (let ((inhibit-read-only t))
+                 (erase-buffer)
+                 (insert (pichat-artifact-source artifact)))
+               (message "PiChat table alignment unavailable: %s"
+                        (error-message-string error-data))))
+            (use-local-map (copy-keymap (current-local-map)))
+            (local-set-key (kbd "q") #'quit-window)
+            (setq buffer-read-only t))
+        (special-mode))
+      (goto-char (point-min))
+      (set-buffer-modified-p nil))
     (pop-to-buffer buffer)))
 
 (defvar-keymap pichat-code-block-map

@@ -77,12 +77,18 @@ Use `markdown-mode's customizable language mapping when available."
 (defun pichat-artifacts-embark-inspect-link (target)
   "Inspect destination of link TARGET."
   (message "%s" (pichat-artifact-payload (pichat-artifacts-embark--descriptor target))))
-(defun pichat-artifacts-embark-open-link (target)
-  "Open link TARGET only when PiChat's scheme policy allows it."
+(defun pichat-artifacts-embark--open-link (target browser)
+  "Open link TARGET with BROWSER only when PiChat's scheme policy allows it."
   (let ((url (pichat-artifact-payload (pichat-artifacts-embark--descriptor target))))
     (unless (pichat-response-view--safe-url-p url)
       (user-error "PiChat will not open URL scheme: %s" url))
-    (browse-url url)))
+    (funcall browser url)))
+(defun pichat-artifacts-embark-open-link (target)
+  "Open link TARGET using the configured browser, subject to scheme policy."
+  (pichat-artifacts-embark--open-link target #'browse-url))
+(defun pichat-artifacts-embark-open-link-externally (target)
+  "Open link TARGET in an external browser, subject to scheme policy."
+  (pichat-artifacts-embark--open-link target #'browse-url-default-browser))
 (defun pichat-artifacts-embark--prepare-table ()
   "Add outer pipes where needed so `markdown-table-align' sees the table.
 Only the private preview buffer is changed; the captured source stays exact."
@@ -136,6 +142,7 @@ Only the private preview buffer is changed; the captured source stays exact."
 (defvar-keymap pichat-link-map
   :doc "PiChat link actions; no generic URL actions."
   "o" #'pichat-artifacts-embark-open-link
+  "x" #'pichat-artifacts-embark-open-link-externally
   "c" #'pichat-artifacts-embark-copy-link
   "?" #'pichat-artifacts-embark-inspect-link)
 (defvar-keymap pichat-table-map

@@ -134,9 +134,10 @@ PiChat package does not require either.
   This only selects an editing mode; it does not add an execution runner.
   Fence lines are included in selection, not in the body. Unclosed and
   cross-prose fences are ignored.
-- Simple `[label](destination)` links: `o` opens only `http`, `https`, or
-  `mailto` by default (shared with the rendered-view scheme setting); `c`
-  copies and `?` inspects the destination. Complex nested/escaped Markdown
+- Simple `[label](destination)` links: `o` opens using the configured browser,
+  `x` opens in an external browser; both allow only `http`, `https`, or `mailto`
+  by default (shared with the rendered-view scheme setting). `c` copies and
+  `?` inspects the destination. Complex nested/escaped Markdown
   links are deliberately not recognized.
 - Pipe tables with a Markdown alignment row and equal-width rows: `c` copies
   exact source; `p` opens a separate, read-only `markdown-mode` buffer and runs

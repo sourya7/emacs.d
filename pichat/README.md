@@ -44,9 +44,10 @@ so it does not split an activity group or produce a terminal annotation. Actual
 terminal stops and explicit assistant errors remain boundaries. Disabling
 `pichat-chat-show-thinking` hides thinking text and thought-only groups but
 retains tool activity grouping and controls.
-`pichat-chat-activity-group-display` defaults to `latest`, which keeps current
-live tail activity open and folds older or settled groups. It also accepts
-`collapsed` and `expanded`; an explicit group choice overrides any policy.
+`pichat-chat-activity-group-display` defaults to `collapsed`, which folds
+activity groups, including the live tail. Set it to `latest` to keep current
+live tail activity open while folding older or settled groups, or `expanded`
+to open all groups. An explicit group choice overrides any policy.
 Assistant prose and tool rows share a shallow visual gutter without adding
 spaces to copied or exported transcript text.
 

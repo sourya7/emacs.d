@@ -139,6 +139,24 @@ STOP-REASON, when non-nil, is attached to the assistant message."
                            (string-match-p "Final answer" text))))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+(ert-deftest pichat-chat-activity-default-collapses-live-tool-group ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          buffer)
+      (should (eq 'collapsed (default-value 'pichat-chat-activity-group-display)))
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (with-current-buffer buffer
+              (pichat-test-chat-activity--apply
+               pichat-chat--live-draft
+               (pichat-test-chat-activity--tool-event
+                "default-closed" "read" '(:path "closed.el")))
+              (let ((group (car (pichat-test-chat-activity--ordered-blocks))))
+                (should (eq 'collapsed (plist-get group :display-state)))
+                (should-not (gethash "default-closed" pichat-chat--tool-blocks)))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
 (ert-deftest pichat-chat-activity-latest-collapses-when-prose-begins ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
@@ -407,6 +425,7 @@ STOP-REASON, when non-nil, is attached to the assistant message."
 (ert-deftest pichat-chat-activity-live-choice-transfers-to-canonical-settlement ()
   (pichat-test-with-unit-session (session proc)
     (let* ((pichat-chat-stop-session-on-kill nil)
+           (pichat-chat-activity-group-display 'latest)
            (pichat-chat-render-markdown nil)
            (fixture (pichat-test-read-json-fixture "canonical-session.json"))
            (data (list :entries (plist-get fixture :entries)

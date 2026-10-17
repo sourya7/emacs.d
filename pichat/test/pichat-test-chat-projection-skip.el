@@ -94,6 +94,7 @@
 (ert-deftest pichat-chat-live-candidate-detects-all-tool-visible-changes ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-activity-group-display 'latest)
           (pichat-chat-render-markdown nil)
           (pichat-chat-collapse-tools-by-default nil)
           (pichat-chat-tool-default-display 'output)

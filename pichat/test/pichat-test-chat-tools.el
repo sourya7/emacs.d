@@ -40,6 +40,7 @@
 (ert-deftest pichat-chat-live-completed-tool-folds-at-configured-default ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-activity-group-display 'latest)
           (pichat-chat-collapse-tools-by-default t)
           buffer)
       (unwind-protect
@@ -115,6 +116,7 @@
 (ert-deftest pichat-chat-tool-details-use-source-buffer-auxiliary-data ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-activity-group-display 'latest)
           (details-buffer-name "*PiChat Tool Details*")
           buffer)
       (unwind-protect
@@ -153,6 +155,7 @@
 (ert-deftest pichat-chat-tool-location-overlay-preserves-source-and-fold-state ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-activity-group-display 'latest)
           (pichat-chat-collapse-tools-by-default t)
           buffer)
       (unwind-protect
@@ -193,7 +196,9 @@
 
 (ert-deftest pichat-chat-tool-location-decoration-survives-projection-rollback ()
   (pichat-test-with-unit-session (session proc)
-    (let ((pichat-chat-stop-session-on-kill nil) buffer)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-activity-group-display 'latest)
+          buffer)
       (unwind-protect
           (progn
             (setq buffer (pichat-chat-open session))
@@ -225,6 +230,7 @@
 (ert-deftest pichat-chat-tool-location-actions-visit-copy-path-and-location ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-activity-group-display 'latest)
           (target (generate-new-buffer " *pichat-location-target*"))
           copied visited buffer)
       (unwind-protect
@@ -262,6 +268,7 @@
 (ert-deftest pichat-chat-live-tool-fold-survives-whole-tail-reprojection ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-activity-group-display 'latest)
           (pichat-chat-collapse-tools-by-default nil)
           (pichat-chat-tool-default-display 'output)
           buffer)
@@ -294,6 +301,7 @@
 (ert-deftest pichat-chat-live-tool-fold-transfers-to-canonical-settlement ()
   (pichat-test-with-unit-session (session proc)
     (let* ((pichat-chat-stop-session-on-kill nil)
+           (pichat-chat-activity-group-display 'latest)
            (pichat-chat-render-markdown nil)
            (pichat-chat-collapse-tools-by-default nil)
            (pichat-chat-tool-default-display 'output)
@@ -434,6 +442,7 @@
 (ert-deftest pichat-chat-adjacent-live-tools-keep-independent-fold-state ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-activity-group-display 'latest)
           (pichat-chat-collapse-tools-by-default nil)
           (pichat-chat-tool-default-display 'output)
           buffer)

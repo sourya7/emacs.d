@@ -341,6 +341,7 @@
 (ert-deftest pichat-chat-streaming-thinking-shown-omits-label ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-activity-group-display 'latest)
           (pichat-chat-show-thinking t)
           buffer)
       (unwind-protect
@@ -362,6 +363,7 @@
 (ert-deftest pichat-chat-streaming-thinking-before-tool-is-compact ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-activity-group-display 'latest)
           (pichat-chat-show-thinking t)
           buffer)
       (unwind-protect
@@ -420,6 +422,7 @@
 (ert-deftest pichat-chat-streaming-thinking-compacts-internal-blank-lines ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-activity-group-display 'latest)
           (pichat-chat-show-thinking t)
           buffer)
       (unwind-protect

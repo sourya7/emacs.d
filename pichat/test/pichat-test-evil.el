@@ -15,7 +15,9 @@
   (require 'pichat-artifacts-embark)
   (let* ((was-active (bound-and-true-p evil-mode))
          (modes '(pichat-chat-mode pichat-chat-compose-mode
-                  pichat-view-mode pichat-session-manager-mode))
+                  pichat-view-mode pichat-session-manager-mode
+                  pichat-artifact-result-mode pichat-artifact-elisp-result-mode
+                  pichat-artifact-runner-result-mode))
          (previous-preview-hook
           (copy-sequence pichat-artifacts-preview-mode-hook))
          (previous (mapcar (lambda (mode)
@@ -71,6 +73,22 @@
             (should (eq (key-binding (kbd "q")) #'pichat-view-quit))
             (should (eq (key-binding (kbd "g r"))
                         #'pichat-response-view-refresh)))
+          (with-temp-buffer
+            (pichat-artifact-elisp-result-mode)
+            (should (eq evil-state 'normal))
+            (should (eq (key-binding (kbd "s")) #'pichat-artifact-result-share))
+            (should (eq (key-binding (kbd "g y"))
+                        #'pichat-artifact-result-copy-report))
+            (should (eq (key-binding (kbd "w")) #'evil-forward-word-begin))
+            (should (eq (key-binding (kbd "q")) #'pichat-view-quit)))
+          (with-temp-buffer
+            (pichat-artifact-runner-result-mode)
+            (should (eq evil-state 'normal))
+            (should (eq (key-binding (kbd "s")) #'pichat-artifact-result-share))
+            (should (eq (key-binding (kbd "g y"))
+                        #'pichat-artifact-result-copy-report))
+            (should (eq (key-binding (kbd "w")) #'evil-forward-word-begin))
+            (should (eq (key-binding (kbd "q")) #'pichat-view-quit)))
           (with-temp-buffer
             (pichat-response-view-mode)
             (let ((inhibit-read-only t))

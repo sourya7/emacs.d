@@ -65,12 +65,31 @@ Use `markdown-mode's customizable language mapping when available."
       (insert (pichat-artifact-payload artifact))
       (funcall (pichat-artifacts-embark--code-mode language)))
     (pop-to-buffer buffer)))
+(defun pichat-artifacts-embark--focus-result (result origin-window origin)
+  "Focus RESULT if Embark restored ORIGIN in ORIGIN-WINDOW after Run.
+Do not steal focus after the user has selected another window or changed the
+origin window.  Direct runner calls already focus their result normally."
+  (when (and (buffer-live-p result)
+             (window-live-p origin-window)
+             (eq (selected-window) origin-window)
+             (eq (window-buffer origin-window) origin))
+    (when-let* ((window (get-buffer-window result (window-frame origin-window))))
+      (select-window window))))
+
 (defun pichat-artifacts-embark-run (target)
   "Explicitly execute code TARGET outside Pi's tool permission boundary."
-  (let ((artifact (pichat-artifacts-embark--descriptor target)))
-    (pichat-artifact-runner-run (pichat-artifact-payload artifact)
-                                (pichat-artifact-metadata artifact)
-                                default-directory)))
+  (let* ((artifact (pichat-artifacts-embark--descriptor target))
+         (origin (current-buffer))
+         (origin-window (selected-window))
+         (result (pichat-artifact-runner-run
+                  (pichat-artifact-payload artifact)
+                  (pichat-artifact-metadata artifact)
+                  default-directory)))
+    ;; Embark may reselect the target window after the action has displayed
+    ;; its result.  Wait until that command finishes before selecting the view.
+    (run-at-time 0 nil #'pichat-artifacts-embark--focus-result
+                 result origin-window origin)
+    result))
 (defun pichat-artifacts-embark-copy-link (target)
   "Copy destination of link TARGET."
   (kill-new (pichat-artifact-payload (pichat-artifacts-embark--descriptor target))))

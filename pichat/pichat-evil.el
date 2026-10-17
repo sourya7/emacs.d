@@ -15,6 +15,9 @@
 (require 'pichat-session-manager)
 
 (defvar pichat-artifacts-preview-mode-map)
+(defvar pichat-artifact-result-mode-map)
+(declare-function pichat-artifact-result-share "pichat-artifact-result" ())
+(declare-function pichat-artifact-result-copy-report "pichat-artifact-result" ())
 
 (declare-function evil-set-initial-state "evil-core" (mode state))
 (declare-function evil-define-key* "evil-core"
@@ -33,6 +36,9 @@ remain in their original mode maps."
   (evil-set-initial-state 'pichat-chat-mode 'normal)
   (evil-set-initial-state 'pichat-chat-compose-mode 'normal)
   (evil-set-initial-state 'pichat-view-mode 'normal)
+  (evil-set-initial-state 'pichat-artifact-result-mode 'normal)
+  (evil-set-initial-state 'pichat-artifact-elisp-result-mode 'normal)
+  (evil-set-initial-state 'pichat-artifact-runner-result-mode 'normal)
   (evil-set-initial-state 'pichat-session-manager-mode 'normal)
   ;; The shared view close must beat Evil Collection's generic quit-window:
   ;; PiChat also owns the origin, nested displays, and snapshot kill policy.
@@ -56,6 +62,11 @@ remain in their original mode maps."
     (kbd "g r") #'pichat-session-manager-preview-refresh)
   (evil-define-key* 'normal pichat-response-view-mode-map
     (kbd "g r") #'pichat-response-view-refresh)
+  (with-eval-after-load 'pichat-artifact-result
+    (evil-define-key* 'normal pichat-artifact-result-mode-map
+      (kbd "s") #'pichat-artifact-result-share
+      (kbd "g y") #'pichat-artifact-result-copy-report
+      (kbd "q") #'pichat-view-quit))
   (with-eval-after-load 'pichat-artifacts-embark
     (evil-define-key* 'normal pichat-artifacts-preview-mode-map
       (kbd "q") #'pichat-view-quit)

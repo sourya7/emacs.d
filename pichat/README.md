@@ -155,16 +155,47 @@ presentation; `q` closes the preview and returns to its origin without leaving
 another copy behind. The separate code-edit buffer remains an ordinary editor.
 
 Run supports Python (`python`, `python3`, `py` -> `python3`), JavaScript
-(`javascript`, `js`, `node` -> `node`), and shell (`sh`, `shell`, `bash` ->
-`sh`). Missing or unknown language prompts for a runner. Execution uses a
-local temporary script in the chat's local working directory, with explicit
-argv, bounded output (`pichat-artifact-runner-output-limit`) and timeout
-(`pichat-artifact-runner-timeout`). Remote working directories are rejected.
-The result buffer shows submitted code, executable/arguments, cwd, merged
-stdout/stderr, and exit status. Killing the buffer stops the run and removes
-the temporary script. **This is not a sandbox:** model code can access files,
-credentials, and the network or modify your system. Pi tool permissions do not
-apply to code launched from Emacs. Only choose `r` for code you trust.
+(`javascript`, `js`, `node` -> `node`), shell (`sh`, `shell`, `bash` -> `sh`),
+and in-process Emacs Lisp (`elisp`, `emacs-lisp`). Missing or unknown language
+prompts for a runner; selecting an editing mode does not select a runner.
+Subprocess runners use a local temporary script with explicit argv, the chat's
+local working directory as cwd, bounded output
+(`pichat-artifact-runner-output-limit`) and timeout
+(`pichat-artifact-runner-timeout`). Their result buffer shows submitted code,
+executable/arguments, cwd, merged stdout/stderr, and exit status. `q` closes
+that view, stops a running process, and removes the temporary script.
+Completed subprocess results can be inserted into the chat draft with `s`,
+including bounded output and the exit, signal, timeout, or output-limit status.
+While a subprocess is running, `s` refuses to share until completion; `w`
+can copy an explicitly marked partial report instead.
+
+Emacs Lisp instead evaluates synchronously **in this running Emacs process**,
+with access to its live packages, variables, and functions; it does not need
+`emacsclient` or a daemon. Forms use lexical evaluation in a private temporary
+buffer with the chat's cwd, not in the chat buffer. No major-mode hooks or
+file-local variables are applied to that private buffer. The result view
+shows cwd, submitted code, output written via `print`/`princ` (not minibuffer
+`message` calls), and the last value, error, or quit status. Read/evaluation
+errors include the condition type where useful; output printed before a failure
+is retained in both the view and the bounded report for the agent. Output and
+printed values are bounded by `pichat-artifact-elisp-output-limit`. This synchronous runner
+has **no timeout**: an infinite loop can block Emacs, and side effects are not
+rolled back on error. Remote working directories are rejected for all runners.
+
+Runner results use Emacs's normal `pop-to-buffer` display rules (which can
+create a split); after invoking `r` through Embark, focus follows the result
+window. Quitting closes the owned view without disturbing unrelated windows. In every runner result view, `s` inserts a bounded labelled report
+into the originating chat's existing draft for review, closes the result, and
+returns to the chat; send the draft normally to share it with the agent. A
+failed share leaves the result open. Nothing sends automatically or creates a
+Pi tool result. `w` copies the report, including when that chat is gone or has
+switched sources; `q` closes the view. Under Evil Normal state, `s` shares,
+`g y` copies, and `q` closes; `w` retains Vim word motion. Customize
+`pichat-artifact-result-share-limit` to change the per-section prompt limit
+(`pichat-artifact-elisp-share-limit` remains an alias). **None of these runners is a sandbox:** model
+code can access files, credentials, and the network or modify your system.
+Elisp also has your running Emacs's privileges and state. Pi tool permissions
+do not apply. Only choose `r` for code you trust.
 
 ## Module dependency direction
 

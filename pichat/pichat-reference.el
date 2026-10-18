@@ -19,11 +19,14 @@
 (defvar pichat-chat--input-start)
 (defvar pichat-reference--path-context nil
   "Dynamically bound destination-session path context.")
+(defvar pichat-reference--transport nil
+  "Dynamically bound destination-session transport.")
 (declare-function dired-get-marked-files "dired")
 (declare-function compilation-goto-error "compile")
 (declare-function pichat-chat--insert-prompt "pichat-chat")
 (declare-function pichat-session-buffer "pichat-session")
 (declare-function pichat-session-path-context "pichat-session")
+(declare-function pichat-session-transport "pichat-session")
 
 (defcustom pichat-reference-snapshot-large-threshold 80000
   "Ask before writing a temporary reference larger than this many characters."
@@ -31,10 +34,11 @@
   :group 'pichat)
 
 (defcustom pichat-reference-temp-directory nil
-  "Directory for non-file references, or nil for `temporary-file-directory'.
-The destination Pi runtime must be able to read files here.  For mapped,
-container, or remote runtimes, configure a shared or mapped directory.
-PiChat does not remove these files; cleanup follows that directory's OS policy."
+  "Directory for non-file references, or nil for the runtime's temp directory.
+With nil, local runtimes use `temporary-file-directory' and SSH runtimes use
+remote /tmp through TRAMP.  An explicit directory must be shared with or
+mapped to Pi.  PiChat does not remove the files; cleanup follows the chosen
+directory's OS policy."
   :type '(choice (const :tag "Emacs temporary directory" nil)
                  (directory :tag "Runtime-accessible directory"))
   :group 'pichat)
@@ -160,20 +164,31 @@ When PROMPT is non-nil, always ask."
              (format "Write large PiChat reference from %s (%d chars)? "
                      label (length text)))
       (user-error "Temporary reference cancelled")))
-  (let* ((dir (file-name-as-directory
-               (expand-file-name (or pichat-reference-temp-directory
-                                     temporary-file-directory))))
+  (let* ((ssh-default (and (null pichat-reference-temp-directory)
+                           pichat-reference--transport
+                           (eq (pichat-transport-kind pichat-reference--transport)
+                               'ssh)))
+         (dir (file-name-as-directory
+               (expand-file-name
+                (cond (ssh-default
+                       (pichat-transport-runtime-file-name
+                        pichat-reference--transport "/tmp"))
+                      (pichat-reference-temp-directory)
+                      (t temporary-file-directory)))))
          (probe (expand-file-name "pichat-reference-probe.txt" dir)))
-    ;; Check before writing: a host-only /tmp file is useless to a mapped Pi.
-    (unless (plist-get (pichat-path-resolve-to-runtime
-                        probe pichat-reference--path-context) :path)
+    ;; A remote /tmp file is written through the exact SSH transport, not
+    ;; through the ordinary project path mappings.
+    (unless (or ssh-default
+                (plist-get (pichat-path-resolve-to-runtime
+                            probe pichat-reference--path-context) :path))
       (user-error "Temporary reference directory is unavailable to Pi; configure pichat-reference-temp-directory: %s"
                   dir))
-    (let ((file (make-temp-file (expand-file-name "pichat-reference-" dir)
-                                nil ".txt" text)))
+    (let* ((file (make-temp-file (expand-file-name "pichat-reference-" dir)
+                                 nil ".txt" text))
+           (runtime-file (if ssh-default (file-local-name file)
+                           (pichat-reference--runtime-path file))))
       (pichat-reference--format-reference-block
-       (list (pichat-reference--format-location
-              file nil nil nil (format "from %s" label)))))))
+       (list (concat "- `" runtime-file "` — from " label))))))
 
 (defun pichat-reference--region ()
   "Return reference text for the active region in the current buffer."
@@ -278,6 +293,10 @@ receive the reference.  Otherwise choose the target buffer DWIM-style."
             (and (boundp 'pichat-chat-session)
                  pichat-chat-session
                  (pichat-session-path-context pichat-chat-session))))
+         (pichat-reference--transport
+          (with-current-buffer target
+            (and pichat-chat-session
+                 (pichat-session-transport pichat-chat-session))))
          (text (pichat-reference--dwim-text)))
     (pichat-reference--insert-into-chat target text)
     (deactivate-mark)

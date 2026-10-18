@@ -147,5 +147,31 @@
         (when stage (ignore-errors (funcall stage 'destroy)))
         (ignore-errors (delete-directory remote-root t))))))
 
+(ert-deftest pichat-integration-ssh-reference-creates-readable-remote-temp-file ()
+  (let ((base (getenv "PICHAT_TEST_SSH_DIRECTORY")))
+    (unless (and (stringp base) (file-remote-p base))
+      (ert-fail "PICHAT_TEST_SSH_DIRECTORY must be a TRAMP directory"))
+    (let* ((prefix (file-remote-p base))
+           (pichat-targets
+            `((pichat-test-reference :kind ssh :tramp-prefix ,prefix
+                                     :path-mappings ((,base . "/isolated")))))
+           (pichat-reference--transport
+            (pichat-transport-resolve base 'pichat-test-reference))
+           (pichat-reference--path-context
+            (pichat-transport-path-context pichat-reference--transport))
+           (pichat-reference-temp-directory nil)
+           (temporary-file-directory "/tmp/")
+           file)
+      (unwind-protect
+          (let ((text (pichat-reference--write-temp-reference
+                       "ssh test" "remote reference content")))
+            (should (string-match "- `\\([^`]+\\)`" text))
+            (setq file (match-string 1 text))
+            (should (string-prefix-p "/tmp/pichat-reference-" file))
+            (with-temp-buffer
+              (insert-file-contents (concat prefix file))
+              (should (equal (buffer-string) "remote reference content"))))
+        (when file (ignore-errors (delete-file (concat prefix file))))))))
+
 (provide 'pichat-test-ssh)
 ;;; pichat-test-ssh.el ends here

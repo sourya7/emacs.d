@@ -769,11 +769,13 @@ on the operating system's cleanup policy for the chosen directory; Emacs exit
 and PiChat session closure do not remove them. Large contents (over 80,000
 characters by default) require confirmation.
 
-The temporary file must be readable by the destination Pi runtime. By default
-it is created under Emacs's `temporary-file-directory`. For mapped, SSH, or
-container runtimes, set `pichat-reference-temp-directory` to a writable directory
-shared with or mapped to Pi; an unmapped directory is rejected before writing.
-A custom directory may not be cleaned automatically by the OS.
+The temporary file must be readable by the destination Pi runtime. Local
+runtimes default to Emacs's `temporary-file-directory`; SSH runtimes default
+to the remote host's `/tmp` through TRAMP, without requiring a path mapping.
+For mapped/container runtimes, or to override either default, set
+`pichat-reference-temp-directory` to a writable directory shared with or mapped
+to Pi; an unmapped override is rejected before writing. A custom directory
+may not be cleaned automatically by the OS.
 
 ## Saved session storage
 

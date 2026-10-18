@@ -404,6 +404,29 @@
                                "selected")))
             (delete-file file)))))))
 
+(ert-deftest pichat-reference-ssh-default-uses-remote-temp-not-project-mappings ()
+  (let* ((pichat-targets
+          '((reference-ssh :kind ssh :tramp-prefix "/ssh:example:"
+                           :path-mappings (("/local/project" . "/project")))))
+         (pichat-reference--transport
+          (pichat-transport-resolve "/local/project" 'reference-ssh))
+         (pichat-reference--path-context
+          (pichat-transport-path-context pichat-reference--transport))
+         (pichat-reference-temp-directory nil)
+         (temporary-file-directory "/local/tmp/")
+         created-prefix)
+    (cl-letf (((symbol-function 'make-temp-file)
+               (lambda (prefix _dir-flag _suffix text)
+                 (should (equal text "remote contents"))
+                 (setq created-prefix prefix)
+                 (concat prefix "123.txt"))))
+      (let ((reference (pichat-reference--write-temp-reference
+                        "notes" "remote contents")))
+        (should (equal created-prefix "/ssh:example:/tmp/pichat-reference-"))
+        (should (string-match-p
+                 (regexp-quote "`/tmp/pichat-reference-123.txt`") reference))
+        (should-not (string-match-p "/ssh:example:" reference))))))
+
 (ert-deftest pichat-reference-unmapped-temp-directory-does-not-write ()
   (pichat-test-with-temp-dir dir
     (let ((pichat-reference-temp-directory dir)

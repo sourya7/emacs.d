@@ -489,6 +489,18 @@
     (should (equal "Launch: global · inferred · independent · ephemeral · choose/enter model"
                    (pichat--launch-action-description)))))
 
+(ert-deftest pichat-launch-transient-accepts-terminal-and-gui-return ()
+  (let* ((transient--prefix (transient--init-prefix 'pichat-launch))
+         (transient--layout (transient--init-suffixes 'pichat-launch))
+         (transient--suffixes (transient--flatten-suffixes transient--layout)))
+    (dolist (key '("RET" "<return>"))
+      (should (eq (lookup-key (transient--make-transient-map) (kbd key))
+                  'pichat-launch-execute)))
+    (with-temp-buffer
+      (transient--insert-groups)
+      (should (string-match-p "RET Launch:" (buffer-string)))
+      (should-not (string-match-p "<return>" (buffer-string))))))
+
 (ert-deftest pichat-launch-transient-initializes-with-safe-empty-value ()
   (let ((object (clone (get 'pichat-launch 'transient--prefix))))
     (oset object value '("--ephemeral" "--model"))

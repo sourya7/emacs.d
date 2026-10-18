@@ -954,6 +954,8 @@ This is the first implementation check; it does not send an LLM prompt."
   [["Action"
     ("RET" pichat-launch-execute
      :description pichat--launch-action-description)]]
+  [:hide (lambda () t)
+   ("<return>" pichat-launch-execute)]
   (interactive)
   (transient-setup 'pichat-launch nil nil
                    :scope (or context (pichat--make-launch-context))))

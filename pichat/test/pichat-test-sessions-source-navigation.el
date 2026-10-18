@@ -249,7 +249,7 @@
                  (setq switch-success success)))
               ((symbol-function 'pichat-rpc-get-state)
                (lambda (_session success &rest _args) (setq state-success success))))
-      (pichat-sessions-browse-files)
+      (pichat-sessions-switch-files)
       (funcall switch-success '(:success t :data (:cancelled t)) session)
       (should (equal '("/origin")
                      (pichat-session-session-file-back-stack session)))

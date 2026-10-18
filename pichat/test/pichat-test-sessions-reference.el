@@ -30,7 +30,7 @@
     (should-not status)
     (should (= 0 state-requests))))
 
-(ert-deftest pichat-sessions-browse-files-cancellation-does-not-refresh-or-claim-success ()
+(ert-deftest pichat-sessions-switch-files-cancellation-does-not-refresh-or-claim-success ()
   (let* ((session (pichat-session-make))
          (file "/sanitized/session.jsonl")
          switch-callback
@@ -57,7 +57,7 @@
                (lambda (&rest _args) (cl-incf state-requests)))
               ((symbol-function 'message)
                (lambda (&rest args) (push args messages))))
-      (pichat-sessions-browse-files)
+      (pichat-sessions-switch-files)
       (funcall switch-callback '(:success t :data (:cancelled t)) session))
     (should (= 0 state-requests))
     (should (cl-some (lambda (args)

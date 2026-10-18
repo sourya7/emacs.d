@@ -1634,7 +1634,10 @@ runtime."
                      (when (fboundp 'pichat-chat-repaint)
                        (pichat-chat-repaint))))))
              (when ready (funcall ready response-session))
-             (message "PiChat opened saved session independently: %s" file)))
+             (if (eq (plist-get cwd-resolution :status) 'unavailable)
+                 (message "PiChat opened saved session independently: %s (runtime working directory is not mapped: %s)"
+                          file cwd)
+               (message "PiChat opened saved session independently: %s" file))))
          (switched (response response-session)
            (if (plist-get (plist-get response :data) :cancelled)
                (cleanup (list :success nil :pichat-failure-kind 'cancelled
@@ -1677,13 +1680,19 @@ runtime."
       (list file cwd))))
 
 (defun pichat-sessions-browse-files-basic (&optional session)
-  "Browse saved files for SESSION with synchronous built-in completion."
+  "Select a saved file and switch SESSION to it using built-in completion."
   (let ((session (or session (pichat-session-current))))
     (when session
       (pichat-backend-require-capability
        session 'saved-sessions "Saved-session browsing"))
     (pcase-let ((`(,file ,cwd) (pichat-sessions--choose-basic-file session)))
       (pichat-sessions-switch-file file cwd))))
+
+(defcustom pichat-sessions-display-chat-function #'pichat-chat-open
+  "Function used to display independently opened saved-session chats.
+Integrations may select a project tab before opening the exact runtime."
+  :type 'function
+  :group 'pichat)
 
 (defun pichat-sessions--consult-available-p ()
   "Load the optional Consult integration and return non-nil when usable."
@@ -1736,8 +1745,8 @@ arguments are forwarded to `pichat-sessions-open-file-independently'."
          #'archive-ready #'archive-unavailable)))))
 
 ;;;###autoload
-(defun pichat-sessions-browse-files (&optional basic)
-  "Search saved sessions and switch PiChat to the selected source.
+(defun pichat-sessions-switch-files (&optional basic)
+  "Search saved sessions and switch the active runtime to the selected source.
 This browser is separate from current-file Session History.  A compatible
 `pi-archive' capability from the exact active local Pi process enables rich
 Consult search.  Without a live process, `pichat-archive-standalone-source' may
@@ -1760,11 +1769,25 @@ picker.  Discovery never starts a Pi process solely for browsing."
                (setq continued t)
                (apply function args)))
            (archive-ready (capability)
-             (continue-once #'pichat-consult-sessions capability))
+             (continue-once
+              #'pichat-consult-sessions capability nil
+              (lambda (file cwd) (pichat-sessions-switch-file file cwd))))
            (archive-unavailable (_reason)
              (continue-once #'pichat-sessions-browse-files-basic)))
         (pichat-archive-discover session buffer
                                  #'archive-ready #'archive-unavailable)))))
+
+;;;###autoload
+(defun pichat-sessions-browse-files (&optional basic)
+  "Open a saved session in an independent runtime in its recorded directory.
+This browser is separate from current-file Session History.  With BASIC
+non-nil, use the built-in picker instead of archive-backed Consult.
+The invoking runtime and its current source remain unchanged."
+  (interactive "P")
+  (pichat-sessions-browse-files-independently
+   :session (pichat-session-current)
+   :display-function pichat-sessions-display-chat-function
+   :basic basic))
 
 ;;;###autoload
 (defun pichat-sessions-browse-related ()

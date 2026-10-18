@@ -821,29 +821,30 @@ and SUBJECT describe a relation-picker target when present."
   "Load the full saved session represented by CANDIDATE.
 When CANDIDATE belongs to a browser with a contextual selection function,
 call that function with the saved FILE and CWD instead of mutating the active
-runtime.  Without a contextual selection function and without a live session
-for the invoking directory, open FILE in an independent runtime owned by the
-selected session's project rather than replacing an unrelated active session
-through the global fallback." 
+runtime.  Without a contextual selection function, open FILE in an independent runtime
+owned by its saved working directory rather than replacing an active source."
   (interactive "sSession: ")
   (let* ((record (pichat-consult--loadable-record candidate))
          (selection-function (pichat-consult--selection-function candidate))
          (file (plist-get record :session-file))
          (cwd (plist-get record :cwd)))
-    (cond
-     (selection-function
-      (funcall selection-function file cwd))
-     ((and (fboundp 'pichat-session-for-directory)
-           (fboundp 'pichat-sessions-open-file-independently)
-           (not (pichat-session-for-directory default-directory))
-           (pichat-session-current))
-      ;; The invoking directory has no live session, so the switch path below
-      ;; would hijack the global fallback runtime.  Preserve it by opening an
-      ;; independent runtime rooted at the selected session's own project.
+    (if selection-function
+        (funcall selection-function file cwd)
       (pichat-sessions-open-file-independently
-       file :cwd cwd :owner-directory cwd))
-     (t
-      (pichat-sessions-switch-file file cwd)))))
+       file :cwd cwd
+       :source-session (let ((context (pichat-consult--candidate-context candidate)))
+                         (plist-get (plist-get context :capability) :session))
+       :display-function pichat-sessions-display-chat-function))))
+
+(defun pichat-consult-switch-session (candidate)
+  "Explicitly replace the active runtime's source with saved CANDIDATE.
+Contextual manager browsing cannot switch a manager row implicitly."
+  (interactive "sSession: ")
+  (when (pichat-consult--selection-function candidate)
+    (user-error "Switch sessions from a chat, not a contextual browser"))
+  (let ((record (pichat-consult--loadable-record candidate)))
+    (pichat-sessions-switch-file
+     (plist-get record :session-file) (plist-get record :cwd))))
 
 (defun pichat-consult-open-session-independently (candidate)
   "Load CANDIDATE in a newly created independent PiChat runtime.
@@ -861,7 +862,8 @@ scope and display policy remain intact."
       (pichat-sessions-open-file-independently
        (plist-get record :session-file)
        :cwd (plist-get record :cwd)
-       :source-session source-session))))
+       :source-session source-session
+       :display-function pichat-sessions-display-chat-function))))
 
 (defun pichat-consult-jump-to-match (candidate)
   "Load CANDIDATE and open Session History at its best known entry.
@@ -1050,7 +1052,7 @@ entry-loadability claim."
                                   (or (plist-get subject :display-title)
                                       (plist-get subject :title)
                                       (plist-get subject :session-id)) 45)
-                                 (if selection-function "open" "load"))
+                                 (if selection-function "select" "open"))
                  :lookup #'consult--lookup-candidate :require-match t
                  :category 'pichat-session :sort nil
                  :annotate #'pichat-consult--relation-annotation
@@ -1200,6 +1202,7 @@ original Consult candidate still carries `consult--candidate'."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'pichat-consult-load-session)
     (define-key map (kbd "o") #'pichat-consult-open-session-independently)
+    (define-key map (kbd "s") #'pichat-consult-switch-session)
     (define-key map (kbd "j") #'pichat-consult-jump-to-match)
     (define-key map (kbd "r") #'pichat-consult-show-relations)
     map)
@@ -1210,6 +1213,7 @@ original Consult candidate still carries `consult--candidate'."
                '(pichat-session . pichat-consult-session-action-map))
   (dolist (action '(pichat-consult-load-session
                     pichat-consult-open-session-independently
+                    pichat-consult-switch-session
                     pichat-consult-jump-to-match
                     pichat-consult-show-relations))
     (cl-pushnew #'pichat-consult--embark-session-action
@@ -1239,7 +1243,7 @@ SELECTION-FUNCTION, when non-nil, receives the selected saved FILE and CWD."
                 lines capability browse-context))))
            :prompt (format "Pi saved sessions [%s] [RET %s, C-o preview, C-c C-r relations]: "
                            (if cwd (abbreviate-file-name cwd) scope-label)
-                           (if selection-function "open" "load"))
+                           (if selection-function "select" "open"))
            :lookup #'consult--lookup-candidate
            :require-match t :category 'pichat-session
            :annotate #'pichat-consult--candidate-annotation
@@ -1284,8 +1288,9 @@ closure preserves its project and selection policy independently."
 Archive projects are loaded first.  Empty search input lists recent sessions;
 name:, text:, and role: fields are translated to conservative FTS expressions.
 When SELECTION-FUNCTION is non-nil, RET passes it the selected saved FILE and
-CWD instead of switching the active runtime.  `C-c C-r' shows relations,
-Embark `j' loads and jumps, and Embark `r' also shows relations."
+CWD; otherwise it opens independently.  `C-c C-r' shows relations. Embark `s'
+explicitly switches the current runtime, `j' switches and jumps to Session
+History, and `r' shows relations."
   (unless (pichat-consult-available-p)
     (user-error "PiChat archive search requires Consult and Node.js"))
   (unless (pichat-archive-capability-current-p capability)

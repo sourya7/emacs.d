@@ -459,6 +459,18 @@
       (should (eq persistence (plist-get profile :persistence)))
       (should (eq model (plist-get profile :model))))))
 
+(ert-deftest pichat-launch-context-uses-configured-display-policy ()
+  (let* ((display (lambda (_session) nil))
+         (pichat-launch-display-chat-function display)
+         (context (pichat--make-launch-context))
+         (profile (pichat--launch-profile-from-arguments nil context)))
+    (should (eq display (plist-get profile :display-function)))
+    (should (eq #'pichat-chat-open
+                (plist-get
+                 (pichat--launch-profile-from-arguments
+                  nil (pichat--make-launch-context #'pichat-chat-open))
+                 :display-function)))))
+
 (ert-deftest pichat-launch-transient-selects-a-configured-target ()
   (let ((pichat-targets '((lima-devbox :kind ssh
                            :tramp-prefix "/ssh:lima-devbox:"))))

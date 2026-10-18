@@ -62,6 +62,13 @@ of `added', `removed', `default-changed', or `updated'.")
   :type 'directory
   :group 'pichat)
 
+(defcustom pichat-launch-display-chat-function #'pichat-chat-open
+  "Function used to display a runtime launched from the ordinary Transient.
+The function receives the runtime session.  Manager-initiated launches supply
+an explicit display function instead of using this default."
+  :type 'function
+  :group 'pichat)
+
 (defcustom pichat-auto-use-repo-bridge nil
   "When non-nil, use `bridge/pichat-bridge.ts' from `pichat-directory' if present.
 The bridge is disabled by default until implemented/tested."
@@ -852,7 +859,8 @@ This is the first implementation check; it does not send an LLM prompt."
   "Capture launch origin and optional DISPLAY-FUNCTION for a Transient suffix."
   (list :origin-buffer (current-buffer)
         :directory default-directory
-        :display-function (or display-function #'pichat-chat-open)))
+        :display-function (or display-function
+                              pichat-launch-display-chat-function)))
 
 (defun pichat--launch-target-choices ()
   "Return target names offered by the launch Transient."

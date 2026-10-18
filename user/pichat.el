@@ -20,7 +20,8 @@
                     ("bridge" "bridge/pichat-bridge.ts"))
             :inherit nil)
   :commands (pichat pichat-global pichat-launch pichat-session-manager
-                    pichat-sessions-browse-files pichat-status
+                    pichat-sessions-browse-files pichat-sessions-switch-files
+                    pichat-status
                     pichat-select-model pichat-stop-session
                     pichat-add-reference pichat-smoke-test))
 
@@ -91,6 +92,10 @@
       (pichat-session-manager-display-chat-current-tab session)))))
 
 (setq pichat-session-manager-display-chat-function
+      #'my/pichat-display-chat-with-bufferlo
+      pichat-launch-display-chat-function
+      #'my/pichat-display-chat-with-bufferlo
+      pichat-sessions-display-chat-function
       #'my/pichat-display-chat-with-bufferlo)
 
 (defun my/pichat-rebuild ()

@@ -287,9 +287,14 @@ The public launch commands are deliberately small:
 - `M-x pichat-launch` opens a Transient for advanced launch profiles.
 - `C-u M-x pichat` opens that same Transient.
 
-The Transient starts with no switches, which is equivalent to ordinary
-`pichat`. It does not restore saved switch values, preventing an old ephemeral
-choice from being repeated accidentally.
+The Transient starts with no switches, which selects the same runtime profile
+as ordinary `pichat`. It does not restore saved switch values, preventing an old
+ephemeral choice from being repeated accidentally. Direct Transient launches
+use `pichat-launch-display-chat-function` to display the chat (current tab by
+default); manager-initiated launches retain the manager's display policy. This
+repository configures direct launches to use the same optional Bufferlo-aware
+project-tab policy as the manager. Ordinary `pichat` retains its current-tab
+display behavior.
 
 | Key | Choice | Effect |
 |---|---|---|
@@ -393,7 +398,7 @@ most recent `pichat-session-manager-preview-max-entries` entries. Use `g` in the
 preview to refresh it and `q` to close it.
 
 Archive-backed Consult candidates also expose Embark action `o` to open a saved
-source in a new independent runtime. Independent loading starts a separate
+source in a new independent runtime (the same behavior as `RET`). Independent loading starts a separate
 process, switches and synchronizes that exact process, and stops/forgets it if
 startup, switching, cancellation, or synchronization fails. It never mutates
 the runtime from which browsing was invoked.
@@ -525,11 +530,16 @@ Chat keys:
 - At the beginning of the prompt, type `/` and invoke completion-at-point to
   complete currently available Pi commands, templates, and skills
 - `C-c C-p` — open **Session History** for the current session file
-- `C-c C-b` — select an archive project, search saved sessions, and switch to
-  one when the exact active local Pi process exposes a compatible `pi-archive`,
-  or when an explicitly trusted standalone source is configured without a live
-  process; otherwise use the basic saved-file picker. `C-u C-c C-b` always
-  forces the basic picker
+- `C-c C-b` — browse saved sessions and open a selection in a new independent
+  runtime rooted at its recorded working directory; the existing runtime is
+  untouched. A compatible live `pi-archive` or explicitly trusted standalone
+  archive enables Consult search; otherwise the basic file picker is used.
+  `C-u C-c C-b` forces the basic picker. In this repository, saved chats use
+  the same project-tab display policy as manager `b`.
+- `M-x pichat-sessions-switch-files` — explicitly replace the active runtime's
+  source with a selected saved session, keeping that runtime's owner scope and
+  tab. A prefix argument forces the basic picker. Consult Embark `s` performs
+  this switch for a candidate; `j` switches and jumps to Session History
 - `C-c C-r` — browse the active persisted session's resolved archive parent and
   direct children; this uses the same bounded relation picker, preview, and
   loading actions as archive search and does not alter the live source
@@ -606,8 +616,9 @@ short session ID still distinguish them.
 summary, and lazily loaded fork-point evidence without changing Pi's active
 session. `C-c C-r` opens a bounded Consult picker for the selected session's
 resolved parent and direct children; use Consult narrowing key `p` for the
-parent and `c` for children. `RET` continues to load the selected session. With
-Embark, `j` loads and opens Session History at a loadable best entry, and `r`
+parent and `c` for children. `RET` opens the selected session independently. With
+Embark, `s` switches the active runtime, `j` switches and opens Session History
+at a loadable best entry, and `r`
 also browses relations. Relation candidates support the same preview and Embark
 actions. `RET` loads only a resolved nested session whose source exists, and
 loading still goes through ordinary PiChat path-mapping checks. Relation
@@ -773,14 +784,15 @@ freshness, resolve conflicts, or write a mirror back to its runtime.
 Set `pichat-sessions-default-root` to the host-visible session directory.  When
 the host and Pi runtime paths differ, add mappings for both the session root and
 the project.  PiChat translates a selected host session file before it sends
-`switch_session` to Pi.  It translates the saved runtime working directory back
-to a host path before it changes the Emacs session scope and
-`default-directory`.
+`switch_session` to Pi. It translates the saved runtime working directory back
+to a host path. Independent opens start a new runtime owned by that directory;
+explicit switches update the existing chat's `default-directory` but do not
+change its immutable owner scope.
 
 When `pichat-path-mappings` is non-nil, a selected saved session file must be
 covered by a mapping.  PiChat rejects an uncovered file instead of sending a
 host-only path to Pi.  If the saved working directory is not covered, PiChat
-loads the session but keeps its current host working directory and reports the
+loads the session using its startup host working directory and reports the
 missing mapping.  If an external mirror is stale or its runtime file no longer
 exists, Pi reports the normal `switch_session` error.
 

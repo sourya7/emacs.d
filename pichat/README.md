@@ -757,10 +757,23 @@ Additional chat keys:
 ## Emacs references
 
 `pichat-add-reference` inserts a lightweight reference into the active PiChat
-prompt instead of maintaining persistent Emacs-side context.  It is DWIM:
-active regions become file/line references, file buffers reference the current
-defun/symbol/line, Dired references marked files, compilation buffers reference
-the source error location, and non-file buffers insert a snapshot.
+prompt instead of maintaining persistent Emacs-side context. It is DWIM:
+active regions in file buffers become file/line references, file buffers
+reference the current defun/symbol/line, Dired references marked files, and
+compilation buffers reference the source error location. Non-file buffers and
+regions write their contents to a temporary `.txt` file and insert its path as
+a reference; compilation buffers without a resolvable error do the same.
+Only the selected text is written for a region. PiChat uses Emacs's
+`make-temp-file` and does not track or delete these files. Their lifetime depends
+on the operating system's cleanup policy for the chosen directory; Emacs exit
+and PiChat session closure do not remove them. Large contents (over 80,000
+characters by default) require confirmation.
+
+The temporary file must be readable by the destination Pi runtime. By default
+it is created under Emacs's `temporary-file-directory`. For mapped, SSH, or
+container runtimes, set `pichat-reference-temp-directory` to a writable directory
+shared with or mapped to Pi; an unmapped directory is rejected before writing.
+A custom directory may not be cleaned automatically by the OS.
 
 ## Saved session storage
 

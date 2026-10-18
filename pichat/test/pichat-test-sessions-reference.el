@@ -359,14 +359,59 @@
           (should (string-match-p (regexp-quote "`/workspace/sample.el`:2") text))
           (should-not (string-match-p (regexp-quote dir) text)))))))
 
-(ert-deftest pichat-reference-nonfile-buffer-serializes-snapshot ()
-  (with-temp-buffer
-    (rename-buffer "*pichat snapshot source*" t)
-    (emacs-lisp-mode)
-    (insert "(message \"snapshot\")")
-    (let ((text (pichat-reference--buffer-snapshot)))
-      (should (string-match-p "Reference snapshot" text))
-      (should (string-match-p (regexp-quote "(message \"snapshot\")") text)))))
+(ert-deftest pichat-reference-nonfile-buffer-writes-temp-file ()
+  (pichat-test-with-temp-dir dir
+    (let ((pichat-reference-temp-directory dir)
+          (pichat-path-mappings nil))
+      (with-temp-buffer
+        (rename-buffer "*pichat temp source*" t)
+        (insert "(message \"snapshot\")")
+        (let* ((text (pichat-reference--buffer-temp-reference))
+               (file (progn
+                       (should (string-match "- `\\([^`]+\\)`" text))
+                       (match-string 1 text))))
+          (unwind-protect
+              (progn
+                (should (string-match-p "References for the Pi agent to inspect:" text))
+                (should (string-match-p "from \\*pichat temp source\\*" text))
+                (should (equal (with-temp-buffer
+                                 (insert-file-contents file)
+                                 (buffer-string))
+                               "(message \"snapshot\")")))
+            (delete-file file)))))))
+
+(ert-deftest pichat-reference-nonfile-region-writes-only-selected-text ()
+  (pichat-test-with-temp-dir dir
+    (let ((pichat-reference-temp-directory dir)
+          (pichat-path-mappings (list (cons dir "/workspace/"))))
+      (with-temp-buffer
+        (insert "before\nselected\nafter")
+        (goto-char (point-min))
+        (forward-line 1)
+        (set-mark (line-end-position))
+        (setq mark-active t)
+        (let* ((text (pichat-reference--region))
+               (runtime-file (progn
+                               (should (string-match "- `\\([^`]+\\)`" text))
+                               (match-string 1 text)))
+               (file (expand-file-name (file-name-nondirectory runtime-file) dir)))
+          (unwind-protect
+              (progn
+                (should (string-prefix-p "/workspace/pichat-reference-" runtime-file))
+                (should (equal (with-temp-buffer
+                                 (insert-file-contents file)
+                                 (buffer-string))
+                               "selected")))
+            (delete-file file)))))))
+
+(ert-deftest pichat-reference-unmapped-temp-directory-does-not-write ()
+  (pichat-test-with-temp-dir dir
+    (let ((pichat-reference-temp-directory dir)
+          (pichat-path-mappings '(("/other" . "/workspace"))))
+      (with-temp-buffer
+        (insert "private")
+        (should-error (pichat-reference--buffer-temp-reference) :type 'user-error)
+        (should-not (directory-files dir nil "^pichat-reference-"))))))
 
 (ert-deftest pichat-session-file-summary-ignores-malformed-lines ()
   (pichat-test-with-temp-dir dir

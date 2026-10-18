@@ -3,9 +3,9 @@
 ;;; Commentary:
 
 ;; A lightweight alternative to persistent context: turn the thing at point in
-;; Emacs into an explicit reference/snapshot and insert it into a live PiChat
-;; prompt.  Pi's own session history and tools remain responsible for retaining
-;; and reading the referenced source.
+;; Emacs into an explicit file reference and insert it into a live PiChat prompt.
+;; Pi's own session history and tools remain responsible for retaining and
+;; reading the referenced source.
 
 ;;; Code:
 
@@ -19,7 +19,6 @@
 (defvar pichat-chat--input-start)
 (defvar pichat-reference--path-context nil
   "Dynamically bound destination-session path context.")
-
 (declare-function dired-get-marked-files "dired")
 (declare-function compilation-goto-error "compile")
 (declare-function pichat-chat--insert-prompt "pichat-chat")
@@ -27,8 +26,17 @@
 (declare-function pichat-session-path-context "pichat-session")
 
 (defcustom pichat-reference-snapshot-large-threshold 80000
-  "Ask before inserting a snapshot larger than this many characters."
+  "Ask before writing a temporary reference larger than this many characters."
   :type 'integer
+  :group 'pichat)
+
+(defcustom pichat-reference-temp-directory nil
+  "Directory for non-file references, or nil for `temporary-file-directory'.
+The destination Pi runtime must be able to read files here.  For mapped,
+container, or remote runtimes, configure a shared or mapped directory.
+PiChat does not remove these files; cleanup follows that directory's OS policy."
+  :type '(choice (const :tag "Emacs temporary directory" nil)
+                 (directory :tag "Runtime-accessible directory"))
   :group 'pichat)
 
 (defun pichat-reference--chat-buffers ()
@@ -76,13 +84,6 @@ When PROMPT is non-nil, always ask."
   "Return cons of 1-based line range for BEG..END."
   (cons (line-number-at-pos beg t)
         (line-number-at-pos (max beg (1- end)) t)))
-
-(defun pichat-reference--code-lang ()
-  "Return a code fence language derived from `major-mode'."
-  (let ((name (symbol-name major-mode)))
-    (setq name (string-remove-suffix "-mode" name))
-    (setq name (string-remove-suffix "-ts" name))
-    name))
 
 (defun pichat-reference--format-location (path &optional start-line end-line symbol note)
   "Return a prompt reference for PATH and optional START-LINE/END-LINE/SYMBOL/NOTE."
@@ -152,19 +153,27 @@ When PROMPT is non-nil, always ask."
                   "\n\n"
                   (pichat-reference--format-reference-block all-lines)))))))
 
-(defun pichat-reference--confirm-snapshot (label text)
-  "Ask before inserting large snapshot TEXT labelled LABEL."
+(defun pichat-reference--write-temp-reference (label text)
+  "Write TEXT from LABEL to a runtime-accessible file and return its reference."
   (when (> (length text) pichat-reference-snapshot-large-threshold)
     (unless (yes-or-no-p
-             (format "Insert large PiChat snapshot from %s (%d chars)? "
+             (format "Write large PiChat reference from %s (%d chars)? "
                      label (length text)))
-      (user-error "Snapshot cancelled"))))
-
-(defun pichat-reference--format-snapshot (label text &optional lang)
-  "Return prompt snapshot LABEL/TEXT with optional LANG."
-  (pichat-reference--confirm-snapshot label text)
-  (format "Reference snapshot from `%s`:\n\n````%s\n%s\n````\n\n"
-          label (or lang "") text))
+      (user-error "Temporary reference cancelled")))
+  (let* ((dir (file-name-as-directory
+               (expand-file-name (or pichat-reference-temp-directory
+                                     temporary-file-directory))))
+         (probe (expand-file-name "pichat-reference-probe.txt" dir)))
+    ;; Check before writing: a host-only /tmp file is useless to a mapped Pi.
+    (unless (plist-get (pichat-path-resolve-to-runtime
+                        probe pichat-reference--path-context) :path)
+      (user-error "Temporary reference directory is unavailable to Pi; configure pichat-reference-temp-directory: %s"
+                  dir))
+    (let ((file (make-temp-file (expand-file-name "pichat-reference-" dir)
+                                nil ".txt" text)))
+      (pichat-reference--format-reference-block
+       (list (pichat-reference--format-location
+              file nil nil nil (format "from %s" label)))))))
 
 (defun pichat-reference--region ()
   "Return reference text for the active region in the current buffer."
@@ -175,10 +184,9 @@ When PROMPT is non-nil, always ask."
           (pichat-reference--format-reference-block
            (list (pichat-reference--format-location
                   file start finish (thing-at-point 'symbol t)))))
-      (pichat-reference--format-snapshot
+      (pichat-reference--write-temp-reference
        (buffer-name)
-       (buffer-substring-no-properties beg end)
-       (pichat-reference--code-lang)))))
+       (buffer-substring-no-properties beg end)))))
 
 (defun pichat-reference--dired ()
   "Return reference text for Dired marked files."
@@ -218,12 +226,11 @@ When PROMPT is non-nil, always ask."
        (list (pichat-reference--format-location
               file (line-number-at-pos nil t) nil symbol))))))
 
-(defun pichat-reference--buffer-snapshot ()
-  "Return snapshot text for the current buffer."
-  (pichat-reference--format-snapshot
+(defun pichat-reference--buffer-temp-reference ()
+  "Return a temporary file reference for the current buffer."
+  (pichat-reference--write-temp-reference
    (buffer-name)
-   (buffer-substring-no-properties (point-min) (point-max))
-   (pichat-reference--code-lang)))
+   (buffer-substring-no-properties (point-min) (point-max))))
 
 (defun pichat-reference--dwim-text ()
   "Return prompt text describing the current Emacs context DWIM."
@@ -231,9 +238,9 @@ When PROMPT is non-nil, always ask."
    ((use-region-p) (pichat-reference--region))
    ((derived-mode-p 'dired-mode) (pichat-reference--dired))
    ((derived-mode-p 'compilation-mode) (or (pichat-reference--compilation)
-                                           (pichat-reference--buffer-snapshot)))
+                                           (pichat-reference--buffer-temp-reference)))
    ((buffer-file-name) (pichat-reference--defun-or-line))
-   (t (pichat-reference--buffer-snapshot))))
+   (t (pichat-reference--buffer-temp-reference))))
 
 (defun pichat-reference--insert-into-chat (buffer text)
   "Insert TEXT into PiChat prompt BUFFER.

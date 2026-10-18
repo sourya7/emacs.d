@@ -493,18 +493,21 @@
           (should (equal "Archive parent" (plist-get parent :display-title)))
           (should (eq 'none (plist-get parent :parent-resolution)))
           (should (= 1 (plist-get parent :child-count))))
-        (let (switched)
-          (cl-letf (((symbol-function 'pichat-session-for-directory)
-                     (lambda (&optional _directory) session))
+        (let (opened)
+          (cl-letf (((symbol-function 'pichat-sessions-open-file-independently)
+                     (lambda (file &rest keys)
+                       (setq opened (list file (plist-get keys :cwd)
+                                          (plist-get keys :display-function)))))
                     ((symbol-function 'pichat-sessions-switch-file)
-                     (lambda (file cwd &optional _ready)
-                       (setq switched (list file cwd)))))
+                     (lambda (&rest _args)
+                       (ert-fail "Archive load replaced the active runtime"))))
             (pichat-consult-load-session
              (pichat-consult--relation-candidate
               (car relations) capability (car recent) nil)))
-          (should (equal '("/fixture/sessions/archive-parent.jsonl"
-                           "/fixture/project")
-                         switched))))))
+          (should (equal (list "/fixture/sessions/archive-parent.jsonl"
+                               "/fixture/project"
+                               pichat-sessions-display-chat-function)
+                         opened))))))
 
   (ert-deftest pichat-integration-custom-archive-fixture-does-not-advertise-marker ()
     (pichat-test-with-integration-session
@@ -1532,7 +1535,7 @@
   (ert-deftest pichat-integration-reference-text-reaches-fake-provider-context ()
     (pichat-test-with-integration-session
         (session :no-session t
-                 :script '(:turns [(:expectContextIncludes ["References for the Pi agent to inspect:"
+                 :script '(:turns [(:expectContextIncludes ["References:"
                                                             "sample.el"
                                                             "What does this code do?"]
                                    :text "reference observed")]))

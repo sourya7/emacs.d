@@ -103,7 +103,7 @@ When PROMPT is non-nil, always ask."
        ""))))
 
 (defconst pichat-reference--block-heading
-  "References for the Pi agent to inspect:"
+  "References:"
   "Heading used for prompt reference blocks.")
 
 (defun pichat-reference--format-reference-block (lines)

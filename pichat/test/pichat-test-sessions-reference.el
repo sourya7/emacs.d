@@ -372,7 +372,7 @@
                        (match-string 1 text))))
           (unwind-protect
               (progn
-                (should (string-match-p "References for the Pi agent to inspect:" text))
+                (should (string-match-p "References:" text))
                 (should (string-match-p "from \\*pichat temp source\\*" text))
                 (should (equal (with-temp-buffer
                                  (insert-file-contents file)

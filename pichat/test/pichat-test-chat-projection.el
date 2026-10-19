@@ -82,6 +82,11 @@
           (progn
             (setq buffer (pichat-chat-open session))
             (with-current-buffer buffer
+              (goto-char (point-min))
+              (should (looking-at "PiChat — "))
+              (forward-line 1)
+              (should (looking-at "^$"))
+              (should-not (string-match-p "Keys: RET send" (buffer-string)))
               (pichat-chat--set-status 'phase-2 "[stable status]")
               (buffer-enable-undo)
               (setq buffer-undo-list nil)

@@ -452,7 +452,9 @@ Markup characters remain visible; this is fontification only."
 `C-c C-p' opens Session History for every branch in the current session file;
 it forks into new sessions and does not perform same-file tree navigation.
 `C-c C-b' separately browses saved session files and switches sources.
-`C-c C-r' browses the active persisted session's archived parent and children."
+`C-c C-r' browses the active persisted session's archived parent and children.
+RET sends the prompt, S-RET inserts a newline, C-c C-k aborts a run, and
+C-c C-y recovers a failed submission."
   (setq-local truncate-lines nil)
   (visual-line-mode 1)
   (add-hook 'kill-buffer-hook #'pichat-chat--cancel-pending-ui-requests nil t)
@@ -872,7 +874,7 @@ length change even though the internal edit itself must not become undoable."
   (pichat-chat--with-buffer-edit
     (erase-buffer)
     (insert (pichat-chat--header-title session) "\n")
-    (insert "Keys: RET send, S-RET newline, C-c C-k abort, C-c C-y recover, C-c C-z fold tools, C-c C-d tool details, C-h m help\n\n")
+    (insert "\n")
     (dolist (marker (list pichat-chat--extension-status-start
                           pichat-chat--extension-status-end
                           pichat-chat--canonical-start

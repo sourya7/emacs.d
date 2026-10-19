@@ -202,7 +202,8 @@ rows."
 
 RET jumps to the matching entry in the active chat transcript.  f forks
 explicitly, v previews, d shows details, C clones the active branch, b browses
-saved sessions, q returns to chat, and ? describes the complete mode bindings."
+saved sessions, q returns to chat, and ? describes the complete mode bindings.
+TAB folds branches, F cycles filters, / searches, and g refreshes history."
   (setq-local truncate-lines t)
   (unless (hash-table-p pichat-sessions--folded)
     (setq pichat-sessions--folded (make-hash-table :test #'equal)))
@@ -821,7 +822,7 @@ FOLDED records collapsed branch segments.  EVIL-NORMAL-P selects matching help."
 (defun pichat-sessions--render-model (model filter query folded &optional evil-normal-p)
   "Return a temporary buffer containing projected MODEL.
 The header displays FILTER and optional QUERY; FOLDED controls segment marks.
-EVIL-NORMAL-P selects the matching key legend for the owning history view."
+EVIL-NORMAL-P selects contextual help text for history entries."
   (let ((rendered (generate-new-buffer " *pichat-history-render*")))
     (condition-case error-data
         (with-current-buffer rendered
@@ -830,11 +831,7 @@ EVIL-NORMAL-P selects the matching key legend for the owning history view."
                           (if query (format "  query: %s" query) "")
                           (length (pichat-sessions--model-ordered-ids model))
                           (if pichat-sessions--stale-p "  [stale]" "")))
-          (if evil-normal-p
-              (insert "RET jump · z v preview · z a fold · j/k entries · M-n/M-p branch\n"
-                      "/ Vim search · g r refresh · q chat · other actions: M-x (SPC m when configured)\n\n")
-            (insert "RET jump to chat · f fork · v preview · TAB fold · n/p move · M-n/M-p branch\n"
-                    "/ search · F filter · g refresh · d details · C clone · b browse · q chat · ? help\n\n"))
+          (insert "\n")
           (let ((prefixes (pichat-sessions--tree-prefixes model)))
             (dolist (id (pichat-sessions--model-ordered-ids model))
               (pichat-sessions--render-entry-line
@@ -2202,9 +2199,7 @@ runtime-manager previews."
     (insert (format "Status: %s\n"
                     (pichat-sessions--preview-status-label
                      pichat-sessions-preview--status)))
-    (insert (if (pichat-view-evil-normal-p)
-                "q close · fork / history / details: M-x (SPC m when configured)\n\n"
-              "f fork · t history · d details · q close\n\n"))
+    (insert "\n")
     (let ((selected-position
            (pichat-sessions-insert-preview-path
             pichat-sessions-preview--path

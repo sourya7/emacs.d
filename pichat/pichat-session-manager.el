@@ -370,9 +370,6 @@ canonical chat cache while an RPC refresh is pending."
           (unless (equal emacs-source (pichat-session-session-file session))
             (insert (format "Emacs source: %s\n"
                             (abbreviate-file-name emacs-source)))))
-        (insert (if (pichat-view-evil-normal-p)
-                    "q close · g r refresh · RET in manager opens chat\n"
-                  "q close · g refresh · RET in manager opens chat\n"))
         (when note
           (insert (propertize (concat "\n" note "\n") 'face 'shadow)))
         (insert "\n" (propertize "Recent active branch" 'face 'bold) "\n\n")
@@ -572,7 +569,9 @@ canonical chat cache while an RPC refresh is pending."
 
 (define-derived-mode pichat-session-manager-preview-mode pichat-view-mode
   "PiChat-Runtime-Preview"
-  "Display a bounded active-branch preview for one retained runtime."
+  "Display a bounded active-branch preview for one retained runtime.
+
+Press g to refresh the preview or q to return to the manager."
   (setq-local truncate-lines nil))
 
 (defun pichat-session-manager--handle-runtime-event

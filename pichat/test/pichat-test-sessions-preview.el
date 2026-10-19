@@ -119,7 +119,9 @@
                      (call-pos (string-match "TOOL CALL: read" text))
                      (result-pos (string-match "TOOL RESULT: read" text))
                      (alternate-pos (string-match "Alternate prompt" text)))
-                (should (string-match-p "Status: alternate branch" text))
+                (should (string-match-p "Status: alternate branch\n\n" text))
+                (should-not (string-match-p "f fork · t history" text))
+                (should-not (string-match-p "q close · fork" text))
                 (should (string-match-p "Selected entry: assistant at 18:42" text))
                 (should (string-match-p
                          (regexp-quote "{\"path\":\"README.md\"}") text))

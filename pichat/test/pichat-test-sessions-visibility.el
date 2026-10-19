@@ -167,6 +167,20 @@
       (should-not pichat-sessions--query)
       (should-not (string-match-p "query:" (buffer-string))))))
 
+(ert-deftest pichat-sessions-history-renders-entries-without-key-legend ()
+  (let* ((session (pichat-session-make))
+         (node (pichat-test-sessions-tree--message "user" "user" "question"))
+         (response (pichat-test-sessions-tree--response (list node) "user")))
+    (with-temp-buffer
+      (pichat-sessions--refresh-from-response response session (current-buffer))
+      (goto-char (point-min))
+      (should (looking-at "Session History  "))
+      (forward-line 1)
+      (should (looking-at "^$"))
+      (pichat-sessions--goto-id "user")
+      (should (equal "user" (pichat-sessions--entry-id-at-point)))
+      (should-not (string-match-p "RET jump" (buffer-string))))))
+
 (ert-deftest pichat-sessions-folding-retains-root-and-hides-descendants ()
   (let* ((leaf (pichat-test-sessions-tree--message "leaf" "assistant" "answer"))
          (root (pichat-test-sessions-tree--set-children

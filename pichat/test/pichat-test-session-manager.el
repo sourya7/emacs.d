@@ -456,6 +456,7 @@
               (should (string-match-p "Preferred: no" text))
               (should (string-match-p "Pi ID: pi-source" text))
               (should (string-match-p "Persistence: persisted source file" text))
+              (should-not (string-match-p "q close ·" text))
               (should (string-match-p "Source: /tmp/pi-source.jsonl" text))
               (should (string-match-p "Fix the parser" text))
               (should (string-match-p "Working on the parser now" text)))))))))

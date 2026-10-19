@@ -169,7 +169,7 @@
                 (should (equal source
                                (buffer-substring-no-properties beg end)))
                 (should-not (overlays-in beg end)))
-              (dolist (key '("C-c C-l" "C-c C-a" "C-c C-<return>"))
+              (dolist (key '("C-c C-a" "C-c C-<return>"))
                 (should-not (lookup-key pichat-chat-mode-map (kbd key)))))
         (when (buffer-live-p buffer) (kill-buffer buffer)))))))
 

@@ -44,6 +44,13 @@ remain in their original mode maps."
   ;; PiChat also owns the origin, nested displays, and snapshot kill policy.
   (evil-define-key* 'normal pichat-view-mode-map
     (kbd "q") #'pichat-view-quit)
+  (evil-define-key* 'normal pichat-chat-mode-map
+    (kbd "]]") #'pichat-chat-next-user-turn
+    (kbd "[[") #'pichat-chat-previous-user-turn
+    (kbd "]a") #'pichat-chat-next-activity
+    (kbd "[a") #'pichat-chat-previous-activity
+    (kbd "]t") #'pichat-chat-next-tool
+    (kbd "[t") #'pichat-chat-previous-tool)
   (evil-define-key* 'normal pichat-sessions-mode-map
     (kbd "q") #'pichat-sessions-return-to-chat
     (kbd "RET") #'pichat-sessions-activate-at-point

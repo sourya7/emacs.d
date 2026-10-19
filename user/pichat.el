@@ -176,8 +176,6 @@
     "z" '(pichat-chat-toggle-tool-at-point :which-key "Cycle tool display")
     "d" '(pichat-chat-show-tool-details :which-key "Tool details")
     "A" '(pichat-chat-select-visible-artifact :which-key "Select artifact")
-    "J" '(pichat-chat-next-tool :which-key "Next tool")
-    "K" '(pichat-chat-previous-tool :which-key "Previous tool")
     "x" '(pichat-command-run :which-key "Command picker")
     "o" '(pichat-chat-compact :which-key "Compact")
     "f" '(pichat-chat-follow-up :which-key "Follow up")

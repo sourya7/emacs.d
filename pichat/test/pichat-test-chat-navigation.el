@@ -18,6 +18,20 @@
    :content (list (pichat-transcript-content-create
                    :kind 'prose :index 0 :text text))))
 
+(ert-deftest pichat-chat-native-navigation-bindings-cover-messages-groups-and-tools ()
+  (with-temp-buffer
+    (pichat-chat-mode)
+    (dolist (binding '(("C-c C-l u" . pichat-chat-next-user-turn)
+                       ("C-c C-l U" . pichat-chat-previous-user-turn)
+                       ("C-c C-l a" . pichat-chat-next-activity)
+                       ("C-c C-l A" . pichat-chat-previous-activity)
+                       ("C-c C-l t" . pichat-chat-next-tool)
+                       ("C-c C-l T" . pichat-chat-previous-tool)))
+      (should (eq (key-binding (kbd (car binding))) (cdr binding))))
+    (should-not (eq (key-binding (kbd "M-n")) #'pichat-chat-next-tool))
+    (should-not (eq (key-binding (kbd "C-c M-n"))
+                    #'pichat-chat-next-user-turn))))
+
 (ert-deftest pichat-navigation-user-turns-use-logical-role-not-faces ()
   (with-temp-buffer
     (insert "header\n")

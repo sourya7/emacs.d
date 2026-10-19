@@ -398,6 +398,17 @@ Markup characters remain visible; this is fontification only."
   :lighter " md"
   :group 'pichat)
 
+(defvar pichat-chat-navigation-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "u") #'pichat-chat-next-user-turn)
+    (define-key map (kbd "U") #'pichat-chat-previous-user-turn)
+    (define-key map (kbd "a") #'pichat-chat-next-activity)
+    (define-key map (kbd "A") #'pichat-chat-previous-activity)
+    (define-key map (kbd "t") #'pichat-chat-next-tool)
+    (define-key map (kbd "T") #'pichat-chat-previous-tool)
+    map)
+  "Navigation bindings for the PiChat transcript.")
+
 (defvar pichat-chat-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'pichat-chat-ret)
@@ -426,10 +437,7 @@ Markup characters remain visible; this is fontification only."
     (define-key map (kbd "C-c C-g") #'pichat-chat-visit-tool-location)
     (define-key map (kbd "C-c C-w") #'pichat-chat-copy-tool-location)
     (define-key map (kbd "C-c C-v") #'pichat-chat-repaint)
-    (define-key map (kbd "M-n") #'pichat-chat-next-tool)
-    (define-key map (kbd "M-p") #'pichat-chat-previous-tool)
-    (define-key map (kbd "C-c M-n") #'pichat-chat-next-user-turn)
-    (define-key map (kbd "C-c M-p") #'pichat-chat-previous-user-turn)
+    (define-key map (kbd "C-c C-l") pichat-chat-navigation-map)
     (define-key map (kbd "C-c C-.") #'pichat-chat-jump-to-active-item)
     (define-key map (kbd "C-c C-,") #'pichat-chat-open-compose-buffer)
     (define-key map (kbd "C-c C-h") #'pichat-chat-view-response)
@@ -454,7 +462,8 @@ it forks into new sessions and does not perform same-file tree navigation.
 `C-c C-b' separately browses saved session files and switches sources.
 `C-c C-r' browses the active persisted session's archived parent and children.
 RET sends the prompt, S-RET inserts a newline, C-c C-k aborts a run, and
-C-c C-y recovers a failed submission."
+C-c C-y recovers a failed submission.  C-c C-l provides navigation between
+user messages, activity groups, and tool blocks."
   (setq-local truncate-lines nil)
   (visual-line-mode 1)
   (add-hook 'kill-buffer-hook #'pichat-chat--cancel-pending-ui-requests nil t)

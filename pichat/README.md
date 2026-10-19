@@ -448,7 +448,10 @@ PiChat-specific close/return policy instead of Evil Collection's generic
 `zv` to toggle its preview, and `gr` to refresh. Runtime and response previews
 also use `gr` to refresh. The local
 `SPC m` menus provide preview, details, and other PiChat actions without
-taking over Vim's `/`, `n/N`, `v`, `f`, `t`, or `C-o` in Normal state. Consult's
+taking over Vim's `/`, `n/N`, `v`, `f`, `t`, or `C-o` in Normal state. In chat,
+`[[` / `]]` move between user messages, `[a` / `]a` between activity-group
+headers, and `[t` / `]t` between visible tool blocks. These Normal-state
+bindings leave literal brackets available in Insert state. Consult's
 `C-o` preview remains a minibuffer control. The single-key lists below describe
 native Emacs bindings; the Evil-specific keys above and `SPC m` menus apply
 when this optional layer is enabled.
@@ -719,8 +722,7 @@ Additional chat keys:
 - `RET`, `TAB`, or mouse-1 on an activity header — expand or collapse that
   source-ordered tool group
 - `C-c C-;` — expand or collapse the activity group header at point
-- `M-x pichat-chat-next-activity` / `M-x pichat-chat-previous-activity` — move
-  between visible activity group headers
+- `C-c C-l a` / `C-c C-l A` — next/previous visible activity group header
 - `C-c C-z` — cycle a visible child tool block between header and arguments;
   the selected child view survives parent-group folding
 - `C-c C-d` — show full tool details/output, kind, title, and location at point
@@ -736,9 +738,9 @@ Additional chat keys:
   through host Emacs compilation when
   `pichat-shell-presentation-enable-compilation-rerun` is enabled; this never
   uses Pi RPC and does not reproduce container or SSH execution
-- `M-n` / `M-p` — next/previous tool block
-- `C-c M-n` / `C-c M-p` — next/previous user turn using stable logical node
-  properties rather than fontification
+- `C-c C-l t` / `C-c C-l T` — next/previous visible tool block
+- `C-c C-l u` / `C-c C-l U` — next/previous user message using stable logical
+  node properties rather than fontification
 - `C-c C-.` — jump by explicit priority to the latest running tool, pending
   extension request, non-empty live tail, or active prompt
 - `C-c C-,` — open an expanded editor initialized from the trimmed current

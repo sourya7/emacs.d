@@ -290,13 +290,10 @@ fallback instead of losing the canonical response text."
                      (pre . pichat-response-view--render-pre)
                      (table . pichat-response-view--render-table))))
               (shr-insert-document dom))
+            (when (string-blank-p (buffer-string))
+              (error "Markdown rendering produced no visible content"))
             (buffer-substring (point-min) (point-max))))
       (error (pichat-response-view--fallback-string markdown error-data)))))
-
-(defun pichat-response-view--display-width (origin)
-  "Return an initial rendering width derived from ORIGIN."
-  (let ((window (plist-get origin :window)))
-    (if (window-live-p window) (window-body-width window) 80)))
 
 (defun pichat-response-view--install-face-remaps ()
   "Install theme-aware SHR face remaps in the current response view."
@@ -305,16 +302,23 @@ fallback instead of losing the canonical response text."
   (face-remap-add-relative 'shr-code 'pichat-response-view-code-face)
   (face-remap-add-relative 'shr-link 'pichat-response-view-link-face))
 
-(defun pichat-response-view--replace-rendering (response width)
-  "Transactionally replace this view with RESPONSE rendered at WIDTH."
+(defun pichat-response-view--replace-rendering (response width &optional preserve-point)
+  "Transactionally replace this view with RESPONSE rendered at WIDTH.
+When PRESERVE-POINT is non-nil, keep the approximate reading position."
   (let* ((markdown
           (copy-sequence
            (pichat-chat-navigation-response-markdown response)))
          (rendered (pichat-response-view--rendered-string markdown width))
+         (fraction (and preserve-point
+                        (/ (float (- (point) (point-min)))
+                           (max 1 (- (point-max) (point-min))))))
          (inhibit-read-only t))
     (erase-buffer)
     (insert rendered)
-    (goto-char (point-min))
+    (goto-char (if fraction
+                   (+ (point-min)
+                      (round (* fraction (- (point-max) (point-min)))))
+                 (point-min)))
     (setq-local pichat-response-view-response response)
     (setq-local pichat-response-view-source-markdown markdown)
     (set-buffer-modified-p nil)))
@@ -338,7 +342,7 @@ fallback instead of losing the canonical response text."
          (width (window-body-width (selected-window))))
     (unless (pichat-chat-navigation-response-p response)
       (user-error "PiChat response source changed; snapshot preserved"))
-    (pichat-response-view--replace-rendering response width)
+    (pichat-response-view--replace-rendering response width t)
     (message "PiChat response view refreshed")))
 
 (defun pichat-response-view--url-at-point ()
@@ -426,10 +430,12 @@ identity.  SOURCE-NAME is used only to name the snapshot buffer."
             (setq-local pichat-response-view-origin-buffer
                         (plist-get origin :buffer))
             (setq-local pichat-response-view-refresh-function refresh-function)
-            (setq-local pichat-response-view-return-function return-function)
+            (setq-local pichat-response-view-return-function return-function))
+          (pichat-view-display buffer origin 'kill)
+          (with-current-buffer buffer
             (pichat-response-view--replace-rendering
-             response (pichat-response-view--display-width origin)))
-          (pichat-view-display buffer origin 'kill))
+             response (window-body-width (selected-window))))
+          buffer)
       (error
        (when (buffer-live-p buffer) (kill-buffer buffer))
        (signal (car error-data) (cdr error-data))))))

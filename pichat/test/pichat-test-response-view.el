@@ -193,6 +193,18 @@
       (pichat-response-view-copy-markdown)
       (should (equal exact (current-kill 0 t))))))
 
+(ert-deftest pichat-response-view-falls-back-when-sanitization-removes-everything ()
+  (let ((pichat-response-view-convert-function
+         (lambda (_markdown) "<html><body><script>hidden</script></body></html>"))
+        (exact "Important canonical prose"))
+    (with-temp-buffer
+      (pichat-response-view-mode)
+      (pichat-response-view--replace-rendering
+       (pichat-test-response-view--response "discarded" exact) 60)
+      (should (string-match-p "Rendered preview unavailable" (buffer-string)))
+      (should (string-suffix-p exact (buffer-string)))
+      (should-not (string-match-p "hidden" (buffer-string))))))
+
 (ert-deftest pichat-response-view-copies-exact-source-and-shows-empty-response ()
   (let ((pichat-response-view-convert-function
          #'pichat-test-response-view--html)
@@ -244,6 +256,66 @@
               (should-error (pichat-response-view-return-to-origin)
                             :type 'user-error)
               (should (buffer-live-p view))))
+        (dolist (buffer (list view origin))
+          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
+(ert-deftest pichat-response-view-refresh-preserves-approximate-reading-position ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((origin (generate-new-buffer " *pichat-response-position-origin*"))
+          view
+          (display-buffer-overriding-action '((display-buffer-same-window)))
+          (pichat-response-view-convert-function
+           (lambda (markdown) (format "<p>%s</p>" markdown))))
+      (unwind-protect
+          (progn
+            (switch-to-buffer origin)
+            (setq view
+                  (pichat-response-view-open
+                   (pichat-test-response-view--response
+                    "position" (make-string 500 ?x))
+                   (pichat-view-capture-origin)
+                   (lambda (_response)
+                     (pichat-test-response-view--response
+                      "position" (make-string 1000 ?x)))
+                   (lambda (_response) (point-min)) "position"))
+            (with-current-buffer view
+              (goto-char (+ (point-min) (/ (- (point-max) (point-min)) 2)))
+              (pichat-response-view-refresh)
+              (should (> (point) (+ (point-min) 200)))
+              (should (< (point) (- (point-max) 200)))))
+        (dolist (buffer (list view origin))
+          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
+(ert-deftest pichat-response-view-renders-at-displayed-window-width ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((origin (generate-new-buffer " *pichat-response-width-origin*"))
+          view seen-width
+          (pichat-response-view-convert-function
+           (lambda (_markdown) "<p>width fixture</p>")))
+      (unwind-protect
+          (progn
+            (switch-to-buffer origin)
+            (let ((origin-width (window-body-width (selected-window)))
+                  (original (symbol-function 'pichat-response-view--rendered-string)))
+              (cl-letf (((symbol-function 'pichat-response-view--rendered-string)
+                         (lambda (markdown width)
+                           (setq seen-width width)
+                           (funcall original markdown width)))
+                        ((symbol-function 'pichat-view-display)
+                         (lambda (buffer &rest _)
+                           (let ((window (split-window-right)))
+                             (set-window-buffer window buffer)
+                             (select-window window))
+                           buffer)))
+                (setq view
+                      (pichat-response-view-open
+                       (pichat-test-response-view--response "width" "text")
+                       (pichat-view-capture-origin) #'ignore #'ignore "width")))
+              (should (= seen-width (window-body-width (selected-window))))
+              (should (< seen-width origin-width))
+              (should (eq view (window-buffer (selected-window))))))
         (dolist (buffer (list view origin))
           (when (buffer-live-p buffer) (kill-buffer buffer)))))))
 

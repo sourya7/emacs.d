@@ -303,13 +303,54 @@ display behavior.
 | `t` | Target | Use inferred, local, or a configured runtime target |
 | `e` | Ephemeral | Start Pi with `--no-session`; implies independent |
 | `m` | Choose/enter model | Select a listed model or enter an unlisted ID for only this run; implies independent |
+| `r` | Manual runner | Start without Pi's shell tool, with human-runner instructions; implies independent |
 | `RET` | Launch | Execute the normalized profile shown in the action label |
 
 The switches compose. For example, `g e m` creates an independent global,
 ephemeral runtime and asks for its model. `n` alone creates an independent
 persistent/default-model runtime in the current scope. `g` alone opens the
 preferred global runtime. With no switches, PiChat opens the preferred current
-runtime.
+runtime. `r` opens an **independent** manual-runner runtime without changing or
+stopping the preferred one; deselecting `r` returns to the ordinary launch
+behavior. The runtime manager's Tools column/preview and the chat's `MANUAL`
+mode-line label identify this startup choice. This is a launch-time switch,
+not an in-chat change to a running Pi process. The choice belongs to the
+Emacs runtime, not to a saved Pi transcript.
+
+A manual-runner runtime starts Pi with `--tools` set to
+`pichat-manual-runner-tools` (default: `read,grep,find,ls,edit,write`) and
+`--append-system-prompt` set to `pichat-manual-runner-system-prompt`. The
+prompt asks the agent to offer complete fenced code, stop, and wait for you to
+run and share the result. Customize either value to suit your workflow; the
+prompt setting accepts text or an existing file visible to the Pi process.
+For example, configure the manual profile in `user/pichat.el`:
+
+```elisp
+(setq pichat-manual-runner-tools '("read" "grep" "find" "ls" "edit" "write")
+      pichat-manual-runner-system-prompt
+      (my/emacs-shared-dir "pichat-runner.md"))
+```
+
+Create that file before launching; for SSH runtimes use a file path visible to
+Pi on the remote host, or supply the prompt text directly. The built-in prompt
+remains in place. To replace it for either launch mode,
+Pi also accepts `--system-prompt` through `pichat-pi-extra-args`. Manual-runner
+flags are applied **after** generic Pi extra args, so the manual tool allowlist
+wins over a generic `--tools`. For shell blocks, request `sh`-compatible code:
+the PiChat shell runner uses `sh` even when a fence is labelled `bash`. Run
+with Embark `r`, then `s` to place the completed result into the chat draft;
+review and send that draft to continue. The default runner timeout is 15
+seconds (`pichat-artifact-runner-timeout`).
+
+`--tools` limits Pi's default tool selection, but MCP tools and extensions
+(including an optional PiChat tool bridge) can provide other execution paths;
+this is a workflow, **not a sandbox**. PiChat's explicit runners execute code
+locally outside Pi's tool permissions. Manual-runner launch works on local and
+structured SSH targets, but the **PiChat code runners themselves run on the
+Emacs host**, not the SSH host. They reject TRAMP working directories; a local
+mounted directory runs locally. A complete local `pichat-rpc-command` wrapper
+cannot be amended safely and is rejected before starting a runtime. For a
+wrapper, place the equivalent flags directly in its complete command instead.
 
 An independent runtime is a separate Pi RPC process retained in the manager but
 not marked `★` as the scope's preferred runtime. “Independent” does not mean
@@ -471,7 +512,8 @@ Commands:
 
 - `M-x pichat` — open the preferred current-scope chat
 - `M-x pichat-global` — open the preferred global chat
-- `M-x pichat-launch` or `C-u M-x pichat` — configure an advanced launch
+- `M-x pichat-launch` or `C-u M-x pichat` — configure an advanced launch;
+  toggle `r` for an independent manual-runner runtime without agent bash
 - `M-x pichat-session-manager` — manage all retained RPC runtimes
 - `M-x pichat-smoke-test` — start Pi RPC and call `get_state`
 - `M-x pichat-stop-session` — stop current RPC process
@@ -900,8 +942,9 @@ requires no synchronization:
 
 Use `M-x pichat-path-validate-mappings` to inspect mappings. Because this
 example sets a complete `pichat-rpc-command`, ephemeral and run-local-model
-profiles from `pichat-launch` are not yet supported; use a plain Pi command for
-those launches until a wrapper-aware command builder is implemented.
+profiles and manual-runner launches from `pichat-launch` are not supported;
+use a plain Pi command for those launches until a wrapper-aware command builder
+is implemented.
 
 ## Permissions
 

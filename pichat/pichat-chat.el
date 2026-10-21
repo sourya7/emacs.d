@@ -1241,6 +1241,8 @@ straightforward to exercise without synthesizing mouse input."
          (delq nil
                (list (pichat-chat--mode-line-state-control state)
                      model-thinking
+                     (when (eq (pichat-session-execution-mode s) 'manual-runner)
+                       "MANUAL")
                      (when (and (stringp name) (not (string-empty-p name)))
                        (truncate-string-to-width name 32 nil nil "…"))
                      (when (and (stringp pichat-chat--extension-title)

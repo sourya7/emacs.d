@@ -281,10 +281,12 @@ session over the global `pichat-current-session'."
          (scope (or (plist-get profile :scope) 'current))
          (target (or (plist-get profile :target) 'inferred))
          (persistence (or (plist-get profile :persistence) 'persistent))
+         (execution (or (plist-get profile :execution) 'standard))
          (model (or (plist-get profile :model) 'default))
          (explicit-reuse-p (plist-member profile :reuse))
          (reuse (or (plist-get profile :reuse)
                     (if (or (eq persistence 'ephemeral)
+                            (eq execution 'manual-runner)
                             (eq model 'prompt)
                             (stringp model))
                         'new
@@ -303,6 +305,8 @@ session over the global `pichat-current-session'."
       (user-error "Invalid PiChat runtime policy: %S" reuse))
     (unless (memq persistence '(persistent ephemeral))
       (user-error "Invalid PiChat persistence: %S" persistence))
+    (unless (memq execution '(standard manual-runner))
+      (user-error "Invalid PiChat execution mode: %S" execution))
     (unless (or (memq model '(default prompt))
                 (and (stringp model) (not (string-blank-p model))))
       (user-error "Invalid PiChat model policy: %S" model))
@@ -310,17 +314,19 @@ session over the global `pichat-current-session'."
       (user-error "Invalid PiChat display function: %S" display-function))
     (when (and (eq reuse 'preferred)
                (or (eq persistence 'ephemeral)
+                   (eq execution 'manual-runner)
                    (eq model 'prompt)
                    (stringp model)))
       (if explicit-reuse-p
           (user-error
-           "Preferred PiChat runtimes require persistent/default-model launch")
+           "Preferred PiChat runtimes require persistent/default-model/standard launch")
         (setq reuse 'new)))
     (list :backend backend
           :scope scope
           :target target
           :reuse reuse
           :persistence persistence
+          :execution execution
           :model model
           :display-function display-function)))
 
@@ -360,6 +366,7 @@ Prompted-model profiles first select a model asynchronously and return nil."
              (display-function (plist-get profile :display-function))
              (launch-options
               (list :persistence persistence
+                    :execution (plist-get profile :execution)
                     :model (and (stringp model) model)
                     :target (unless (eq target 'inferred) target)))
              (previous-session pichat-current-session)
@@ -382,7 +389,8 @@ Prompted-model profiles first select a model asynchronously and return nil."
 (defun pichat-start-session (&optional cwd scope launch-options)
   "Start a PiChat RPC session rooted at CWD and return it.
 SCOPE, when non-nil, is the immutable (KEY CWD LABEL) owner scope.
-LAUNCH-OPTIONS supports `:persistence' and an exact run-local `:model'."
+LAUNCH-OPTIONS supports `:persistence', `:execution', and an exact run-local
+`:model'."
   (interactive)
   (pichat--maybe-enable-default-bridge)
   (let* ((transport-override (plist-get launch-options :transport))
@@ -413,6 +421,7 @@ LAUNCH-OPTIONS supports `:persistence' and an exact run-local `:model'."
                    :transport transport
                    :path-context context
                    :persistence (plist-get normalized-options :persistence)
+                   :execution-mode (plist-get normalized-options :execution)
                    :startup-model (plist-get normalized-options :model)
                    :scope-key (nth 0 scope)
                    :owner-scope-key (nth 0 scope)
@@ -883,27 +892,31 @@ This is the first implementation check; it does not send an LLM prompt."
   (let* ((global-p (member "--global" arguments))
          (ephemeral-p (member "--ephemeral" arguments))
          (prompt-p (member "--model" arguments))
+         (manual-p (member "--manual-runner" arguments))
          (independent-p (or (member "--new" arguments)
-                            ephemeral-p prompt-p)))
+                            ephemeral-p prompt-p manual-p)))
     (pichat--normalize-launch-profile
      (list :backend 'pi
            :scope (if global-p 'global 'current)
            :target (pichat--launch-target-argument arguments)
            :reuse (if independent-p 'new 'preferred)
            :persistence (if ephemeral-p 'ephemeral 'persistent)
+           :execution (if manual-p 'manual-runner 'standard)
            :model (if prompt-p 'prompt 'default)
            :display-function (or (plist-get context :display-function)
                                  #'pichat-chat-open)))))
 
 (defun pichat--launch-profile-description (profile)
   "Return a concise description of normalized launch PROFILE."
-  (format "Launch: %s · %s · %s · %s · %s model"
+  (format "Launch: %s · %s · %s · %s · %s · %s model"
           (if (eq (plist-get profile :scope) 'global) "global" "current")
           (plist-get profile :target)
           (if (eq (plist-get profile :reuse) 'new)
               "independent" "preferred")
           (if (eq (plist-get profile :persistence) 'ephemeral)
               "ephemeral" "persistent")
+          (if (eq (plist-get profile :execution) 'manual-runner)
+              "manual runner" "standard tools")
           (if (eq (plist-get profile :model) 'prompt)
               "choose/enter" "default")))
 
@@ -950,7 +963,9 @@ This is the first implementation check; it does not send an LLM prompt."
    ["Persistence"
     ("e" "Ephemeral" "--ephemeral")]
    ["Model"
-    ("m" "Choose/enter model" "--model")]]
+    ("m" "Choose/enter model" "--model")]
+   ["Tools"
+    ("r" "Manual runner" "--manual-runner")]]
   [["Action"
     ("RET" pichat-launch-execute
      :description pichat--launch-action-description)]]

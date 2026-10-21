@@ -65,6 +65,14 @@
         (should (eq session selected))
         (should (eq session cycled))))))
 
+(ert-deftest pichat-chat-controls-mode-line-identifies-manual-runner-only ()
+  (pichat-test-with-unit-session (session proc)
+    (with-temp-buffer
+      (setq-local pichat-chat-session session)
+      (should-not (string-match-p "MANUAL" (pichat-chat--mode-line-status)))
+      (setf (pichat-session-execution-mode session) 'manual-runner)
+      (should (string-match-p "MANUAL" (pichat-chat--mode-line-status))))))
+
 (ert-deftest pichat-chat-controls-mode-line-renders-all-runtime-states-compactly ()
   (pichat-test-with-unit-session (session proc)
     (with-temp-buffer

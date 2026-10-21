@@ -137,13 +137,13 @@
                               (append (cadr entry) nil))))
         (should (equal (pichat-session-runtime-id session) (car entry)))
         (should (equal '("★" "8ab3111a" "idle" "pi" "file" "emacs.mine"
-                         "local" "openai/gpt-5.4" "Improve session manager")
+                         "local" "standard" "openai/gpt-5.4" "Improve session manager")
                        columns)))
       (cl-letf (((symbol-function 'pop-to-buffer) (lambda (&rest _args) nil)))
         (setq buffer (pichat-session-manager)))
       (unwind-protect
           (with-current-buffer buffer
-            (should (equal '("" "ID" "Status" "Backend" "Store" "Project" "Target" "Model" "Session")
+            (should (equal '("" "ID" "Status" "Backend" "Store" "Project" "Target" "Tools" "Model" "Session")
                            (mapcar #'car (append tabulated-list-format nil))))
             (should (equal '("Project")
                            (list (car tabulated-list-sort-key)))))
@@ -155,7 +155,20 @@
                    :owner-scope-key "global"
                    :owner-scope-label "global"))
          (columns (append (cadr (pichat-session-manager--entry session)) nil)))
-    (should (equal '("" "—" "starting" "pi" "file" "global" "local" "—" "—") columns))))
+    (should (equal '("" "—" "starting" "pi" "file" "global" "local" "standard" "—" "—") columns))))
+
+(ert-deftest pichat-session-manager-identifies-manual-runner-runtime ()
+  (let* ((session (pichat-session-make :execution-mode 'manual-runner))
+         (columns (append (cadr (pichat-session-manager--entry session)) nil)))
+    (should (equal "manual" (nth 7 columns)))
+    (with-temp-buffer
+      (pichat-session-manager-mode)
+      (pichat-session-manager--render-preview session nil)
+      (unwind-protect
+          (with-current-buffer pichat-session-manager-preview-buffer-name
+            (should (string-match-p "Tools: manual runner" (buffer-string))))
+        (when-let* ((buffer (get-buffer pichat-session-manager-preview-buffer-name)))
+          (kill-buffer buffer))))))
 
 (ert-deftest pichat-session-manager-status-marks-pending-user-input-minimally ()
   (pichat-test-with-unit-session (session proc)

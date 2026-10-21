@@ -49,6 +49,30 @@ variable supplies the complete process command.  A later `--model' in
   :type '(repeat string)
   :group 'pichat)
 
+(defcustom pichat-manual-runner-tools
+  '("read" "grep" "find" "ls" "edit" "write")
+  "Pi tool allowlist for new manual-runner runtimes.
+Passed through `--tools', after `pichat-pi-extra-args'.  Do not include a
+shell-capable tool if the agent should ask you to run shell commands instead.
+Extensions and MCP tools may provide other execution paths; this is not a
+security boundary."
+  :type '(repeat string)
+  :group 'pichat)
+
+(defcustom pichat-manual-runner-system-prompt
+  (concat "In PiChat manual-runner mode, use the available file tools for "
+          "file inspection and edits. Do not execute shell commands through "
+          "other tools. When a task needs a shell command, test run, or code "
+          "execution, provide a complete fenced code block with a language "
+          "(use sh for portable shell code), then stop and wait for the user "
+          "to run it and share the result. Never claim the code ran or "
+          "assume its outcome.")
+  "Text or Pi-visible file appended to the system prompt in manual-runner mode.
+The default retains Pi's built-in prompt and explains the human-runner loop.
+An existing file path must be accessible to the Pi runtime, including over SSH."
+  :type 'string
+  :group 'pichat)
+
 (defcustom pichat-bridge-extension-file nil
   "Optional path to the PiChat bridge extension loaded with `-e'."
   :type '(choice (const :tag "Disabled" nil) file)
@@ -112,13 +136,29 @@ Set to nil to retain all events."
 
 (defun pichat-rpc-normalize-launch-options (&optional launch-options)
   "Return validated low-level LAUNCH-OPTIONS.
-Supported keys are `:persistence' and the optional exact `:model' reference.
-A complete `pichat-rpc-command' cannot safely be amended for either option."
+Supported keys are `:persistence', `:execution' and the optional exact
+`:model' reference.  A complete local `pichat-rpc-command' cannot safely be
+amended for ephemeral, manual-runner, or run-local-model launches."
   (let ((persistence (or (plist-get launch-options :persistence) 'persistent))
+        (execution (or (plist-get launch-options :execution) 'standard))
         (model (plist-get launch-options :model))
         (structured-p (plist-get launch-options :structured-transport)))
     (unless (memq persistence '(persistent ephemeral))
       (user-error "Invalid PiChat persistence: %S" persistence))
+    (unless (memq execution '(standard manual-runner))
+      (user-error "Invalid PiChat execution mode: %S" execution))
+    (when (eq execution 'manual-runner)
+      (unless (and (consp pichat-manual-runner-tools)
+                   (cl-every (lambda (name)
+                               (and (stringp name)
+                                    (not (string-blank-p name))
+                                    (not (string-match-p "," name))))
+                             pichat-manual-runner-tools))
+        (user-error "Invalid PiChat manual-runner tools: %S"
+                    pichat-manual-runner-tools))
+      (unless (and (stringp pichat-manual-runner-system-prompt)
+                   (not (string-blank-p pichat-manual-runner-system-prompt)))
+        (user-error "Invalid PiChat manual-runner system prompt")))
     (unless (or (null model)
                 (and (stringp model) (not (string-blank-p model))))
       (user-error "Invalid PiChat startup model: %S" model))
@@ -129,15 +169,21 @@ A complete `pichat-rpc-command' cannot safely be amended for either option."
     (when (and model pichat-rpc-command (not structured-p))
       (user-error
        "Run-local PiChat models are not yet supported with `pichat-rpc-command'"))
-    (list :persistence persistence :model model)))
+    (when (and (eq execution 'manual-runner) pichat-rpc-command
+               (not structured-p))
+      (user-error
+       "Manual-runner PiChat runtimes are not supported with `pichat-rpc-command'"))
+    (list :persistence persistence :execution execution :model model)))
 
 (defun pichat-rpc-build-command (&optional session)
   "Return argv list for starting Pi RPC for optional SESSION.
-The exact session metadata controls `--no-session' and a run-local `--model'.
-User extra arguments remain late, while a run-local model remains authoritative."
+The exact session metadata controls `--no-session', manual-runner flags,
+and a run-local `--model'.  User extra arguments remain late, while the
+manual-runner tool selection and run-local model remain authoritative."
   (let* ((persistence (if session
                           (pichat-session-persistence session)
                         'persistent))
+         (execution (and session (pichat-session-execution-mode session)))
          (startup-model (and session (pichat-session-startup-model session)))
          (transport (and session (pichat-session-transport session)))
          (remote-p (and transport
@@ -146,7 +192,7 @@ User extra arguments remain late, while a run-local model remains authoritative.
                               (pichat-transport-pi-executable transport))
                          pichat-pi-executable)))
     (pichat-rpc-normalize-launch-options
-     (list :persistence persistence :model startup-model
+     (list :persistence persistence :execution execution :model startup-model
            :structured-transport remote-p))
     (or (and (not remote-p) pichat-rpc-command)
         (append (list executable)
@@ -164,6 +210,10 @@ User extra arguments remain late, while a run-local model remains authoritative.
                 (when (eq persistence 'ephemeral)
                   (list "--no-session"))
                 (unless remote-p pichat-pi-extra-args)
+                (when (eq execution 'manual-runner)
+                  (list "--tools" (string-join pichat-manual-runner-tools ",")
+                        "--append-system-prompt"
+                        pichat-manual-runner-system-prompt))
                 ;; The per-run selection must override any generic model in
                 ;; `pichat-pi-extra-args' without changing that customization.
                 (when startup-model

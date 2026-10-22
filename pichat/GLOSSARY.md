@@ -1,6 +1,6 @@
 # PiChat glossary
 
-Terms for PiChat lifecycle and session operations. **Runtime**, **Pi session**, **saved session file**, and **Session History** refer to different things. For commands, keybindings, configuration, and operational details, see [README.md](README.md).
+Shared terms for discussing PiChat. **Runtime**, **Pi session**, **saved session file**, and **Session History** refer to different things. For commands, keybindings, configuration, and operational details, see [README.md](README.md).
 
 ## Identity and lifetime
 
@@ -51,7 +51,7 @@ Terms for PiChat lifecycle and session operations. **Runtime**, **Pi session**, 
 | Term | Meaning |
 |---|---|
 | **Saved-session browser** | A picker of saved sessions, rather than entries within one session. Its selection context determines whether a file opens independently or replaces the current runtime's source. |
-| **Basic picker** | Saved-session file completion that does not require archive or Consult integration. |
+| **Basic picker** | Saved-session file completion that does not require archive or Consult integration; used when archive-backed browsing is unavailable or explicitly bypassed. |
 | **Archive-backed Consult picker** | Search and selection of indexed saved sessions through a compatible `pi-archive` integration. The basic picker is the fallback when this integration is unavailable. |
 | **Related-session browser** | A picker of a saved session's resolved archive parent and children. It explores relations between sessions, not branches within one session. |
 | **Session History** | A view of entries and branches within the current Pi session, distinct from browsing saved sessions. |
@@ -59,3 +59,69 @@ Terms for PiChat lifecycle and session operations. **Runtime**, **Pi session**, 
 | **Active branch** | The current root-to-leaf conversation path within a Pi session. |
 | **Branch preview** | A read-only view of a root-to-entry path in Session History. Previewing does not change the runtime's source or Pi's active branch. |
 | **Archive relation** | An indexed parent/child link between distinct saved Pi sessions. It is separate from branches within one session and from a runtime's source back/forward chain. |
+
+## Transcript and rendering
+
+| Term | Meaning |
+|---|---|
+| **Canonical transcript** | PiChat's synchronized representation of Pi's active-branch entries, used as the authority for settled chat content. It also applies to ephemeral sessions. |
+| **Live tail** | Provisional chat content derived from RPC events while an agent run is in progress, before canonical synchronization. |
+| **Settlement** | The transition from an agent run's provisional output to synchronized canonical content after the run ends. |
+| **State synchronization** | Fetching Pi's state or entries to update PiChat after a run or source rebinding. |
+| **Source generation** | A PiChat generation marker used to invalidate stale events, callbacks, or caches after source rebinding. It is not a Pi session ID. |
+| **Repaint** | Refreshing the chat display from PiChat's synchronized transcript model, rather than treating visible buffer text as the source of truth. |
+| **Rendered response view** | A read-only rendering of one settled assistant response's prose. The chat itself retains the response's exact Markdown source. |
+
+## Messages and tool display
+
+| Term | Meaning |
+|---|---|
+| **Activity group** | A source-ordered, foldable presentation group for thinking and tool activity. It is distinct from an individual tool call. |
+| **Tool block** | The chat presentation of an individual tool call, including available arguments, output, status, and folding controls. |
+| **Tool enrichment** | Presentation-only classification or file locations derived from tool activity; it does not change Pi's recorded transcript. |
+| **Settled tool result** | Tool output represented in synchronized Pi entries, as opposed to provisional output shown while a tool is running. |
+
+## Prompt and input
+
+| Term | Meaning |
+|---|---|
+| **Draft** | Unsent text in the chat prompt; placing text in a draft does not send it to Pi. |
+| **Steering message** | A message queued to redirect the agent during an ongoing run. |
+| **Follow-up message** | A message queued for delivery after the agent finishes its current work. |
+| **Recoverable submission** | Prompt content retained by PiChat after a rejected or ambiguously failed submission so the user can restore it. |
+| **Attachment** | An image associated with a pending draft or submission. |
+| **Compose editor** | A separate buffer for editing a draft before returning its text to the chat prompt without submitting it. |
+
+## Tools, extensions, and permissions
+
+| Term | Meaning |
+|---|---|
+| **Built-in tool** | A tool supplied by Pi itself, such as `read`, `edit`, or `bash`. |
+| **Extension tool** | A tool registered by a Pi extension; loading an extension does not necessarily declare its tool to the model. |
+| **MCP tool** | A tool provided through a Model Context Protocol (MCP) server. |
+| **Tool declaration** | Offering a tool directly to the model, distinct from loading the extension or MCP server that provides it. |
+| **PiChat bridge** | The optional Pi extension that connects a Pi runtime to PiChat's Emacs-side tool and UI facilities. |
+| **Emacs-defined tool** | A PiChat tool implemented on the Emacs side and exposed to Pi through the bridge, rather than a Pi built-in tool. |
+| **Approval policy** | PiChat's allow/ask/deny policy for Emacs-defined tools. It does not govern Pi-native tools. |
+| **Extension UI request** | An extension's request for interaction with the user, routed to the owning chat. |
+
+## Code artifacts and execution
+
+| Term | Meaning |
+|---|---|
+| **Settled chat artifact** | A selectable code fence, link, table, or LaTeX span in settled assistant prose. It is not a live tool call. |
+| **Artifact runner** | PiChat's explicit action to execute code from a selected fence, outside Pi's tool-call and permission flow. |
+| **Artifact result view** | The buffer showing an artifact runner's executed code, output, and outcome. |
+| **Result handoff** | Inserting a bounded runner report into the chat draft for review; it is not sent to Pi automatically. |
+| **Spill file** | A file retaining runner output that exceeds a preview or sharing limit; it may outlive the result view. |
+
+## Configuration and integration
+
+| Term | Meaning |
+|---|---|
+| **Built-in tool selection** | The selection of Pi built-in tools offered for a run, using Pi's defaults or startup tool flags. |
+| **Base system prompt** | Pi's normal system instructions, which a preset can retain or replace. |
+| **Appended system prompt** | Instructions added to the system prompt without replacing its base text. |
+| **Run-local model** | A model selected for one newly launched runtime rather than changed as Pi's persistent default. |
+| **Path mapping** | Translation between Emacs-visible paths and paths accessible to the Pi runtime, including saved session files and working directories. |
+| **Archive capability** | A validated `pi-archive` integration that permits archive-backed browsing of saved sessions. |

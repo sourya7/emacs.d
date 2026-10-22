@@ -622,16 +622,17 @@ Chat keys:
 - At the beginning of the prompt, type `/` and invoke completion-at-point to
   complete currently available Pi commands, templates, and skills
 - `C-c C-p` — open **Session History** for the current session file
-- `C-c C-b` — browse saved sessions and open a selection in a new independent
-  runtime rooted at its recorded working directory; the existing runtime is
-  untouched. A compatible live `pi-archive` or explicitly trusted standalone
-  archive enables Consult search; otherwise the basic file picker is used.
-  `C-u C-c C-b` forces the basic picker. In this repository, saved chats use
-  the same project-tab display policy as manager `b`.
-- `M-x pichat-sessions-switch-files` — explicitly replace the active runtime's
-  source with a selected saved session, keeping that runtime's owner scope and
-  tab. A prefix argument forces the basic picker. Consult Embark `s` performs
-  this switch for a candidate; `j` switches and jumps to Session History
+- `C-c C-b` (or the chat-local `SPC m b` menu in this repository) — switch the
+  active runtime to a selected saved session, keeping its owner scope and tab.
+  `C-u C-c C-b` forces the basic picker. Consult Embark `s` also switches a
+  candidate; `j` switches and jumps to Session History.
+- `M-x pichat-sessions-browse-files` (or global `C-c p b` in this repository)
+  — browse saved sessions and open a selection in a new independent runtime
+  rooted at its recorded working directory; the existing runtime is untouched.
+  A compatible live `pi-archive` or explicitly trusted standalone archive
+  enables Consult search; otherwise the basic file picker is used. A prefix
+  argument forces the basic picker. In this repository, independently opened
+  chats use the same project-tab display policy as manager `b`.
 - `C-c C-r` — browse the active persisted session's resolved archive parent and
   direct children; this uses the same bounded relation picker, preview, and
   loading actions as archive search and does not alter the live source

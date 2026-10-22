@@ -22,7 +22,9 @@ Personal GNU Emacs configuration. `init.el` loads `core/package.el`, then `user/
 
 Before changing these packages, read their documentation:
 
-- `pichat/README.md` and `pichat/TESTING_GUIDELINES.md` — Pi RPC frontend and tests
+- `pichat/README.md`, `pichat/GLOSSARY.md`, and `pichat/TESTING_GUIDELINES.md` — Pi RPC frontend, terminology, and tests
+
+When discussing or changing PiChat concepts, always consult `pichat/GLOSSARY.md` and use its precise terms (especially runtime vs. Pi session vs. saved session file, open vs. switch, and Session History vs. saved-session browsing). Reference the glossary when explaining specific concepts; keep it consistent with source and `pichat/README.md` when behavior changes.
 
 Sources fetched with elpaca generally live in `.local/elpaca/sources/vui/` (eg. `.local/elpaca/sources/vui/` for `vui`).
 

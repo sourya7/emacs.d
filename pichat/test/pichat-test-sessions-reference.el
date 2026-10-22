@@ -189,10 +189,11 @@
     (should-not prompted)
     (should-not sent)))
 
-(ert-deftest pichat-saved-session-browser-remains-separately-invokable ()
+(ert-deftest pichat-chat-switches-saved-sessions-while-independent-browser-remains-invokable ()
   (should (commandp #'pichat-sessions-browse-files))
+  (should (commandp #'pichat-sessions-switch-files))
   (should (eq (lookup-key pichat-chat-mode-map (kbd "C-c C-b"))
-              #'pichat-sessions-browse-files))
+              #'pichat-sessions-switch-files))
   (should-not (eq (lookup-key pichat-chat-mode-map (kbd "C-c C-p"))
                   #'pichat-sessions-browse-files)))
 

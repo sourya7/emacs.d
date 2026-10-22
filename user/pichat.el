@@ -169,7 +169,7 @@
     "t" '(pichat-chat-cycle-thinking-level :which-key "Cycle thinking")
     "r" '(pichat-chat-refresh-status :which-key "Refresh")
     "R" '(pichat-chat-repaint :which-key "Repaint")
-    "b" '(pichat-sessions-browse-files :which-key "Browse saved sessions")
+    "b" '(pichat-sessions-switch-files :which-key "Switch saved session")
     "p" '(pichat-sessions-list :which-key "Session history")
     "[" '(pichat-sessions-return-to-origin :which-key "Return to source session")
     "]" '(pichat-sessions-forward-to-fork :which-key "Forward to fork")

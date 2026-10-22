@@ -345,7 +345,8 @@ TOOLS, when non-nil, selects explicit Pi tools instead of disabling built-ins."
        (pichat-test-with-temp-dir project-dir
          (pichat-test-with-temp-dir agent-dir
            (pichat-test-with-temp-dir session-dir
-             (let* ((script-file (expand-file-name "fake-provider-script.json" project-dir))
+             (let* ((pichat-default-preset 'standard)
+                    (script-file (expand-file-name "fake-provider-script.json" project-dir))
                     (status-file (expand-file-name "fake-provider-status.json" project-dir))
                     (process-environment
                      (append (list "PI_OFFLINE=1"

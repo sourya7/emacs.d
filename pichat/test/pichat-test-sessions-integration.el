@@ -269,7 +269,8 @@ SESSION-ID defaults to a stable Phase 11 fixture identity."
       (pichat-test-with-temp-dir project-dir
         (pichat-test-with-temp-dir agent-dir
           (pichat-test-with-temp-dir session-dir
-            (let* ((script (expand-file-name "script.json" project-dir))
+            (let* ((pichat-default-preset 'standard)
+                   (script (expand-file-name "script.json" project-dir))
                    (status (expand-file-name "status.json" project-dir))
                    (file (expand-file-name "independent-saved.jsonl" session-dir))
                    (pichat-rpc-command
@@ -324,7 +325,8 @@ SESSION-ID defaults to a stable Phase 11 fixture identity."
         (pichat-test-with-temp-dir project-two
           (pichat-test-with-temp-dir agent-dir
             (pichat-test-with-temp-dir session-dir
-              (let* ((script-one (expand-file-name "script-one.json" project-one))
+              (let* ((pichat-default-preset 'standard)
+                     (script-one (expand-file-name "script-one.json" project-one))
                      (script-two (expand-file-name "script-two.json" project-two))
                      (status-one (expand-file-name "status-one.json" project-one))
                      (status-two (expand-file-name "status-two.json" project-two))

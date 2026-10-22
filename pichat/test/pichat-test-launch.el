@@ -66,21 +66,22 @@
                  (lambda (_session) (setq rpc-started t))))
         (should-error
          (pichat-start-session
-          "/tmp/pichat-launch/" nil '(:execution manual-runner))
+          "/tmp/pichat-launch/" nil '(:preset manual))
          :type 'user-error)
         (should-not rpc-started)
         (should-not (pichat-session-list))))))
 
 (ert-deftest pichat-start-session-retains-valid-startup-failure-in-registry ()
   (pichat-test-with-clean-state
-    (let ((pichat-rpc-command '("/definitely/missing/pichat-pi")))
+    (let ((pichat-default-preset 'standard)
+          (pichat-rpc-command '("/definitely/missing/pichat-pi")))
       (let ((session (pichat-start-session "/tmp/pichat-launch/")))
         (should (eq 'error (pichat-session-state session)))
         (should (memq session (pichat-session-list)))))))
 
 (ert-deftest pichat-launch-profile-defaults-are-orthogonal-and-explicit ()
   (should (equal '(:backend pi :scope current :target inferred :reuse preferred
-                   :persistence persistent :execution standard :model default
+                   :persistence persistent :preset default :model default
                    :display-function pichat-chat-open)
                  (pichat--normalize-launch-profile nil)))
   (should (eq 'new
@@ -97,14 +98,14 @@
                :reuse)))
   (should (eq 'new
               (plist-get
-               (pichat--normalize-launch-profile '(:execution manual-runner))
+               (pichat--normalize-launch-profile '(:preset manual))
                :reuse))))
 
 (ert-deftest pichat-launch-profile-rejects-incompatible-preferred-policy ()
   (dolist (profile '((:reuse preferred :persistence ephemeral)
                      (:reuse preferred :model prompt)
                      (:reuse preferred :model "run/model")
-                     (:reuse preferred :execution manual-runner)))
+                     (:reuse preferred :preset manual)))
     (should-error (pichat--normalize-launch-profile profile)
                   :type 'user-error)))
 
@@ -208,7 +209,7 @@
                       (gethash "project:/tmp/project/"
                                pichat--sessions-by-scope))))))))
 
-(ert-deftest pichat-launch-manual-runner-retains-preferred-and-captures-mode ()
+(ert-deftest pichat-launch-explicit-preset-retains-preferred-and-captures-name ()
   (pichat-test-with-clean-state
     (let ((preferred (pichat-session-make :cwd "/tmp/project/"))
           (pichat-rpc-command nil))
@@ -221,9 +222,9 @@
                 ((symbol-function 'pichat-rpc-get-state) #'ignore))
         (let ((manual
                (pichat--open-launch-profile
-                '(:scope current :execution manual-runner) "/tmp/project/")))
-          (should (eq 'manual-runner (pichat-session-execution-mode manual)))
-          (should (eq 'standard (pichat-session-execution-mode preferred)))
+                '(:scope current :preset manual) "/tmp/project/")))
+          (should (eq 'manual (pichat-session-preset-name manual)))
+          (should-not (pichat-session-preset-name preferred))
           (should (eq preferred (gethash "project:/tmp/project/"
                                          pichat--sessions-by-scope)))
           (should (not (eq preferred manual))))))))
@@ -304,7 +305,7 @@
   (pichat-test-with-clean-state
     (let ((previous (pichat-session-make :cwd "/tmp/previous/"))
           (profile '(:scope current :reuse new
-                     :persistence persistent :execution manual-runner
+                     :persistence persistent :preset manual
                      :model prompt))
           opened-profile opened-directory)
       (setq pichat-current-session previous)
@@ -324,7 +325,7 @@
                          opened-directory directory))))
         (pichat--select-model-before-launch profile "/tmp/project/"))
       (should (equal "test/vendor/chosen" (plist-get opened-profile :model)))
-      (should (eq 'manual-runner (plist-get opened-profile :execution)))
+      (should (eq 'manual (plist-get opened-profile :preset)))
       (should (equal "/tmp/project/" opened-directory))
       (should (eq previous pichat-current-session))
       (should-not (pichat-session-list)))))
@@ -485,20 +486,20 @@
       (should-not listed))))
 
 (ert-deftest pichat-launch-transient-arguments-compose-and-imply-independent ()
-  (dolist (case '((nil current preferred persistent standard default)
-                  (("--global") global preferred persistent standard default)
-                  (("--new") current new persistent standard default)
-                  (("--ephemeral") current new ephemeral standard default)
-                  (("--model") current new persistent standard prompt)
-                  (("--manual-runner") current new persistent manual-runner default)
-                  (("--global" "--ephemeral" "--model" "--manual-runner")
-                   global new ephemeral manual-runner prompt)))
-    (pcase-let* ((`(,arguments ,scope ,reuse ,persistence ,execution ,model) case)
+  (dolist (case '((nil current preferred persistent default default)
+                  (("--global") global preferred persistent default default)
+                  (("--new") current new persistent default default)
+                  (("--ephemeral") current new ephemeral default default)
+                  (("--model") current new persistent default prompt)
+                  (("--preset=manual") current new persistent manual default)
+                  (("--global" "--ephemeral" "--model" "--preset=review")
+                   global new ephemeral review prompt)))
+    (pcase-let* ((`(,arguments ,scope ,reuse ,persistence ,preset ,model) case)
                  (profile (pichat--launch-profile-from-arguments arguments)))
       (should (eq scope (plist-get profile :scope)))
       (should (eq reuse (plist-get profile :reuse)))
       (should (eq persistence (plist-get profile :persistence)))
-      (should (eq execution (plist-get profile :execution)))
+      (should (eq preset (plist-get profile :preset)))
       (should (eq model (plist-get profile :model))))))
 
 (ert-deftest pichat-launch-context-uses-configured-display-policy ()
@@ -526,9 +527,9 @@
 
 (ert-deftest pichat-launch-transient-description-shows-normalized-profile ()
   (cl-letf (((symbol-function 'transient-get-value)
-             (lambda () '("--global" "--ephemeral" "--model" "--manual-runner")))
+             (lambda () '("--global" "--ephemeral" "--model" "--preset=review")))
             ((symbol-function 'transient-scope) (lambda (&rest _args) nil)))
-    (should (equal "Launch: global · inferred · independent · ephemeral · manual runner · choose/enter model"
+    (should (equal "Launch: global · inferred · independent · ephemeral · review · choose/enter model"
                    (pichat--launch-action-description)))))
 
 (ert-deftest pichat-launch-transient-accepts-terminal-and-gui-return ()
@@ -545,7 +546,7 @@
 
 (ert-deftest pichat-launch-transient-initializes-with-safe-empty-value ()
   (let ((object (clone (get 'pichat-launch 'transient--prefix))))
-    (oset object value '("--ephemeral" "--model" "--manual-runner"))
+    (oset object value '("--ephemeral" "--model" "--preset=manual"))
     (pichat--launch-transient-init-value object)
     (should-not (oref object value))))
 

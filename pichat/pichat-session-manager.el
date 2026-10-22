@@ -210,8 +210,8 @@ or Bufferlo dependency."
     (pichat-session-manager--persistence-label session)
     (pichat-session-manager--project-label session)
     (pichat-session-manager--target-label session)
-    (if (eq (pichat-session-execution-mode session) 'manual-runner)
-        "manual" "standard")
+    (if (pichat-session-preset-name session)
+        (symbol-name (pichat-session-preset-name session)) "legacy")
     (pichat-session-manager--model-name session)
     (pichat-session-manager--row-session-name session))))
 
@@ -344,10 +344,24 @@ canonical chat cache while an RPC refresh is pending."
                         (or (pichat-session-id session) "—")))
         (insert (format "Backend: %s\n"
                         (pichat-session-backend-id session)))
-        (insert (format "Tools: %s\n"
-                        (if (eq (pichat-session-execution-mode session)
-                                'manual-runner)
-                            "manual runner" "standard")))
+        (let ((spec (pichat-session-preset-spec session)))
+          (insert (format "Preset: %s\n"
+                          (or (pichat-session-preset-name session) "legacy")))
+          (when spec
+            (when-let* ((description (plist-get spec :description)))
+              (insert (format "Description: %s\n"
+                              (truncate-string-to-width description 120 nil nil "…"))))
+            (insert (format "Built-in tools: %s\n"
+                            (pcase (plist-get spec :tools)
+                              (:default "Pi defaults")
+                              ('nil "none")
+                              (names (string-join names ", ")))))
+            (insert (format "System prompt: %s%s\n"
+                            (if (plist-get spec :system-prompt)
+                                "replaced" "Pi default")
+                            (if (plist-get spec :append-system-prompt)
+                                ", appended instructions" "")))
+            (insert "Extension and MCP tools are not constrained by built-in tool selection.\n")))
         (insert (format "Model: %s\n"
                         (pichat-session-manager--preview-model-name session)))
         (insert (format "Scope: %s\n"
@@ -848,7 +862,7 @@ Killing this buffer never stops or forgets a runtime."
                ("Store" 6 t)
                ("Project" 18 t)
                ("Target" 16 t)
-               ("Tools" 9 t)
+               ("Preset" 12 t)
                ("Model" 28 t)
                ("Session" 40 t)])
   (setq-local tabulated-list-padding 2)

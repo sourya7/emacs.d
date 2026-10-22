@@ -164,7 +164,8 @@
 
 (ert-deftest pichat-diagnostics-top-level-chat-opens-after-startup-failure ()
   (pichat-test-with-clean-state
-    (let ((pichat-rpc-command
+    (let ((pichat-default-preset 'standard)
+          (pichat-rpc-command
            (list (expand-file-name "missing-pi-for-chat"
                                    temporary-file-directory)))
           (pichat-chat-stop-session-on-kill nil)

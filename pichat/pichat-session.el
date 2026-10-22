@@ -39,7 +39,8 @@
   state
   persistence
   startup-model
-  execution-mode
+  preset-name
+  preset-spec
   session-file
   session-file-back-stack
   session-file-forward-stack
@@ -104,8 +105,6 @@
       (setf (pichat-session-state session) 'starting))
     (unless (pichat-session-persistence session)
       (setf (pichat-session-persistence session) 'persistent))
-    (unless (pichat-session-execution-mode session)
-      (setf (pichat-session-execution-mode session) 'standard))
     (unless (pichat-session-pending-responses session)
       (setf (pichat-session-pending-responses session)
             (make-hash-table :test #'equal)))

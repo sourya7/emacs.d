@@ -340,55 +340,64 @@ display behavior.
 | `t` | Target | Use inferred, local, or a configured runtime target |
 | `e` | Ephemeral | Start Pi with `--no-session`; implies independent |
 | `m` | Choose/enter model | Select a listed model or enter an unlisted ID for only this run; implies independent |
-| `r` | Manual runner | Start without Pi's shell tool, with human-runner instructions; implies independent |
+| `p` | Preset | Choose a named tool/prompt preset; explicit selection implies independent |
 | `RET` | Launch | Execute the normalized profile shown in the action label |
 
 The switches compose. For example, `g e m` creates an independent global,
 ephemeral runtime and asks for its model. `n` alone creates an independent
 persistent/default-model runtime in the current scope. `g` alone opens the
 preferred global runtime. With no switches, PiChat opens the preferred current
-runtime. `r` opens an **independent** manual-runner runtime without changing or
-stopping the preferred one; deselecting `r` returns to the ordinary launch
-behavior. The runtime manager's Tools column/preview and the chat's `MANUAL`
-mode-line label identify this startup choice. This is a launch-time switch,
-not an in-chat change to a running Pi process. The choice belongs to the
-Emacs runtime, not to a saved Pi transcript.
+runtime. The picker starts at `default (manual)`; this policy reuses the
+preferred runtime if one exists, even when that runtime was created with a
+different preset. Choosing a named preset (including `manual`) starts an
+**independent** runtime without stopping or changing the preferred runtime.
+Choose `default` again to restore normal reuse, unless another switch requires
+an independent runtime. The manager's Preset column and the chat's `P:name`
+mode-line label identify the captured startup choice. Presets belong to Emacs
+runtimes, not saved Pi transcripts, and cannot change an existing process.
 
-A manual-runner runtime starts Pi with `--tools` set to
-`pichat-manual-runner-tools` (default: `read,grep,find,ls,edit,write`) and
-`--append-system-prompt` set to `pichat-manual-runner-system-prompt`. The
-prompt asks the agent to offer complete fenced code, stop, and wait for you to
-run and share the result. Customize either value to suit your workflow; the
-prompt setting accepts text or an existing file visible to the Pi process.
-For example, configure the manual profile in `user/pichat.el`:
+The built-in `manual` preset retains Pi's base prompt, selects
+`read,grep,find,ls,edit,write` and asks the agent to supply fenced code and
+wait for your run results. Other built-ins: `coding` (includes bash), `review`
+(read-only built-in tools), `discuss` (no built-in tools), and `standard`
+(Pi's defaults). Set `pichat-default-preset` to change the creation default.
+Define or replace a preset in `user/pichat.el`, for example:
 
 ```elisp
-(setq pichat-manual-runner-tools '("read" "grep" "find" "ls" "edit" "write")
-      pichat-manual-runner-system-prompt
-      (my/emacs-shared-dir "pichat-runner.md"))
+(pichat-make-preset 'manual
+  :description "Inspect and edit; ask me to run code."
+  :tools '("read" "grep" "find" "ls" "edit" "write")
+  :append-system-prompt
+  `((:file ,(my/emacs-shared-dir "pichat-runner.md"))
+    "Wait for my run results before continuing."))
+(setq pichat-default-preset 'manual)
 ```
 
-Create that file before launching; for SSH runtimes use a file path visible to
-Pi on the remote host, or supply the prompt text directly. The built-in prompt
-remains in place. To replace it for either launch mode,
-Pi also accepts `--system-prompt` through `pichat-pi-extra-args`. Manual-runner
-flags are applied **after** generic Pi extra args, so the manual tool allowlist
-wins over a generic `--tools`. For shell blocks, request `sh`-compatible code:
-the PiChat shell runner uses `sh` even when a fence is labelled `bash`. Run
-with Embark `r`, then `s` to place the completed result into the chat draft;
-review and send that draft to continue. The default subprocess timeout is
-120 seconds (`pichat-artifact-runner-timeout`).
+The file must exist and be readable **by Emacs** when a new runtime starts;
+PiChat sends its contents as literal text, including to SSH Pi. Prompts can be
+literal strings, `(:file ABSOLUTE-PATH)`, or ordered lists of those fragments.
+Resolved prompts end with a newline so Pi does not mistake literal text that
+looks like a filename for a runtime-side file reference.
+`:system-prompt` replaces Pi's base prompt; `:append-system-prompt` adds to it.
+`:tools :default` (or omission) leaves Pi's built-in selection alone;
+`:tools nil` disables built-in tools. Explicit lists select exactly those
+built-ins. Presets reject conflicting generic Pi tool/prompt flags before
+runtime creation; use `standard` when the generic Pi arguments should govern.
+Changes to definitions affect future runtimes only. For shell blocks, request
+`sh`-compatible code: the PiChat shell runner uses `sh` even when a fence is
+labelled `bash`. Run with Embark `r`, then `s` to place results in the draft;
+review and send it to continue. The subprocess timeout defaults to 120 seconds.
 
 `--tools` limits Pi's default tool selection, but MCP tools and extensions
 (including an optional PiChat tool bridge) can provide other execution paths;
 this is a workflow, **not a sandbox**. PiChat's explicit runners execute code
-outside Pi's tool permissions on the selected host. Manual-runner launch and
-subprocess code execution work on local and structured SSH targets: SSH code
-runs remotely even when the project is mounted locally. The in-process Elisp
-runner is unavailable for SSH Pi sessions. A complete local
-`pichat-rpc-command` wrapper cannot be amended safely and is rejected before
-starting a manual-runner runtime. For a
-wrapper, place the equivalent flags directly in its complete command instead.
+outside Pi's tool permissions on the selected host. Presets and subprocess
+code execution work on local and structured SSH targets: SSH code runs remotely
+even when the project is mounted locally. The in-process Elisp runner is
+unavailable for SSH Pi sessions. A complete local `pichat-rpc-command` wrapper
+cannot be amended safely: presets with tool or prompt overrides are rejected
+before startup. Set the default preset to `standard` for such a wrapper, and
+put any desired tool/prompt flags in its complete command instead.
 
 An independent runtime is a separate Pi RPC process retained in the manager but
 not marked `★` as the scope's preferred runtime. “Independent” does not mean
@@ -551,7 +560,7 @@ Commands:
 - `M-x pichat` — open the preferred current-scope chat
 - `M-x pichat-global` — open the preferred global chat
 - `M-x pichat-launch` or `C-u M-x pichat` — configure an advanced launch;
-  toggle `r` for an independent manual-runner runtime without agent bash
+  choose `p` for an independent named preset, or use the default manual preset
 - `M-x pichat-session-manager` — manage all retained RPC runtimes
 - `M-x pichat-smoke-test` — start Pi RPC and call `get_state`
 - `M-x pichat-stop-session` — stop current RPC process
@@ -980,7 +989,7 @@ requires no synchronization:
 
 Use `M-x pichat-path-validate-mappings` to inspect mappings. Because this
 example sets a complete `pichat-rpc-command`, ephemeral and run-local-model
-profiles and manual-runner launches from `pichat-launch` are not supported;
+profiles and presets that override tools or prompts are not supported;
 use a plain Pi command for those launches until a wrapper-aware command builder
 is implemented.
 

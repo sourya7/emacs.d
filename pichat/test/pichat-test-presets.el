@@ -1,0 +1,103 @@
+;;; pichat-test-presets.el --- PiChat preset behavior -*- lexical-binding: t; -*-
+;;; Code:
+(require 'pichat-test-support)
+
+(ert-deftest pichat-presets-validate-and-compose-emacs-readable-prompts ()
+  (let ((pichat-presets (copy-tree pichat-presets))
+        (file (make-temp-file "pichat-preset-")))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "From Emacs"))
+          (pichat-make-preset 'test-compose
+            :description "Initial"
+            :tools '("read" "read" "write")
+            :system-prompt "Replacement"
+            :append-system-prompt (list "Before" (list :file file) "After"))
+          (let ((snapshot (pichat-presets-resolve 'test-compose)))
+            (should (equal '("read" "write") (plist-get snapshot :tools)))
+            (should (equal "Replacement\n" (plist-get snapshot :system-prompt)))
+            (should (equal "Before\n\nFrom Emacs\n\nAfter\n"
+                           (plist-get snapshot :append-system-prompt)))
+            (with-temp-file file (insert "Changed"))
+            (pichat-make-preset 'test-compose :tools nil)
+            (should (equal "Before\n\nFrom Emacs\n\nAfter\n"
+                           (plist-get snapshot :append-system-prompt)))
+            (should-not (plist-get (pichat-presets-resolve 'test-compose) :tools))))
+      (delete-file file))))
+
+(ert-deftest pichat-presets-reject-invalid-registration-and-files ()
+  (let ((pichat-presets (copy-tree pichat-presets)))
+    (dolist (spec '((:tools ("bash,read")) (:tools ("unknown"))
+                    (:tools "read") (:tools nil :tools :default) (:append-system-prompt " ")
+                    (:append-system-prompt (:file "relative.md"))
+                    (:append-system-prompt (:file "/tmp/a" :extra t))
+                    (:typo t) (:tools)))
+      (should-error (apply #'pichat-make-preset 'invalid spec) :type 'user-error))
+    (should-error (pichat-make-preset 'default :tools nil) :type 'user-error)
+    (should-error (pichat-presets-resolve 'unknown) :type 'user-error)
+    (pichat-make-preset 'missing :append-system-prompt
+      '(:file "/definitely/missing/pichat-preset.md"))
+    (should-error (pichat-presets-resolve 'missing) :type 'user-error)))
+
+(ert-deftest pichat-presets-default-reuses-existing-runtime-without-resolution ()
+  (pichat-test-with-clean-state
+    (let ((pichat-default-preset 'missing))
+      (cl-letf (((symbol-function 'pichat-session-alive-p) (lambda (_s) t)))
+        (let* ((scope '("scope" "/tmp/" "test"))
+               (session (pichat-session-make :preset-name 'review)))
+          (puthash "scope" session pichat--sessions-by-scope)
+          (should (eq session (pichat--preferred-session-for-exact-scope scope)))
+          (should (eq 'review (pichat-session-preset-name session))))))))
+
+(ert-deftest pichat-presets-reject-conflicting-generic-tools-before-registration ()
+  (pichat-test-with-clean-state
+    (let ((pichat-rpc-command nil)
+          (pichat-pi-extra-args '("--tools" "bash")))
+      (should-error (pichat-start-session "/tmp/" nil '(:preset review))
+                    :type 'user-error)
+      (should-not (pichat-session-list)))))
+
+(ert-deftest pichat-presets-complete-command-allows-no-op-standard ()
+  (pichat-test-with-clean-state
+    (let ((pichat-rpc-command '("wrapper" "pi" "--mode" "rpc")))
+      (cl-letf (((symbol-function 'pichat-rpc-start) #'identity))
+        (let ((session (pichat-start-session "/tmp/" nil '(:preset standard))))
+          (should (eq 'standard (pichat-session-preset-name session)))
+          (should (equal pichat-rpc-command (pichat-rpc-build-command session))))))))
+
+(ert-deftest pichat-presets-ordinary-start-captures-manual-default ()
+  (pichat-test-with-clean-state
+    (let ((pichat-rpc-command nil)
+          (pichat-default-preset 'manual))
+      (cl-letf (((symbol-function 'pichat-rpc-start) #'identity))
+        (let ((session (pichat-start-session "/tmp/")))
+          (should (eq 'manual (pichat-session-preset-name session)))
+          (should (equal '("read" "grep" "find" "ls" "edit" "write")
+                         (plist-get (pichat-session-preset-spec session) :tools)))
+          (should (member "--tools" (pichat-rpc-build-command session))))))))
+
+(ert-deftest pichat-presets-transient-reader-offers-annotated-default ()
+  (let ((pichat-default-preset 'manual))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt choices _predicate require-match &rest _)
+                 (should require-match)
+                 (should (member "review" choices))
+                 (should (string-match-p "manual"
+                          (funcall (plist-get completion-extra-properties
+                                              :annotation-function)
+                                   "default")))
+                 "review")))
+      (should (equal "review" (pichat--launch-read-preset "Preset: " nil nil))))))
+
+(ert-deftest pichat-presets-default-selection-keeps-independent-switches ()
+  (should (eq 'preferred
+              (plist-get (pichat--launch-profile-from-arguments
+                          '("--preset=default")) :reuse)))
+  (should (eq 'new
+              (plist-get (pichat--launch-profile-from-arguments
+                          '("--preset=default" "--new")) :reuse)))
+  (should-error (pichat--launch-profile-from-arguments '("--preset=missing"))
+                :type 'user-error))
+
+(provide 'pichat-test-presets)
+;;; pichat-test-presets.el ends here

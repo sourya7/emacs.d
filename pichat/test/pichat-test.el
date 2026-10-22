@@ -15,6 +15,7 @@
 (require 'pichat-test-rpc)
 (require 'pichat-test-transport)
 (require 'pichat-test-launch)
+(require 'pichat-test-presets)
 (require 'pichat-test-chat-core)
 (require 'pichat-test-chat-controls)
 (require 'pichat-test-chat-diagnostics)

@@ -11,6 +11,7 @@
 (require 'json)
 (require 'subr-x)
 (require 'pichat-session)
+(require 'pichat-presets)
 (require 'pichat-events)
 (require 'pichat-path)
 (require 'pichat-transport)
@@ -47,30 +48,6 @@ variable supplies the complete process command.  A later `--model' in
 (defcustom pichat-pi-extra-args nil
   "Additional arguments passed to Pi after `pichat-pi-default-args'."
   :type '(repeat string)
-  :group 'pichat)
-
-(defcustom pichat-manual-runner-tools
-  '("read" "grep" "find" "ls" "edit" "write")
-  "Pi tool allowlist for new manual-runner runtimes.
-Passed through `--tools', after `pichat-pi-extra-args'.  Do not include a
-shell-capable tool if the agent should ask you to run shell commands instead.
-Extensions and MCP tools may provide other execution paths; this is not a
-security boundary."
-  :type '(repeat string)
-  :group 'pichat)
-
-(defcustom pichat-manual-runner-system-prompt
-  (concat "In PiChat manual-runner mode, use the available file tools for "
-          "file inspection and edits. Do not execute shell commands through "
-          "other tools. When a task needs a shell command, test run, or code "
-          "execution, provide a complete fenced code block with a language "
-          "(use sh for portable shell code), then stop and wait for the user "
-          "to run it and share the result. Never claim the code ran or "
-          "assume its outcome.")
-  "Text or Pi-visible file appended to the system prompt in manual-runner mode.
-The default retains Pi's built-in prompt and explains the human-runner loop.
-An existing file path must be accessible to the Pi runtime, including over SSH."
-  :type 'string
   :group 'pichat)
 
 (defcustom pichat-bridge-extension-file nil
@@ -134,31 +111,41 @@ Set to nil to retain all events."
     ("extension_error" . extension-error))
   "Mapping from Pi RPC event type strings to PiChat event symbols.")
 
+(defun pichat-rpc--validate-preset-args (preset args)
+  "Reject conflicting generic Pi ARGS for configured PRESET."
+  (when (pichat-presets-overrides-p preset)
+    (let ((tools (plist-get preset :tools)))
+      (dolist (arg args)
+        (when (or (and (not (eq tools :default))
+                       (or (member arg '("--tools" "-t" "--no-tools" "-nt"
+                                         "--no-builtin-tools" "-nbt"
+                                         "--exclude-tools" "-xt"))
+                           (string-prefix-p "--tools=" arg)
+                           (string-prefix-p "--exclude-tools=" arg)))
+                  (and (plist-get preset :system-prompt)
+                       (string-prefix-p "--system-prompt" arg))
+                  (and (plist-get preset :append-system-prompt)
+                       (string-prefix-p "--append-system-prompt" arg)))
+          (user-error "Pi arguments conflict with preset %s: %s"
+                      (plist-get preset :name) arg))))))
+
 (defun pichat-rpc-normalize-launch-options (&optional launch-options)
   "Return validated low-level LAUNCH-OPTIONS.
-Supported keys are `:persistence', `:execution' and the optional exact
+Supported keys are `:persistence', `:preset-spec' and the optional exact
 `:model' reference.  A complete local `pichat-rpc-command' cannot safely be
-amended for ephemeral, manual-runner, or run-local-model launches."
+amended for ephemeral, configured-preset, or run-local-model launches."
+  (when (plist-member launch-options :execution)
+    (user-error "Obsolete :execution option; select a PiChat :preset instead"))
   (let ((persistence (or (plist-get launch-options :persistence) 'persistent))
-        (execution (or (plist-get launch-options :execution) 'standard))
+        (preset (plist-get launch-options :preset-spec))
         (model (plist-get launch-options :model))
+        (preset-args (plist-get launch-options :preset-args))
         (structured-p (plist-get launch-options :structured-transport)))
     (unless (memq persistence '(persistent ephemeral))
       (user-error "Invalid PiChat persistence: %S" persistence))
-    (unless (memq execution '(standard manual-runner))
-      (user-error "Invalid PiChat execution mode: %S" execution))
-    (when (eq execution 'manual-runner)
-      (unless (and (consp pichat-manual-runner-tools)
-                   (cl-every (lambda (name)
-                               (and (stringp name)
-                                    (not (string-blank-p name))
-                                    (not (string-match-p "," name))))
-                             pichat-manual-runner-tools))
-        (user-error "Invalid PiChat manual-runner tools: %S"
-                    pichat-manual-runner-tools))
-      (unless (and (stringp pichat-manual-runner-system-prompt)
-                   (not (string-blank-p pichat-manual-runner-system-prompt)))
-        (user-error "Invalid PiChat manual-runner system prompt")))
+    (when (and preset (not (and (listp preset) (symbolp (plist-get preset :name)))))
+      (user-error "Invalid PiChat preset snapshot: %S" preset))
+    (pichat-rpc--validate-preset-args preset preset-args)
     (unless (or (null model)
                 (and (stringp model) (not (string-blank-p model))))
       (user-error "Invalid PiChat startup model: %S" model))
@@ -169,21 +156,19 @@ amended for ephemeral, manual-runner, or run-local-model launches."
     (when (and model pichat-rpc-command (not structured-p))
       (user-error
        "Run-local PiChat models are not yet supported with `pichat-rpc-command'"))
-    (when (and (eq execution 'manual-runner) pichat-rpc-command
+    (when (and (pichat-presets-overrides-p preset) pichat-rpc-command
                (not structured-p))
       (user-error
-       "Manual-runner PiChat runtimes are not supported with `pichat-rpc-command'"))
-    (list :persistence persistence :execution execution :model model)))
+       "Configured PiChat presets require a structured Pi command; choose standard for this wrapper"))
+    (list :persistence persistence :preset-spec preset :model model)))
 
 (defun pichat-rpc-build-command (&optional session)
   "Return argv list for starting Pi RPC for optional SESSION.
-The exact session metadata controls `--no-session', manual-runner flags,
-and a run-local `--model'.  User extra arguments remain late, while the
-manual-runner tool selection and run-local model remain authoritative."
+The session snapshot controls `--no-session', preset flags and the model."
   (let* ((persistence (if session
                           (pichat-session-persistence session)
                         'persistent))
-         (execution (and session (pichat-session-execution-mode session)))
+         (preset (and session (pichat-session-preset-spec session)))
          (startup-model (and session (pichat-session-startup-model session)))
          (transport (and session (pichat-session-transport session)))
          (remote-p (and transport
@@ -192,7 +177,10 @@ manual-runner tool selection and run-local model remain authoritative."
                               (pichat-transport-pi-executable transport))
                          pichat-pi-executable)))
     (pichat-rpc-normalize-launch-options
-     (list :persistence persistence :execution execution :model startup-model
+     (list :persistence persistence :preset-spec preset :model startup-model
+           :preset-args (append pichat-pi-default-args
+                                (and transport (pichat-transport-pi-args transport))
+                                (unless remote-p pichat-pi-extra-args))
            :structured-transport remote-p))
     (or (and (not remote-p) pichat-rpc-command)
         (append (list executable)
@@ -210,10 +198,15 @@ manual-runner tool selection and run-local model remain authoritative."
                 (when (eq persistence 'ephemeral)
                   (list "--no-session"))
                 (unless remote-p pichat-pi-extra-args)
-                (when (eq execution 'manual-runner)
-                  (list "--tools" (string-join pichat-manual-runner-tools ",")
-                        "--append-system-prompt"
-                        pichat-manual-runner-system-prompt))
+                (when (and preset (not (eq (plist-get preset :tools) :default)))
+                  (if (null (plist-get preset :tools))
+                      (list "--no-builtin-tools")
+                    (list "--tools" (string-join (plist-get preset :tools) ","))))
+                (when (plist-get preset :system-prompt)
+                  (list "--system-prompt" (plist-get preset :system-prompt)))
+                (when (plist-get preset :append-system-prompt)
+                  (list "--append-system-prompt"
+                        (plist-get preset :append-system-prompt)))
                 ;; The per-run selection must override any generic model in
                 ;; `pichat-pi-extra-args' without changing that customization.
                 (when startup-model

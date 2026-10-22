@@ -101,30 +101,31 @@
                      "--offline")
                    (pichat-rpc-build-command session)))))
 
-(ert-deftest pichat-rpc-build-command-manual-runner-selects-tools-and-appends-prompt ()
+(ert-deftest pichat-rpc-build-command-preset-selects-tools-and-appends-prompt ()
   (let ((pichat-rpc-command nil)
         (pichat-pi-executable "/opt/pi")
         (pichat-pi-default-args '("--mode" "rpc"))
         (pichat-pi-session-dir nil)
         (pichat-bridge-extension-file nil)
         (pichat-default-model nil)
-        (pichat-pi-extra-args '("--tools" "bash,read" "--offline"))
-        (pichat-manual-runner-tools '("read" "edit" "write"))
-        (pichat-manual-runner-system-prompt "Wait for my code-run results")
-        (session (pichat-session-make :execution-mode 'manual-runner)))
+        (pichat-pi-extra-args '("--offline"))
+        (session (pichat-session-make
+                  :preset-name 'manual
+                  :preset-spec '(:name manual :tools ("read" "edit" "write")
+                                 :append-system-prompt "Wait for my code-run results"))))
     (should (equal '("/opt/pi" "--mode" "rpc"
-                     "--tools" "bash,read" "--offline"
+                     "--offline"
                      "--tools" "read,edit,write"
                      "--append-system-prompt" "Wait for my code-run results")
                    (pichat-rpc-build-command session)))))
 
-(ert-deftest pichat-rpc-build-command-manual-runner-validates-configuration ()
+(ert-deftest pichat-rpc-build-command-preset-without-builtins ()
   (let ((pichat-rpc-command nil)
-        (session (pichat-session-make :execution-mode 'manual-runner)))
-    (let ((pichat-manual-runner-tools nil))
-      (should-error (pichat-rpc-build-command session) :type 'user-error))
-    (let ((pichat-manual-runner-system-prompt ""))
-      (should-error (pichat-rpc-build-command session) :type 'user-error))))
+        (pichat-pi-extra-args nil)
+        (session (pichat-session-make
+                  :preset-name 'discuss
+                  :preset-spec '(:name discuss :tools nil))))
+    (should (member "--no-builtin-tools" (pichat-rpc-build-command session)))))
 
 (ert-deftest pichat-rpc-build-command-ignores-default-model-for-complete-command ()
   (let ((pichat-rpc-command '("docker" "run" "image" "pi" "--mode" "rpc"))
@@ -141,9 +142,11 @@
         (session (pichat-session-make :startup-model "run/model")))
     (should-error (pichat-rpc-build-command session) :type 'user-error)))
 
-(ert-deftest pichat-rpc-build-command-rejects-manual-runner-complete-command ()
+(ert-deftest pichat-rpc-build-command-rejects-configured-preset-complete-command ()
   (let ((pichat-rpc-command '("docker" "run" "image" "pi" "--mode" "rpc"))
-        (session (pichat-session-make :execution-mode 'manual-runner)))
+        (session (pichat-session-make
+                  :preset-name 'manual
+                  :preset-spec (pichat-presets-resolve 'manual))))
     (should-error (pichat-rpc-build-command session) :type 'user-error)))
 
 (ert-deftest pichat-rpc-build-command-rejects-ephemeral-complete-command ()

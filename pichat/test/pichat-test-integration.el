@@ -23,16 +23,17 @@
                "--no-themes" "--no-extensions"))
             (pichat-pi-extra-args
              (list "-e" pichat-test-fake-provider-extension
-                   "--model" "pichat-fake/pichat-fake"
-                   "--tools" "bash,read"))
-            (pichat-manual-runner-tools '("read" "edit" "write"))
-            (pichat-manual-runner-system-prompt "WAIT_FOR_USER_RUN_RESULTS")
+                   "--model" "pichat-fake/pichat-fake"))
+            (pichat-presets (copy-tree pichat-presets))
             manual)
+        (pichat-make-preset 'integration-manual
+          :tools '("read" "edit" "write")
+          :append-system-prompt "WAIT_FOR_USER_RUN_RESULTS")
         (unwind-protect
             (progn
               (setq manual (pichat-start-session
                             project-dir nil
-                            '(:persistence ephemeral :execution manual-runner)))
+                            '(:persistence ephemeral :preset integration-manual)))
               (pichat-test-rpc-call manual "get_state")
               (pichat-test-rpc-call manual "set_auto_retry"
                                     (list :enabled :json-false))
@@ -45,6 +46,62 @@
               (when (process-live-p proc) (delete-process proc))
               (when-let* ((buf (process-buffer proc)))
                 (when (buffer-live-p buf) (kill-buffer buf)))))))))
+
+  (ert-deftest pichat-integration-presets-select-different-builtins-and-prompts ()
+    (pichat-test-require-pi)
+    (pichat-test-with-clean-state
+      (pichat-test-with-temp-dir project-dir
+        (pichat-test-with-temp-dir agent-dir
+          (let* ((script (expand-file-name "script.json" project-dir))
+                 (status (expand-file-name "status.json" project-dir))
+                 (process-environment
+                  (append (list "PI_OFFLINE=1" "PI_SKIP_VERSION_CHECK=1"
+                                "PI_TELEMETRY=0"
+                                (concat "PI_CODING_AGENT_DIR=" agent-dir)
+                                (concat "PICHAT_FAKE_PROVIDER_SCRIPT=" script)
+                                (concat "PICHAT_FAKE_PROVIDER_STATUS=" status))
+                          process-environment))
+                 (pichat-rpc-command nil)
+                 (pichat-pi-executable pichat-test-pi-executable)
+                 (pichat-pi-default-args
+                  '("--mode" "rpc" "--offline" "--no-approve"
+                    "--no-context-files" "--no-skills" "--no-prompt-templates"
+                    "--no-themes" "--no-extensions"))
+                 (pichat-pi-extra-args
+                  (list "-e" pichat-test-fake-provider-extension
+                        "--model" "pichat-fake/pichat-fake"))
+                 (pichat-presets (copy-tree pichat-presets)))
+            (pichat-make-preset 'test-replace :tools nil
+              :system-prompt "REPLACED_BASE_PROMPT")
+            (dolist (case '((review "read" "bash" "Review for correctness")
+                            (coding "bash" "none" "run relevant checks")
+                            (discuss "none" "read" "supplied context")
+                            (test-replace "none" "read" "REPLACED_BASE_PROMPT")))
+              (pcase-let ((`(,name ,present ,absent ,instruction) case))
+                (let (session)
+                  (with-temp-file script
+                    (insert (json-serialize
+                             (list :turns
+                                   (vector (append
+                                            (list :expectContextIncludes instruction
+                                                  :expectToolAbsent absent
+                                                  :text "preset ready")
+                                            (unless (equal present "none")
+                                              (list :expectTool (list :name present))))))
+                             :false-object :json-false :null-object nil)))
+                  (unwind-protect
+                      (progn
+                        (setq session (pichat-start-session project-dir nil
+                                                           (list :persistence 'ephemeral
+                                                                 :preset name)))
+                        (pichat-test-rpc-call session "get_state")
+                        (pichat-test-rpc-call session "set_auto_retry"
+                                              (list :enabled :json-false))
+                        (pichat-test-rpc-call session "set_auto_compaction"
+                                              (list :enabled :json-false))
+                        (pichat-test-prompt-and-wait session "check selected preset")
+                        (pichat-test-assert-provider-script-consumed status))
+                    (when session (pichat-rpc-stop session)))))))))))
 
   (ert-deftest pichat-integration-codemode-nested-tool-completes-live ()
     (pichat-test-with-integration-session
@@ -1678,6 +1735,7 @@
                            (concat "PICHAT_FAKE_PROVIDER_STATUS=" status-file))
                      process-environment))
                    (pichat-rpc-command nil)
+                   (pichat-default-preset 'standard)
                    (pichat-pi-executable pichat-test-pi-executable)
                    (pichat-pi-default-args
                     '("--mode" "rpc" "--offline" "--no-approve"

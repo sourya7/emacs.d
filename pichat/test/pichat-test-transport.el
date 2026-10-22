@@ -109,15 +109,15 @@
 (ert-deftest pichat-rpc-command-for-ssh-manual-runner-uses-runtime-visible-prompt ()
   (let* ((pichat-rpc-command '("docker" "run" "pi" "--mode" "rpc"))
          (pichat-pi-extra-args '("--host-only"))
-         (pichat-manual-runner-tools '("read" "write"))
-         (pichat-manual-runner-system-prompt "Remote manual-runner instructions")
          (transport
           (pichat-transport--create
            :id 'devbox :kind 'ssh :label "devbox"
            :tramp-prefix "/ssh:devbox:" :pi-executable "/remote/bin/pi"
            :pi-args '("--offline")))
          (session (pichat-session-make
-                   :transport transport :execution-mode 'manual-runner)))
+                   :transport transport :preset-name 'manual
+                   :preset-spec '(:name manual :tools ("read" "write")
+                                  :append-system-prompt "Remote manual-runner instructions"))))
     (should (equal '("/remote/bin/pi" "--mode" "rpc" "--offline"
                      "--tools" "read,write"
                      "--append-system-prompt" "Remote manual-runner instructions")

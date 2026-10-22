@@ -17,6 +17,7 @@
 (require 'pichat-events)
 (require 'pichat-path)
 (require 'pichat-rpc)
+(require 'pichat-presets)
 (require 'pichat-pi)
 (require 'pichat-chat)
 (require 'pichat-reference)
@@ -281,12 +282,12 @@ session over the global `pichat-current-session'."
          (scope (or (plist-get profile :scope) 'current))
          (target (or (plist-get profile :target) 'inferred))
          (persistence (or (plist-get profile :persistence) 'persistent))
-         (execution (or (plist-get profile :execution) 'standard))
+         (preset (or (plist-get profile :preset) 'default))
          (model (or (plist-get profile :model) 'default))
          (explicit-reuse-p (plist-member profile :reuse))
          (reuse (or (plist-get profile :reuse)
                     (if (or (eq persistence 'ephemeral)
-                            (eq execution 'manual-runner)
+                            (not (eq preset 'default))
                             (eq model 'prompt)
                             (stringp model))
                         'new
@@ -305,8 +306,10 @@ session over the global `pichat-current-session'."
       (user-error "Invalid PiChat runtime policy: %S" reuse))
     (unless (memq persistence '(persistent ephemeral))
       (user-error "Invalid PiChat persistence: %S" persistence))
-    (unless (memq execution '(standard manual-runner))
-      (user-error "Invalid PiChat execution mode: %S" execution))
+    (when (plist-member profile :execution)
+      (user-error "Obsolete :execution option; select a PiChat :preset instead"))
+    (unless (or (eq preset 'default) (assq preset pichat-presets))
+      (user-error "Unknown PiChat launch preset: %S" preset))
     (unless (or (memq model '(default prompt))
                 (and (stringp model) (not (string-blank-p model))))
       (user-error "Invalid PiChat model policy: %S" model))
@@ -314,19 +317,19 @@ session over the global `pichat-current-session'."
       (user-error "Invalid PiChat display function: %S" display-function))
     (when (and (eq reuse 'preferred)
                (or (eq persistence 'ephemeral)
-                   (eq execution 'manual-runner)
+                   (not (eq preset 'default))
                    (eq model 'prompt)
                    (stringp model)))
       (if explicit-reuse-p
           (user-error
-           "Preferred PiChat runtimes require persistent/default-model/standard launch")
+           "Preferred PiChat runtimes require persistent/default-model/default-preset launch")
         (setq reuse 'new)))
     (list :backend backend
           :scope scope
           :target target
           :reuse reuse
           :persistence persistence
-          :execution execution
+          :preset preset
           :model model
           :display-function display-function)))
 
@@ -366,7 +369,7 @@ Prompted-model profiles first select a model asynchronously and return nil."
              (display-function (plist-get profile :display-function))
              (launch-options
               (list :persistence persistence
-                    :execution (plist-get profile :execution)
+                    :preset (plist-get profile :preset)
                     :model (and (stringp model) model)
                     :target (unless (eq target 'inferred) target)))
              (previous-session pichat-current-session)
@@ -389,11 +392,17 @@ Prompted-model profiles first select a model asynchronously and return nil."
 (defun pichat-start-session (&optional cwd scope launch-options)
   "Start a PiChat RPC session rooted at CWD and return it.
 SCOPE, when non-nil, is the immutable (KEY CWD LABEL) owner scope.
-LAUNCH-OPTIONS supports `:persistence', `:execution', and an exact run-local
-`:model'."
+LAUNCH-OPTIONS supports `:persistence', `:preset', and an exact run-local
+`:model'.  Omitted preset means the configured default."
   (interactive)
   (pichat--maybe-enable-default-bridge)
-  (let* ((transport-override (plist-get launch-options :transport))
+  (when (plist-member launch-options :execution)
+    (user-error "Obsolete :execution option; select a PiChat :preset instead"))
+  (let* ((preset-name (let ((choice (plist-get launch-options :preset)))
+                        (if (or (null choice) (eq choice 'default))
+                            pichat-default-preset choice)))
+         (preset-spec (pichat-presets-resolve preset-name))
+         (transport-override (plist-get launch-options :transport))
          (target (plist-get launch-options :target))
          (cwd (file-name-as-directory
                (expand-file-name (or cwd default-directory))))
@@ -401,9 +410,17 @@ LAUNCH-OPTIONS supports `:persistence', `:execution', and an exact run-local
                         (pichat-transport-resolve cwd target)))
          (normalized-options
           (pichat-rpc-normalize-launch-options
-           (plist-put (copy-sequence launch-options)
-                      :structured-transport
-                      (eq (pichat-transport-kind transport) 'ssh))))
+           (plist-put
+            (plist-put
+             (plist-put (copy-sequence launch-options)
+                        :preset-spec preset-spec)
+             :preset-args
+             (append pichat-pi-default-args
+                     (pichat-transport-pi-args transport)
+                     (unless (eq (pichat-transport-kind transport) 'ssh)
+                       pichat-pi-extra-args)))
+            :structured-transport
+            (eq (pichat-transport-kind transport) 'ssh))))
          (context (pichat-transport-path-context transport pichat-path-mappings))
          (runtime-resolution (pichat-path-resolve-to-runtime cwd context))
          (runtime-cwd
@@ -421,7 +438,8 @@ LAUNCH-OPTIONS supports `:persistence', `:execution', and an exact run-local
                    :transport transport
                    :path-context context
                    :persistence (plist-get normalized-options :persistence)
-                   :execution-mode (plist-get normalized-options :execution)
+                   :preset-name preset-name
+                   :preset-spec preset-spec
                    :startup-model (plist-get normalized-options :model)
                    :scope-key (nth 0 scope)
                    :owner-scope-key (nth 0 scope)
@@ -876,6 +894,25 @@ This is the first implementation check; it does not send an LLM prompt."
   (append '("inferred" "local")
           (mapcar (lambda (entry) (symbol-name (car entry))) pichat-targets)))
 
+(defun pichat--launch-preset-choices ()
+  "Return default policy and registered preset names for the launcher."
+  (cons "default" (mapcar (lambda (entry) (symbol-name (car entry)))
+                           pichat-presets)))
+
+(defun pichat--launch-read-preset (prompt initial history)
+  "Read a named preset or default policy with descriptions."
+  (let ((completion-extra-properties
+         (list :annotation-function
+               (lambda (choice)
+                 (let ((description
+                        (if (equal choice "default")
+                            (format "Use configured default (%s)" pichat-default-preset)
+                          (plist-get (pichat-get-preset (intern choice))
+                                     :description))))
+                   (when description (concat "  " description)))))))
+    (completing-read prompt (pichat--launch-preset-choices) nil t
+                     initial history)))
+
 (defun pichat--launch-target-argument (arguments)
   "Return normalized target selected in Transient ARGUMENTS."
   (if-let* ((argument
@@ -889,19 +926,31 @@ This is the first implementation check; it does not send an LLM prompt."
   "Convert Transient ARGUMENTS and optional CONTEXT to a launch profile."
   (when (member "--native" arguments)
     (user-error "Native PiChat launch is no longer supported"))
+  (when (member "--manual-runner" arguments)
+    (user-error "Obsolete --manual-runner; use --preset=manual"))
   (let* ((global-p (member "--global" arguments))
          (ephemeral-p (member "--ephemeral" arguments))
          (prompt-p (member "--model" arguments))
-         (manual-p (member "--manual-runner" arguments))
+         (preset-arg (cl-find-if (lambda (arg) (string-prefix-p "--preset=" arg))
+                                 arguments))
+         (preset (if preset-arg
+                     (let ((name (substring preset-arg 9)))
+                       (or (car (cl-find-if
+                                 (lambda (entry)
+                                   (string= name (symbol-name (car entry))))
+                                 pichat-presets))
+                           (and (string= name "default") 'default)
+                           (user-error "Unknown PiChat preset: %s" name)))
+                   'default))
          (independent-p (or (member "--new" arguments)
-                            ephemeral-p prompt-p manual-p)))
+                            ephemeral-p prompt-p (not (eq preset 'default)))))
     (pichat--normalize-launch-profile
      (list :backend 'pi
            :scope (if global-p 'global 'current)
            :target (pichat--launch-target-argument arguments)
            :reuse (if independent-p 'new 'preferred)
            :persistence (if ephemeral-p 'ephemeral 'persistent)
-           :execution (if manual-p 'manual-runner 'standard)
+           :preset preset
            :model (if prompt-p 'prompt 'default)
            :display-function (or (plist-get context :display-function)
                                  #'pichat-chat-open)))))
@@ -915,8 +964,10 @@ This is the first implementation check; it does not send an LLM prompt."
               "independent" "preferred")
           (if (eq (plist-get profile :persistence) 'ephemeral)
               "ephemeral" "persistent")
-          (if (eq (plist-get profile :execution) 'manual-runner)
-              "manual runner" "standard tools")
+          (let ((preset (plist-get profile :preset)))
+            (if (eq preset 'default)
+                (format "default (%s)" pichat-default-preset)
+              (symbol-name preset)))
           (if (eq (plist-get profile :model) 'prompt)
               "choose/enter" "default")))
 
@@ -962,10 +1013,10 @@ This is the first implementation check; it does not send an LLM prompt."
      :choices pichat--launch-target-choices)]
    ["Persistence"
     ("e" "Ephemeral" "--ephemeral")]
-   ["Model"
-    ("m" "Choose/enter model" "--model")]
-   ["Tools"
-    ("r" "Manual runner" "--manual-runner")]]
+   ["Configuration"
+    ("p" "Preset" "--preset=" :choices pichat--launch-preset-choices
+     :reader pichat--launch-read-preset)
+    ("m" "Choose/enter model" "--model")]]
   [["Action"
     ("RET" pichat-launch-execute
      :description pichat--launch-action-description)]]

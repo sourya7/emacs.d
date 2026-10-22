@@ -1,6 +1,7 @@
 ;;; pichat-test-ssh.el --- Opt-in real SSH transport test -*- lexical-binding: t; -*-
 
 (require 'pichat-test-support)
+(require 'pichat-artifact-runner)
 
 (ert-deftest pichat-integration-ssh-rpc-streams-and-stops-cleanly ()
   (let ((base (getenv "PICHAT_TEST_SSH_DIRECTORY")))
@@ -172,6 +173,288 @@
               (insert-file-contents (concat prefix file))
               (should (equal (buffer-string) "remote reference content"))))
         (when file (ignore-errors (delete-file (concat prefix file))))))))
+
+(ert-deftest pichat-integration-ssh-runner-executes-on-pi-host-and-publishes-output ()
+  (let ((base (getenv "PICHAT_TEST_SSH_DIRECTORY")))
+    (unless (and (stringp base) (file-remote-p base))
+      (ert-fail "PICHAT_TEST_SSH_DIRECTORY must be a TRAMP directory"))
+    (let* ((prefix (file-remote-p base))
+           (project (expand-file-name
+                     (format "pichat-runner-test-%d-%06x/"
+                             (emacs-pid) (random #xFFFFFF)) base))
+           (runtime-cwd (file-local-name project))
+           (transport (pichat-transport--create
+                       :id 'runner-test :kind 'ssh :label "runner-test"
+                       :tramp-prefix prefix
+                       :remote-path '(tramp-own-remote-path)))
+           (session (pichat-session-make :transport transport
+                                         :cwd "/mounted/project/"
+                                         :runtime-cwd runtime-cwd))
+           (pichat-artifact-runner-output-limit 4)
+           (chat (generate-new-buffer " *pichat-ssh-runner-chat*"))
+           view output script)
+      (unwind-protect
+          (progn
+            (make-directory project t)
+            (with-current-buffer chat
+              (pichat-chat-mode)
+              (setq-local pichat-chat-session session)
+              ;; A locally mounted origin still runs in the remote cwd.
+              (setq view (pichat-artifact-runner-run
+                          "printf 'abcdef'; pwd; exit 7\n" "sh"
+                          "/mounted/project/" session)))
+            (with-current-buffer view (setq script pichat-artifact-runner--file))
+            (pichat-test-wait-until
+             (lambda () (with-current-buffer view
+                          (not (memq pichat-artifact-runner--status
+                                     '(running publishing)))))
+             20 "remote code run and output publication")
+            (with-current-buffer view
+              (setq output pichat-artifact-runner--output-file)
+              (should (equal 'exit pichat-artifact-runner--status))
+              (should (= 7 pichat-artifact-runner--exit))
+              (should (equal runtime-cwd pichat-artifact-runner--directory))
+              (should (string-prefix-p "/tmp/pichat-output-" output))
+              (should (string-match-p (regexp-quote output)
+                                      (pichat-artifact-runner--report))))
+            (should-not (file-exists-p script))
+            (should (= #o600 (file-modes (concat prefix output))))
+            (with-temp-buffer
+              (insert-file-contents (concat prefix output))
+              (should (equal (buffer-string)
+                             (format "abcdef%s\n" (directory-file-name runtime-cwd))))))
+        (when (buffer-live-p view) (kill-buffer view))
+        (when output (ignore-errors (delete-file (concat prefix output))))
+        (when (buffer-live-p chat) (kill-buffer chat))
+        (ignore-errors (delete-directory project t))))))
+
+(ert-deftest pichat-integration-ssh-runner-share-truncation-publishes-remote-file ()
+  (let ((base (getenv "PICHAT_TEST_SSH_DIRECTORY")))
+    (unless (and (stringp base) (file-remote-p base))
+      (ert-fail "PICHAT_TEST_SSH_DIRECTORY must be a TRAMP directory"))
+    (let* ((prefix (file-remote-p base))
+           (project (expand-file-name
+                     (format "pichat-runner-share-%d-%06x/"
+                             (emacs-pid) (random #xFFFFFF)) base))
+           (transport (pichat-transport--create
+                       :id 'runner-test :kind 'ssh :label "runner-test"
+                       :tramp-prefix prefix
+                       :remote-path '(tramp-own-remote-path)))
+           (session (pichat-session-make :transport transport
+                                         :cwd "/mounted/project/"
+                                         :runtime-cwd (file-local-name project)))
+           (pichat-artifact-result-share-limit 4000)
+           (pichat-artifact-runner-output-limit 65536)
+           (chat (generate-new-buffer " *pichat-ssh-share-chat*"))
+           view output script)
+      (unwind-protect
+          (progn
+            (make-directory project t)
+            (with-current-buffer chat
+              (pichat-chat-mode)
+              (setq-local pichat-chat-session session)
+              (pichat-chat--set-input-text "draft")
+              (setq view (pichat-artifact-runner-run
+                          "printf '%010000d' 0; exit 7\n" "sh"
+                          "/mounted/project/" session)))
+            (with-current-buffer view (setq script pichat-artifact-runner--file))
+            (pichat-test-wait-until
+             (lambda () (with-current-buffer view
+                          (not (memq pichat-artifact-runner--status
+                                     '(running publishing)))))
+             20 "remote share-only spill and publication")
+            (with-current-buffer view
+              (setq output pichat-artifact-runner--output-file)
+              (should (string-prefix-p "/tmp/pichat-output-" output))
+              (should (eq 'exit pichat-artifact-runner--status))
+              (should (= 7 pichat-artifact-runner--exit))
+              (should (= 10000 (length pichat-artifact-runner--captured-output)))
+              (should-not pichat-artifact-runner--preview-truncated)
+              (should (string-match-p (regexp-quote output)
+                                      (pichat-artifact-runner--report)))
+              (pichat-artifact-result-share))
+            (should-not (buffer-live-p view))
+            (should-not (file-exists-p script))
+            (should (= #o600 (file-modes (concat prefix output))))
+            (with-current-buffer chat
+              (should (string-match-p (regexp-quote output)
+                                      (pichat-chat--input-text)))
+              (should (string-match-p "Ran with sh — exit 7" (pichat-chat--input-text)))
+              (should (string-match-p "```\n0000"
+                                      (pichat-chat--input-text))))
+            (with-temp-buffer
+              (insert-file-contents (concat prefix output))
+              (should (equal (buffer-string) (make-string 10000 ?0)))))
+        (when (buffer-live-p view) (kill-buffer view))
+        (when output (ignore-errors (delete-file (concat prefix output))))
+        (when (buffer-live-p chat) (kill-buffer chat))
+        (ignore-errors (delete-directory project t))))))
+
+(ert-deftest pichat-integration-ssh-runner-python-uses-remote-interpreter ()
+  (let ((base (getenv "PICHAT_TEST_SSH_DIRECTORY")))
+    (unless (and (stringp base) (file-remote-p base))
+      (ert-fail "PICHAT_TEST_SSH_DIRECTORY must be a TRAMP directory"))
+    (let* ((prefix (file-remote-p base))
+           (project (expand-file-name
+                     (format "pichat-runner-python-%d-%06x/"
+                             (emacs-pid) (random #xFFFFFF)) base))
+           (transport (pichat-transport--create
+                       :id 'runner-test :kind 'ssh :label "runner-test"
+                       :tramp-prefix prefix
+                       :remote-path '(tramp-own-remote-path)))
+           (session (pichat-session-make :transport transport
+                                         :cwd project
+                                         :runtime-cwd (file-local-name project)))
+           (chat (generate-new-buffer " *pichat-ssh-python-chat*"))
+           view)
+      (unwind-protect
+          (progn
+            (let ((default-directory base))
+              (unless (executable-find "python3" t)
+                (ert-skip "SSH test host has no python3 interpreter")))
+            (make-directory project t)
+            (with-current-buffer chat
+              (pichat-chat-mode)
+              (setq-local pichat-chat-session session)
+              (setq view (pichat-artifact-runner-run
+                          "import os\nprint(os.getcwd())\n" "python"
+                          project session)))
+            (pichat-test-wait-until
+             (lambda () (with-current-buffer view
+                          (not (memq pichat-artifact-runner--status
+                                     '(running publishing)))))
+             20 "remote Python run")
+            (with-current-buffer view
+              (should (eq 'exit pichat-artifact-runner--status))
+              (should (= 0 pichat-artifact-runner--exit))
+              (should (equal (concat (directory-file-name
+                                      (file-local-name project)) "\n")
+                             pichat-artifact-runner--captured-output))))
+        (when (buffer-live-p view) (kill-buffer view))
+        (when (buffer-live-p chat) (kill-buffer chat))
+        (ignore-errors (delete-directory project t))))))
+
+(ert-deftest pichat-integration-ssh-runner-timeout-kills-remote-process ()
+  (let ((base (getenv "PICHAT_TEST_SSH_DIRECTORY")))
+    (unless (and (stringp base) (file-remote-p base))
+      (ert-fail "PICHAT_TEST_SSH_DIRECTORY must be a TRAMP directory"))
+    (let* ((prefix (file-remote-p base))
+           (project (expand-file-name
+                     (format "pichat-runner-timeout-%d-%06x/"
+                             (emacs-pid) (random #xFFFFFF)) base))
+           (pid-file (expand-file-name "runner.pid" project))
+           (transport (pichat-transport--create
+                       :id 'runner-test :kind 'ssh :label "runner-test"
+                       :tramp-prefix prefix
+                       :remote-path '(tramp-own-remote-path)))
+           (session (pichat-session-make :transport transport
+                                         :cwd project
+                                         :runtime-cwd (file-local-name project)))
+           (pichat-artifact-runner-output-limit 2)
+           (chat (generate-new-buffer " *pichat-ssh-timeout-chat*"))
+           view output script pid)
+      (unwind-protect
+          (progn
+            (make-directory project t)
+            (with-current-buffer chat
+              (pichat-chat-mode)
+              (setq-local pichat-chat-session session)
+              (setq view (pichat-artifact-runner-run
+                          (format "printf 'initial'; echo $$ > %s; exec sleep 30\n"
+                                  (shell-quote-argument (file-local-name pid-file)))
+                          "sh" project session)))
+            (with-current-buffer view (setq script pichat-artifact-runner--file))
+            (pichat-test-wait-until
+             (lambda ()
+               (ignore-errors
+                 (with-temp-buffer
+                   (insert-file-contents pid-file)
+                   (let ((text (string-trim (buffer-string))))
+                     (when (string-match-p "\\`[0-9]+\\'" text)
+                       (setq pid text))))))
+             10 "remote child PID")
+            (pichat-test-wait-until
+             (lambda () (with-current-buffer view
+                          (and pichat-artifact-runner--staging
+                               (> pichat-artifact-runner--output-bytes 0))))
+             10 "streamed remote output before timeout")
+            (with-current-buffer view
+              (pichat-artifact-runner--timeout pichat-artifact-runner--process))
+            (pichat-test-wait-until
+             (lambda () (with-current-buffer view
+                          (not (memq pichat-artifact-runner--status
+                                     '(running publishing)))))
+             20 "remote timeout and output publication")
+            (with-current-buffer view
+              (should (eq 'timeout pichat-artifact-runner--status))
+              (setq output pichat-artifact-runner--output-file)
+              (should (string-prefix-p "/tmp/pichat-output-" output)))
+            (should-not (file-exists-p script))
+            (pichat-test-wait-until
+             (lambda ()
+               (let ((default-directory project))
+                 (not (zerop (process-file "sh" nil nil nil "-c"
+                                           (format "kill -0 %s 2>/dev/null" pid))))))
+             10 "remote interpreter termination after timeout"))
+        (when (buffer-live-p view) (kill-buffer view))
+        (when output (ignore-errors (delete-file (concat prefix output))))
+        (when (buffer-live-p chat) (kill-buffer chat))
+        (ignore-errors (delete-directory project t))))))
+
+(ert-deftest pichat-integration-ssh-runner-quit-kills-remote-child ()
+  (let ((base (getenv "PICHAT_TEST_SSH_DIRECTORY")))
+    (unless (and (stringp base) (file-remote-p base))
+      (ert-fail "PICHAT_TEST_SSH_DIRECTORY must be a TRAMP directory"))
+    (let* ((prefix (file-remote-p base))
+           (project (expand-file-name
+                     (format "pichat-runner-quit-%d-%06x/"
+                             (emacs-pid) (random #xFFFFFF)) base))
+           (pid-file (expand-file-name "child.pid" project))
+           (transport (pichat-transport--create
+                       :id 'runner-test :kind 'ssh :label "runner-test"
+                       :tramp-prefix prefix
+                       :remote-path '(tramp-own-remote-path)))
+           (session (pichat-session-make :transport transport
+                                         :cwd project
+                                         :runtime-cwd (file-local-name project)))
+           (chat (generate-new-buffer " *pichat-ssh-quit-chat*"))
+           view script pid)
+      (unwind-protect
+          (progn
+            (make-directory project t)
+            (with-current-buffer chat
+              (pichat-chat-mode)
+              (setq-local pichat-chat-session session)
+              (setq view (pichat-artifact-runner-run
+                          (format "sleep 30 & child=$!; echo $child > %s; wait $child\n"
+                                  (shell-quote-argument (file-local-name pid-file)))
+                          "sh" project session)))
+            (with-current-buffer view (setq script pichat-artifact-runner--file))
+            (pichat-test-wait-until
+             (lambda ()
+               (ignore-errors
+                 (with-temp-buffer
+                   (insert-file-contents pid-file)
+                   (let ((text (string-trim (buffer-string))))
+                     (when (string-match-p "\\`[0-9]+\\'" text)
+                       (setq pid text))))))
+             10 "remote child PID before quit")
+            (kill-buffer view)
+            (should-not (file-exists-p script))
+            (pichat-test-wait-until
+             (lambda ()
+               (let ((default-directory project))
+                 (not (zerop (process-file "sh" nil nil nil "-c"
+                                           (format "kill -0 %s 2>/dev/null" pid))))))
+             10 "remote child termination after quit"))
+        (when (buffer-live-p view) (kill-buffer view))
+        (when pid
+          (ignore-errors
+            (let ((default-directory project))
+              (process-file "sh" nil nil nil "-c"
+                            (format "kill %s 2>/dev/null" pid)))))
+        (when (buffer-live-p chat) (kill-buffer chat))
+        (ignore-errors (delete-directory project t))))))
 
 (provide 'pichat-test-ssh)
 ;;; pichat-test-ssh.el ends here

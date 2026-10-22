@@ -158,16 +158,43 @@ Run supports Python (`python`, `python3`, `py` -> `python3`), JavaScript
 (`javascript`, `js`, `node` -> `node`), shell (`sh`, `shell`, `bash` -> `sh`),
 and in-process Emacs Lisp (`elisp`, `emacs-lisp`). Missing or unknown language
 prompts for a runner; selecting an editing mode does not select a runner.
-Subprocess runners use a local temporary script with explicit argv, the chat's
-local working directory as cwd, bounded output
-(`pichat-artifact-runner-output-limit`) and timeout
-(`pichat-artifact-runner-timeout`). Their result buffer shows submitted code,
-executable/arguments, cwd, merged stdout/stderr, and exit status. `q` closes
-that view, stops a running process, and removes the temporary script.
-Completed subprocess results can be inserted into the chat draft with `s`,
-including bounded output and the exit, signal, timeout, or output-limit status.
-While a subprocess is running, `s` refuses to share until completion; `w`
-can copy an explicitly marked partial report instead.
+Subprocess runners use an argv-based temporary script on the originating Pi
+session's host: locally for a local session, or through its SSH/TRAMP transport
+in the session's runtime cwd for SSH. A locally mounted project with SSH Pi
+still runs on the SSH host. The result view identifies the host, cwd, code,
+argv, merged stdout/stderr and exit status. Missing interpreters are checked
+on the execution host. The default timeout is 120 seconds
+(`pichat-artifact-runner-timeout`); `q` stops a running process and removes its
+temporary script.
+
+`pichat-artifact-runner-output-limit` (default 65,536 characters) bounds the
+live preview, **not** the process. The independent
+`pichat-artifact-result-share-limit` (default 4,000 characters) bounds each
+section inserted into the draft. Output exceeding **either** limit spills to
+a private file without stopping the process or shortening the view preview:
+for example, 10,000 characters are shown in full in the view, but the agent
+receives a 4,000-character excerpt and a path to the entire output. At exactly
+the smaller threshold no file is needed. Limits are captured at the start of
+each run so changing customization mid-run cannot leave a truncated report
+without a file. Once the run finishes, the bounded report contains an excerpt
+and a path Pi can read: local runtime-accessible temporary storage or the
+owning SSH host's `/tmp` (a native remote path, not a TRAMP filename).
+Output files remain after `s`, `q`, and session closure so Pi can read them; they are not managed or deleted by PiChat, and retention depends on the
+OS's temp cleanup. Delete sensitive output explicitly when no longer needed.
+Set `pichat-artifact-runner-output-directory` for a mapped/shared alternative;
+unmapped local wrapper/container paths are not advertised as Pi-readable.
+
+Spill files are private (0600), including files needed only because of the
+agent-sharing limit. `pichat-artifact-runner-output-max-bytes`
+(default 32 MiB) caps captured file size without killing the run: the report
+explicitly marks a file **incomplete** and counts discarded bytes. A failed
+capture or publication leaves a bounded preview and an error, never a false
+Pi-readable path; a failed local staging file is shown only in the result view
+for inspection and retained until OS temp cleanup. SSH output travels through
+Emacs once before publication to remote storage; high-volume SSH runs can
+therefore incur network overhead. `s` waits for completion and publication;
+`w` can copy a labelled partial report while the run is active. Nothing is
+sent automatically.
 
 Emacs Lisp instead evaluates synchronously **in this running Emacs process**,
 with access to its live packages, variables, and functions; it does not need
@@ -180,7 +207,17 @@ errors include the condition type where useful; output printed before a failure
 is retained in both the view and the bounded report for the agent. Output and
 printed values are bounded by `pichat-artifact-elisp-output-limit`. This synchronous runner
 has **no timeout**: an infinite loop can block Emacs, and side effects are not
-rolled back on error. Remote working directories are rejected for all runners.
+rolled back on error. Emacs Lisp is rejected for SSH Pi sessions rather than
+silently executing on the wrong machine; it remains local to this Emacs.
+
+Subprocess reports shared with the agent use a compact handoff: interpreter
+basename and outcome, the executed script snapshot, and combined output.
+Script and output sections are fenced and bounded for sharing. An output
+excerpt is labelled up front with its full-output path when available;
+incomplete capture and publication failures remain explicit. Host, cwd, and
+routine byte counts stay in the result view instead of repeating session
+context in the report. A long script retains an explicit truncation marker;
+source-file publication is not currently provided.
 
 Runner results use Emacs's normal `pop-to-buffer` display rules (which can
 create a split); after invoking `r` through Embark, focus follows the result
@@ -339,17 +376,18 @@ flags are applied **after** generic Pi extra args, so the manual tool allowlist
 wins over a generic `--tools`. For shell blocks, request `sh`-compatible code:
 the PiChat shell runner uses `sh` even when a fence is labelled `bash`. Run
 with Embark `r`, then `s` to place the completed result into the chat draft;
-review and send that draft to continue. The default runner timeout is 15
-seconds (`pichat-artifact-runner-timeout`).
+review and send that draft to continue. The default subprocess timeout is
+120 seconds (`pichat-artifact-runner-timeout`).
 
 `--tools` limits Pi's default tool selection, but MCP tools and extensions
 (including an optional PiChat tool bridge) can provide other execution paths;
 this is a workflow, **not a sandbox**. PiChat's explicit runners execute code
-locally outside Pi's tool permissions. Manual-runner launch works on local and
-structured SSH targets, but the **PiChat code runners themselves run on the
-Emacs host**, not the SSH host. They reject TRAMP working directories; a local
-mounted directory runs locally. A complete local `pichat-rpc-command` wrapper
-cannot be amended safely and is rejected before starting a runtime. For a
+outside Pi's tool permissions on the selected host. Manual-runner launch and
+subprocess code execution work on local and structured SSH targets: SSH code
+runs remotely even when the project is mounted locally. The in-process Elisp
+runner is unavailable for SSH Pi sessions. A complete local
+`pichat-rpc-command` wrapper cannot be amended safely and is rejected before
+starting a manual-runner runtime. For a
 wrapper, place the equivalent flags directly in its complete command instead.
 
 An independent runtime is a separate Pi RPC process retained in the manager but

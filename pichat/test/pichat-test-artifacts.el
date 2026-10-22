@@ -262,6 +262,34 @@
         (dolist (buffer (list origin preview))
           (when (buffer-live-p buffer) (kill-buffer buffer)))))))
 
+(ert-deftest pichat-artifacts-runner-report-is-compact-and-self-contained ()
+  (with-temp-buffer
+    (setq-local pichat-artifact-runner--executable "/usr/bin/sh"
+                pichat-artifact-runner--status 'exit
+                pichat-artifact-runner--exit 0
+                pichat-artifact-runner--code "printf hello\n"
+                pichat-artifact-runner--captured-output "hello"
+                pichat-artifact-runner--share-limit 4000)
+    (should (equal (pichat-artifact-runner--report)
+                   (concat "Ran with sh — exit 0\n\nExecuted script:\n"
+                           "```\nprintf hello\n```\n\nOutput:\n```\nhello\n```")))
+    ;; Delimit source containing Markdown fences without closing it early.
+    (setq pichat-artifact-runner--code "printf '```'\n")
+    (should (string-search "````\nprintf '```'\n````"
+                           (pichat-artifact-runner--report)))
+    (setq pichat-artifact-runner--session (pichat-session-make)
+          pichat-artifact-runner--output-file "/tmp/test-output.txt"
+          pichat-artifact-runner--output-bytes 5000)
+    (let ((report (pichat-artifact-runner--report)))
+      (should (string-search
+               "Output excerpt — full output: /tmp/test-output.txt" report))
+      (should-not (string-match-p "view\\|Host:\\|Cwd:\\|5000" report)))
+    (setq pichat-artifact-runner--discarded-bytes 100)
+    (should (string-search "INCOMPLETE output at /tmp/test-output.txt"
+                           (pichat-artifact-runner--report)))
+    (should (string-search "5000 bytes captured; 100 discarded"
+                           (pichat-artifact-runner--report)))))
+
 (ert-deftest pichat-artifacts-runner-selection-and-rejections ()
   (require 'pichat-artifact-runner)
   (should (eq 'javascript (car (pichat-artifact-runner-select "js"))))
@@ -275,7 +303,7 @@
 
 (ert-deftest pichat-artifacts-runner-argv-cwd-and-script-cleanup-with-stubs ()
   (require 'pichat-artifact-runner)
-  (let (argv cwd output script buffer)
+  (let (argv cwd output script buffer delay)
     (cl-letf (((symbol-function 'executable-find) (lambda (_) "/stub/sh"))
               ((symbol-function 'make-process)
                (lambda (&rest args)
@@ -284,13 +312,15 @@
                        cwd default-directory
                        script (cadr argv))
                  nil))
-              ((symbol-function 'run-at-time) (lambda (&rest _) nil))
+              ((symbol-function 'run-at-time)
+               (lambda (seconds &rest _) (setq delay seconds) nil))
               ((symbol-function 'pop-to-buffer) (lambda (&rest _) nil)))
       (setq buffer (pichat-artifact-runner-run "echo stub\n" "sh"
                                                  temporary-file-directory))
       (unwind-protect
           (progn
             (should (equal (car argv) "/stub/sh"))
+            (should (= delay 120))
             (should (equal cwd temporary-file-directory))
             (should (eq output buffer))
             (should (equal (with-temp-buffer
@@ -302,21 +332,313 @@
         (when (buffer-live-p buffer) (kill-buffer buffer)))
       (should-not (file-exists-p script)))))
 
-(ert-deftest pichat-artifacts-runner-output-limit-and-timeout-with-stubs ()
+(ert-deftest pichat-artifacts-runner-overflow-does-not-stop-process ()
   (require 'pichat-artifact-runner)
   (with-temp-buffer
-    (let ((buffer (current-buffer)) (stops 0))
-      (setq-local pichat-artifact-runner--output-start (point-min))
+    (let ((buffer (current-buffer)) (stops 0) staging)
+      (setq-local pichat-artifact-runner--captured-output "")
+      (setq-local pichat-artifact-runner--status 'running)
       (cl-letf (((symbol-function 'process-buffer) (lambda (_) buffer))
                 ((symbol-function 'process-live-p) (lambda (_) t))
                 ((symbol-function 'delete-process) (lambda (_) (cl-incf stops))))
-        (let ((pichat-artifact-runner-output-limit 4))
-          (pichat-artifact-runner--filter 'stub "abcdef")
-          (should (string-match-p "abcd\n\\[Output limit reached\\]" (buffer-string)))
-          (should (= stops 1)))
-        (pichat-artifact-runner--timeout 'stub)
-        (should (= stops 2))
-        (should (string-match-p "\\[Timed out\\]" (buffer-string)))))))
+        (unwind-protect
+            (let ((pichat-artifact-runner-output-limit 4))
+              (pichat-artifact-runner--filter 'stub "abcd")
+              (should-not pichat-artifact-runner--staging)
+              (pichat-artifact-runner--filter 'stub "ef")
+              (pichat-artifact-runner--filter 'stub "gh")
+              (setq staging pichat-artifact-runner--staging)
+              (should (= stops 0))
+              (should (equal "abcd" pichat-artifact-runner--captured-output))
+              (should (string-match-p "\\[Preview limit reached; run continues\\]"
+                                      (buffer-string)))
+              (with-temp-buffer
+                (insert-file-contents staging)
+                (should (equal (buffer-string) "abcdefgh")))
+              (pichat-artifact-runner--timeout 'stub)
+              (should (= stops 1))
+              (should (string-match-p "\\[Timed out\\]" (buffer-string))))
+          (when staging (delete-file staging)))))))
+
+(ert-deftest pichat-artifacts-runner-share-limit-spill-keeps-growing-preview ()
+  (with-temp-buffer
+    (let ((buffer (current-buffer))
+          (pichat-artifact-runner-output-limit 8)
+          (pichat-artifact-result-share-limit 4)
+          stage)
+      (setq-local pichat-artifact-runner--captured-output "")
+      (setq-local pichat-artifact-runner--status 'running)
+      (setq-local pichat-artifact-runner--preview-limit 8)
+      (setq-local pichat-artifact-runner--share-limit 4)
+      (setq-local pichat-artifact-runner--transport pichat-transport-local)
+      (setq-local pichat-artifact-runner--directory temporary-file-directory)
+      (setq-local pichat-artifact-runner--executable "sh")
+      (setq-local pichat-artifact-runner--code "test")
+      (cl-letf (((symbol-function 'process-buffer) (lambda (_) buffer)))
+        (unwind-protect
+            (progn
+              (pichat-artifact-runner--filter 'stub "abcd")
+              (should-not pichat-artifact-runner--staging)
+              (pichat-artifact-runner--filter 'stub "ef")
+              (setq stage pichat-artifact-runner--staging)
+              (should stage)
+              (should (equal "abcdef" pichat-artifact-runner--captured-output))
+              (should-not (string-search "Preview limit reached" (buffer-string)))
+              (pichat-artifact-runner--filter 'stub "gh")
+              (pichat-artifact-runner--filter 'stub "ijk")
+              (should (equal "abcdefgh" pichat-artifact-runner--captured-output))
+              (should (= 1 (how-many "Preview limit reached" (point-min) (point-max))))
+              (with-temp-buffer
+                (insert-file-contents stage)
+                (should (equal "abcdefghijk" (buffer-string))))
+              ;; A later customization change cannot silently truncate a
+              ;; result that was collected under the original share limit.
+              (let ((pichat-artifact-result-share-limit 2))
+                (should (string-match-p
+                         "```\nabcd\n\\[Section truncated for sharing\\]"
+                         (pichat-artifact-runner--report)))))
+          (when stage (delete-file stage)))))))
+
+(ert-deftest pichat-artifacts-runner-spill-byte-cap-preserves-characters ()
+  (with-temp-buffer
+    (let ((buffer (current-buffer))
+          (pichat-artifact-runner-output-limit 2)
+          (pichat-artifact-runner-output-max-bytes 5)
+          file)
+      (setq-local pichat-artifact-runner--captured-output "")
+      (setq-local pichat-artifact-runner--status 'running)
+      (setq-local pichat-artifact-runner--transport pichat-transport-local)
+      (setq-local pichat-artifact-runner--directory temporary-file-directory)
+      (setq-local pichat-artifact-runner--code "test")
+      (setq-local pichat-artifact-runner--executable "sh")
+      (cl-letf (((symbol-function 'process-buffer) (lambda (_) buffer)))
+        (unwind-protect
+            (progn
+              (pichat-artifact-runner--filter 'stub "aéédef")
+              (setq file pichat-artifact-runner--staging)
+              (should (equal "aé" pichat-artifact-runner--captured-output))
+              (should (= 5 pichat-artifact-runner--output-bytes))
+              (should (= 3 pichat-artifact-runner--discarded-bytes))
+              (with-temp-buffer
+                (insert-file-contents file)
+                (should (equal "aéé" (buffer-string))))
+              (pichat-artifact-runner--publish)
+              (should (equal file pichat-artifact-runner--output-file))
+              (should (string-match-p "INCOMPLETE output at"
+                                      (pichat-artifact-runner--report))))
+          (when file (delete-file file)))))))
+
+(ert-deftest pichat-artifacts-runner-unmapped-publication-keeps-local-file ()
+  (let* ((session (pichat-session-make
+                   :path-context (pichat-path-context--create
+                                  :transport-id 'local
+                                  :mappings '(("/unrelated" . "/container"))
+                                  :strict-p t)))
+         (file (make-temp-file "pichat-output-" nil ".txt" "abcdef")))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local pichat-artifact-runner--transport pichat-transport-local)
+          (setq-local pichat-artifact-runner--session session)
+          (setq-local pichat-artifact-runner--staging file)
+          (setq-local pichat-artifact-runner--output-bytes 6)
+          (setq-local pichat-artifact-runner--directory temporary-file-directory)
+          (setq-local pichat-artifact-runner--executable "sh")
+          (setq-local pichat-artifact-runner--code "echo")
+          (setq-local pichat-artifact-runner--captured-output "abc")
+          (pichat-artifact-runner--publish)
+          (should-not pichat-artifact-runner--output-file)
+          (should (string-match-p "not mapped" pichat-artifact-runner--capture-error))
+          (should (file-exists-p file))
+          (should-not (string-match-p (regexp-quote file)
+                                      (pichat-artifact-runner--report)))
+          (should (string-match-p (regexp-quote file)
+                                  (pichat-artifact-runner--output-description))))
+      (delete-file file))))
+
+(ert-deftest pichat-artifacts-runner-share-only-publication-failure-keeps-staging ()
+  (let ((directory (make-temp-file "pichat-share-failed-" t))
+        (pichat-artifact-runner-output-limit 80)
+        (pichat-artifact-result-share-limit 40)
+        stage)
+    (unwind-protect
+        (with-temp-buffer
+          (let ((buffer (current-buffer))
+                (pichat-artifact-runner-output-directory directory))
+            (setq-local pichat-artifact-runner--captured-output ""
+                        pichat-artifact-runner--share-limit 40
+                        pichat-artifact-runner--preview-limit 80
+                        pichat-artifact-runner--status 'running
+                        pichat-artifact-runner--transport pichat-transport-local
+                        pichat-artifact-runner--directory temporary-file-directory
+                        pichat-artifact-runner--executable "sh"
+                        pichat-artifact-runner--code "test")
+            (cl-letf (((symbol-function 'process-buffer) (lambda (_) buffer)))
+              (pichat-artifact-runner--filter 'stub (make-string 50 ?a)))
+            (setq stage pichat-artifact-runner--staging)
+            (should stage)
+            (should (equal (make-string 50 ?a)
+                           pichat-artifact-runner--captured-output))
+            (setq-local pichat-artifact-runner--status 'exit
+                        pichat-artifact-runner--exit 7)
+            (cl-letf (((symbol-function 'copy-file)
+                       (lambda (&rest _) (error "copy unavailable"))))
+              (pichat-artifact-runner--publish))
+            (should (file-exists-p stage))
+            (should-not pichat-artifact-runner--output-file)
+            (let ((report (pichat-artifact-runner--report)))
+              (should (string-match-p "Ran with sh — exit 7" report))
+              (should (string-match-p "output publication failed" report))
+              (should (string-match-p "```\naaaa" report))
+              (should-not (string-match-p (regexp-quote stage) report)))))
+      (when (and stage (file-exists-p stage)) (delete-file stage))
+      (delete-directory directory t))))
+
+(ert-deftest pichat-artifacts-runner-mapped-output-directory-publishes-native-path ()
+  (let* ((directory (make-temp-file "pichat-mapped-output-" t))
+         (pichat-artifact-runner-output-directory directory)
+         (session (pichat-session-make
+                   :path-context (pichat-path-context--create
+                                  :transport-id 'local
+                                  :mappings (list (cons directory "/runtime"))
+                                  :strict-p t)))
+         (stage (make-temp-file "pichat-output-" nil ".txt" "abcdef"))
+         output)
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local pichat-artifact-runner--transport pichat-transport-local)
+          (setq-local pichat-artifact-runner--session session)
+          (setq-local pichat-artifact-runner--staging stage)
+          (setq-local pichat-artifact-runner--output-bytes 6)
+          (pichat-artifact-runner--publish)
+          (setq output pichat-artifact-runner--output-file)
+          (should (string-prefix-p "/runtime/pichat-output-" output))
+          (should-not (file-exists-p stage))
+          (should (= #o600 (file-modes (expand-file-name
+                                      (file-name-nondirectory output)
+                                      directory))))
+          (with-temp-buffer
+            (insert-file-contents (expand-file-name
+                                   (file-name-nondirectory output) directory))
+            (should (equal "abcdef" (buffer-string)))))
+      (when (file-exists-p stage) (delete-file stage))
+      (delete-directory directory t))))
+
+(ert-deftest pichat-artifacts-runner-failed-copy-retains-staging-without-agent-path ()
+  (let* ((directory (make-temp-file "pichat-failed-output-" t))
+         (pichat-artifact-runner-output-directory directory)
+         (stage (make-temp-file "pichat-output-" nil ".txt" "abcdef")))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local pichat-artifact-runner--transport pichat-transport-local)
+          (setq-local pichat-artifact-runner--staging stage)
+          (setq-local pichat-artifact-runner--output-bytes 6)
+          (setq-local pichat-artifact-runner--directory temporary-file-directory)
+          (setq-local pichat-artifact-runner--executable "sh")
+          (setq-local pichat-artifact-runner--code "echo")
+          (setq-local pichat-artifact-runner--captured-output "abc")
+          (cl-letf (((symbol-function 'copy-file)
+                     (lambda (&rest _) (error "copy unavailable"))))
+            (pichat-artifact-runner--publish))
+          (should-not pichat-artifact-runner--output-file)
+          (should (string-match-p "copy unavailable"
+                                  pichat-artifact-runner--capture-error))
+          (should (file-exists-p stage))
+          (should-not (string-match-p (regexp-quote stage)
+                                      (pichat-artifact-runner--report)))
+          (should (null (directory-files directory nil "pichat-output-"))))
+      (when (file-exists-p stage) (delete-file stage))
+      (delete-directory directory t))))
+
+(ert-deftest pichat-artifacts-runner-ssh-session-selects-runtime-host-and-cwd ()
+  (let* ((transport (pichat-transport--create
+                     :id 'other :kind 'ssh :label "other"
+                     :tramp-prefix "/ssh:other:"
+                     :remote-path '(tramp-own-remote-path)))
+         (session (pichat-session-make
+                   :transport transport :cwd "/mounted/project/"
+                   :runtime-cwd "/srv/project/"))
+         (origin (generate-new-buffer " *pichat-remote-run-test*"))
+         (real-make-temp-file (symbol-function 'make-temp-file))
+         buffer prefix spawned args script)
+    (unwind-protect
+        (cl-letf (((symbol-function 'file-directory-p)
+                   (lambda (directory)
+                     (should (equal directory "/ssh:other:/srv/project/")) t))
+                  ((symbol-function 'executable-find)
+                   (lambda (_name &optional remote)
+                     (should remote)
+                     (should (equal default-directory
+                                    "/ssh:other:/srv/project/"))
+                     "/ssh:other:/usr/bin/sh"))
+                  ((symbol-function 'make-temp-file)
+                   (lambda (name &optional dir suffix &rest rest)
+                     (if (string-prefix-p "/ssh:other:/tmp/pichat-code-" name)
+                         (progn (setq prefix name)
+                                (funcall real-make-temp-file
+                                         "pichat-test-code-" dir suffix))
+                       (apply real-make-temp-file name dir suffix rest))))
+                  ((symbol-function 'make-process)
+                   (lambda (&rest process-args)
+                     (setq spawned default-directory args process-args
+                           script (cadr (plist-get args :command)))
+                     nil))
+                  ((symbol-function 'run-at-time) (lambda (&rest _) nil))
+                  ((symbol-function 'pichat-view-display)
+                   (lambda (result &rest _) result)))
+          (with-current-buffer origin
+            (setq buffer (pichat-artifact-runner-run
+                          "pwd\n" "sh" "/mounted/project/" session)))
+          (should (equal prefix "/ssh:other:/tmp/pichat-code-"))
+          (should (equal spawned "/ssh:other:/srv/project/"))
+          (should (plist-get args :file-handler))
+          (should (equal (car (plist-get args :command)) "/usr/bin/sh"))
+          (should (string-prefix-p "/tmp/" script))
+          (with-current-buffer buffer
+            (should (string-match-p "Cwd: /srv/project/" (buffer-string)))
+            (should (string-match-p "Host: other (ssh)" (buffer-string)))
+            (should-not (string-match-p "Host:\\|Cwd:"
+                                        (pichat-artifact-runner--report)))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (when (buffer-live-p origin) (kill-buffer origin)))))
+
+(ert-deftest pichat-artifacts-runner-ssh-rejects-mismatched-directory-and-elisp ()
+  (let* ((transport (pichat-transport--create
+                     :id 'remote :kind 'ssh :label "remote"
+                     :tramp-prefix "/ssh:remote:"))
+         (session (pichat-session-make
+                   :transport transport :runtime-cwd "/tmp/")))
+    (should-error (pichat-artifact-runner-run
+                   "echo nope" "sh" "/ssh:wrong:/tmp/" session)
+                  :type 'user-error)
+    (cl-letf (((symbol-function 'file-directory-p) (lambda (_) t)))
+      (should-error (pichat-artifact-runner-run
+                     "(+ 1 2)" "elisp" "/mounted/" session)
+                    :type 'user-error))))
+
+(ert-deftest pichat-artifacts-runner-spill-write-failure-does-not-kill-run ()
+  (with-temp-buffer
+    (let ((buffer (current-buffer))
+          (pichat-artifact-runner-output-limit 2)
+          file)
+      (setq-local pichat-artifact-runner--captured-output "")
+      (setq-local pichat-artifact-runner--status 'running)
+      (setq-local pichat-artifact-runner--transport pichat-transport-local)
+      (setq-local pichat-artifact-runner--directory temporary-file-directory)
+      (setq-local pichat-artifact-runner--code "test")
+      (setq-local pichat-artifact-runner--executable "sh")
+      (unwind-protect
+          (cl-letf (((symbol-function 'process-buffer) (lambda (_) buffer))
+                    ((symbol-function 'write-region)
+                     (lambda (&rest _) (error "disk unavailable"))))
+            (pichat-artifact-runner--filter 'stub "abcdef")
+            (setq file pichat-artifact-runner--staging)
+            (should (eq 'running pichat-artifact-runner--status))
+            (should (string-match-p "disk unavailable"
+                                    pichat-artifact-runner--capture-error))
+            (should-not pichat-artifact-runner--output-file)
+            (should-not (string-match-p (regexp-quote file)
+                                        (pichat-artifact-runner--report))))
+        (when file (delete-file file))))))
 
 (ert-deftest pichat-artifacts-avy-cancellation-preserves-point ()
   (with-temp-buffer
@@ -607,6 +929,149 @@
     (should-not (with-current-buffer buffer
                   (eq pichat-artifact-runner--status 'running)))))
 
+(ert-deftest pichat-artifacts-subprocess-timeout-publishes-partial-output ()
+  (let ((pichat-artifact-runner-output-limit 3) view output script)
+    (unwind-protect
+        (progn
+          (setq view (pichat-artifact-runner-run
+                      "printf 'abcdefgh'; exec sleep 10\n"
+                      "sh" temporary-file-directory))
+          (with-current-buffer view (setq script pichat-artifact-runner--file))
+          (let ((deadline (+ (float-time) 3)))
+            (while (and (< (float-time) deadline)
+                        (with-current-buffer view
+                          (null pichat-artifact-runner--staging)))
+              (accept-process-output nil 0.02)))
+          (with-current-buffer view
+            (should pichat-artifact-runner--staging)
+            (pichat-artifact-runner--timeout pichat-artifact-runner--process))
+          (pichat-test-artifacts--wait-for-run view)
+          (with-current-buffer view
+            (setq output pichat-artifact-runner--output-file)
+            (should (eq 'timeout pichat-artifact-runner--status))
+            (should (string-match-p "Ran with sh — timed out"
+                                    (pichat-artifact-runner--report)))
+            (should (string-match-p (regexp-quote output)
+                                    (pichat-artifact-runner--report))))
+          (should-not (file-exists-p script))
+          (with-temp-buffer
+            (insert-file-contents output)
+            (should (equal "abcdefgh" (buffer-string)))))
+      (when (buffer-live-p view) (kill-buffer view))
+      (when output (delete-file output)))))
+
+(ert-deftest pichat-artifacts-subprocess-spill-share-retains-readable-file ()
+  (save-window-excursion
+    (let ((chat (generate-new-buffer " *pichat-spill-share-chat*"))
+        (pichat-artifact-runner-output-limit 3) view output)
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (pichat-chat-mode)
+            (pichat-chat--set-input-text "draft")
+            (setq view (pichat-artifact-runner-run
+                        "printf 'abcdefgh'\n" "sh" temporary-file-directory)))
+          (pichat-test-artifacts--wait-for-run view)
+          (with-current-buffer view
+            (setq output pichat-artifact-runner--output-file)
+            (should (string-match-p (regexp-quote output)
+                                    (pichat-artifact-runner--report)))
+            (let ((pichat-artifact-runner--status 'publishing))
+              (should-error (pichat-artifact-result-share) :type 'user-error))
+            (pichat-artifact-result-share))
+          (should-not (buffer-live-p view))
+          (should (file-exists-p output))
+          (with-current-buffer chat
+            (should (string-match-p (regexp-quote output)
+                                    (pichat-chat--input-text)))
+            (should (string-match-p "```\nabc"
+                                    (pichat-chat--input-text)))))
+      (when (buffer-live-p view) (kill-buffer view))
+      (when (buffer-live-p chat) (kill-buffer chat))
+      (when output (delete-file output))))))
+
+(ert-deftest pichat-artifacts-subprocess-spill-exact-boundaries-and-snapshot ()
+  (dolist (count '(3 4 5 8 9))
+    (let ((pichat-artifact-runner-output-limit 8)
+          (pichat-artifact-result-share-limit 4)
+          view output)
+      (unwind-protect
+          (progn
+            (setq view (pichat-artifact-runner-run
+                        (format "printf '%%0%dd' 0\n" count)
+                        "sh" temporary-file-directory))
+            (pichat-test-artifacts--wait-for-run view)
+            (with-current-buffer view
+              (setq output pichat-artifact-runner--output-file)
+              (should (eq (not (null output)) (> count 4)))
+              (should (eq pichat-artifact-runner--preview-truncated (> count 8)))
+              (should (= (length pichat-artifact-runner--captured-output)
+                         (min 8 count)))
+              (when output
+                (with-temp-buffer
+                  (insert-file-contents output)
+                  (should (equal (buffer-string) (make-string count ?0)))))))
+        (when (buffer-live-p view) (kill-buffer view))
+        (when output (delete-file output)))))
+  (let ((pichat-artifact-runner-output-limit 8)
+        (pichat-artifact-result-share-limit 10)
+        view)
+    (unwind-protect
+        (progn
+          (setq view (pichat-artifact-runner-run
+                      "printf 000000\n" "sh" temporary-file-directory))
+          (pichat-test-artifacts--wait-for-run view)
+          (with-current-buffer view
+            (should-not pichat-artifact-runner--output-file)
+            (let ((pichat-artifact-result-share-limit 2))
+              (should (string-match-p "```\n000000\n```\\'"
+                                      (pichat-artifact-runner--report))))))
+      (when (buffer-live-p view) (kill-buffer view)))))
+
+(ert-deftest pichat-artifacts-subprocess-share-truncation-retains-full-file ()
+  (save-window-excursion
+    (let ((chat (generate-new-buffer " *pichat-share-truncation-chat*"))
+          (pichat-artifact-runner-output-limit 65536)
+          (pichat-artifact-result-share-limit 4000)
+          view output)
+      (unwind-protect
+          (progn
+            (with-current-buffer chat
+              (pichat-chat-mode)
+              (pichat-chat--set-input-text "draft")
+              (setq view (pichat-artifact-runner-run
+                          "printf '%010000d' 0; exit 7\n"
+                          "sh" temporary-file-directory)))
+            (pichat-test-artifacts--wait-for-run view)
+            (with-current-buffer view
+              (setq output pichat-artifact-runner--output-file)
+              (should (and output (file-exists-p output)))
+              (should (= #o600 (file-modes output)))
+              (should (eq 'exit pichat-artifact-runner--status))
+              (should (= 7 pichat-artifact-runner--exit))
+              (should (= 10000 (length pichat-artifact-runner--captured-output)))
+              (should-not pichat-artifact-runner--preview-truncated)
+              (should-not (string-search "Preview limit reached" (buffer-string)))
+              (let ((report (pichat-artifact-runner--report)))
+                (should (string-match-p "Ran with sh — exit 7" report))
+                (should (string-match-p (regexp-quote output) report))
+                (should (string-match-p
+                         "```\n0000" report))
+                (should (string-match-p "Section truncated for sharing" report)))
+              (pichat-artifact-result-share))
+            (should-not (buffer-live-p view))
+            (with-current-buffer chat
+              (should (string-match-p (regexp-quote output)
+                                      (pichat-chat--input-text)))
+              (should (string-match-p "```\n0000"
+                                      (pichat-chat--input-text))))
+            (with-temp-buffer
+              (insert-file-contents output)
+              (should (equal (buffer-string) (make-string 10000 ?0)))))
+        (when (buffer-live-p view) (kill-buffer view))
+        (when (buffer-live-p chat) (kill-buffer chat))
+        (when output (delete-file output))))))
+
 (ert-deftest pichat-artifacts-python-and-javascript-use-shared-result-actions ()
   (dolist (case '(("py" "python3" ".py") ("js" "node" ".js")))
     (let (view script)
@@ -647,15 +1112,15 @@
             (with-current-buffer view
               (should (eq (key-binding (kbd "s")) #'pichat-artifact-result-share))
               (let ((report (pichat-artifact-runner--report)))
-                (should (string-match-p "Status: exit 3" report))
-                (should (string-match-p "stdout/stderr:\nhello" report)))
+                (should (string-match-p "Ran with sh — exit 3" report))
+                (should (string-match-p "Output:\n```\nhello" report)))
               (pichat-artifact-result-share))
             (should-not (buffer-live-p view))
             (with-current-buffer chat
-              (should (string-prefix-p "draft\n\nCode run: "
+              (should (string-prefix-p "draft\n\nRan with sh — "
                                        (buffer-substring-no-properties
                                         pichat-chat--input-start (point-max))))
-              (should (string-match-p "Status: exit 3" (buffer-string)))
+              (should (string-match-p "Ran with sh — exit 3" (buffer-string)))
               (should (equal pichat-chat--pending-attachments '(image)))))
         (when (buffer-live-p view) (kill-buffer view))
         (when (buffer-live-p chat) (kill-buffer chat))))))
@@ -674,28 +1139,28 @@
             (with-current-buffer view
               (should-error (pichat-artifact-result-share) :type 'user-error)
               (should (buffer-live-p view))
-              (should (string-match-p "Status: running (partial output)"
+              (should (string-match-p "Ran with sh — running (partial output)"
                                       (pichat-artifact-runner--report)))
               (pichat-artifact-result-copy-report)
-              (should (string-match-p "Status: running" (current-kill 0)))
+              (should (string-match-p "Ran with sh — running" (current-kill 0)))
               (pichat-artifact-runner--timeout pichat-artifact-runner--process))
             (pichat-test-artifacts--wait-for-run view)
             (with-current-buffer view
-              (should (string-match-p "Status: timed out"
+              (should (string-match-p "Ran with sh — timed out"
                                       (pichat-artifact-runner--report)))
               (pichat-artifact-result-share))
             (with-current-buffer chat
-              (should (string-prefix-p "original\n\nCode run: "
+              (should (string-prefix-p "original\n\nRan with sh — "
                                        (buffer-substring-no-properties
                                         pichat-chat--input-start (point-max))))
-              (should (string-match-p "Status: timed out" (buffer-string)))))
+              (should (string-match-p "Ran with sh — timed out" (buffer-string)))))
         (when (buffer-live-p view) (kill-buffer view))
         (when (buffer-live-p chat) (kill-buffer chat))))))
 
 (ert-deftest pichat-artifacts-subprocess-output-limit-and-stale-source ()
   (save-window-excursion
     (let ((chat (generate-new-buffer " *pichat-subprocess-stale*"))
-          (pichat-artifact-runner-output-limit 4) view)
+          (pichat-artifact-runner-output-limit 4) view published)
       (unwind-protect
           (progn
             (switch-to-buffer chat)
@@ -705,19 +1170,25 @@
                         "printf abcdefghijkl\n" "sh" temporary-file-directory))
             (pichat-test-artifacts--wait-for-run view)
             (with-current-buffer view
+              (setq published pichat-artifact-runner--output-file)
               (let ((report (pichat-artifact-runner--report)))
-                (should (string-match-p "Status: output limit reached" report))
-                (should (string-match-p "stdout/stderr:\nabcd\\'" report))))
+                (should (string-match-p "Ran with sh — exit 0" report))
+                (should (string-match-p "```\nabcd\n```\\'" report))
+                (should (string-match-p (regexp-quote published) report)))
+              (with-temp-buffer
+                (insert-file-contents published)
+                (should (equal (buffer-string) "abcdefghijkl"))))
             (with-current-buffer chat (cl-incf pichat-chat--source-generation))
             (with-current-buffer view
               (should-error (pichat-artifact-result-share) :type 'user-error)
               (should (buffer-live-p view))
               (pichat-artifact-result-copy-report)
-              (should (string-match-p "Status: output limit reached"
-                                      (current-kill 0))))
+              (should (string-match-p "Ran with sh — exit 0" (current-kill 0))))
             (with-current-buffer chat
               (should (equal "keep" (pichat-chat--input-text)))))
         (when (buffer-live-p view) (kill-buffer view))
+        (when published (should (file-exists-p published))
+              (delete-file published))
         (when (buffer-live-p chat) (kill-buffer chat))))))
 
 (provide 'pichat-test-artifacts)

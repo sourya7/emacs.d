@@ -84,7 +84,7 @@ origin window.  Direct runner calls already focus their result normally."
          (result (pichat-artifact-runner-run
                   (pichat-artifact-payload artifact)
                   (pichat-artifact-metadata artifact)
-                  default-directory)))
+                  default-directory pichat-chat-session)))
     ;; Embark may reselect the target window after the action has displayed
     ;; its result.  Wait until that command finishes before selecting the view.
     (run-at-time 0 nil #'pichat-artifacts-embark--focus-result

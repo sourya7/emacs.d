@@ -64,9 +64,13 @@ PICHAT_TEST_SSH_PI=/etc/profiles/per-user/dev/bin/pi \
   pichat/test/run-ssh-tests.sh
 ```
 
-The test creates and removes a unique remote directory, copies only the fake
-provider fixture, uses isolated agent/session state, streams one prompt, stops
-the remote process, and checks for an orphan. It never reads normal remote Pi
+The RPC test creates and removes a unique remote directory, copies only the
+fake provider fixture, uses isolated agent/session state, streams one prompt,
+stops the remote process, and checks for an orphan. SSH runner tests also run
+an explicit shell script in an isolated remote project, verify that both
+preview-limit and share-limit-only overflow files in remote `/tmp` are readable
+and included in the draft, and check timeout/temporary-script cleanup.
+They remove their own remote output files. No test reads normal remote Pi
 settings, credentials, extensions, or sessions.
 
 ## Coverage

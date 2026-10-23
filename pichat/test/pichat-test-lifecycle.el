@@ -8,6 +8,550 @@
 
 (require 'pichat-test-support)
 
+(ert-deftest pichat-reconfigure-tools-use-captured-preset-not-changed-registry ()
+  (let ((pichat-presets (copy-tree pichat-presets)))
+    (pichat-make-preset 'test-snapshot :tools '("read" "edit"))
+    (let* ((spec (pichat-presets-resolve 'test-snapshot))
+           (session (pichat-session-make
+                     :preset-name 'test-snapshot :preset-spec spec
+                     :tool-selection (pichat-tool-selection-resolve spec)))
+           (captured (pichat-reconfigure-captured-configuration session)))
+      (pichat-make-preset 'test-snapshot :tools '("read" "bash"))
+      (let ((tools-only
+             (pichat-reconfigure-select-tools
+              captured '(:builtins ("read") :mcp nil)))
+            (explicit (pichat-reconfigure-select-preset captured 'test-snapshot)))
+        (should (equal '("read" "edit")
+                       (plist-get (plist-get tools-only :preset-spec) :tools)))
+        (should (equal '("read" "bash")
+                       (plist-get (plist-get explicit :preset-spec) :tools)))
+        (should (pichat-reconfigure-effective-change-p captured tools-only))
+        (should (pichat-reconfigure-effective-change-p captured explicit)))
+      (setf (pichat-session-preset-spec session)
+            '(:name changed :tools ("bash")))
+      (should (equal '("read" "edit")
+                     (plist-get (plist-get captured :preset-spec) :tools))))))
+
+(ert-deftest pichat-reconfigure-removed-preset-can-be-retained-but-not-reselected ()
+  (let ((pichat-presets (copy-tree pichat-presets)))
+    (pichat-make-preset 'test-removed :tools '("read"))
+    (let* ((spec (pichat-presets-resolve 'test-removed))
+           (session (pichat-session-make
+                     :preset-name 'test-removed :preset-spec spec
+                     :tool-selection (pichat-tool-selection-resolve spec)))
+           (captured (pichat-reconfigure-captured-configuration session)))
+      (setq pichat-presets (assq-delete-all 'test-removed pichat-presets))
+      (should-not (pichat-reconfigure-effective-change-p captured captured))
+      (should (equal '("read")
+                     (plist-get (plist-get
+                                 (pichat-reconfigure-select-tools
+                                  captured '(:builtins ("read")))
+                                 :preset-spec) :tools)))
+      (should-error (pichat-reconfigure-select-preset captured 'test-removed)
+                    :type 'user-error))))
+
+(ert-deftest pichat-reconfigure-equivalent-preset-does-not-trigger-restart ()
+  (let ((pichat-presets (copy-tree pichat-presets)))
+    (pichat-make-preset 'test-same-a :tools '("read")
+      :append-system-prompt "same")
+    (pichat-make-preset 'test-same-b :tools '("read")
+      :append-system-prompt "same")
+    (let* ((spec (pichat-presets-resolve 'test-same-a))
+           (session (pichat-session-make
+                     :preset-name 'test-same-a :preset-spec spec
+                     :tool-selection (pichat-tool-selection-resolve spec)))
+           (captured (pichat-reconfigure-captured-configuration session))
+           (selected (pichat-reconfigure-select-preset captured 'test-same-b)))
+      (should-not (pichat-reconfigure-effective-change-p captured selected))
+      (pichat-make-preset 'test-same-b :tools '("read")
+        :append-system-prompt "different")
+      (should (pichat-reconfigure-effective-change-p
+               captured (pichat-reconfigure-select-preset captured 'test-same-b))))))
+
+(ert-deftest pichat-reconfigure-preferred-lookup-does-not-create-during-restart ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat--sessions-by-id (make-hash-table :test #'equal))
+          (pichat--session-order nil)
+          (pichat--sessions-by-scope (make-hash-table :test #'equal))
+          (scope '("project|local|/tmp/restarting/" "/tmp/restarting/" "test"))
+          (started 0))
+      (pichat-register-session session scope)
+      (setf (pichat-session-restart-operation session)
+            (list :token (make-symbol "restart") :phase 'stopping))
+      (cl-letf (((symbol-function 'pichat-start-session)
+                 (lambda (&rest _) (cl-incf started))))
+        (should-error (pichat--preferred-session-for-exact-scope scope)
+                      :type 'user-error)
+        (should (= started 0)))
+      (setf (pichat-session-restart-operation session)
+            (list :token (make-symbol "restart") :phase 'failed))
+      (should-not (pichat--restarting-runtime-for-scope (car scope))))))
+
+(ert-deftest pichat-chat-restart-staging-retains-snapshot-until-verified-commit ()
+  (pichat-test-with-unit-session (session proc)
+    (let* ((pichat-chat-stop-session-on-kill nil)
+           (pichat-chat-render-markdown nil)
+           (fixture (pichat-test-read-json-fixture "canonical-session.json"))
+           (data (list :entries (plist-get fixture :entries)
+                       :leafId (plist-get fixture :leafId)))
+           buffer)
+      (setf (pichat-session-id session) (plist-get fixture :sessionId)
+            (pichat-session-session-file session) (plist-get fixture :sessionFile)
+            (pichat-session-state session) 'idle)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (with-current-buffer buffer
+              (pichat-chat--apply-sync-response (list :data data) t nil)
+              (pichat-chat--set-input-text "unsent draft")
+              (let ((retained pichat-chat--entry-cache)
+                    (compose-token (pichat-chat--compose-source-token))
+                    (generation pichat-chat--source-generation))
+                (pichat-chat-stage-restart session)
+                (should-not (pichat-chat-canonical-entry-cache session))
+                (pichat-emit session 'agent-start
+                             :raw '(:type "agent_start"))
+                (pichat-emit session 'turn-end
+                             :raw '(:type "turn_end"))
+                (should (eq retained pichat-chat--entry-cache))
+                (pichat-chat--on-session-rebinding session nil nil)
+                (pichat-chat--on-state-changed session nil nil)
+                (cl-letf (((symbol-function 'pichat-rpc-get-entries)
+                           (lambda (&rest _) (ert-fail "Staged restart must not repaint"))))
+                  (pichat-chat-repaint))
+                (should (eq retained pichat-chat--entry-cache))
+                (should (= generation pichat-chat--source-generation))
+                (should (pichat-chat--compose-source-valid-p compose-token))
+                (should (string-match-p "Final persisted answer"
+                                        (buffer-string)))
+                (should (equal "unsent draft" (pichat-chat--input-text)))
+                (should-error
+                 (pichat-chat-commit-staged-restart
+                  session (pichat-entry-cache-empty "other" "/tmp/other.jsonl"))
+                 :type 'user-error)
+                (should (eq retained pichat-chat--entry-cache))
+                (cl-letf (((symbol-function 'pichat-render-canonical)
+                           (lambda (&rest _) (error "render failure"))))
+                  (should-error
+                   (pichat-chat-commit-staged-restart session retained)))
+                (should (eq retained pichat-chat--entry-cache))
+                (should pichat-chat--restart-staging)
+                (pichat-chat-commit-staged-restart
+                 session (pichat-pi-entry-cache-full
+                          (plist-get fixture :sessionId)
+                          (plist-get fixture :sessionFile)
+                          (plist-get fixture :entries) (plist-get fixture :leafId)))
+                (should-not pichat-chat--restart-staging)
+                (should-not pichat-chat--source-rebinding-p)
+                (should (pichat-chat--compose-source-valid-p compose-token))
+                (should (equal "unsent draft" (pichat-chat--input-text))))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-reconfigure-transaction-preflight-blocks-before-stop ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          buffer result)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (cl-letf (((symbol-function 'pichat-reconfigure-request-preflight)
+                       (lambda (_origin callback)
+                         (funcall callback '("Pi is busy") nil)))
+                      ((symbol-function 'pichat-rpc-stop)
+                       (lambda (&rest _) (ert-fail "Preflight stopped Pi"))))
+              (pichat-reconfigure-restart
+               (pichat-reconfigure-capture-origin session)
+               '(:preset-spec (:name coding))
+               (lambda (success reason) (setq result (list success reason)))))
+            (should (equal '(nil "Pi is busy") result))
+            (should-not (pichat-session-restart-operation session))
+            (should (eq proc (pichat-session-process session)))
+            (should (process-live-p proc)))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-reconfigure-bridge-handshake-is-owned-but-tools-are-denied ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-rpc--dispatch-process proc)
+          (token (make-symbol "restart"))
+          replies)
+      (setf (pichat-session-restart-operation session)
+            (list :token token :phase 'loading))
+      (cl-letf (((symbol-function 'process-send-string)
+                 (lambda (_proc line) (push (pichat-rpc--json-decode line) replies)))
+                ((symbol-function 'pichat-tool-bridge-execute-json)
+                 (lambda (&rest _) (ert-fail "Restart executed an Emacs tool"))))
+        (should (pichat-bridge-transport-handle
+                 session (list :id "handshake" :title
+                               pichat-bridge-transport-handshake-title)))
+        (should (pichat-bridge-transport-handle
+                 session (list :id "tool" :title
+                               pichat-bridge-transport-tool-call-title
+                               :prefill "{}")))
+        (should (= 2 (length replies)))
+        (should (equal "tool" (plist-get (car replies) :id)))
+        (should (plist-get (pichat-rpc--json-decode
+                            (plist-get (car replies) :value)) :isError))))))
+
+(ert-deftest pichat-reconfigure-external-stop-retires-operation-before-shutdown ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((operation (list :token (make-symbol "restart") :phase 'loading
+                           :requested '(:preset coding))))
+      (setf (pichat-session-restart-operation session) operation)
+      (pichat-stop-session session)
+      (should-not (eq operation (pichat-session-restart-operation session)))
+      (should (eq 'failed (plist-get (pichat-session-restart-operation session)
+                                   :phase)))
+      (should (equal '(:preset coding)
+                     (plist-get (pichat-session-restart-operation session)
+                                :requested)))
+      (should-not (process-live-p proc)))))
+
+(ert-deftest pichat-reconfigure-killed-chat-cancels-restart-even-without-stop-on-kill ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          (operation (list :token (make-symbol "restart") :phase 'starting))
+          buffer)
+      (setq buffer (pichat-chat-open session))
+      (setf (pichat-session-restart-operation session) operation)
+      (kill-buffer buffer)
+      (should-not (eq operation (pichat-session-restart-operation session)))
+      (should (eq 'failed (plist-get (pichat-session-restart-operation session)
+                                   :phase)))
+      (should-not (process-live-p proc)))))
+
+(ert-deftest pichat-reconfigure-shutdown-waits-for-exit-and-sentinel ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((operation (list :token (make-symbol "restart") :phase 'stopping))
+          (pichat-reconfigure-shutdown-timeout 0.2)
+          result)
+      (setf (pichat-session-restart-operation session) operation)
+      (pichat-reconfigure-stop-and-wait
+       session operation (lambda (success reason)
+                           (push (list success reason) result)))
+      (pichat-test-wait-until (lambda () result) 2 "local shutdown barrier")
+      (should (equal '((t nil)) result))
+      (should-not (process-live-p proc))
+      (should (eq 'stopped (pichat-session-state session))))))
+
+(ert-deftest pichat-reconfigure-shutdown-times-out-without-confirmed-exit ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((operation (list :token (make-symbol "restart") :phase 'stopping))
+          (pichat-reconfigure-shutdown-timeout 0.02)
+          result)
+      (setf (pichat-session-restart-operation session) operation)
+      (cl-letf (((symbol-function 'pichat-rpc-stop) #'ignore))
+        (pichat-reconfigure-stop-and-wait
+         session operation (lambda (success reason)
+                             (setq result (list success reason))))
+        (pichat-test-wait-until (lambda () result) 2 "local shutdown timeout")
+        (should-not (car result))
+        (should (string-match-p "Timed out confirming" (cadr result)))
+        (should (process-live-p proc))))))
+
+(ert-deftest pichat-reconfigure-command-is-validated-without-early-commit ()
+  (pichat-test-with-unit-session (session proc)
+    (let* ((old (pichat-presets-resolve 'manual))
+           (new (pichat-presets-resolve 'coding))
+           (tools (pichat-tool-selection-resolve new))
+           (configuration (list :preset-spec new :tool-selection tools))
+           (state '(:model (:provider "test-provider" :id "test-model")))
+           (pichat-rpc-command nil)
+           (pichat-pi-extra-args nil)
+           (pichat-default-model nil))
+      (setf (pichat-session-preset-spec session) old
+            (pichat-session-tool-selection session)
+            (pichat-tool-selection-resolve old)
+            (pichat-session-startup-model session) "old-model")
+      (let ((command (pichat-reconfigure-validated-command
+                      session configuration state)))
+        (should (equal '("--model" "test-provider/test-model")
+                       (last command 2)))
+        (should (member "--append-system-prompt" command))
+        (should (equal "old-model" (pichat-session-startup-model session)))
+        (should (eq 'manual (plist-get (pichat-session-preset-spec session)
+                                        :name))))
+      (should-error
+       (pichat-reconfigure-validated-command session configuration
+                                              '(:model (:provider "test")))
+       :type 'user-error))))
+
+(ert-deftest pichat-reconfigure-settings-validation-detects-unknown-and-changed ()
+  (let* ((expected '(:model (:provider "fake" :id "model" :contextWindow 100)
+                    :thinkingLevel "medium" :steeringMode "all"
+                    :followUpMode "one-at-a-time"
+                    :autoCompactionEnabled nil))
+         (actual '(:model (:provider "fake" :id "model" :contextWindow 200)
+                   :thinkingLevel "medium" :steeringMode "all"
+                   :followUpMode "one-at-a-time"
+                   :autoCompactionEnabled nil)))
+    (should-not (pichat-reconfigure-settings-mismatches expected actual))
+    (should (equal '(:thinkingLevel :followUpMode)
+                   (pichat-reconfigure-settings-mismatches
+                    expected (list :model (plist-get actual :model)
+                                   :thinkingLevel "high" :steeringMode "all"
+                                   :autoCompactionEnabled nil))))
+    (should (equal '(:autoCompactionEnabled)
+                   (pichat-reconfigure-settings-mismatches
+                    expected (plist-put (copy-sequence actual)
+                                        :autoCompactionEnabled t))))))
+
+(ert-deftest pichat-reconfigure-reload-validates-source-branch-and-full-entries ()
+  (let* ((fixture (pichat-test-read-json-fixture "canonical-session.json"))
+         (id (plist-get fixture :sessionId))
+         (file (plist-get fixture :sessionFile))
+         (entries (plist-get fixture :entries))
+         (leaf (plist-get fixture :leafId))
+         (retained (pichat-pi-entry-cache-full id file entries leaf))
+         (origin (list :session-id id :session-file file))
+         (state (list :sessionId id :sessionFile file))
+         (response (list :entries entries :leafId leaf)))
+    (let ((reloaded (pichat-reconfigure-validate-reload
+                     origin retained state response)))
+      (should (pichat-entry-cache-p reloaded))
+      (should-not (eq retained reloaded)))
+    (should-error (pichat-reconfigure-validate-reload
+                   origin retained (plist-put (copy-sequence state)
+                                              :sessionId "another") response)
+                  :type 'user-error)
+    (should-error (pichat-reconfigure-validate-reload
+                   origin retained state
+                   (list :entries entries :leafId "entry-abandoned"))
+                  :type 'user-error)
+    (let* ((modified (copy-tree entries t))
+           (message (plist-get (car modified) :message))
+           (content (car (plist-get message :content))))
+      (plist-put content :text "modified by another writer")
+      (should-error (pichat-reconfigure-validate-reload
+                     origin retained state (list :entries modified :leafId leaf))
+                    :type 'user-error))
+    (should (equal (plist-get (plist-get
+                              (gethash "entry-user"
+                                       (pichat-entry-cache-entries-by-id retained))
+                              :message) :content)
+                   (plist-get (plist-get (car entries) :message) :content)))
+    (should-error (pichat-reconfigure-validate-reload
+                   origin retained state (list :entries entries))
+                  :type 'user-error)))
+
+(ert-deftest pichat-reconfigure-preflight-request-rechecks-origin-after-state ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((origin (pichat-reconfigure-capture-origin session))
+          (pichat-reconfigure-preflight-timeout 2)
+          state-callback result)
+      (cl-letf (((symbol-function 'pichat-rpc-get-state)
+                 (lambda (_session success _failure)
+                   (setq state-callback success)
+                   "request"))
+                ((symbol-function 'pichat-reconfigure-preflight-blockers)
+                 (lambda (_origin _state)
+                   (ert-fail "Stale intent should not reach validation"))))
+        (pichat-reconfigure-request-preflight
+         origin (lambda (blockers _state) (setq result blockers)))
+        (setf (pichat-session-id session) "changed")
+        (funcall state-callback '(:data (:sessionId "changed")) session)
+        (should (member "The originating runtime, process, or conversation changed"
+                        result))))))
+
+(ert-deftest pichat-reconfigure-preflight-request-reports-fresh-state-once ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((origin (pichat-reconfigure-capture-origin session))
+          (pichat-reconfigure-preflight-timeout 2)
+          success failure received)
+      (cl-letf (((symbol-function 'pichat-rpc-get-state)
+                 (lambda (_session callback error-callback)
+                   (setq success callback failure error-callback)
+                   "request"))
+                ((symbol-function 'pichat-reconfigure-preflight-blockers)
+                 (lambda (_origin state)
+                   (should (equal state '(:sessionId "source"))) nil)))
+        (pichat-reconfigure-request-preflight
+         origin (lambda (blockers state)
+                  (push (list blockers state) received)))
+        (funcall success '(:data (:sessionId "source")) session)
+        (funcall failure '(:error "late failure") session)
+        (should (equal received '((nil (:sessionId "source")))))))))
+
+(ert-deftest pichat-reconfigure-preflight-request-times-out-without-stopping ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-reconfigure-preflight-timeout 0.01)
+          (origin (pichat-reconfigure-capture-origin session))
+          cancelled result)
+      (cl-letf (((symbol-function 'pichat-rpc-get-state)
+                 (lambda (&rest _) "pending-request"))
+                ((symbol-function 'pichat-rpc-cancel-request)
+                 (lambda (_session id) (setq cancelled id))))
+        (pichat-reconfigure-request-preflight
+         origin (lambda (blockers _state) (setq result blockers)))
+        (pichat-test-wait-until (lambda () result) 2 "preflight timeout")
+        (should (equal cancelled "pending-request"))
+        (should (member "Timed out waiting for Pi state; the runtime was not stopped"
+                        result))
+        (should (eq (pichat-session-process session) proc))
+        (should (process-live-p proc))))))
+
+(ert-deftest pichat-reconfigure-preflight-rejects-stale-process-and-source ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((origin (pichat-reconfigure-capture-origin session)))
+      (should (pichat-reconfigure-origin-current-p origin))
+      (setf (pichat-session-process-generation session) 2)
+      (should-not (pichat-reconfigure-origin-current-p origin))
+      (should (member "The originating runtime, process, or conversation changed"
+                      (pichat-reconfigure-preflight-blockers origin nil)))
+      (setf (pichat-session-process-generation session) nil
+            (pichat-session-id session) "other")
+      (should-not (pichat-reconfigure-origin-current-p origin)))))
+
+(ert-deftest pichat-reconfigure-ssh-shutdown-gate-rejects-before-stop ()
+  (pichat-test-with-unit-session (session proc)
+    (let* ((remote (pichat-transport--create :id 'test-ssh :kind 'ssh
+                                              :label "test"))
+           (origin (pichat-reconfigure-capture-origin session))
+           (operation (list :token (make-symbol "restart") :phase 'stopping)))
+      (setf (pichat-session-transport session) remote
+            (pichat-session-restart-operation session) operation)
+      (should (member "Remote Pi shutdown cannot yet be confirmed; restart is unavailable on SSH"
+                      (pichat-reconfigure-preflight-blockers origin nil)))
+      (should-error
+       (pichat-reconfigure-stop-and-wait session operation #'ignore)
+       :type 'user-error)
+      (should (process-live-p proc)))))
+
+(ert-deftest pichat-reconfigure-preflight-requires-authoritative-idle-settings-and-file ()
+  (pichat-test-with-unit-session (session proc)
+    (pichat-test-with-temp-dir dir
+      (let* ((file (expand-file-name "conversation.jsonl" dir))
+             (pichat-rpc-command nil)
+             (state (list :sessionId "source" :sessionFile file
+                          :isStreaming nil :isCompacting nil
+                          :pendingMessageCount 0
+                          :model '(:provider "fake" :id "model")
+                          :thinkingLevel "medium"
+                          :steeringMode "all" :followUpMode "one-at-a-time"
+                          :autoCompactionEnabled nil)))
+        (write-region "{}\n" nil file nil 'silent)
+        (setf (pichat-session-state session) 'idle
+              (pichat-session-id session) "source"
+              (pichat-session-session-file session) file)
+        (let ((origin (pichat-reconfigure-capture-origin session)))
+          (cl-letf (((symbol-function 'pichat-reconfigure--chat-blockers)
+                     (lambda (_session) nil)))
+            (should-not (pichat-reconfigure-preflight-blockers origin state))
+            (should (member "Pi is busy or its pending-message count is unknown"
+                            (pichat-reconfigure-preflight-blockers
+                             origin (plist-put (copy-sequence state)
+                                               :pendingMessageCount 1))))
+            (should (member "Pi did not supply all settings required for safe restoration"
+                            (pichat-reconfigure-preflight-blockers
+                             origin (cl-loop for (key value) on state by #'cddr
+                                             unless (eq key :steeringMode)
+                                             append (list key value)))))
+            (delete-file file)
+            (should (member "The saved conversation file is inaccessible on the runtime target"
+                            (pichat-reconfigure-preflight-blockers origin state)))))))))
+
+(ert-deftest pichat-reconfigure-unwritten-preflight-requires-authoritative-metadata-only ()
+  (pichat-test-with-unit-session (session proc)
+    (pichat-test-with-temp-dir dir
+      (let* ((pichat-chat-stop-session-on-kill nil)
+             (pichat-chat-render-markdown nil)
+             (pichat-rpc-command nil)
+             (file (expand-file-name "not-yet-written.jsonl" dir))
+             (model-entry '(:type "model_change" :id "model" :parentId nil
+                                  :provider "fake" :modelId "model"))
+             (state (list :sessionId "empty-source" :sessionFile file
+                          :isStreaming nil :isCompacting nil :pendingMessageCount 0
+                          :model '(:provider "fake" :id "model")
+                          :thinkingLevel "off" :steeringMode "all"
+                          :followUpMode "one-at-a-time"
+                          :autoCompactionEnabled nil))
+             (entries (list :entries (list model-entry) :leafId "model"))
+             buffer result)
+        (setf (pichat-session-id session) "empty-source"
+              (pichat-session-session-file session) file
+              (pichat-session-persistence session) 'persistent
+              (pichat-session-state session) 'idle)
+        (unwind-protect
+            (progn
+              (setq buffer (pichat-chat-open session))
+              (with-current-buffer buffer
+                (pichat-chat--apply-sync-response (list :data entries) t nil))
+              (let ((origin (pichat-reconfigure-capture-origin session)))
+                (cl-letf (((symbol-function 'pichat-rpc-get-state)
+                           (lambda (_session callback _failure)
+                             (funcall callback (list :data state) session)))
+                          ((symbol-function 'pichat-rpc-get-entries)
+                           (lambda (_session _since callback _failure)
+                             (funcall callback (list :data entries) session))))
+                  (pichat-reconfigure-request-preflight
+                   origin (lambda (blockers fresh)
+                            (setq result (list blockers fresh))))
+                  (should-not (car result))
+                  (should (plist-get (cadr result) :pichat-empty-unwritten))
+                  (should (process-live-p proc))
+                  (setq entries
+                        (list :entries (list model-entry
+                                             '(:type "message" :id "user"
+                                                     :parentId "model"
+                                                     :message (:role "user")))
+                              :leafId "user")
+                        result nil)
+                  (pichat-reconfigure-request-preflight
+                   origin (lambda (blockers _fresh) (setq result blockers)))
+                  (should (member
+                           "The unwritten Pi session is not empty or changed during preflight"
+                           result))
+                  (should (process-live-p proc)))))
+          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
+(ert-deftest pichat-reconfigure-validate-empty-replacement-rejects-old-or-nonempty ()
+  (let ((origin '(:session-id "old" :session-file "/tmp/old.jsonl"))
+        (state '(:sessionId "new" :sessionFile "/tmp/new.jsonl"))
+        (entries '(:entries nil :leafId nil)))
+    (should (pichat-entry-cache-p
+             (pichat-reconfigure-validate-empty-replacement
+              origin state entries)))
+    (should-error
+     (pichat-reconfigure-validate-empty-replacement
+      origin '(:sessionId "old" :sessionFile "/tmp/new.jsonl") entries)
+     :type 'user-error)
+    (should-error
+     (pichat-reconfigure-validate-empty-replacement
+      origin state
+      '(:entries ((:type "custom" :id "extension" :parentId nil))
+                 :leafId "extension"))
+     :type 'user-error)))
+
+(ert-deftest pichat-reconfigure-preflight-blocks-unreloadable-historical-leaf ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil) buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (cl-letf (((symbol-function 'pichat-chat-canonical-entry-cache)
+                       (lambda (_session)
+                         (pichat-entry-cache-create
+                          :leaf-id "historical" :last-seen-id "latest"))))
+              (should (member "The active branch cannot be restored by Pi RPC after reload"
+                              (pichat-reconfigure--chat-blockers session)))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-reconfigure-preflight-blocks-pending-submission-without-losing-draft ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil) buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (with-current-buffer buffer
+              (pichat-chat--set-input-text "unsent draft")
+              (puthash "prompt" '(:text "sent")
+                       pichat-chat--pending-submissions))
+            (should (member "A prompt submission is pending or in flight"
+                            (pichat-reconfigure--chat-blockers session)))
+            (with-current-buffer buffer
+              (should (equal "unsent draft" (pichat-chat--input-text)))
+              (should (gethash "prompt" pichat-chat--pending-submissions))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
 (ert-deftest pichat-chat-idle-custom-message-and-compaction-trigger-sync ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)

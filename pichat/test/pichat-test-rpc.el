@@ -167,6 +167,197 @@
     (should (equal '("pi" "--mode" "rpc")
                    (pichat-rpc-build-command)))))
 
+(ert-deftest pichat-rpc-old-process-cannot-affect-replacement-lifetime ()
+  (pichat-test-with-unit-session (session old)
+    (let ((replacement nil)
+          (old-stderr (generate-new-buffer " *pichat-old-stderr*"))
+          (new-stderr (generate-new-buffer " *pichat-new-stderr*"))
+          (events 0))
+      (unwind-protect
+          (progn
+            (process-put old 'pichat-stderr-buffer old-stderr)
+            (process-put old 'pichat-process-generation 1)
+            (setf (pichat-session-process-generation session) 1)
+            (setq replacement (pichat-test--make-unit-process session))
+            (process-put replacement 'pichat-stderr-buffer new-stderr)
+            (process-put replacement 'pichat-process-generation 2)
+            (setf (pichat-session-process-generation session) 2
+                  (pichat-session-stderr-buffer session) new-stderr
+                  (pichat-session-state session) 'idle)
+            (pichat-on 'agent-start
+                       (lambda (&rest _) (cl-incf events)) session)
+            (pichat-rpc--process-filter old "{\"type\":\"agent_start\"}\npartial")
+            (should (= events 0))
+            (should (equal "" (pichat-session-rpc-receive-buffer session)))
+            (delete-process old)
+            (pichat-rpc--process-sentinel old "finished\n")
+            (should (eq (pichat-session-process session) replacement))
+            (should (eq (pichat-session-state session) 'idle))
+            (should (buffer-live-p new-stderr))
+            (should-not (buffer-live-p old-stderr))
+            (pichat-rpc--process-filter replacement
+                                        "{\"type\":\"agent_start\"}\n")
+            (should (= events 1)))
+        (when (process-live-p replacement) (delete-process replacement))
+        (dolist (buffer (list (and replacement (process-buffer replacement))
+                              old-stderr new-stderr))
+          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
+(ert-deftest pichat-rpc-sentinel-does-not-end-replacement-started-by-failure-callback ()
+  (pichat-test-with-unit-session (session old)
+    (let ((replacement nil)
+          (ended 0))
+      (unwind-protect
+          (progn
+            (setf (pichat-session-state session) 'idle)
+            (pichat-on 'session-ended
+                       (lambda (&rest _) (cl-incf ended)) session)
+            (pichat-rpc-send
+             session "get_state" nil nil
+             (lambda (_response _session)
+               (setq replacement (pichat-test--make-unit-process session))
+               (setf (pichat-session-state session) 'starting)))
+            (delete-process old)
+            (pichat-test-wait-until (lambda () replacement) 2
+                                    "replacement after old request failure")
+            (should (eq (pichat-session-process session) replacement))
+            (should (eq (pichat-session-state session) 'starting))
+            (should (= ended 0)))
+        (when (process-live-p replacement) (delete-process replacement))
+        (when-let* ((buffer (and replacement (process-buffer replacement))))
+          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
+(ert-deftest pichat-rpc-reentrant-response-listener-cannot-apply-old-state ()
+  (pichat-test-with-unit-session (session old)
+    (let ((replacement nil)
+          (state-events 0)
+          (called 0))
+      (unwind-protect
+          (progn
+            (let ((id (pichat-rpc-get-state
+                       session (lambda (&rest _) (cl-incf called)))))
+              (pichat-on 'response-received
+                         (lambda (_s _e _data)
+                           (unless replacement
+                             (setq replacement
+                                   (pichat-test--make-unit-process session))
+                             (setf (pichat-session-state session) 'starting)))
+                         session)
+              (pichat-on 'session-state-changed
+                         (lambda (&rest _) (cl-incf state-events)) session)
+              (pichat-rpc--process-filter
+               old (format "{\"type\":\"response\",\"id\":%S,\"command\":\"get_state\",\"success\":true,\"data\":{\"sessionId\":\"old-response\"}}\n" id))
+              (should replacement)
+              (should (= called 0))
+              (should (= state-events 0))
+              (should-not (equal "old-response" (pichat-session-id session)))
+              (should (eq 'starting (pichat-session-state session)))))
+        (when (process-live-p replacement) (delete-process replacement))
+        (when-let* ((buffer (and replacement (process-buffer replacement))))
+          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
+(ert-deftest pichat-rpc-reentrant-generic-event-cannot-emit-old-specific-event ()
+  (pichat-test-with-unit-session (session old)
+    (let ((replacement nil)
+          (specific 0))
+      (unwind-protect
+          (progn
+            (pichat-on 'rpc-event
+                       (lambda (&rest _)
+                         (setq replacement (pichat-test--make-unit-process session))
+                         (setf (pichat-session-state session) 'starting)) session)
+            (pichat-on 'agent-start
+                       (lambda (&rest _) (cl-incf specific)) session)
+            (pichat-rpc--process-filter old "{\"type\":\"agent_start\"}\n")
+            (should replacement)
+            (should (= specific 0))
+            (should (eq 'starting (pichat-session-state session))))
+        (when (process-live-p replacement) (delete-process replacement))
+        (when-let* ((buffer (and replacement (process-buffer replacement))))
+          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
+(ert-deftest pichat-rpc-restart-token-blocks-other-input-and-allows-owner ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((token (make-symbol "restart")))
+      (setf (pichat-session-restart-operation session)
+            (list :token token :phase 'loading))
+      (should-error (pichat-rpc-send session "new_session" nil nil)
+                    :type 'user-error)
+      (should-error (pichat-rpc-send-notification
+                     session '(:type "extension_ui_response"))
+                    :type 'user-error)
+      (let ((pichat-rpc--operation-token (make-symbol "stale")))
+        (should-error (pichat-rpc-send session "get_state" nil nil)
+                      :type 'user-error))
+      (let ((pichat-rpc--operation-token token))
+        (should (stringp (pichat-rpc-send session "get_state" nil nil))))
+      (should (= 1 (hash-table-count
+                    (pichat-session-pending-responses session)))))))
+
+(ert-deftest pichat-rpc-stale-pending-callbacks-retire-after-reentrant-replacement ()
+  (pichat-test-with-unit-session (session old)
+    (let ((replacement nil)
+          (callbacks 0)
+          (pichat-rpc-request-timeout 30)
+          timers)
+      (unwind-protect
+          (progn
+            (dotimes (_ 2)
+              (let* ((id (pichat-rpc-send
+                          session "get_state" nil nil
+                          (lambda (_response _session)
+                            (cl-incf callbacks)
+                            (unless replacement
+                              (setq replacement
+                                    (pichat-test--make-unit-process session))))))
+                     (pending (gethash id (pichat-session-pending-responses session))))
+                (push (pichat-rpc--pending-timer pending) timers)))
+            (delete-process old)
+            (pichat-test-wait-until (lambda () replacement) 2
+                                    "replacement in first pending callback")
+            (should (= callbacks 1))
+            (dolist (timer timers)
+              (should-not (memq timer timer-list)))
+            (should (eq (pichat-session-process session) replacement)))
+        (when (process-live-p replacement) (delete-process replacement))
+        (when-let* ((buffer (and replacement (process-buffer replacement))))
+          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
+(ert-deftest pichat-rpc-process-replacement-retires-partial-input-and-requests ()
+  (pichat-test-with-unit-session (session proc)
+    (let* ((id (pichat-rpc-send session "get_state" nil #'ignore))
+           (pending (gethash id (pichat-session-pending-responses session)))
+           (timer (run-at-time 30 nil #'ignore)))
+      (unwind-protect
+          (progn
+            (puthash id (plist-put pending :timer timer)
+                     (pichat-session-pending-responses session))
+            (setf (pichat-session-rpc-receive-buffer session) "partial"
+                  (pichat-session-rpc-send-queue session) '("outbound"))
+            (pichat-rpc--retire-process-state session)
+            (should-not (gethash id (pichat-session-pending-responses session)))
+            (should-not (memq timer timer-list))
+            (should (equal "" (pichat-session-rpc-receive-buffer session)))
+            (should-not (pichat-session-rpc-send-queue session)))
+        (cancel-timer timer)))))
+
+(ert-deftest pichat-rpc-old-filter-stops-processing-after-reentrant-replacement ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((events 0))
+      (pichat-on 'agent-start
+                 (lambda (_s _e _data)
+                   (cl-incf events)
+                   (setf (pichat-session-process session) nil)) session)
+      (pichat-rpc--process-filter
+       proc "{\"type\":\"agent_start\"}\n{\"type\":\"agent_start\"}\n")
+      (should (= events 1))
+      (should (equal "" (pichat-session-rpc-receive-buffer session))))))
+
+(ert-deftest pichat-rpc-start-refuses-duplicate-live-process ()
+  (pichat-test-with-unit-session (session proc)
+    (should-error (pichat-rpc-start session) :type 'user-error)
+    (should (eq (pichat-session-process session) proc))))
+
 (ert-deftest pichat-rpc-filter-dispatches-split-jsonl-once ()
   (pichat-test-with-unit-session (session proc)
     (let (events)

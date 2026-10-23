@@ -1563,8 +1563,14 @@ non-minibuffer buffer."
                  file cwd)
               (message "PiChat switched session: %s" file)))))))))
 
+(defcustom pichat-sessions-selection-timeout 15
+  "Seconds allowed for each selected saved-session launch RPC phase."
+  :type 'positive-integer
+  :group 'pichat)
+
 (cl-defun pichat-sessions-open-file-independently
     (file &key cwd owner-directory owner-scope source-session ready error-callback
+          launch-options synchronized-ready expected-session-id
           (display-function #'pichat-chat-open))
   "Open saved session FILE in a newly created independent runtime.
 CWD is saved runtime metadata.  OWNER-DIRECTORY determines the startup
@@ -1593,8 +1599,11 @@ runtime."
           (if source-session
               (pichat-start-session
                start-directory owner-scope
-               (list :transport (pichat-session-transport source-session)))
-            (pichat-start-session start-directory owner-scope)))
+               (plist-put (copy-sequence launch-options)
+                          :transport (pichat-session-transport source-session)))
+            (if launch-options
+                (pichat-start-session start-directory owner-scope launch-options)
+              (pichat-start-session start-directory owner-scope))))
          (finished nil))
     (cl-labels
         ((cleanup (response)
@@ -1612,49 +1621,105 @@ runtime."
                (funcall error-callback response session))))
          (failure (response _response-session)
            (cleanup response))
-         (state-ready (_response response-session)
+         (complete (response-session)
            (unless finished
              (setq finished t)
-             (pichat-sessions-clear-source-navigation response-session)
-             (when session-cwd
-               (pichat-sessions--apply-session-cwd
-                response-session session-cwd cwd))
-             (when display-function
-               (funcall display-function response-session)
-               ;; `get_state' arrived before the newly displayed chat installed
-               ;; its handlers, and it contains metadata rather than entries.
-               ;; Explicitly request the authoritative transcript just as the
-               ;; ordinary saved-session switch path does.
-               (when-let* ((buffer (pichat-session-buffer response-session)))
-                 (when (buffer-live-p buffer)
-                   (with-current-buffer buffer
-                     (when (fboundp 'pichat-chat-repaint)
-                       (pichat-chat-repaint))))))
              (when ready (funcall ready response-session))
              (if (eq (plist-get cwd-resolution :status) 'unavailable)
                  (message "PiChat opened saved session independently: %s (runtime working directory is not mapped: %s)"
                           file cwd)
                (message "PiChat opened saved session independently: %s" file))))
+         (state-ready (response response-session)
+           (unless finished
+             (condition-case condition
+                 (progn
+                   (when synchronized-ready
+                     (let ((state (plist-get response :data))
+                           (model (plist-get launch-options :model)))
+                       (unless (and (equal runtime-file (plist-get state :sessionFile))
+                                    (or (null expected-session-id)
+                                        (equal expected-session-id
+                                               (plist-get state :sessionId)))
+                                    (or (null model)
+                                        (equal model
+                                               (format "%s/%s"
+                                                       (plist-get (plist-get state :model)
+                                                                  :provider)
+                                                       (plist-get (plist-get state :model)
+                                                                  :id)))))
+                         (user-error "Loaded Pi session identity or selected model differs"))))
+                   (pichat-sessions-clear-source-navigation response-session)
+                   (when session-cwd
+                     (pichat-sessions--apply-session-cwd
+                      response-session session-cwd cwd))
+                   (when display-function
+                     (funcall display-function response-session))
+                   (if synchronized-ready
+                       (let ((pichat-rpc-request-timeout
+                              pichat-sessions-selection-timeout))
+                         (pichat-rpc-get-entries
+                          response-session nil
+                        (lambda (entries synchronized-session)
+                          (unless finished
+                            (condition-case sync-error
+                                (let* ((data (plist-get entries :data))
+                                       (cache (pichat-pi-entry-cache-full
+                                               (pichat-session-id synchronized-session)
+                                               (pichat-session-session-file
+                                                synchronized-session)
+                                               (plist-get data :entries)
+                                               (plist-get data :leafId)))
+                                       (buffer (pichat-session-buffer
+                                                synchronized-session)))
+                                  (unless (and (equal (pichat-entry-cache-session-file cache)
+                                                      runtime-file)
+                                               (buffer-live-p buffer))
+                                    (user-error "Selected saved session did not synchronize in a chat"))
+                                  (with-current-buffer buffer
+                                    (pichat-chat--cancel-sync-request)
+                                    (setq pichat-chat--sync-in-flight nil)
+                                    (pichat-chat--apply-sync-response entries t nil))
+                                  (complete synchronized-session))
+                              (error (cleanup
+                                      (list :success nil :error
+                                            (error-message-string sync-error)))))))
+                          #'failure))
+                     ;; Preserve the existing independent-browser contract.
+                     (when-let* ((buffer (pichat-session-buffer response-session)))
+                       (when (buffer-live-p buffer)
+                         (with-current-buffer buffer
+                           (when (fboundp 'pichat-chat-repaint)
+                             (pichat-chat-repaint)))))
+                     (complete response-session)))
+               (error (cleanup (list :success nil :error
+                                     (error-message-string condition)))))))
          (switched (response response-session)
            (if (plist-get (plist-get response :data) :cancelled)
                (cleanup (list :success nil :pichat-failure-kind 'cancelled
                               :error "PiChat session switch cancelled"))
-             (pichat-backend-get-state
-              response-session #'state-ready #'failure))))
+             (let ((pichat-rpc-request-timeout
+                    (if synchronized-ready pichat-sessions-selection-timeout
+                      pichat-rpc-request-timeout)))
+               (pichat-backend-get-state
+                response-session #'state-ready #'failure)))))
       (if (or (eq (pichat-session-state session) 'error)
               (not (pichat-session-alive-p session)))
           (cleanup (list :success nil :pichat-failure-kind 'process
                          :error "PiChat independent runtime failed to start"))
         (condition-case condition
-            (pichat-rpc-switch-session session runtime-file
-                                       #'switched #'failure)
+            (let ((pichat-rpc-request-timeout
+                   (if synchronized-ready pichat-sessions-selection-timeout
+                     pichat-rpc-request-timeout)))
+              (pichat-rpc-switch-session session runtime-file
+                                         #'switched #'failure))
           (error
            (cleanup (list :success nil :pichat-failure-kind 'process
                           :error (error-message-string condition)))))))
     session))
 
-(defun pichat-sessions--choose-basic-file (&optional session)
-  "Return (FILE CWD) selected for optional SESSION's runtime."
+(defun pichat-sessions--choose-basic-file (&optional session include-record)
+  "Return (FILE CWD) selected for optional SESSION's runtime.
+When INCLUDE-RECORD is non-nil, also return the exact completion record."
   (let* ((root (if session
                    (pichat-sessions--root-dir session)
                  (pichat-sessions--root-dir)))
@@ -1674,7 +1739,60 @@ runtime."
                     (plist-get record :cwd)
                   (and file (plist-get (pichat-sessions--file-summary file)
                                        :cwd)))))
-      (list file cwd))))
+      (if include-record (list file cwd record) (list file cwd)))))
+
+(defun pichat-sessions-selection (file cwd transport &optional record source-session)
+  "Build a detached saved-session selection of FILE and saved CWD.
+TRANSPORT is the browsing target's validated provenance, never inferred
+from display text.  RECORD carries an optional structured browser row."
+  (unless (and (stringp file) (file-name-absolute-p file)
+               (pichat-transport-p transport))
+    (user-error "Saved conversation lacks a target-qualified file"))
+  (list :file file :cwd cwd :transport transport
+        :source-session source-session
+        :transport-id (pichat-transport-id transport)
+        :session-id (plist-get record :session-id)
+        :title (or (plist-get record :display-title)
+                   (plist-get record :title)
+                   (plist-get record :candidate))
+        :record (and record (copy-tree record t))))
+
+(cl-defun pichat-sessions-select-file (callback &key session basic)
+  "Select a saved conversation without opening or switching any runtime.
+CALLBACK receives a structured transport-qualified selection.  BASIC forces
+built-in completion; otherwise use the archive-backed Consult picker when
+available, falling back to basic completion on discovery failure."
+  (unless (functionp callback) (user-error "No selection callback"))
+  (let ((buffer (current-buffer))
+        (continued nil))
+    (cl-labels
+        ((choose-basic ()
+           (pcase-let ((`(,file ,cwd ,record)
+                        (pichat-sessions--choose-basic-file session t)))
+             (funcall callback
+                      (pichat-sessions-selection
+                       file cwd (if session (pichat-session-transport session)
+                                  pichat-transport-local)
+                       record session))))
+         (archive-ready (capability)
+           (unless continued
+             (setq continued t)
+             (pichat-consult-sessions
+              capability nil
+              (lambda (file cwd record)
+                (funcall callback
+                         (pichat-sessions-selection
+                          file cwd (plist-get capability :transport) record
+                          (plist-get capability :session))))
+              t)))
+         (archive-unavailable (_reason)
+           (unless continued
+             (setq continued t)
+             (choose-basic))))
+      (if (or basic (not (pichat-sessions--consult-available-p)))
+          (choose-basic)
+        (pichat-archive-discover session buffer
+                                 #'archive-ready #'archive-unavailable)))))
 
 (defun pichat-sessions-browse-files-basic (&optional session)
   "Select a saved file and switch SESSION to it using built-in completion."

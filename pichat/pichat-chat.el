@@ -261,6 +261,9 @@ from final newlines or redisplay edge cases."
 (defvar-local pichat-chat--source-rebinding-p nil
   "Non-nil after rebind success and before fresh state arrives.")
 
+(defvar-local pichat-chat--restart-staging nil
+  "Captured source identity while retaining the last canonical restart snapshot.")
+
 (defvar-local pichat-chat--source-session-id nil
   "Pi session id associated with the current source generation.")
 
@@ -475,6 +478,7 @@ user messages, activity groups, and tool blocks."
   (add-hook 'kill-buffer-hook #'pichat-chat--remove-event-handlers nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--stop-session-on-kill nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--release-session-buffer nil t)
+  (add-hook 'kill-buffer-hook #'pichat-chat--cancel-restart-on-kill nil t)
   (add-hook 'completion-at-point-functions
             #'pichat-chat--slash-command-capf nil t)
   (add-hook 'post-command-hook
@@ -505,6 +509,7 @@ user messages, activity groups, and tool blocks."
   (setq-local pichat-chat--source-generation 0)
   (setq-local pichat-chat--source-bound-p nil)
   (setq-local pichat-chat--source-rebinding-p nil)
+  (setq-local pichat-chat--restart-staging nil)
   (setq-local pichat-chat--source-session-id nil)
   (setq-local pichat-chat--source-session-file nil)
   (setq-local pichat-chat--thinking-control-error nil)
@@ -572,6 +577,16 @@ user messages, activity groups, and tool blocks."
     (setf (pichat-session-buffer pichat-chat-session) nil)
     (when (fboundp 'pichat-note-session-updated)
       (pichat-note-session-updated pichat-chat-session))))
+
+(defun pichat-chat--cancel-restart-on-kill ()
+  "Cancel a restart and stop its process when this owning chat is killed."
+  (when (and pichat-chat-session
+             (pichat-session-restart-operation pichat-chat-session))
+    (when (fboundp 'pichat-reconfigure-cancel-operation)
+      (funcall #'pichat-reconfigure-cancel-operation
+               pichat-chat-session "Owning chat buffer was killed"))
+    (when (pichat-session-alive-p pichat-chat-session)
+      (pichat-backend-stop-session pichat-chat-session))))
 
 (defun pichat-chat--stop-session-on-kill ()
   "Stop and forget this chat buffer's runtime session when configured."
@@ -754,22 +769,152 @@ When DEFER-SYNC is non-nil, wait for a subsequent authoritative state reply."
 
 (defun pichat-chat--on-session-rebinding (_session _event _plist)
   "Invalidate source-derived state before fresh state for a rebind arrives."
-  (pichat-chat--reset-for-source nil nil t)
-  (setq pichat-chat--source-bound-p nil
-        pichat-chat--source-rebinding-p t)
-  (pichat-chat--set-status 'source "[session source changing]")
+  (if pichat-chat--restart-staging
+      ;; An in-place restart reloads the *same* Pi session.  Retain the last
+      ;; canonical snapshot through loading/failure; only an explicit verified
+      ;; commit may replace it.  Ordinary source rebinding still resets it.
+      (progn
+        (pichat-chat--cancel-live-projection)
+        (pichat-chat--cancel-sync-request)
+        (pichat-chat--cancel-stats-request)
+        (setq pichat-chat--sync-in-flight nil
+              pichat-chat--sync-pending nil
+              pichat-chat--source-rebinding-p t)
+        (pichat-chat--set-status 'restart "[runtime reloading; snapshot retained]"))
+    (pichat-chat--reset-for-source nil nil t)
+    (setq pichat-chat--source-bound-p nil
+          pichat-chat--source-rebinding-p t)
+    (pichat-chat--set-status 'source "[session source changing]"))
   (force-mode-line-update))
+
+(defun pichat-chat-stage-restart (session)
+  "Retain SESSION's last synchronized chat snapshot for a restart attempt.
+This does not stop Pi.  Only a verified same-source replacement may commit a
+new snapshot through `pichat-chat-commit-staged-restart'."
+  (unless (and (derived-mode-p 'pichat-chat-mode)
+               (eq session pichat-chat-session)
+               (not pichat-chat--restart-staging)
+               (not pichat-chat--sync-in-flight)
+               (not pichat-chat--sync-pending)
+               (pichat-chat-canonical-entry-cache session))
+    (user-error "Chat has no settled canonical snapshot to stage"))
+  (setq pichat-chat--restart-staging
+        (list :session session
+              :session-id pichat-chat--source-session-id
+              :session-file pichat-chat--source-session-file
+              :cache pichat-chat--entry-cache))
+  (pichat-chat--cancel-live-projection)
+  (pichat-chat--cancel-stats-request)
+  (pichat-chat--cancel-extension-status-projection)
+  (pichat-chat-completion-reset
+   pichat-chat--source-generation (pichat-chat--completion-source-key))
+  (clrhash pichat-chat--extension-statuses)
+  (clrhash pichat-chat--extension-widgets)
+  (pichat-chat--project-extension-statuses)
+  (pichat-chat--render-extension-widgets)
+  (pichat-chat--set-status 'restart "[runtime restarting; snapshot retained]")
+  pichat-chat--restart-staging)
+
+(defun pichat-chat-commit-staged-restart (session cache)
+  "Atomically install verified replacement CACHE for staged SESSION.
+The caller must verify the complete reloaded entries and process generation
+before calling this.  Projection failure keeps the readable old snapshot and
+staging state for explicit recovery."
+  (let ((staging pichat-chat--restart-staging))
+    (unless (and (eq session pichat-chat-session)
+                 (eq session (plist-get staging :session))
+                 (pichat-entry-cache-p cache)
+                 (equal (pichat-entry-cache-session-id cache)
+                        (plist-get staging :session-id))
+                 (equal (pichat-entry-cache-session-file cache)
+                        (plist-get staging :session-file))
+                 (equal (pichat-session-id session)
+                        (plist-get staging :session-id))
+                 (equal (pichat-session-session-file session)
+                        (plist-get staging :session-file)))
+      (user-error "Restart source changed; retained chat snapshot was not replaced"))
+    (let* ((transcript (pichat-pi-build-canonical-transcript cache))
+           (context (pichat-chat--canonical-render-context transcript))
+           (fragment (pichat-render-canonical transcript context)))
+      (pichat-chat--project-canonical cache transcript fragment context)
+      (setq pichat-chat--restart-staging nil
+            pichat-chat--source-rebinding-p nil)
+      (pichat-chat--set-status 'restart nil)
+      (pichat-chat--set-status 'session nil)
+      (pichat-chat--refresh-header session)
+      cache)))
+
+(defun pichat-chat-commit-staged-empty-restart (session cache)
+  "Commit a verified new empty Pi session after restarting an unwritten one.
+Keep the runtime, chat and unsent draft, but update the source identity and
+retarget compose editors opened for the original empty session."
+  (let ((staging pichat-chat--restart-staging))
+    (unless (and (eq session pichat-chat-session)
+                 (eq session (plist-get staging :session))
+                 (pichat-entry-cache-p (plist-get staging :cache))
+                 (cl-every (lambda (entry-id)
+                             (member (plist-get
+                                      (gethash entry-id
+                                               (pichat-entry-cache-entries-by-id
+                                                (plist-get staging :cache)))
+                                      :type)
+                                     '("model_change" "thinking_level_change")))
+                           (pichat-entry-cache-append-order
+                            (plist-get staging :cache)))
+                 (pichat-entry-cache-p cache)
+                 (cl-every (lambda (entry-id)
+                             (member (plist-get
+                                      (gethash entry-id
+                                               (pichat-entry-cache-entries-by-id cache))
+                                      :type)
+                                     '("model_change" "thinking_level_change")))
+                           (pichat-entry-cache-append-order cache))
+                 (equal (pichat-session-id session)
+                        (pichat-entry-cache-session-id cache))
+                 (equal (pichat-session-session-file session)
+                        (pichat-entry-cache-session-file cache))
+                 (not (equal (pichat-session-id session)
+                             (plist-get staging :session-id))))
+      (user-error "Empty restart did not produce a verified new Pi session"))
+    (let* ((old-token (pichat-chat--source-token))
+           (transcript (pichat-pi-build-canonical-transcript cache))
+           (context (pichat-chat--canonical-render-context transcript))
+           (fragment (pichat-render-canonical transcript context)))
+      ;; Projection rollback retains the old readable snapshot on failure.
+      (pichat-chat--project-canonical cache transcript fragment context)
+      (cl-incf pichat-chat--source-generation)
+      (setq pichat-chat--source-session-id (pichat-session-id session)
+            pichat-chat--source-session-file (pichat-session-session-file session)
+            pichat-chat--live-draft
+            (pichat-live-draft-empty pichat-chat--source-generation)
+            pichat-chat--restart-staging nil
+            pichat-chat--source-rebinding-p nil)
+      (pichat-chat-completion-reset
+       pichat-chat--source-generation (pichat-chat--completion-source-key))
+      (let ((new-token (pichat-chat--source-token)))
+        (dolist (buffer (buffer-list))
+          (with-current-buffer buffer
+            (when (and (derived-mode-p 'pichat-chat-compose-mode)
+                       (eq pichat-chat-compose-target-buffer
+                           (pichat-session-buffer session))
+                       (equal pichat-chat-compose-target-token old-token))
+              (setq pichat-chat-compose-target-token new-token)))))
+      (pichat-chat--set-status 'restart nil)
+      (pichat-chat--set-status 'session nil)
+      (pichat-chat--refresh-header session)
+      cache)))
 
 (defun pichat-chat-canonical-entry-cache (session)
   "Return SESSION's current settled entry cache, or nil.
 The returned cache is authoritative Pi data owned by SESSION's live chat buffer;
-callers must treat it as read-only.  A cache for an older rebound source is
-never returned."
+callers must treat it as read-only.  A cache for an older rebound source or a
+staged read-only restart snapshot is never returned."
   (let ((buffer (and session (pichat-session-buffer session))))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
         (and (derived-mode-p 'pichat-chat-mode)
              (eq pichat-chat-session session)
+             (not pichat-chat--restart-staging)
              (pichat-entry-cache-p pichat-chat--entry-cache)
              (equal (pichat-entry-cache-session-id pichat-chat--entry-cache)
                     (pichat-session-id session))
@@ -3090,6 +3235,7 @@ Stale generations and events without a tool call id are ignored."
   (let* ((raw (pichat-chat--raw plist))
          (type (plist-get raw :type)))
     (when (and (not pichat-chat--source-rebinding-p)
+               (not pichat-chat--restart-staging)
                (member type '("message_start" "message_update" "message_end"
                               "tool_execution_start" "tool_execution_update"
                               "tool_execution_end" "compaction_end"
@@ -3278,6 +3424,7 @@ BASE-CACHE is the cache captured by the incremental request."
   "Request canonical synchronization; when FULL, ignore the cache cursor."
   (let ((kind (if full 'full 'incremental)))
     (cond
+     (pichat-chat--restart-staging nil)
      ((pichat-chat--active-operation-p)
       (pichat-chat--queue-sync kind))
      (pichat-chat--sync-in-flight
@@ -3308,7 +3455,13 @@ BASE-CACHE is the cache captured by the incremental request."
                        (lambda (session event plist)
                          (when (buffer-live-p buffer)
                            (with-current-buffer buffer
-                             (when (eq session pichat-chat-session)
+                             (when (and (eq session pichat-chat-session)
+                                        (or (not pichat-chat--restart-staging)
+                                            (memq event
+                                                  '(session-rebinding
+                                                    session-state-changed
+                                                    session-ended error
+                                                    extension-ui-request))))
                                (funcall event-fn session event plist))))))))
         (setq pichat-chat--handlers
               `((rpc-event . ,(funcall handler #'pichat-chat--on-rpc-event))
@@ -3758,6 +3911,11 @@ Return non-nil only when the projected status value changes."
 
 (defun pichat-chat--on-state-changed (session _event _plist)
   "Update display and source identity after state changes."
+  (unless pichat-chat--restart-staging
+    (pichat-chat--apply-state-changed session)))
+
+(defun pichat-chat--apply-state-changed (session)
+  "Apply SESSION state to the chat outside restart staging."
   (setq pichat-chat--thinking-control-error nil)
   (let ((rebound pichat-chat--source-rebinding-p)
         (source-generation pichat-chat--source-generation))
@@ -4097,6 +4255,16 @@ Return non-nil only when the projected status value changes."
   (let* ((raw (pichat-chat--raw plist))
          (method (plist-get raw :method)))
     (cond
+     (pichat-chat--restart-staging
+      (when (member method '("confirm" "input" "select" "editor"))
+        (if (pichat-bridge-transport-handle-p raw)
+            (pichat-bridge-transport-handle session raw)
+          (let* ((operation (pichat-session-restart-operation session))
+                 (pichat-rpc--operation-token
+                  (and operation pichat-rpc--dispatch-process
+                       (pichat-rpc--dispatch-current-p session)
+                       (plist-get operation :token))))
+            (pichat-rpc-extension-ui-cancel session (plist-get raw :id))))))
      ((and (member method '("confirm" "input" "select" "editor"))
            (pichat-bridge-transport-handle-p raw))
       (if (pichat-bridge-transport-user-input-required-p session raw)

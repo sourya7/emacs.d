@@ -529,8 +529,38 @@
   (cl-letf (((symbol-function 'transient-get-value)
              (lambda () '("--global" "--ephemeral" "--model" "--preset=review")))
             ((symbol-function 'transient-scope) (lambda (&rest _args) nil)))
-    (should (equal "Launch: global · inferred · independent · ephemeral · review · choose/enter model"
+    (should (equal "Launch · independent · review · global · ephemeral · choose model"
                    (pichat--launch-action-description)))))
+
+(ert-deftest pichat-launch-selected-conversation-details-are-full-width ()
+  (let* ((selection (list :title "what tools are available here"
+                          :session-id "01a16663abcdef"
+                          :cwd "/home/mojo"))
+         (scope (list :directory "/home/mojo/"
+                      :conversation (list :kind 'saved :selection selection)))
+         (transient--prefix (transient--init-prefix 'pichat-launch))
+         (transient--layout (transient--init-suffixes 'pichat-launch))
+         (transient--suffixes (transient--flatten-suffixes transient--layout)))
+    (cl-letf (((symbol-function 'transient-scope)
+               (lambda (&rest _) scope))
+              ((symbol-function 'transient-get-value)
+               (lambda (&rest _) nil))
+              ((symbol-function 'pichat--resolve-launch-scope)
+               (lambda (&rest _) (list nil nil "global"))))
+      (should (equal "Selected saved conversation"
+                     (pichat--launch-conversation-description)))
+      (should (equal (concat "Selected: what tools are available here · "
+                             "01a16663abc…\nSaved cwd: /home/mojo · "
+                             "owner: global\nAction")
+                     (pichat--launch-action-heading)))
+      (with-temp-buffer
+        (transient--insert-groups)
+        (let ((rendered (buffer-string)))
+          (should (string-match-p "^Conversation +Configuration" rendered))
+          (should (string-match-p "Selected saved conversation" rendered))
+          (should (string-match-p "^Selected: what tools" rendered))
+          (should (string-match-p "^Saved cwd: /home/mojo" rendered))
+          (should (string-match-p "^Action$" rendered)))))))
 
 (ert-deftest pichat-launch-transient-accepts-terminal-and-gui-return ()
   (let* ((transient--prefix (transient--init-prefix 'pichat-launch))
@@ -541,7 +571,7 @@
                   'pichat-launch-execute)))
     (with-temp-buffer
       (transient--insert-groups)
-      (should (string-match-p "RET Launch:" (buffer-string)))
+      (should (string-match-p "RET Launch ·" (buffer-string)))
       (should-not (string-match-p "<return>" (buffer-string))))))
 
 (ert-deftest pichat-launch-transient-initializes-with-safe-empty-value ()
@@ -575,6 +605,265 @@
                 :type 'user-error)
   (should-error (pichat--launch-profile-from-arguments '("--native"))
                 :type 'user-error))
+
+(ert-deftest pichat-launch-conversation-intents-preserve-independent-switches ()
+  (let* ((context (list :display-function #'pichat-chat-open
+                        :conversation '(:kind new)))
+         (with-new (pichat--launch-profile-from-arguments
+                    '("--global" "--preset=review") context)))
+    (should (eq 'new (plist-get with-new :reuse)))
+    (should (eq 'global (plist-get with-new :scope)))
+    (should (eq 'review (plist-get with-new :preset)))
+    (plist-put context :conversation nil)
+    (should (eq 'new (plist-get
+                      (pichat--launch-profile-from-arguments
+                       '("--global" "--preset=review") context)
+                      :reuse)))
+    (should (eq 'preferred (plist-get
+                            (pichat--launch-profile-from-arguments nil context)
+                            :reuse)))))
+
+(ert-deftest pichat-launch-source-key-collapses-local-file-aliases ()
+  (pichat-test-with-temp-dir dir
+    (let ((file (expand-file-name "conversation.jsonl" dir))
+          (alias (expand-file-name "alias.jsonl" dir)))
+      (write-region "{}\n" nil file nil 'silent)
+      (make-symbolic-link file alias)
+      (should (equal (pichat--selected-file-key pichat-transport-local file)
+                     (pichat--selected-file-key pichat-transport-local alias))))))
+
+(ert-deftest pichat-launch-selected-file-reservation-blocks-racing-writers ()
+  (pichat-test-with-temp-dir dir
+    (let* ((file (expand-file-name "saved.jsonl" dir))
+           (selection (pichat-sessions-selection
+                       file dir pichat-transport-local
+                       '(:session-id "saved" :title "Saved title")))
+           (profile (list :scope (list "global|local|reservation-test"
+                                       dir "reservation-test")
+                          :target 'local :reuse 'new :persistence 'persistent
+                          :conversation (list :kind 'saved :selection selection)))
+           (pichat--source-reservations (make-hash-table :test #'equal))
+           (starts 0)
+           failure)
+      (write-region "{}\n" nil file nil 'silent)
+      (cl-letf (((symbol-function 'pichat--selected-file-conflict)
+                 (lambda (_key) nil))
+                ((symbol-function 'pichat-sessions-open-file-independently)
+                 (lambda (_file &rest keys)
+                   (cl-incf starts)
+                   (setq failure (plist-get keys :error-callback))
+                   'pending)))
+        (pichat--open-launch-profile profile dir)
+        (should (= starts 1))
+        (should-error (pichat--open-launch-profile profile dir)
+                      :type 'user-error)
+        (should (= starts 1))
+        (funcall failure '(:error "injected startup failure") nil)
+        (should (= 0 (hash-table-count pichat--source-reservations)))
+        (pichat--open-launch-profile profile dir)
+        (should (= starts 2))))))
+
+(ert-deftest pichat-launch-selected-conversation-rejects-ephemeral-and-cross-target ()
+  (pichat-test-with-temp-dir dir
+    (let* ((selection (pichat-sessions-selection
+                       (expand-file-name "saved.jsonl" dir) dir
+                       pichat-transport-local))
+           (profile (list :scope (list "global|local|selected-test" dir "test")
+                          :target 'local :reuse 'new :persistence 'ephemeral
+                          :conversation (list :kind 'saved :selection selection))))
+      (should-error (pichat--open-launch-profile profile dir) :type 'user-error)
+      (setq profile (plist-put profile :persistence 'persistent))
+      (setq selection (plist-put selection :transport-id 'different-target))
+      (should-error (pichat--open-launch-profile profile dir)
+                    :type 'user-error))))
+
+(ert-deftest pichat-sessions-selector-returns-structured-record-without-loading ()
+  (let (chosen)
+    (cl-letf (((symbol-function 'pichat-sessions--choose-basic-file)
+               (lambda (&optional _session _record)
+                 (list "/saved/test.jsonl" "/saved/cwd"
+                       '(:session-id "exact-id" :candidate "bounded title"))))
+              ((symbol-function 'pichat-sessions-open-file-independently)
+               (lambda (&rest _) (ert-fail "Selection opened a runtime")))
+              ((symbol-function 'pichat-sessions-switch-file)
+               (lambda (&rest _) (ert-fail "Selection switched a runtime"))))
+      (pichat-sessions-select-file (lambda (selection) (setq chosen selection))
+                                   :basic t)
+      (should (equal 'local (plist-get chosen :transport-id)))
+      (should (equal "/saved/test.jsonl" (plist-get chosen :file)))
+      (should (equal "exact-id" (plist-get chosen :session-id)))
+      (should (equal "/saved/cwd" (plist-get chosen :cwd))))))
+
+(ert-deftest pichat-reconfigure-transient-renders-blocked-restart ()
+  (let* ((base (list :preset-spec (pichat-presets-resolve 'manual)))
+         (draft (pichat-reconfigure-select-preset base 'coding))
+         (session (pichat-session-create :id "test" :name "Conversation"
+                                         :transport pichat-transport-local))
+         (scope (list :origin (list :session session)
+                      :base base :draft draft :blockers '("Pi is busy")))
+         (prefix (transient--init-prefix 'pichat-reconfigure-menu)))
+    (oset prefix scope scope)
+    (let* ((transient--prefix prefix)
+           (transient--layout (transient--init-suffixes 'pichat-reconfigure-menu))
+           (transient--suffixes (transient--flatten-suffixes transient--layout)))
+      (should (string-match-p "Blocked.*Pi is busy"
+                              (pichat--reconfigure-action-description)))
+      (with-temp-buffer
+        (transient--insert-groups)
+        (should (string-match-p "Blocked.*Pi is busy" (buffer-string)))))))
+
+(ert-deftest pichat-reconfigure-transient-distinguishes-tools-and-definition-changes ()
+  (let* ((base (pichat-reconfigure-select-preset
+                (list :preset-spec (pichat-presets-resolve 'standard)) 'manual))
+         (tools (copy-tree base t))
+         (definition (copy-tree base t))
+         (scope (list :base base :draft tools)))
+    (plist-put tools :tool-selection
+               (pichat-tool-selection-resolve
+                (pichat-presets-resolve 'manual) '("read")))
+    (cl-letf (((symbol-function 'transient-scope) (lambda (&rest _) scope)))
+      (should (string-match-p "update tools"
+                              (pichat--reconfigure-action-description)))
+      (plist-put (plist-get definition :preset-spec)
+                 :append-system-prompt "A genuinely different prompt")
+      (plist-put scope :draft definition)
+      (should (string-match-p "definition changed"
+                              (pichat--reconfigure-action-description))))))
+
+(ert-deftest pichat-reconfigure-transient-labels-new-empty-pi-session ()
+  (let* ((base (pichat-reconfigure-select-preset
+                (list :preset-spec (pichat-presets-resolve 'standard)) 'manual))
+         (draft (pichat-reconfigure-select-preset base 'coding))
+         (scope (list :base base :draft draft :empty-unwritten t)))
+    (cl-letf (((symbol-function 'transient-scope) (lambda (&rest _) scope)))
+      (should (string-match-p "new empty Pi session; keep chat and draft"
+                              (pichat--reconfigure-action-description))))))
+
+(ert-deftest pichat-reconfigure-empty-restart-confirms-concisely ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          buffer prompt)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (let* ((base (pichat-reconfigure-select-preset
+                          (list :preset-spec (pichat-presets-resolve 'standard))
+                          'manual))
+                   (scope (list :origin (pichat-reconfigure-capture-origin session)
+                                :base base
+                                :draft (pichat-reconfigure-select-preset
+                                        base 'coding)
+                                :empty-unwritten t)))
+              (cl-letf (((symbol-function 'transient-scope)
+                         (lambda (&rest _) scope))
+                        ((symbol-function 'yes-or-no-p)
+                         (lambda (question) (setq prompt question) nil))
+                        ((symbol-function 'pichat-reconfigure-restart)
+                         (lambda (&rest _) (ert-fail "Confirmation declined"))))
+                (pichat-reconfigure-execute)
+                (should (equal "Restart this runtime with coding? " prompt))
+                (should (process-live-p proc)))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-reconfigure-saved-restart-and-recovery-prompts-are-concise ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          buffer prompt scope)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (let ((base (pichat-reconfigure-select-preset
+                         (list :preset-spec (pichat-presets-resolve 'standard))
+                         'manual)))
+              (setq scope (list :origin (pichat-reconfigure-capture-origin session)
+                                :base base
+                                :draft (pichat-reconfigure-select-preset
+                                        base 'coding))))
+            (cl-letf (((symbol-function 'transient-scope)
+                       (lambda (&rest _) scope))
+                      ((symbol-function 'yes-or-no-p)
+                       (lambda (question) (setq prompt question) nil))
+                      ((symbol-function 'pichat-reconfigure-restart)
+                       (lambda (&rest _) (ert-fail "Confirmation declined"))))
+              (pichat-reconfigure-execute)
+              (should (equal "Restart this runtime with coding? " prompt))
+              (setq scope (list :session session))
+              (dolist (empty '(nil t))
+                (setf (pichat-session-restart-operation session)
+                      (list :failure "Startup failed" :empty-unwritten empty))
+                (should (string-match-p
+                         (if empty "new Pi session" "snapshot retained$")
+                         (pichat--reconfigure-recovery-description)))
+                (pichat--reconfigure-recovery-run 'retry)
+                (should (equal "Retry this runtime restart? " prompt))
+                (pichat--reconfigure-recovery-run 'restore)
+                (should (equal "Restore the previous runtime configuration? "
+                               prompt)))
+              (should (process-live-p proc))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-reconfigure-transient-noop-does-not-confirm-or-stop ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (let* ((base (pichat-reconfigure-select-preset
+                          (list :preset-spec (pichat-presets-resolve 'standard))
+                          'manual))
+                   (scope (list :origin (pichat-reconfigure-capture-origin session)
+                                :base base :draft (copy-tree base t)
+                                :blockers '("Busy"))))
+              (cl-letf (((symbol-function 'transient-scope)
+                         (lambda (&rest _) scope))
+                        ((symbol-function 'yes-or-no-p)
+                         (lambda (&rest _) (ert-fail "No-op prompted to restart")))
+                        ((symbol-function 'pichat-reconfigure-restart)
+                         (lambda (&rest _) (ert-fail "No-op restarted"))))
+                (pichat-reconfigure-execute)
+                (should (process-live-p proc)))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-reconfigure-transient-ret-and-cancellation-are-side-effect-free ()
+  (let* ((base (pichat-reconfigure-select-preset
+                (list :preset-spec (pichat-presets-resolve 'standard)) 'manual))
+         (scope (list :origin (list :session-id "session"
+                                    :session (pichat-session-create
+                                              :name "Test conversation"
+                                              :transport pichat-transport-local))
+                      :base base :draft (copy-tree base t)
+                      :blockers nil))
+         (transient--prefix (transient--init-prefix 'pichat-reconfigure-menu))
+         (transient--layout (transient--init-suffixes 'pichat-reconfigure-menu))
+         (transient--suffixes (transient--flatten-suffixes transient--layout)))
+    (oset transient--prefix scope scope)
+    (dolist (key '("RET" "<return>"))
+      (should (eq 'pichat-reconfigure-execute
+                  (lookup-key (transient--make-transient-map) (kbd key)))))
+    (with-temp-buffer
+      (transient--insert-groups)
+      (should (string-match-p "No configuration changes" (buffer-string)))))
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          (started nil)
+          buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (let ((scope (list :origin-buffer buffer :directory default-directory)))
+              (cl-letf (((symbol-function 'transient-scope)
+                         (lambda (&rest _) scope))
+                        ((symbol-function 'transient-args) (lambda (&rest _) nil))
+                        ((symbol-function 'pichat--reconfigure-show)
+                         (lambda (menu)
+                           (should (eq session (plist-get (plist-get menu :origin)
+                                                           :session)))))
+                        ((symbol-function 'pichat-rpc-stop)
+                         (lambda (&rest _) (setq started t))))
+                (pichat-launch-reconfigure)
+                (should-not started))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
 (provide 'pichat-test-launch)
 ;;; pichat-test-launch.el ends here

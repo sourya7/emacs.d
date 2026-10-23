@@ -70,6 +70,16 @@ Do not allocate a TTY for JSONL transports."
                  (repeat string))
   :group 'pichat)
 
+(defvar pichat-rpc--operation-token nil
+  "Dynamically bound by an owned runtime restart when sending its RPC calls.")
+
+(defun pichat-rpc--require-operation-ownership (session)
+  "Reject unowned RPC input while SESSION is restarting."
+  (when-let* ((operation (pichat-session-restart-operation session)))
+    (unless (and (plist-get operation :token)
+                 (eq pichat-rpc--operation-token (plist-get operation :token)))
+      (user-error "PiChat runtime is restarting; RPC input is temporarily unavailable"))))
+
 (defcustom pichat-rpc-request-timeout nil
   "Optional timeout in seconds for Pi RPC command responses.
 When nil, requests do not time out.  Timed-out requests are removed from the
@@ -233,7 +243,7 @@ The session snapshot controls `--no-session', preset flags and the model."
 
 (defun pichat-rpc--mark-ready (session process)
   "Mark PROCESS ready for SESSION and flush queued JSONL in order."
-  (when (and (eq process (pichat-session-process session))
+  (when (and (pichat-rpc--current-process-p session process)
              (process-live-p process)
              (not (pichat-session-rpc-ready-p session)))
     (when (timerp (pichat-session-rpc-ready-timer session))
@@ -249,11 +259,35 @@ The session snapshot controls `--no-session', preset flags and the model."
   "Release SESSION's startup queue for still-current remote PROCESS."
   (pichat-rpc--mark-ready session process))
 
-(defun pichat-rpc-start (session)
+(defun pichat-rpc--retire-process-state (session)
+  "Retire RPC state belonging to SESSION's previous process lifetime.
+Do not dispatch callbacks into a replacement process."
+  (when (timerp (pichat-session-rpc-ready-timer session))
+    (cancel-timer (pichat-session-rpc-ready-timer session)))
+  (maphash (lambda (_id pending) (pichat-rpc--cancel-pending-timer pending))
+           (pichat-session-pending-responses session))
+  (clrhash (pichat-session-pending-responses session))
+  (setf (pichat-session-rpc-receive-buffer session) ""
+        (pichat-session-rpc-ready-timer session) nil
+        (pichat-session-rpc-send-queue session) nil))
+
+(defun pichat-rpc--current-process-p (session process)
+  "Return non-nil only if PROCESS owns SESSION's current process lifetime."
+  (and (eq process (pichat-session-process session))
+       (let ((generation (process-get process 'pichat-process-generation)))
+         (or (null generation) ; Older unit fixtures have no generation token.
+             (eql generation (pichat-session-process-generation session))))))
+
+(defun pichat-rpc-start (session &optional validated-command)
   "Start the Pi RPC process for SESSION and return SESSION.
-A local startup failure is retained as an inspectable diagnostic and leaves
-SESSION in `error' state rather than being confused with a Pi RPC response."
-  (let* ((argv (pichat-rpc-build-command session))
+VALIDATED-COMMAND is an optional detached argv prepared before a restart;
+ordinary launches continue to build the command from SESSION.  A local
+startup failure leaves SESSION in `error' state with a diagnostic."
+  (when (and (pichat-session-process session)
+             (process-live-p (pichat-session-process session)))
+    (user-error "Cannot start another Pi process in a live runtime"))
+  (pichat-rpc--retire-process-state session)
+  (let* ((argv (or validated-command (pichat-rpc-build-command session)))
          (program (car argv))
          (args (cdr argv))
          (transport (pichat-session-transport session))
@@ -285,7 +319,15 @@ SESSION in `error' state rather than being confused with a Pi RPC response."
                         :sentinel #'pichat-rpc--process-sentinel)))
             (set-process-query-on-exit-flag proc nil)
             (set-process-coding-system proc 'utf-8-unix 'utf-8-unix)
+            ;; Emacs otherwise appends the stderr pipe's own termination
+            ;; message to diagnostic output, depending on sentinel ordering.
+            (when-let* ((stderr-process (get-buffer-process stderr-buffer)))
+              (set-process-sentinel stderr-process #'ignore))
             (process-put proc 'pichat-session session)
+            (process-put proc 'pichat-stderr-buffer stderr-buffer)
+            (let ((generation (1+ (or (pichat-session-process-generation session) 0))))
+              (process-put proc 'pichat-process-generation generation)
+              (setf (pichat-session-process-generation session) generation))
             (setf (pichat-session-process session) proc
                   (pichat-session-stderr-buffer session) stderr-buffer)
             (when (eq (pichat-transport-kind transport) 'ssh)
@@ -348,57 +390,73 @@ When LIMIT is non-nil, copy at most LIMIT leading characters."
   "Handle PROCESS lifecycle EVENT and clean its hidden transport buffers."
   (unless (process-live-p process)
     (when-let* ((session (process-get process 'pichat-session)))
-      (when (timerp (pichat-session-rpc-ready-timer session))
-        (cancel-timer (pichat-session-rpc-ready-timer session)))
-      (setf (pichat-session-rpc-ready-timer session) nil
-            (pichat-session-rpc-send-queue session) nil)
-      (let* ((intentional (pichat-session-stop-requested-p session))
-             (stderr (pichat-rpc--buffer-string
-                      (pichat-session-stderr-buffer session)
-                      (1+ pichat-diagnostics-stderr-limit)))
-             (reason (if intentional 'stopped 'error))
-             (exit-status (process-exit-status process))
-             (diagnostic
-              (unless intentional
-                (pichat-chat-diagnostics-record
-                 session :origin 'process-exit
-                 :message (format "Pi RPC process %s" (string-trim event))
-                 :stderr stderr :exit-status exit-status
-                 :command (pichat-session-rpc-command session)))))
-        (pichat-rpc--fail-pending
-         session
-         (format "Pi RPC process %s" (string-trim event))
-         (if intentional 'cancelled 'process))
-        (setf (pichat-session-state session) reason)
-        (unless intentional
-          (pichat-emit session 'error
-                       :message (plist-get diagnostic :summary)
-                       :diagnostic diagnostic))
-        (pichat-emit session 'session-ended
-                     :reason reason :event (string-trim event)
-                     :diagnostic diagnostic)))
+      (when (pichat-rpc--current-process-p session process)
+        (when (timerp (pichat-session-rpc-ready-timer session))
+          (cancel-timer (pichat-session-rpc-ready-timer session)))
+        (setf (pichat-session-rpc-ready-timer session) nil
+              (pichat-session-rpc-send-queue session) nil)
+        (let* ((intentional (pichat-session-stop-requested-p session))
+               (stderr (pichat-rpc--buffer-string
+                        (process-get process 'pichat-stderr-buffer)
+                        (1+ pichat-diagnostics-stderr-limit)))
+               (reason (if intentional 'stopped 'error))
+               (exit-status (process-exit-status process))
+               (diagnostic
+                (unless intentional
+                  (pichat-chat-diagnostics-record
+                   session :origin 'process-exit
+                   :message (format "Pi RPC process %s" (string-trim event))
+                   :stderr stderr :exit-status exit-status
+                   :command (pichat-session-rpc-command session)))))
+          (pichat-rpc--fail-pending
+           session
+           (format "Pi RPC process %s" (string-trim event))
+           (if intentional 'cancelled 'process))
+          ;; A failed-request callback may itself start a replacement.  The
+          ;; old sentinel must not publish its state into that new lifetime.
+          (when (pichat-rpc--current-process-p session process)
+            (setf (pichat-session-state session) reason)
+            (unless intentional
+              (pichat-emit session 'error
+                           :message (plist-get diagnostic :summary)
+                           :diagnostic diagnostic))
+            (when (pichat-rpc--current-process-p session process)
+              (pichat-emit session 'session-ended
+                           :reason reason :event (string-trim event)
+                           :diagnostic diagnostic))))))
     (dolist (buffer (list (process-buffer process)
-                          (when-let* ((session (process-get process 'pichat-session)))
-                            (pichat-session-stderr-buffer session))))
+                          (process-get process 'pichat-stderr-buffer)))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
+
+(defvar pichat-rpc--dispatch-process nil
+  "Process that owns the JSONL record currently being dispatched.")
+
+(defun pichat-rpc--dispatch-current-p (session)
+  "Return non-nil if the currently dispatched record still owns SESSION."
+  (or (null pichat-rpc--dispatch-process)
+      (pichat-rpc--current-process-p session pichat-rpc--dispatch-process)))
 
 (defun pichat-rpc--process-filter (process chunk)
   "Handle PROCESS output CHUNK.
 Records are split only on LF, preserving JSON strings containing Unicode line
 separator characters.  A trailing CR is stripped for CRLF compatibility."
   (when-let* ((session (process-get process 'pichat-session)))
-    (pichat-rpc--mark-ready session process)
-    (let ((buf (concat (or (pichat-session-rpc-receive-buffer session) "") chunk))
-          line)
-      (while (string-match "\n" buf)
-        (setq line (substring buf 0 (match-beginning 0))
-              buf (substring buf (match-end 0)))
-        (when (string-suffix-p "\r" line)
-          (setq line (substring line 0 -1)))
-        (unless (string-empty-p line)
-          (pichat-rpc--handle-line session line)))
-      (setf (pichat-session-rpc-receive-buffer session) buf))))
+    (when (pichat-rpc--current-process-p session process)
+      (pichat-rpc--mark-ready session process)
+      (let ((buf (concat (or (pichat-session-rpc-receive-buffer session) "") chunk))
+            line)
+        (while (and (pichat-rpc--current-process-p session process)
+                    (string-match "\n" buf))
+          (setq line (substring buf 0 (match-beginning 0))
+                buf (substring buf (match-end 0)))
+          (when (string-suffix-p "\r" line)
+            (setq line (substring line 0 -1)))
+          (unless (string-empty-p line)
+            (let ((pichat-rpc--dispatch-process process))
+              (pichat-rpc--handle-line session line))))
+        (when (pichat-rpc--current-process-p session process)
+          (setf (pichat-session-rpc-receive-buffer session) buf))))))
 
 (defun pichat-rpc--handle-line (session line)
   "Parse and dispatch one JSONL LINE for SESSION."
@@ -497,23 +555,29 @@ separator characters.  A trailing CR is stripped for CRLF compatibility."
 (defun pichat-rpc--fail-pending (session reason &optional failure-kind)
   "Fail all pending SESSION requests with REASON.
 FAILURE-KIND is the machine-readable local failure cause."
-  (let (pending-entries)
+  (let ((owner (pichat-session-process session))
+        (generation (pichat-session-process-generation session))
+        pending-entries)
     (maphash (lambda (id pending)
+               (pichat-rpc--cancel-pending-timer pending)
                (push (cons id pending) pending-entries))
              (pichat-session-pending-responses session))
     (clrhash (pichat-session-pending-responses session))
     (dolist (entry pending-entries)
-      (let* ((id (car entry))
-             (pending (cdr entry))
-             (response (list :type "response"
-                             :id id
-                             :command (pichat-rpc--pending-command pending)
-                             :success nil
-                             :pichat-failure-kind failure-kind
-                             :error reason)))
-        (pichat-rpc--cancel-pending-timer pending)
-        (pichat-emit session 'response-received :response response)
-        (pichat-rpc--dispatch-failure session response pending)))))
+      (when (and (eq owner (pichat-session-process session))
+                 (eql generation (pichat-session-process-generation session)))
+        (let* ((id (car entry))
+               (pending (cdr entry))
+               (response (list :type "response"
+                               :id id
+                               :command (pichat-rpc--pending-command pending)
+                               :success nil
+                               :pichat-failure-kind failure-kind
+                               :error reason)))
+          (pichat-emit session 'response-received :response response)
+          (when (and (eq owner (pichat-session-process session))
+                     (eql generation (pichat-session-process-generation session)))
+            (pichat-rpc--dispatch-failure session response pending)))))))
 
 (defun pichat-rpc--cancel-pending-command (session command except-id)
   "Cancel pending COMMAND requests in SESSION other than EXCEPT-ID."
@@ -555,36 +619,41 @@ FAILURE-KIND is the machine-readable local failure cause."
     (when pending
       (pichat-rpc--cancel-pending-timer pending))
     (pichat-emit session 'response-received :response response)
-    (let ((command (or (plist-get response :command)
-                       (pichat-rpc--pending-command pending))))
-      (when (and success
+    (when (pichat-rpc--dispatch-current-p session)
+      (let ((command (or (plist-get response :command)
+                         (pichat-rpc--pending-command pending))))
+        (when (and success
                  (not (plist-get (plist-get response :data) :cancelled))
-                 (member command '("new_session" "switch_session"
-                                   "fork" "clone")))
-        ;; Stale state and stats replies from before the rebind must neither
-        ;; mutate the session nor satisfy consumers waiting for the new
-        ;; identity.
-        (pichat-rpc--cancel-pending-command session "get_state" id)
-        (pichat-rpc--cancel-pending-command session "get_session_stats" id)
-        (setf (pichat-session-context-usage session) nil)
-        ;; Invalidate consumers before command callbacks can request state for
-        ;; the newly rebound session.
-        (pichat-emit session 'session-rebinding :command command
-                     :response response)))
-    (when (and success pending)
-      (pcase (or (plist-get response :command)
-                 (pichat-rpc--pending-command pending))
-        ("get_state"
-         (pichat-session-apply-rpc-state session (plist-get response :data))
-         (pichat-emit session 'session-state-changed :state (plist-get response :data)))
-        ("get_session_stats"
-         (pichat-session-apply-rpc-stats session (plist-get response :data)))))
-    (when pending
-      (if success
-          (let ((callback (pichat-rpc--pending-callback pending)))
-            (when callback
-              (funcall callback response session)))
-        (pichat-rpc--dispatch-failure session response pending)))))
+                   (member command '("new_session" "switch_session"
+                                     "fork" "clone")))
+          ;; Stale state and stats replies from before the rebind must neither
+          ;; mutate the session nor satisfy consumers waiting for the new
+          ;; identity.
+          (pichat-rpc--cancel-pending-command session "get_state" id)
+          (when (pichat-rpc--dispatch-current-p session)
+            (pichat-rpc--cancel-pending-command session "get_session_stats" id))
+          (when (pichat-rpc--dispatch-current-p session)
+            (setf (pichat-session-context-usage session) nil)
+            ;; Invalidate consumers before command callbacks can request state
+            ;; for the newly rebound session.
+            (pichat-emit session 'session-rebinding :command command
+                         :response response))))
+
+      (when (and (pichat-rpc--dispatch-current-p session) success pending)
+        (pcase (or (plist-get response :command)
+                   (pichat-rpc--pending-command pending))
+          ("get_state"
+           (pichat-session-apply-rpc-state session (plist-get response :data))
+           (pichat-emit session 'session-state-changed
+                        :state (plist-get response :data)))
+          ("get_session_stats"
+           (pichat-session-apply-rpc-stats session (plist-get response :data)))))
+      (when (and (pichat-rpc--dispatch-current-p session) pending)
+        (if success
+            (let ((callback (pichat-rpc--pending-callback pending)))
+              (when callback
+                (funcall callback response session)))
+          (pichat-rpc--dispatch-failure session response pending))))))
 
 (defun pichat-rpc--dispatch-event (session event)
   "Normalize and emit RPC EVENT for SESSION."
@@ -632,12 +701,14 @@ FAILURE-KIND is the machine-readable local failure cause."
     ;; event.  A consumer must subscribe to one form, never both.
     (pichat-emit session 'rpc-event
                  :raw event :normalized-event normalized)
-    (pichat-emit session normalized :raw event)))
+    (when (pichat-rpc--dispatch-current-p session)
+      (pichat-emit session normalized :raw event))))
 
 ;;;###autoload
 (defun pichat-rpc-send (session type payload callback &optional error-callback)
   "Send RPC command TYPE with PAYLOAD for SESSION.
 CALLBACK and ERROR-CALLBACK receive (RESPONSE SESSION).  Return request id."
+  (pichat-rpc--require-operation-ownership session)
   (unless (pichat-session-alive-p session)
     (error "PiChat RPC process is not alive"))
   (let* ((id (pichat-rpc--next-id session))
@@ -659,6 +730,7 @@ CALLBACK and ERROR-CALLBACK receive (RESPONSE SESSION).  Return request id."
 
 (defun pichat-rpc-send-notification (session payload)
   "Send raw notification PAYLOAD without request id to SESSION."
+  (pichat-rpc--require-operation-ownership session)
   (unless (pichat-session-alive-p session)
     (error "PiChat RPC process is not alive"))
   (let ((line (concat (pichat-rpc--json-encode payload) "\n")))

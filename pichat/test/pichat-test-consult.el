@@ -764,6 +764,57 @@
       (should-error (pichat-consult-jump-to-match missing-candidate)
                     :type 'user-error))))
 
+(ert-deftest pichat-consult-selection-context-survives-search-replay ()
+  (let ((capability '(:identity fixture))
+        (project '(:cwd "/fixture"))
+        calls)
+    (cl-letf (((symbol-function 'pichat-archive-capability-current-p)
+               (lambda (_capability) t))
+              ((symbol-function 'pichat-consult--search)
+               (lambda (&rest args) (push (cons this-command args) calls))))
+      (pichat-consult--run-project-search
+       capability project "search" #'ignore nil t)
+      (let ((replay (caar calls)))
+        ;; The opaque replay command retains the selection-only policy.
+        (should (equal (cdar calls)
+                       (list capability project "search" #'ignore t)))
+        (funcall replay)
+        (should (equal (cdar calls)
+                       (list capability project nil #'ignore t))))
+      (pichat-consult--resume-context
+       (list :kind 'archive :capability capability :project project
+             :input "resume" :selection-function #'ignore
+             :selection-only t))
+      (should (equal (cdar calls)
+                     (list capability project "resume" #'ignore t))))))
+
+(ert-deftest pichat-consult-launch-selection-rejects-mutating-actions ()
+  (let* ((chosen nil)
+         (recipient (lambda (file cwd record)
+                      (setq chosen (list file cwd record))))
+         (candidate (list :session-id "session" :session-file "/saved.jsonl"
+                          :source-exists t :cwd "/saved"
+                          :browse-context (list :kind 'archive :selection-only t
+                                                :selection-function recipient))))
+    (should (eq #'pichat-consult-select-session
+                (lookup-key pichat-consult-session-selection-action-map
+                            (kbd "RET"))))
+    (dolist (key '("o" "s" "j"))
+      (should-not (lookup-key pichat-consult-session-selection-action-map
+                             (kbd key))))
+    (cl-letf (((symbol-function 'pichat-sessions-switch-file)
+               (lambda (&rest _) (ert-fail "Selection switched runtime")))
+              ((symbol-function 'pichat-sessions-open-file-independently)
+               (lambda (&rest _) (ert-fail "Selection opened runtime"))))
+      (pichat-consult-select-session candidate)
+      (should (equal "/saved.jsonl" (car chosen)))
+      (should (eq candidate (caddr chosen)))
+      (should-error (pichat-consult-open-session-independently candidate)
+                    :type 'user-error)
+      (should-error (pichat-consult-switch-session candidate) :type 'user-error)
+      (should-error (pichat-consult-jump-to-match candidate)
+                    :type 'user-error))))
+
 (ert-deftest pichat-consult-contextual-selection-preserves-browser-open-policy ()
   (let* ((opened nil)
          (context

@@ -32,6 +32,8 @@
   transport
   path-context
   process
+  process-generation
+  restart-operation
   rpc
   buffer
   stderr-buffer

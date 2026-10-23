@@ -24,10 +24,12 @@
            (remote-extension (expand-file-name "fake-provider.ts" remote-root))
            (runtime-extension (expand-file-name "fake-provider.ts" runtime-root))
            (remote-script (expand-file-name "script.json" remote-root))
+           (remote-saved (expand-file-name "selected.jsonl" remote-root))
            (runtime-script (expand-file-name "script.json" runtime-root))
            (remote-status (expand-file-name "status.json" remote-root))
            (runtime-status (expand-file-name "status.json" runtime-root))
            (pi (or (getenv "PICHAT_TEST_SSH_PI") "pi"))
+           (pichat-default-preset 'standard)
            (pichat-targets
             `((pichat-test-ssh
                :kind ssh :tramp-prefix ,prefix :pi-executable ,pi
@@ -47,7 +49,7 @@
                    (concat "PICHAT_FAKE_PROVIDER_SCRIPT=" runtime-script)
                    (concat "PICHAT_FAKE_PROVIDER_STATUS=" runtime-status))
              process-environment))
-           session)
+           session selected)
       (unwind-protect
           (progn
             (make-directory remote-project t)
@@ -86,7 +88,46 @@
                                        (directory-file-name runtime-root))
                                       1)))))
                   (should (or (= status 1)
-                              (string-empty-p (string-trim (buffer-string)))))))))
+                              (string-empty-p (string-trim (buffer-string)))))))
+              ;; Launch a saved conversation on the same captured SSH target
+              ;; after the original writer has stopped.  No fallback to local
+              ;; paths or a different target is permitted.
+              (with-temp-file remote-saved
+                (insert (json-serialize
+                         (list :type "session" :version 3
+                               :id "pichat-ssh-selected"
+                               :timestamp "2026-07-25T16:00:00.000Z"
+                               :cwd runtime-project)) "\n"))
+              (setq selected
+                    (pichat--open-launch-profile
+                     (list :scope 'current :target 'pichat-test-ssh
+                           :reuse 'new :persistence 'persistent
+                           :preset 'standard :model 'default
+                           :display-function #'pichat-chat-open
+                           :conversation
+                           (list :kind 'saved
+                                 :selection
+                                 (list :file remote-saved :cwd runtime-project
+                                       :session-id "pichat-ssh-selected"
+                                       :transport (pichat-session-transport session)
+                                       :transport-id 'pichat-test-ssh
+                                       :source-session session)))
+                     remote-project))
+              (pichat-test-wait-until
+               (lambda () (and (pichat-session-p selected)
+                               (equal "pichat-ssh-selected"
+                                      (pichat-session-id selected))
+                               (pichat-chat-canonical-entry-cache selected)))
+               25 "selected SSH session fully synchronized")
+              (should (eq 'ssh (pichat-transport-kind
+                                (pichat-session-transport selected))))
+              (should (equal (file-local-name remote-saved)
+                             (pichat-session-session-file selected)))))
+        (when (and selected (pichat-session-alive-p selected))
+          (ignore-errors (pichat-rpc-stop selected)))
+        (when-let* ((buffer (and selected (pichat-session-buffer selected))))
+          (when (buffer-live-p buffer)
+            (let ((pichat-chat-stop-session-on-kill nil)) (kill-buffer buffer))))
         (when (and session (pichat-session-alive-p session))
           (ignore-errors (pichat-rpc-stop session)))
         (ignore-errors (delete-directory remote-root t))))))

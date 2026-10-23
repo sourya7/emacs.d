@@ -2,6 +2,7 @@
 
 ;;; Code:
 
+(require 'json)
 (require 'pichat-rpc)
 (require 'pichat-backend)
 (require 'pichat-tool-bridge)
@@ -28,8 +29,23 @@
   "Handle bridge sentinel RAW for SESSION.  Return non-nil if handled."
   (pichat-backend-require-capability
    session 'extension-ui "Pi extension bridge")
-  (let ((id (plist-get raw :id))
-        (title (plist-get raw :title)))
+  (let* ((id (plist-get raw :id))
+         (title (plist-get raw :title))
+         (operation (pichat-session-restart-operation session))
+         (restarting (and operation
+                          (memq (plist-get operation :phase)
+                                '(starting loading synchronizing))))
+         ;; Only the current process's bridge handshake/definitions may send
+         ;; operation-owned UI replies.  Never accept a previous process's
+         ;; delayed event or execute a tool against a staged old snapshot.
+         (pichat-rpc--operation-token
+          (if (and restarting pichat-rpc--dispatch-process
+                   (pichat-rpc--dispatch-current-p session))
+              (plist-get operation :token)
+            pichat-rpc--operation-token)))
+    (when (and operation pichat-rpc--dispatch-process
+               (not (pichat-rpc--dispatch-current-p session)))
+      (user-error "Obsolete bridge process cannot rebind this runtime"))
     (cond
      ((string= title pichat-bridge-transport-handshake-title)
       (pichat-rpc-extension-ui-value
@@ -40,8 +56,13 @@
       (pichat-rpc-extension-ui-value session id (pichat-tool-bridge-definitions-json)) t)
      ((string= title pichat-bridge-transport-tool-call-title)
       (pichat-rpc-extension-ui-value
-       session id (pichat-tool-bridge-execute-json
-                   (or (plist-get raw :prefill) "{}") session))
+       session id
+       (if operation
+           (json-serialize
+            '(:isError t :content [(:type "text"
+                                     :text "PiChat runtime is restarting")]))
+         (pichat-tool-bridge-execute-json
+          (or (plist-get raw :prefill) "{}") session)))
       t)
      (t nil))))
 

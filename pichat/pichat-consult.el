@@ -580,6 +580,10 @@ runtime never marks its own project as current."
   (plist-get (pichat-consult--candidate-context candidate)
              :selection-function))
 
+(defun pichat-consult--selection-only-p (candidate)
+  "Return non-nil for a launcher's selection-only browse CANDIDATE."
+  (plist-get (pichat-consult--candidate-context candidate) :selection-only))
+
 (defun pichat-consult--insert-preview-entry (entry)
   "Insert one readable preview ENTRY into the current buffer."
   (let ((role (or (plist-get entry :role) "message"))
@@ -828,20 +832,26 @@ owned by its saved working directory rather than replacing an active source."
          (selection-function (pichat-consult--selection-function candidate))
          (file (plist-get record :session-file))
          (cwd (plist-get record :cwd)))
-    (if selection-function
-        (funcall selection-function file cwd)
+    (cond
+     ((pichat-consult--selection-only-p candidate)
+      (unless selection-function
+        (user-error "Selection-only browser has no launcher recipient"))
+      (funcall selection-function file cwd record))
+     (selection-function (funcall selection-function file cwd))
+     (t
       (pichat-sessions-open-file-independently
        file :cwd cwd
        :source-session (let ((context (pichat-consult--candidate-context candidate)))
                          (plist-get (plist-get context :capability) :session))
-       :display-function pichat-sessions-display-chat-function))))
+       :display-function pichat-sessions-display-chat-function)))))
 
 (defun pichat-consult-switch-session (candidate)
   "Explicitly replace the active runtime's source with saved CANDIDATE.
 Contextual manager browsing cannot switch a manager row implicitly."
   (interactive "sSession: ")
-  (when (pichat-consult--selection-function candidate)
-    (user-error "Switch sessions from a chat, not a contextual browser"))
+  (when (or (pichat-consult--selection-function candidate)
+            (pichat-consult--selection-only-p candidate))
+    (user-error "Selecting a saved conversation cannot switch a runtime"))
   (let ((record (pichat-consult--loadable-record candidate)))
     (pichat-sessions-switch-file
      (plist-get record :session-file) (plist-get record :cwd))))
@@ -856,6 +866,8 @@ scope and display policy remain intact."
          (capability
           (plist-get (pichat-consult--candidate-context candidate) :capability))
          (source-session (and capability (plist-get capability :session))))
+    (when (pichat-consult--selection-only-p candidate)
+      (user-error "Selecting a saved conversation cannot open a runtime"))
     (if selection-function
         (funcall selection-function
                  (plist-get record :session-file) (plist-get record :cwd))
@@ -874,7 +886,8 @@ entry-loadability claim."
   (let* ((relation (pichat-consult--candidate-relation candidate))
          (record (pichat-consult--loadable-record candidate))
          (entry-id (plist-get record :entry-id)))
-    (when (pichat-consult--selection-function candidate)
+    (when (or (pichat-consult--selection-function candidate)
+              (pichat-consult--selection-only-p candidate))
       (user-error
        "Open this session first; contextual independent browsing cannot jump in another runtime"))
     (unless (or relation (and entry-id (plist-get record :entry-loadable)))
@@ -1013,9 +1026,15 @@ entry-loadability claim."
     ('archive
      (let ((capability (plist-get context :capability)))
        (if (pichat-archive-capability-current-p capability)
-           (pichat-consult--run-project-search
-            capability (plist-get context :project) (plist-get context :input)
-            (plist-get context :selection-function))
+           (if (plist-get context :selection-only)
+               (pichat-consult--run-project-search
+                capability (plist-get context :project)
+                (plist-get context :input)
+                (plist-get context :selection-function) nil t)
+             (pichat-consult--run-project-search
+              capability (plist-get context :project)
+              (plist-get context :input)
+              (plist-get context :selection-function)))
          (message "PiChat archive search cannot resume: capability is stale"))))
     ('relations
      (pichat-consult--read-relations
@@ -1035,6 +1054,8 @@ entry-loadability claim."
            (context (list :kind 'relations :capability capability
                           :subject subject :relations relations
                           :parent parent-context
+                          :selection-only
+                          (plist-get parent-context :selection-only)
                           :selection-function selection-function))
            (candidates
             (mapcar (lambda (relation)
@@ -1054,7 +1075,9 @@ entry-loadability claim."
                                       (plist-get subject :session-id)) 45)
                                  (if selection-function "select" "open"))
                  :lookup #'consult--lookup-candidate :require-match t
-                 :category 'pichat-session :sort nil
+                 :category (if (plist-get context :selection-only)
+                               'pichat-session-selection 'pichat-session)
+                 :sort nil
                  :annotate #'pichat-consult--relation-annotation
                  :group #'pichat-consult--relation-group
                  :narrow (pichat-consult--relation-narrow-config)
@@ -1198,6 +1221,20 @@ original Consult candidate still carries `consult--candidate'."
     (unless candidate (user-error "No PiChat archive session target"))
     (funcall action candidate)))
 
+(defun pichat-consult-select-session (candidate)
+  "Select CANDIDATE for a launcher without opening a PiChat runtime."
+  (interactive "sSession: ")
+  (unless (pichat-consult--selection-only-p candidate)
+    (user-error "Selection requires the launcher's selection-only browser"))
+  (pichat-consult-load-session candidate))
+
+(defvar pichat-consult-session-selection-action-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET") #'pichat-consult-select-session)
+    (define-key map (kbd "r") #'pichat-consult-show-relations)
+    map)
+  "Embark actions allowed in a selection-only saved-session browser.")
+
 (defvar pichat-consult-session-action-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'pichat-consult-load-session)
@@ -1211,7 +1248,10 @@ original Consult candidate still carries `consult--candidate'."
 (with-eval-after-load 'embark
   (add-to-list 'embark-keymap-alist
                '(pichat-session . pichat-consult-session-action-map))
-  (dolist (action '(pichat-consult-load-session
+  (add-to-list 'embark-keymap-alist
+               '(pichat-session-selection . pichat-consult-session-selection-action-map))
+  (dolist (action '(pichat-consult-select-session
+                    pichat-consult-load-session
                     pichat-consult-open-session-independently
                     pichat-consult-switch-session
                     pichat-consult-jump-to-match
@@ -1220,7 +1260,7 @@ original Consult candidate still carries `consult--candidate'."
                 (alist-get action embark-around-action-hooks))))
 
 (defun pichat-consult--search
-    (capability project &optional initial selection-function)
+    (capability project &optional initial selection-function selection-only)
   "Run Consult archive search for CAPABILITY and selected PROJECT.
 SELECTION-FUNCTION, when non-nil, receives the selected saved FILE and CWD."
   (let* ((cwd (plist-get project :cwd))
@@ -1229,6 +1269,7 @@ SELECTION-FUNCTION, when non-nil, receives the selected saved FILE and CWD."
          (pichat-consult--pending-action nil)
          (browse-context (list :kind 'archive :capability capability
                                :project project :input (or initial "")
+                               :selection-only selection-only
                                :selection-function selection-function))
          (builder (lambda (input)
                     (plist-put browse-context :input input)
@@ -1245,7 +1286,9 @@ SELECTION-FUNCTION, when non-nil, receives the selected saved FILE and CWD."
                            (if cwd (abbreviate-file-name cwd) scope-label)
                            (if selection-function "select" "open"))
            :lookup #'consult--lookup-candidate
-           :require-match t :category 'pichat-session
+           :require-match t
+           :category (if selection-only 'pichat-session-selection
+                       'pichat-session)
            :annotate #'pichat-consult--candidate-annotation
            :history '(:input pichat-consult--session-history)
            :initial initial :state (pichat-consult--preview-state)
@@ -1258,7 +1301,8 @@ SELECTION-FUNCTION, when non-nil, receives the selected saved FILE and CWD."
      (selected (pichat-consult-load-session selected)))))
 
 (defun pichat-consult--run-project-search
-    (capability project &optional initial selection-function replay-command)
+    (capability project &optional initial selection-function replay-command
+             selection-only)
   "Search CAPABILITY in PROJECT through one replayable command.
 INITIAL and SELECTION-FUNCTION are forwarded to `pichat-consult--search'.
 REPLAY-COMMAND, when non-nil, is the command previously made for this exact
@@ -1272,18 +1316,24 @@ closure preserves its project and selection policy independently."
       (fset command
             (lambda ()
               (interactive)
-              (pichat-consult--run-project-search
-               capability project nil selection-function command))))
+              (if selection-only
+                  (pichat-consult--run-project-search
+                   capability project nil selection-function command t)
+                (pichat-consult--run-project-search
+                 capability project nil selection-function command)))))
     ;; The project picker exits immediately before this reader opens.  Give
     ;; Embark the replayable search command instead of inheriting that exit
     ;; command as the session minibuffer's origin.
     (let ((this-command command))
-      (pichat-consult--search
-       capability project initial selection-function))))
+      (if selection-only
+          (pichat-consult--search
+           capability project initial selection-function t)
+        (pichat-consult--search
+         capability project initial selection-function)))))
 
 ;;;###autoload
 (defun pichat-consult-sessions
-    (capability &optional initial selection-function)
+    (capability &optional initial selection-function selection-only)
   "Browse saved sessions through validated archive CAPABILITY.
 Archive projects are loaded first.  Empty search input lists recent sessions;
 name:, text:, and role: fields are translated to conservative FTS expressions.
@@ -1300,8 +1350,11 @@ History, and `r' shows relations."
    (lambda (projects)
      (condition-case nil
          (when-let* ((project (pichat-consult--select-project projects)))
-           (pichat-consult--run-project-search
-            capability project initial selection-function))
+           (if selection-only
+               (pichat-consult--run-project-search
+                capability project initial selection-function nil t)
+             (pichat-consult--run-project-search
+              capability project initial selection-function)))
        (quit nil)))
    (lambda (failure)
      (message "PiChat archive project lookup failed: %s"

@@ -24,7 +24,11 @@ Shared terms for discussing PiChat. **Runtime**, **Pi session**, **saved session
 | **Owner scope** | The project or global scope captured when a runtime starts. It remains unchanged when a different Pi session is loaded. |
 | **Preferred runtime** | The live runtime designated for ordinary reuse within an owner scope, marked with `★` in the manager. |
 | **Independent runtime** | An additional runtime started rather than reusing an existing one, without automatically becoming preferred. This differs from creating a new Pi session inside an existing runtime. |
-| **Launch profile** | The choices governing runtime selection or creation: scope, reuse, persistence, target, model, preset, and optional Tools customization. |
+| **Launch profile** | The choices governing runtime selection or creation: scope, reuse, persistence, target, model, preset, optional Tools customization, and optional conversation intent. |
+| **Conversation intent** | A normal-launch choice: default reuse/fresh behavior, a fresh independent conversation, a selection-only saved session, or an explicit route to the current chat. It does not itself mutate a runtime. |
+| **Reconfiguration** | An explicitly confirmed restart of a runtime to replace startup preset/Tools without changing its runtime ID or owner scope. An existing saved Pi session is reloaded and verified; an unwritten, verified conversation-free Pi session instead receives a **new Pi session ID**. It is not a Pi session switch or clone. |
+| **Restart snapshot** | The last synchronized canonical transcript retained as read-only while a reconfigured runtime is stopping, loading, synchronizing, or failed. For an unwritten session it may contain only startup model/thinking metadata. It is not authoritative state from a replacement process until verified commit. |
+| **Source reservation** | An Emacs-local, transport-qualified saved-file claim held during an independent launch; together with retained active restarts it prevents another PiChat-managed writer. It does not detect external Pi processes. |
 | **Preset** | A named startup configuration of tools and system-prompt additions or replacement, captured as a resolved snapshot when a runtime starts. It belongs to the runtime, not its saved Pi sessions, and cannot be applied to an already-running process. Explicit-tool presets also provide the baseline for the launch Tools picker; pass-through presets leave Pi defaults unchanged. |
 | **Tools customization** | A run-local selection that can remove built-in tools from an explicit preset and opt into eligible, directly exposed MCP tools. The selection belongs to a new independent runtime, not to its Pi session or saved session file; an unchanged preset baseline is not a customization. |
 | **Default preset** | The preset configured for a new runtime when no named preset is explicitly selected. It differs from the launcher's `default` choice, which permits reuse of a preferred runtime regardless of its captured preset. |
@@ -51,7 +55,8 @@ Shared terms for discussing PiChat. **Runtime**, **Pi session**, **saved session
 
 | Term | Meaning |
 |---|---|
-| **Saved-session browser** | A picker of saved sessions, rather than entries within one session. Its selection context determines whether a file opens independently or replaces the current runtime's source. |
+| **Saved-session browser** | A picker of saved sessions, rather than entries within one session. Its selection context determines whether a file opens independently, replaces the current runtime's source, or is returned to the launcher without opening anything. |
+| **Selection-only browse context** | A launcher's saved-session search that returns structured file, Pi session and target provenance to the launch draft; preview and related navigation stay read-only, and mutating Embark open/switch/jump actions are unavailable. |
 | **Basic picker** | Saved-session file completion that does not require archive or Consult integration; used when archive-backed browsing is unavailable or explicitly bypassed. |
 | **Archive-backed Consult picker** | Search and selection of indexed saved sessions through a compatible `pi-archive` integration. The basic picker is the fallback when this integration is unavailable. |
 | **Related-session browser** | A picker of a saved session's resolved archive parent and children. It explores relations between sessions, not branches within one session. |
@@ -69,7 +74,8 @@ Shared terms for discussing PiChat. **Runtime**, **Pi session**, **saved session
 | **Live tail** | Provisional chat content derived from RPC events while an agent run is in progress, before canonical synchronization. |
 | **Settlement** | The transition from an agent run's provisional output to synchronized canonical content after the run ends. |
 | **State synchronization** | Fetching Pi's state or entries to update PiChat after a run or source rebinding. |
-| **Source generation** | A PiChat generation marker used to invalidate stale events, callbacks, or caches after source rebinding. It is not a Pi session ID. |
+| **Source generation** | A PiChat generation marker used to invalidate stale events, callbacks, or caches after source rebinding. It is not a Pi session ID. A verified same-source runtime restart does not create a navigation entry. |
+| **Process generation** | A distinct runtime-process lifetime marker; events and transport buffers from a stopped process cannot act on its replacement, even when it hosts the same Pi session. |
 | **Repaint** | Refreshing the chat display from PiChat's synchronized transcript model, rather than treating visible buffer text as the source of truth. |
 | **Rendered response view** | A read-only rendering of one settled assistant response's prose. The chat itself retains the response's exact Markdown source. |
 

@@ -112,6 +112,8 @@
     (setq pichat--manual-session-counter 0))
   (when (boundp 'pichat--sessions-by-scope)
     (setq pichat--sessions-by-scope (make-hash-table :test #'equal)))
+  (when (boundp 'pichat--preference-revisions)
+    (setq pichat--preference-revisions (make-hash-table :test #'equal)))
   (when (boundp 'pichat--sessions-by-id)
     (setq pichat--sessions-by-id (make-hash-table :test #'equal)))
   (when (boundp 'pichat--session-order)

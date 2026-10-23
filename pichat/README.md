@@ -342,7 +342,9 @@ display behavior.
 | `m` | Choose/enter model | Select a listed model or enter an unlisted ID for only this run; implies independent |
 | `p` | Preset | Choose a named tool/prompt preset; explicit selection implies independent |
 | `x` | Tools | Narrow that preset's built-ins and select direct MCP tools for a new independent runtime |
-| `RET` | Launch | Execute the normalized profile shown in the action label |
+| `s` | Conversation | Default, new independent conversation, existing chat route, or select a saved session |
+| `r` | Reconfigure this runtime | From its owning chat, enter a separate captured-runtime menu; never implied by launching |
+| `RET` | Open / launch | Execute the normalized profile summarized in the action label |
 
 The switches compose. For example, `g e m` creates an independent global,
 ephemeral runtime and asks for its model. `n` alone creates an independent
@@ -355,7 +357,57 @@ different preset. Choosing a named preset (including `manual`) starts an
 Choose `default` again to restore normal reuse, unless another switch requires
 an independent runtime. The manager's Preset column and the chat's `P:name`
 mode-line label identify the captured startup choice. Presets belong to Emacs
-runtimes, not saved Pi transcripts, and cannot change an existing process.
+runtimes, not saved Pi transcripts. Changing a retained runtime's preset or
+Tools requires an explicit guarded restart, not a change to its live process.
+
+`s` retains its choice only while this launcher is open. **Default** preserves
+ordinary reuse; **New conversation** launches a fresh independent runtime and
+Pi session without switching an existing runtime. **Current conversation…**
+only routes to opening the captured chat or entering its reconfiguration menu;
+it never applies pending launch choices. **Choose saved session…** selects a
+transport-qualified file without loading it. Consult search, related-session
+navigation, preview, and Embark in this selection-only context cannot open,
+switch, or jump to a runtime; the built-in file picker is the fallback. `RET`
+starts the selected preset/Tools in a new independent runtime, then loads the
+saved Pi session and waits for authoritative transcript synchronization. The
+menu keeps the choice short and shows the saved title, ID, cwd and resolved
+owner scope in full-width details above the action; loading it does not move
+the process's working directory to that cwd.
+Selected saved sessions require persistent storage and the same target as the
+selected file. Changed target/path context, missing files, and live PiChat
+runtimes already hosting the file block a second writer; concurrent PiChat
+launches reserve the file until synchronization succeeds or fails. This local
+managed-runtime check cannot detect external Pi processes. Canceling the picker
+leaves the prior selection untouched. The ordinary saved-session browser still
+uses its own independent-open ownership and actions.
+
+From an owning chat, `r` opens **Reconfigure this runtime**. The menu captures
+that exact runtime, its current conversation, and its resolved preset/Tools
+snapshots, not the present registry defaults. `p` explicitly resolves the
+selected current definition; `x` edits Tools against the captured draft. `b`
+returns to the untouched launch draft. `RET` with no effective prompt/tool
+change is a no-op. Otherwise PiChat checks fresh Pi state, asks for confirmation,
+stops the old local process, starts the validated replacement with the active
+run-local model, reloads the same saved Pi session, restores supported settings,
+and commits the transcript and configuration only after verifying the source,
+active branch and settings. For a persistent **unwritten** Pi session containing
+only startup model/thinking metadata (no messages, extension entries, name, or
+navigation history), PiChat instead confirms fresh empty entries and restarts
+into a **new Pi session ID**; the old nonexistent file cannot be reloaded. The
+runtime identity, manager row, chat, unsent draft, and owner scope remain;
+compose editors for the empty source are retargeted, while extension-owned
+state is reset. A failed
+post-stop attempt retains the last synchronized conversation as a read-only
+snapshot. Reopen `r` from that chat for **Retry requested**, **Restore previous**,
+or **Leave stopped**. Preferred-runtime designation returns only if no newer
+preference was chosen in that scope. Busy, ephemeral, unsynchronized, missing-
+file with conversation history, unsupported-wrapper, and historical-active-leaf
+cases are blocked before stopping Pi. An empty but named, pending, or
+extension-modified session is not treated as safely disposable. SSH runtime
+restart is presently blocked: ending its transport
+alone cannot prove the remote Pi child stopped, so replacing it could create
+duplicate writers. SSH saved-session launch still uses its captured target and
+path mappings.
 
 The built-in `manual` preset retains Pi's base prompt, selects
 `read,grep,find,ls,edit,write` and asks the agent to supply fenced code and

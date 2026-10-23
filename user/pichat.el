@@ -44,20 +44,20 @@
 
 (declare-function bufferlo-local-buffer-p "bufferlo"
                   (buffer &optional frame tabnum include-hidden))
-(declare-function bufferlo-find-buffer-switch "bufferlo" (buffer-or-name))
-
-(defun my/pichat-bufferlo-local-anywhere-p (buffer)
-  "Return non-nil when BUFFER belongs to any Bufferlo frame/tab list."
-  (and (fboundp 'bufferlo-local-buffer-p)
-       (cl-some
-        (lambda (frame)
-          (let ((tabs (funcall tab-bar-tabs-function frame)))
-            (if tabs
-                (cl-loop for index below (length tabs)
-                         thereis (bufferlo-local-buffer-p
-                                  buffer frame index t))
-              (bufferlo-local-buffer-p buffer frame nil t))))
-        (frame-list))))
+(defun my/pichat-bufferlo-location (buffer)
+  "Return one frame and tab containing BUFFER, without prompting."
+  (when (and (buffer-live-p buffer) (fboundp 'bufferlo-local-buffer-p))
+    (cl-loop for frame in (cons (selected-frame)
+                                (delq (selected-frame) (frame-list)))
+             unless (frame-parameter frame 'no-accept-focus)
+             thereis (let ((tabs (funcall tab-bar-tabs-function frame)))
+                       (if tabs
+                           (cl-loop for index below (length tabs)
+                                    when (bufferlo-local-buffer-p
+                                          buffer frame index t)
+                                    return (cons frame (1+ index)))
+                         (when (bufferlo-local-buffer-p buffer frame nil t)
+                           (cons frame nil)))))))
 
 (defun my/pichat-project-tab-name (session)
   "Return the configured project-tab name for SESSION's owner directory."
@@ -73,23 +73,24 @@
            (funcall tab-bar-tabs-function (selected-frame))))
 
 (defun my/pichat-display-chat-with-bufferlo (session)
-  "Display SESSION in an existing Bufferlo location or its project tab."
-  (let ((buffer (pichat-session-buffer session)))
+  "Display SESSION in its project tab or an existing Bufferlo location."
+  (let* ((name (and (fboundp 'tab-bar-switch-to-tab)
+                    (my/pichat-project-tab-name session)))
+         (location (my/pichat-bufferlo-location
+                    (pichat-session-buffer session))))
     (cond
-     ((and (buffer-live-p buffer)
-           (fboundp 'bufferlo-find-buffer-switch)
-           (my/pichat-bufferlo-local-anywhere-p buffer))
-      (bufferlo-find-buffer-switch buffer))
-     ((and (fboundp 'tab-bar-switch-to-tab)
-           (my/pichat-project-tab-name session))
-      (let ((name (my/pichat-project-tab-name session)))
-        (if (my/pichat-tab-name-exists-p name)
-            (tab-bar-switch-to-tab name)
-          (tab-bar-new-tab)
-          (tab-bar-rename-tab name))
-        (pichat-session-manager-display-chat-current-tab session)))
-     (t
-      (pichat-session-manager-display-chat-current-tab session)))))
+     ;; Prefer the owner's project tab even if Bufferlo also lists the chat
+     ;; in other tabs (for example, the manager's tab).
+     (name
+      (if (my/pichat-tab-name-exists-p name)
+          (tab-bar-switch-to-tab name)
+        (tab-bar-new-tab)
+        (tab-bar-rename-tab name)))
+     (location
+      (pcase-let ((`(,frame . ,tab) location))
+        (select-frame-set-input-focus frame)
+        (when tab (tab-bar-select-tab tab)))))
+    (pichat-session-manager-display-chat-current-tab session)))
 
 (setq pichat-session-manager-display-chat-function
       #'my/pichat-display-chat-with-bufferlo

@@ -463,6 +463,23 @@ session over the global `pichat-current-session'."
               (error nil)))))
    (pichat-session-list)))
 
+(defun pichat--selected-file-reserved-p (key)
+  "Return the current in-progress independent launch claim for KEY."
+  (gethash key pichat--source-reservations))
+
+(defun pichat--claim-selected-file (key)
+  "Acquire KEY for one independent launch and return its ownership token."
+  (when (pichat--selected-file-reserved-p key)
+    (user-error "A PiChat launch is already loading this saved conversation"))
+  (let ((token (make-symbol "pichat-saved-launch")))
+    (puthash key token pichat--source-reservations)
+    token))
+
+(defun pichat--release-selected-file (key token)
+  "Release KEY only if TOKEN still owns the independent-launch claim."
+  (when (eq token (pichat--selected-file-reserved-p key))
+    (remhash key pichat--source-reservations)))
+
 (defun pichat--open-selected-conversation-profile (profile directory)
   "Launch PROFILE's saved conversation with exact ownership and no duplicate writer."
   (let* ((selection (plist-get (plist-get profile :conversation) :selection))
@@ -490,7 +507,7 @@ session over the global `pichat-current-session'."
         (user-error "Selected saved conversation is no longer readable"))
       (let* ((key (pichat--selected-file-key transport runtime-file))
              (conflict (pichat--selected-file-conflict key))
-             (reservation (gethash key pichat--source-reservations)))
+             (reservation (pichat--selected-file-reserved-p key)))
         (when conflict
           (pcase (car (read-multiple-choice
                        "This saved conversation is hosted by another PiChat runtime: "
@@ -504,17 +521,14 @@ session over the global `pichat-current-session'."
             (_ (user-error "Selected saved conversation launch cancelled"))))
         (when reservation
           (user-error "A PiChat launch is already loading this saved conversation"))
-        (let ((token (make-symbol "pichat-saved-launch"))
+        (let ((token (pichat--claim-selected-file key))
               (previous pichat-current-session))
-          (puthash key token pichat--source-reservations)
-          (cl-labels ((release ()
-                        (when (eq token (gethash key pichat--source-reservations))
-                          (remhash key pichat--source-reservations))))
+          (cl-labels ((release () (pichat--release-selected-file key token)))
             (condition-case error-data
                 (pichat-sessions-open-file-independently
                  file :cwd (plist-get selection :cwd)
                  :owner-directory (nth 1 scope) :owner-scope scope
-                 :source-session source :synchronized-ready t
+                 :source-session source :readiness 'transcript-ready
                  :expected-session-id (plist-get selection :session-id)
                  :launch-options
                  (list :persistence 'persistent
@@ -1181,12 +1195,25 @@ This is the first implementation check; it does not send an LLM prompt."
       ('saved '("saved conversation"))))
    " · "))
 
-(defun pichat--launch-action-description ()
-  "Return the normalized action description for the active launch Transient."
+(defun pichat--launch-menu-view ()
+  "Return the launch menu's profile and optional saved-source details."
   (let* ((context (transient-scope))
          (profile (pichat--launch-profile-from-arguments
                    (transient-get-value) context))
-         (selected (plist-get (plist-get profile :conversation) :selection)))
+         (selection (plist-get (plist-get profile :conversation) :selection)))
+    (list :context context :profile profile :selection selection
+          :owner (when selection
+                   (pichat--resolve-launch-scope
+                    (plist-get profile :scope)
+                    (plist-get context :directory)
+                    (plist-get profile :target))))))
+
+(defun pichat--launch-action-description ()
+  "Return the normalized action description for the active launch Transient."
+  (let* ((view (pichat--launch-menu-view))
+         (context (plist-get view :context))
+         (profile (plist-get view :profile))
+         (selected (plist-get view :selection)))
     (cond
      ((and selected (eq (plist-get profile :persistence) 'ephemeral))
       "Blocked · saved conversations require persistent storage")
@@ -1208,16 +1235,11 @@ This is the first implementation check; it does not send an LLM prompt."
 
 (defun pichat--launch-action-heading ()
   "Show selected saved-session provenance at full width above the action."
-  (let* ((context (transient-scope))
-         (selection (plist-get (plist-get context :conversation) :selection)))
+  (let* ((view (pichat--launch-menu-view))
+         (selection (plist-get view :selection)))
     (if (not selection)
         "Action"
-      (let* ((profile (pichat--launch-profile-from-arguments
-                       (transient-get-value) context))
-             (owner (pichat--resolve-launch-scope
-                     (plist-get profile :scope)
-                     (plist-get context :directory)
-                     (plist-get profile :target))))
+      (let ((owner (plist-get view :owner)))
         (format "Selected: %s · %s\nSaved cwd: %s · owner: %s\nAction"
                 (truncate-string-to-width
                  (or (plist-get selection :title) "Saved session")
@@ -1395,6 +1417,13 @@ This is the first implementation check; it does not send an LLM prompt."
                     "new empty Pi session; keep chat and draft"
                   "keep conversation"))))))
 
+(defun pichat--reconfigure-action-inapt-p ()
+  "Return non-nil if a changed draft has preflight blockers."
+  (let ((scope (transient-scope)))
+    (and (plist-get scope :blockers)
+         (pichat-reconfigure-effective-change-p
+          (plist-get scope :base) (plist-get scope :draft)))))
+
 (defun pichat--reconfigure-draft-description ()
   "Describe the exact selected preset and Tools draft."
   (let* ((scope (transient-scope))
@@ -1410,13 +1439,13 @@ This is the first implementation check; it does not send an LLM prompt."
   (let ((origin (plist-get scope :origin)))
     (pichat-reconfigure-request-preflight
      origin
-     (lambda (blockers state)
+     (lambda (blockers result)
        (when (eq (plist-get scope :menu-token)
                  (plist-get (transient-scope) :menu-token))
          (plist-put scope :blockers blockers)
          (plist-put scope :empty-unwritten
                     (and (null blockers)
-                         (plist-get state :pichat-empty-unwritten)))
+                         (eq (plist-get result :source-kind) 'unwritten)))
          (when (and (boundp 'transient--prefix)
                     transient--prefix
                     (eq (oref transient--prefix command)
@@ -1504,7 +1533,7 @@ This is the first implementation check; it does not send an LLM prompt."
                                        (plist-get scope :launch-args)))))
 
 (transient-define-suffix pichat-reconfigure-execute ()
-  "Confirm and run the captured same-conversation restart, or do nothing."
+  "Confirm and run the captured runtime restart, or do nothing."
   (interactive)
   (let* ((scope (transient-scope))
          (origin (plist-get scope :origin))
@@ -1568,14 +1597,14 @@ This is the first implementation check; it does not send an LLM prompt."
                 " · recovery starts a new Pi session" ""))))
 
 (transient-define-prefix pichat-reconfigure-recovery (&optional scope)
-  "Recover a failed runtime without changing its Pi session identity."
+  "Recover a failed runtime, retaining a saved source when available."
   [["Failed restart" :description pichat--reconfigure-recovery-description
     ("r" "Retry requested" pichat-reconfigure-retry)
     ("o" "Restore previous" pichat-reconfigure-restore)
     ("q" "Leave stopped" pichat-reconfigure-leave-stopped)]])
 
 (transient-define-prefix pichat-reconfigure-menu (&optional scope)
-  "Choose a new preset or Tools for the same retained Pi session."
+  "Choose a new preset or Tools for this retained runtime."
   [["Current runtime" :description pichat--reconfigure-menu-description
     ("p" pichat-reconfigure-preset
      :description pichat--reconfigure-draft-description)
@@ -1585,18 +1614,10 @@ This is the first implementation check; it does not send an LLM prompt."
   [["Action"
     ("RET" pichat-reconfigure-execute
      :description pichat--reconfigure-action-description
-     :inapt-if (lambda ()
-                 (and (plist-get (transient-scope) :blockers)
-                      (pichat-reconfigure-effective-change-p
-                       (plist-get (transient-scope) :base)
-                       (plist-get (transient-scope) :draft)))))]]
+     :inapt-if pichat--reconfigure-action-inapt-p)]]
   [:hide (lambda () t)
    ("<return>" pichat-reconfigure-execute
-    :inapt-if (lambda ()
-                (and (plist-get (transient-scope) :blockers)
-                     (pichat-reconfigure-effective-change-p
-                      (plist-get (transient-scope) :base)
-                      (plist-get (transient-scope) :draft)))))]
+    :inapt-if pichat--reconfigure-action-inapt-p)]
   (interactive)
   (pichat--reconfigure-show scope))
 

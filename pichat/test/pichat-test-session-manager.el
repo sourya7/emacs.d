@@ -696,6 +696,16 @@
                      (pichat-session-owner-scope-key independent)))
       (should (equal "/loaded/" (pichat-session-cwd independent))))))
 
+(ert-deftest pichat-independent-source-open-rejects-unknown-readiness-before-start ()
+  (let (started)
+    (cl-letf (((symbol-function 'pichat-start-session)
+               (lambda (&rest _) (setq started t))))
+      (should-error
+       (pichat-sessions-open-file-independently
+        "/saved/session.jsonl" :readiness 'unknown :display-function nil)
+       :type 'user-error)
+      (should-not started))))
+
 (ert-deftest pichat-independent-source-open-infers-placement-from-saved-cwd ()
   (pichat-test-with-clean-state
     (let ((session (pichat-session-make)) started-cwd started-scope ready)

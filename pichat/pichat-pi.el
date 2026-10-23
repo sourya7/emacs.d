@@ -58,6 +58,27 @@ order and LEAF-ID identifies the active branch leaf."
              table)
     copy))
 
+(defun pichat-pi-startup-metadata-only-p (entries leaf-id)
+  "Return non-nil if ENTRIES contain only disposable Pi startup metadata.
+The active LEAF-ID must be the last appended entry, or nil for no entries."
+  (and (sequencep entries)
+       (cl-every (lambda (entry)
+                   (member (plist-get entry :type)
+                           '("model_change" "thinking_level_change")))
+                 entries)
+       (equal leaf-id (plist-get (car (last (append entries nil))) :id))))
+
+(defun pichat-pi-entry-cache-startup-metadata-only-p (cache)
+  "Return non-nil if validated CACHE contains only Pi startup metadata."
+  (and (pichat-entry-cache-p cache)
+       (equal (pichat-entry-cache-leaf-id cache)
+              (pichat-entry-cache-last-seen-id cache))
+       (pichat-pi-startup-metadata-only-p
+        (mapcar (lambda (id)
+                  (gethash id (pichat-entry-cache-entries-by-id cache)))
+                (pichat-entry-cache-append-order cache))
+        (pichat-entry-cache-leaf-id cache))))
+
 (defun pichat-pi-entry-cache-merge (cache entries leaf-id)
   "Return a validated CACHE with incremental ENTRIES and LEAF-ID merged.
 CACHE is not modified.  Repeated identical entries are idempotent; an existing

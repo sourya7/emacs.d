@@ -560,9 +560,9 @@ By default the manager opens chats in the current tab. Customize
 `pichat-session-manager-display-chat-function` to select a frame or tab before
 calling `pichat-session-manager-display-chat-current-tab`. PiChat has no Tab Bar
 or Bufferlo dependency. This repository's `user/pichat.el` demonstrates an
-optional Bufferlo-aware policy: it reuses a chat's existing Bufferlo location,
-otherwise selects or creates the owner project's tab, and finally falls back to
-the current tab. The manager itself remains on demand; showing the same global
+optional Bufferlo-aware policy: it selects or creates the owner's project tab
+first, otherwise chooses an existing Bufferlo location without prompting, and
+finally falls back to the current tab. The manager itself remains on demand; showing the same global
 buffer in a tab lets Bufferlo record normal local membership there.
 
 ## Evil integration

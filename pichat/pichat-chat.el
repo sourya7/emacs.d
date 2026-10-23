@@ -789,8 +789,8 @@ When DEFER-SYNC is non-nil, wait for a subsequent authoritative state reply."
 
 (defun pichat-chat-stage-restart (session)
   "Retain SESSION's last synchronized chat snapshot for a restart attempt.
-This does not stop Pi.  Only a verified same-source replacement may commit a
-new snapshot through `pichat-chat-commit-staged-restart'."
+This does not stop Pi.  A saved source must reload and verify its original
+conversation; an unwritten empty source may commit a verified new Pi session."
   (unless (and (derived-mode-p 'pichat-chat-mode)
                (eq session pichat-chat-session)
                (not pichat-chat--restart-staging)
@@ -815,6 +815,13 @@ new snapshot through `pichat-chat-commit-staged-restart'."
   (pichat-chat--set-status 'restart "[runtime restarting; snapshot retained]")
   pichat-chat--restart-staging)
 
+(defun pichat-chat--project-restart-cache (cache)
+  "Project verified restart CACHE without clearing staging on render failure."
+  (let* ((transcript (pichat-pi-build-canonical-transcript cache))
+         (context (pichat-chat--canonical-render-context transcript))
+         (fragment (pichat-render-canonical transcript context)))
+    (pichat-chat--project-canonical cache transcript fragment context)))
+
 (defun pichat-chat-commit-staged-restart (session cache)
   "Atomically install verified replacement CACHE for staged SESSION.
 The caller must verify the complete reloaded entries and process generation
@@ -833,16 +840,13 @@ staging state for explicit recovery."
                  (equal (pichat-session-session-file session)
                         (plist-get staging :session-file)))
       (user-error "Restart source changed; retained chat snapshot was not replaced"))
-    (let* ((transcript (pichat-pi-build-canonical-transcript cache))
-           (context (pichat-chat--canonical-render-context transcript))
-           (fragment (pichat-render-canonical transcript context)))
-      (pichat-chat--project-canonical cache transcript fragment context)
-      (setq pichat-chat--restart-staging nil
-            pichat-chat--source-rebinding-p nil)
-      (pichat-chat--set-status 'restart nil)
-      (pichat-chat--set-status 'session nil)
-      (pichat-chat--refresh-header session)
-      cache)))
+    (pichat-chat--project-restart-cache cache)
+    (setq pichat-chat--restart-staging nil
+          pichat-chat--source-rebinding-p nil)
+    (pichat-chat--set-status 'restart nil)
+    (pichat-chat--set-status 'session nil)
+    (pichat-chat--refresh-header session)
+    cache))
 
 (defun pichat-chat-commit-staged-empty-restart (session cache)
   "Commit a verified new empty Pi session after restarting an unwritten one.
@@ -851,24 +855,9 @@ retarget compose editors opened for the original empty session."
   (let ((staging pichat-chat--restart-staging))
     (unless (and (eq session pichat-chat-session)
                  (eq session (plist-get staging :session))
-                 (pichat-entry-cache-p (plist-get staging :cache))
-                 (cl-every (lambda (entry-id)
-                             (member (plist-get
-                                      (gethash entry-id
-                                               (pichat-entry-cache-entries-by-id
-                                                (plist-get staging :cache)))
-                                      :type)
-                                     '("model_change" "thinking_level_change")))
-                           (pichat-entry-cache-append-order
-                            (plist-get staging :cache)))
-                 (pichat-entry-cache-p cache)
-                 (cl-every (lambda (entry-id)
-                             (member (plist-get
-                                      (gethash entry-id
-                                               (pichat-entry-cache-entries-by-id cache))
-                                      :type)
-                                     '("model_change" "thinking_level_change")))
-                           (pichat-entry-cache-append-order cache))
+                 (pichat-pi-entry-cache-startup-metadata-only-p
+                  (plist-get staging :cache))
+                 (pichat-pi-entry-cache-startup-metadata-only-p cache)
                  (equal (pichat-session-id session)
                         (pichat-entry-cache-session-id cache))
                  (equal (pichat-session-session-file session)
@@ -876,12 +865,9 @@ retarget compose editors opened for the original empty session."
                  (not (equal (pichat-session-id session)
                              (plist-get staging :session-id))))
       (user-error "Empty restart did not produce a verified new Pi session"))
-    (let* ((old-token (pichat-chat--source-token))
-           (transcript (pichat-pi-build-canonical-transcript cache))
-           (context (pichat-chat--canonical-render-context transcript))
-           (fragment (pichat-render-canonical transcript context)))
+    (let ((old-token (pichat-chat--source-token)))
       ;; Projection rollback retains the old readable snapshot on failure.
-      (pichat-chat--project-canonical cache transcript fragment context)
+      (pichat-chat--project-restart-cache cache)
       (cl-incf pichat-chat--source-generation)
       (setq pichat-chat--source-session-id (pichat-session-id session)
             pichat-chat--source-session-file (pichat-session-session-file session)
@@ -891,14 +877,8 @@ retarget compose editors opened for the original empty session."
             pichat-chat--source-rebinding-p nil)
       (pichat-chat-completion-reset
        pichat-chat--source-generation (pichat-chat--completion-source-key))
-      (let ((new-token (pichat-chat--source-token)))
-        (dolist (buffer (buffer-list))
-          (with-current-buffer buffer
-            (when (and (derived-mode-p 'pichat-chat-compose-mode)
-                       (eq pichat-chat-compose-target-buffer
-                           (pichat-session-buffer session))
-                       (equal pichat-chat-compose-target-token old-token))
-              (setq pichat-chat-compose-target-token new-token)))))
+      (pichat-chat-navigation-retarget-compose
+       (pichat-session-buffer session) old-token (pichat-chat--source-token))
       (pichat-chat--set-status 'restart nil)
       (pichat-chat--set-status 'session nil)
       (pichat-chat--refresh-header session)
@@ -3353,6 +3333,21 @@ BASE-CACHE is the cache captured by the incremental request."
          (context (pichat-chat--canonical-render-context transcript))
          (fragment (pichat-render-canonical transcript context)))
     (pichat-chat--project-canonical cache transcript fragment context t)))
+
+(defun pichat-chat-apply-selected-source-sync (session response)
+  "Project full authoritative RESPONSE for SESSION's selected saved source.
+This is the narrow synchronization seam for an independent selected launch;
+ordinary browser opens retain their existing state-ready contract."
+  (let ((buffer (pichat-session-buffer session)))
+    (unless (buffer-live-p buffer)
+      (user-error "Selected saved session has no chat to synchronize"))
+    (with-current-buffer buffer
+      (unless (and (derived-mode-p 'pichat-chat-mode)
+                   (eq pichat-chat-session session))
+        (user-error "Selected saved session chat changed before synchronization"))
+      (pichat-chat--cancel-sync-request)
+      (setq pichat-chat--sync-in-flight nil)
+      (pichat-chat--apply-sync-response response t nil))))
 
 (defun pichat-chat--start-sync (full)
   "Start one FULL or incremental canonical synchronization."

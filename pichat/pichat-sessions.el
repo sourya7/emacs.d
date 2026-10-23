@@ -1568,22 +1568,38 @@ non-minibuffer buffer."
   :type 'positive-integer
   :group 'pichat)
 
+(defun pichat-sessions--validate-selected-open-state
+    (state runtime-file expected-id model)
+  "Verify STATE matches the selected RUNTIME-FILE, EXPECTED-ID and MODEL."
+  (unless (and (equal runtime-file (plist-get state :sessionFile))
+               (or (null expected-id)
+                   (equal expected-id (plist-get state :sessionId)))
+               (or (null model)
+                   (equal model
+                          (format "%s/%s"
+                                  (plist-get (plist-get state :model) :provider)
+                                  (plist-get (plist-get state :model) :id)))))
+    (user-error "Loaded Pi session identity or selected model differs")))
+
 (cl-defun pichat-sessions-open-file-independently
     (file &key cwd owner-directory owner-scope source-session ready error-callback
-          launch-options synchronized-ready expected-session-id
+          launch-options (readiness 'state-ready) expected-session-id
           (display-function #'pichat-chat-open))
   "Open saved session FILE in a newly created independent runtime.
 CWD is saved runtime metadata.  OWNER-DIRECTORY determines the startup
 location and defaults to the mapped CWD or `default-directory'.  OWNER-SCOPE,
 when non-nil, is the exact immutable (KEY CWD LABEL) owner scope.
 DISPLAY-FUNCTION receives the state-synchronized runtime; nil suppresses
-display.  When display creates a chat buffer, PiChat starts a full transcript
-synchronization before calling READY.  ERROR-CALLBACK receives a bounded
+display.  READINESS is `state-ready' (browser behavior) or
+`transcript-ready' (selected launch): the latter verifies identity and model
+and synchronizes the chat before calling READY.  ERROR-CALLBACK receives a bounded
 failure response and the cleaned-up runtime.  Any startup, switch,
 cancellation, or state-synchronization failure stops and forgets only the new
 runtime."
   (unless (and (stringp file) (not (string-empty-p (string-trim file))))
     (user-error "No saved Pi session file was selected"))
+  (unless (memq readiness '(state-ready transcript-ready))
+    (user-error "Invalid independent-open readiness: %S" readiness))
   (when source-session
     (pichat-backend-require-capability
      source-session 'saved-sessions "Saved-session browsing"))
@@ -1633,28 +1649,17 @@ runtime."
            (unless finished
              (condition-case condition
                  (progn
-                   (when synchronized-ready
-                     (let ((state (plist-get response :data))
-                           (model (plist-get launch-options :model)))
-                       (unless (and (equal runtime-file (plist-get state :sessionFile))
-                                    (or (null expected-session-id)
-                                        (equal expected-session-id
-                                               (plist-get state :sessionId)))
-                                    (or (null model)
-                                        (equal model
-                                               (format "%s/%s"
-                                                       (plist-get (plist-get state :model)
-                                                                  :provider)
-                                                       (plist-get (plist-get state :model)
-                                                                  :id)))))
-                         (user-error "Loaded Pi session identity or selected model differs"))))
+                   (when (eq readiness 'transcript-ready)
+                     (pichat-sessions--validate-selected-open-state
+                      (plist-get response :data) runtime-file
+                      expected-session-id (plist-get launch-options :model)))
                    (pichat-sessions-clear-source-navigation response-session)
                    (when session-cwd
                      (pichat-sessions--apply-session-cwd
                       response-session session-cwd cwd))
                    (when display-function
                      (funcall display-function response-session))
-                   (if synchronized-ready
+                   (if (eq readiness 'transcript-ready)
                        (let ((pichat-rpc-request-timeout
                               pichat-sessions-selection-timeout))
                          (pichat-rpc-get-entries
@@ -1662,23 +1667,13 @@ runtime."
                         (lambda (entries synchronized-session)
                           (unless finished
                             (condition-case sync-error
-                                (let* ((data (plist-get entries :data))
-                                       (cache (pichat-pi-entry-cache-full
-                                               (pichat-session-id synchronized-session)
-                                               (pichat-session-session-file
-                                                synchronized-session)
-                                               (plist-get data :entries)
-                                               (plist-get data :leafId)))
-                                       (buffer (pichat-session-buffer
-                                                synchronized-session)))
-                                  (unless (and (equal (pichat-entry-cache-session-file cache)
-                                                      runtime-file)
-                                               (buffer-live-p buffer))
+                                (progn
+                                  (unless (equal (pichat-session-session-file
+                                                  synchronized-session)
+                                                 runtime-file)
                                     (user-error "Selected saved session did not synchronize in a chat"))
-                                  (with-current-buffer buffer
-                                    (pichat-chat--cancel-sync-request)
-                                    (setq pichat-chat--sync-in-flight nil)
-                                    (pichat-chat--apply-sync-response entries t nil))
+                                  (pichat-chat-apply-selected-source-sync
+                                   synchronized-session entries)
                                   (complete synchronized-session))
                               (error (cleanup
                                       (list :success nil :error
@@ -1698,7 +1693,8 @@ runtime."
                (cleanup (list :success nil :pichat-failure-kind 'cancelled
                               :error "PiChat session switch cancelled"))
              (let ((pichat-rpc-request-timeout
-                    (if synchronized-ready pichat-sessions-selection-timeout
+                    (if (eq readiness 'transcript-ready)
+                        pichat-sessions-selection-timeout
                       pichat-rpc-request-timeout)))
                (pichat-backend-get-state
                 response-session #'state-ready #'failure)))))
@@ -1708,7 +1704,8 @@ runtime."
                          :error "PiChat independent runtime failed to start"))
         (condition-case condition
             (let ((pichat-rpc-request-timeout
-                   (if synchronized-ready pichat-sessions-selection-timeout
+                   (if (eq readiness 'transcript-ready)
+                       pichat-sessions-selection-timeout
                      pichat-rpc-request-timeout)))
               (pichat-rpc-switch-session session runtime-file
                                          #'switched #'failure))

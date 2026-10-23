@@ -133,6 +133,17 @@ no hash-table ordering affects the result."
             (equal pichat-chat-compose-target-token token))))
    (buffer-list)))
 
+(defun pichat-chat-navigation-retarget-compose (target old-token new-token)
+  "Retarget compose editors for TARGET from OLD-TOKEN to NEW-TOKEN.
+Use only after a verified conversation-free source replacement; never carry
+compose editors across an ordinary Pi session switch."
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when (and (derived-mode-p 'pichat-chat-compose-mode)
+                 (eq pichat-chat-compose-target-buffer target)
+                 (equal pichat-chat-compose-target-token old-token))
+        (setq pichat-chat-compose-target-token new-token)))))
+
 (defun pichat-chat-navigation--trimmed-text-and-point (text point-offset)
   "Return trimmed TEXT and its adjusted POINT-OFFSET as a cons."
   (let* ((left-trimmed (string-trim-left text))

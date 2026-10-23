@@ -2062,9 +2062,13 @@
                                (pichat-session-owner-scope-key opened)))
                 (should (eq 'coding (plist-get (pichat-session-preset-spec opened)
                                                 :name)))
-                (should-not (gethash (pichat--selected-file-key
-                                      pichat-transport-local file)
-                                     pichat--source-reservations))
+                ;; Canonical cache publication can precede READY/claim release.
+                (pichat-test-wait-until
+                 (lambda ()
+                   (not (gethash (pichat--selected-file-key
+                                  pichat-transport-local file)
+                                 pichat--source-reservations)))
+                 5 "selected-launch completion releases the source claim")
                 (pichat-test-prompt-and-wait opened "after selection")))
           (when (buffer-live-p buffer) (kill-buffer buffer))
           (when (pichat-session-p opened)

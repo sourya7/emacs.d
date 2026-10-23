@@ -632,6 +632,17 @@
       (should (equal (pichat--selected-file-key pichat-transport-local file)
                      (pichat--selected-file-key pichat-transport-local alias))))))
 
+(ert-deftest pichat-launch-selected-file-claim-release-requires-owner-token ()
+  (let* ((pichat--source-reservations (make-hash-table :test #'equal))
+         (key '(local . "/tmp/selected.jsonl"))
+         (token (pichat--claim-selected-file key)))
+    (should (eq token (pichat--selected-file-reserved-p key)))
+    (should-error (pichat--claim-selected-file key) :type 'user-error)
+    (pichat--release-selected-file key (make-symbol "stale"))
+    (should (eq token (pichat--selected-file-reserved-p key)))
+    (pichat--release-selected-file key token)
+    (should-not (pichat--selected-file-reserved-p key))))
+
 (ert-deftest pichat-launch-selected-file-reservation-blocks-racing-writers ()
   (pichat-test-with-temp-dir dir
     (let* ((file (expand-file-name "saved.jsonl" dir))

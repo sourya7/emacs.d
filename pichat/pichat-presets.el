@@ -136,8 +136,9 @@ or :default tools leaves Pi's default selection alone."
           "tools. When a task needs a shell command, test run, or code "
           "execution, provide a complete fenced code block with a language "
           "(use sh for portable shell code), then stop and wait for the user "
-          "to run it and share the result. Never claim the code ran or assume "
-          "its outcome."))
+          "to run it and share the result. Selected research tools may be "
+          "used for research, but not for shell commands, tests, or arbitrary "
+          "code execution. Never claim the code ran or assume its outcome."))
 (pichat-make-preset 'coding
   :description "Implement changes and run checks."
   :tools '("read" "grep" "find" "ls" "edit" "write" "bash")
@@ -146,10 +147,6 @@ or :default tools leaves Pi's default selection alone."
   :description "Review code without editing or built-in execution."
   :tools '("read" "grep" "find" "ls")
   :append-system-prompt "Review for correctness, regressions and missing tests. Report actionable findings with locations; do not modify files or execute code.")
-(pichat-make-preset 'discuss
-  :description "Discuss supplied context without built-in tools."
-  :tools nil
-  :append-system-prompt "Work from the supplied context; ask for missing information rather than assuming repository details.")
 (pichat-make-preset 'standard
   :description "Use Pi's normal prompt and default built-in tools."
   :tools :default)

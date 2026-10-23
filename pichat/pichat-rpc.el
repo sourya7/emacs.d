@@ -12,6 +12,7 @@
 (require 'subr-x)
 (require 'pichat-session)
 (require 'pichat-presets)
+(require 'pichat-tool-selection)
 (require 'pichat-events)
 (require 'pichat-path)
 (require 'pichat-transport)
@@ -119,7 +120,7 @@ Set to nil to retain all events."
         (when (or (and (not (eq tools :default))
                        (or (member arg '("--tools" "-t" "--no-tools" "-nt"
                                          "--no-builtin-tools" "-nbt"
-                                         "--exclude-tools" "-xt"))
+                                         "--exclude-tools" "-xt" "--no-mcp"))
                            (string-prefix-p "--tools=" arg)
                            (string-prefix-p "--exclude-tools=" arg)))
                   (and (plist-get preset :system-prompt)
@@ -131,9 +132,8 @@ Set to nil to retain all events."
 
 (defun pichat-rpc-normalize-launch-options (&optional launch-options)
   "Return validated low-level LAUNCH-OPTIONS.
-Supported keys are `:persistence', `:preset-spec' and the optional exact
-`:model' reference.  A complete local `pichat-rpc-command' cannot safely be
-amended for ephemeral, configured-preset, or run-local-model launches."
+Supported keys include `:persistence', `:preset-spec', `:tools' and an exact
+`:model' reference.  Complete local commands cannot safely be amended."
   (when (plist-member launch-options :execution)
     (user-error "Obsolete :execution option; select a PiChat :preset instead"))
   (let ((persistence (or (plist-get launch-options :persistence) 'persistent))
@@ -146,6 +146,7 @@ amended for ephemeral, configured-preset, or run-local-model launches."
     (when (and preset (not (and (listp preset) (symbolp (plist-get preset :name)))))
       (user-error "Invalid PiChat preset snapshot: %S" preset))
     (pichat-rpc--validate-preset-args preset preset-args)
+    (when preset (pichat-tool-selection-resolve preset (plist-get launch-options :tools)))
     (unless (or (null model)
                 (and (stringp model) (not (string-blank-p model))))
       (user-error "Invalid PiChat startup model: %S" model))
@@ -169,6 +170,9 @@ The session snapshot controls `--no-session', preset flags and the model."
                           (pichat-session-persistence session)
                         'persistent))
          (preset (and session (pichat-session-preset-spec session)))
+         (tool-snapshot (and preset
+                             (or (pichat-session-tool-selection session)
+                                 (pichat-tool-selection-resolve preset))))
          (startup-model (and session (pichat-session-startup-model session)))
          (transport (and session (pichat-session-transport session)))
          (remote-p (and transport
@@ -198,10 +202,7 @@ The session snapshot controls `--no-session', preset flags and the model."
                 (when (eq persistence 'ephemeral)
                   (list "--no-session"))
                 (unless remote-p pichat-pi-extra-args)
-                (when (and preset (not (eq (plist-get preset :tools) :default)))
-                  (if (null (plist-get preset :tools))
-                      (list "--no-builtin-tools")
-                    (list "--tools" (string-join (plist-get preset :tools) ","))))
+                (pichat-tool-selection-args tool-snapshot)
                 (when (plist-get preset :system-prompt)
                   (list "--system-prompt" (plist-get preset :system-prompt)))
                 (when (plist-get preset :append-system-prompt)

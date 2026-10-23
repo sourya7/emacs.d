@@ -24,8 +24,9 @@ Shared terms for discussing PiChat. **Runtime**, **Pi session**, **saved session
 | **Owner scope** | The project or global scope captured when a runtime starts. It remains unchanged when a different Pi session is loaded. |
 | **Preferred runtime** | The live runtime designated for ordinary reuse within an owner scope, marked with `★` in the manager. |
 | **Independent runtime** | An additional runtime started rather than reusing an existing one, without automatically becoming preferred. This differs from creating a new Pi session inside an existing runtime. |
-| **Launch profile** | The choices governing runtime selection or creation: scope, reuse, persistence, target, model, and preset. |
-| **Preset** | A named startup configuration of tools and system-prompt additions or replacement, captured as a resolved snapshot when a runtime starts. It belongs to the runtime, not its saved Pi sessions, and cannot be applied to an already-running process. |
+| **Launch profile** | The choices governing runtime selection or creation: scope, reuse, persistence, target, model, preset, and optional Tools customization. |
+| **Preset** | A named startup configuration of tools and system-prompt additions or replacement, captured as a resolved snapshot when a runtime starts. It belongs to the runtime, not its saved Pi sessions, and cannot be applied to an already-running process. Explicit-tool presets also provide the baseline for the launch Tools picker; pass-through presets leave Pi defaults unchanged. |
+| **Tools customization** | A run-local selection that can remove built-in tools from an explicit preset and opt into eligible, directly exposed MCP tools. The selection belongs to a new independent runtime, not to its Pi session or saved session file; an unchanged preset baseline is not a customization. |
 | **Default preset** | The preset configured for a new runtime when no named preset is explicitly selected. It differs from the launcher's `default` choice, which permits reuse of a preferred runtime regardless of its captured preset. |
 | **Target** | The execution destination for Pi, such as the local machine or a configured SSH host. |
 | **Transport** | The mechanism used to start and communicate with Pi at its target, such as local process execution or SSH. |
@@ -119,7 +120,7 @@ Shared terms for discussing PiChat. **Runtime**, **Pi session**, **saved session
 
 | Term | Meaning |
 |---|---|
-| **Built-in tool selection** | The selection of Pi built-in tools offered for a run, using Pi's defaults or startup tool flags. |
+| **Built-in tool selection** | The selection of Pi built-in tools offered for a run, using Pi's defaults or startup tool flags. Explicit-tool presets allow a subset through the Tools picker and disable MCP when no MCP tool is selected; pass-through presets retain Pi's normal tool behavior. |
 | **Base system prompt** | Pi's normal system instructions, which a preset can retain or replace. |
 | **Appended system prompt** | Instructions added to the system prompt without replacing its base text. |
 | **Run-local model** | A model selected for one newly launched runtime rather than changed as Pi's persistent default. |

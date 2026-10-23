@@ -351,17 +351,32 @@ canonical chat cache while an RPC refresh is pending."
             (when-let* ((description (plist-get spec :description)))
               (insert (format "Description: %s\n"
                               (truncate-string-to-width description 120 nil nil "…"))))
-            (insert (format "Built-in tools: %s\n"
-                            (pcase (plist-get spec :tools)
-                              (:default "Pi defaults")
-                              ('nil "none")
-                              (names (string-join names ", ")))))
+            (let ((selection (pichat-session-tool-selection session)))
+              (insert (format "Built-in tools: %s\n"
+                              (if selection
+                                  (if-let* ((names (plist-get selection :builtins)))
+                                      (string-join names ", ")
+                                    "none")
+                                (pcase (plist-get spec :tools)
+                                  (:default "Pi defaults")
+                                  ('nil "none")
+                                  (names (string-join names ", "))))))
+              (insert (format "MCP tools: %s\n"
+                              (if selection
+                                  (if-let* ((pairs (plist-get selection :mcp)))
+                                      (string-join
+                                       (mapcar (lambda (pair)
+                                                 (format "%s/%s" (car pair) (cdr pair)))
+                                               pairs)
+                                       ", ")
+                                    "disabled")
+                                "Pi configuration (availability not checked)"))))
             (insert (format "System prompt: %s%s\n"
                             (if (plist-get spec :system-prompt)
                                 "replaced" "Pi default")
                             (if (plist-get spec :append-system-prompt)
                                 ", appended instructions" "")))
-            (insert "Extension and MCP tools are not constrained by built-in tool selection.\n")))
+            (insert "Tools shown are startup selections, not connection status.\n")))
         (insert (format "Model: %s\n"
                         (pichat-session-manager--preview-model-name session)))
         (insert (format "Scope: %s\n"

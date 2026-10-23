@@ -73,9 +73,11 @@
                  (pichat-presets (copy-tree pichat-presets)))
             (pichat-make-preset 'test-replace :tools nil
               :system-prompt "REPLACED_BASE_PROMPT")
+            (pichat-make-preset 'integration-discuss :tools nil
+              :append-system-prompt "supplied context")
             (dolist (case '((review "read" "bash" "Review for correctness")
                             (coding "bash" "none" "run relevant checks")
-                            (discuss "none" "read" "supplied context")
+                            (integration-discuss "none" "read" "supplied context")
                             (test-replace "none" "read" "REPLACED_BASE_PROMPT")))
               (pcase-let ((`(,name ,present ,absent ,instruction) case))
                 (let (session)
@@ -102,6 +104,122 @@
                         (pichat-test-prompt-and-wait session "check selected preset")
                         (pichat-test-assert-provider-script-consumed status))
                     (when session (pichat-rpc-stop session)))))))))))
+
+  (ert-deftest pichat-integration-explicit-tools-select-direct-mcp-only ()
+    (pichat-test-require-pi)
+    (pichat-test-with-clean-state
+      (pichat-test-with-temp-dir project-dir
+        (pichat-test-with-temp-dir agent-dir
+          (pichat-test-with-temp-dir session-dir
+            (let* ((python (or (executable-find "python3")
+                               (ert-fail "MCP fixture needs python3")))
+                   (fixture (expand-file-name
+                             "fixtures/mcp-server.py"
+                             (file-name-directory (locate-library
+                                                   "pichat-test-integration"))))
+                   (script (expand-file-name "script.json" project-dir))
+                   (status (expand-file-name "status.json" project-dir))
+                   (process-environment
+                    (append (list "PI_OFFLINE=1" "PI_SKIP_VERSION_CHECK=1"
+                                  "PI_TELEMETRY=0"
+                                  (concat "PI_CODING_AGENT_DIR=" agent-dir)
+                                  (concat "PI_CODING_AGENT_SESSION_DIR=" session-dir)
+                                  (concat "PICHAT_FAKE_PROVIDER_SCRIPT=" script)
+                                  (concat "PICHAT_FAKE_PROVIDER_STATUS=" status))
+                            process-environment))
+                   (pichat-rpc-command nil)
+                   (pichat-pi-executable pichat-test-pi-executable)
+                   (pichat-pi-default-args
+                    '("--mode" "rpc" "--offline" "--no-approve"
+                      "--no-context-files" "--no-skills" "--no-prompt-templates"
+                      "--no-themes" "--no-extensions"))
+                   (pichat-pi-extra-args
+                    (list "-e" pichat-test-fake-provider-extension
+                          "--model" "pichat-fake/pichat-fake")))
+              (with-temp-file (expand-file-name "mcp.json" agent-dir)
+                (insert (json-serialize
+                         (list :mcpServers
+                               (list :probe (list :command python
+                                                  :args (vector fixture)
+                                                  :exposure "direct")))
+                         :null-object nil :false-object :json-false)))
+              (dolist (case '((:baseline nil "mcp__probe__search" "read")
+                              (:direct (:builtins ("read")
+                                        :mcp (("probe" . "search")))
+                               "mcp__probe__other" "mcp__probe__search")
+                              (:mcp-only (:builtins nil
+                                          :mcp (("probe" . "search")))
+                               "read" "mcp__probe__search")
+                              (:empty (:builtins nil :mcp nil)
+                               "mcp__probe__search" "none")))
+                (pcase-let ((`(,label ,selection ,absent ,present) case))
+                  (let (session)
+                    (with-temp-file script
+                      (insert (json-serialize
+                               (list :turns
+                                     (vector
+                                      (append (list :expectToolAbsent absent
+                                                    :text (format "case %s" label))
+                                              (unless (equal present "none")
+                                                (list :expectTool (list :name present))))))
+                               :null-object nil :false-object :json-false)))
+                    (unwind-protect
+                        (progn
+                          (setq session (pichat-start-session
+                                         project-dir nil
+                                         (list :persistence 'ephemeral
+                                               :preset 'manual :tools selection)))
+                          (pichat-test-rpc-call session "get_state")
+                          (pichat-test-rpc-call session "set_auto_retry"
+                                                (list :enabled :json-false))
+                          (pichat-test-rpc-call session "set_auto_compaction"
+                                                (list :enabled :json-false))
+                          (pichat-test-prompt-and-wait session (format "case %s" label))
+                          (pichat-test-assert-provider-script-consumed status))
+                      (when session (pichat-rpc-stop session))))))))))))
+
+  (ert-deftest pichat-integration-mcp-discovery-uses-isolated-target ()
+    (pichat-test-require-pi)
+    (pichat-test-with-temp-dir project-dir
+      (pichat-test-with-temp-dir agent-dir
+        (let* ((python (or (executable-find "python3")
+                           (ert-fail "MCP fixture needs python3")))
+               (fixture (expand-file-name
+                         "fixtures/mcp-server.py"
+                         (file-name-directory (locate-library
+                                               "pichat-test-integration"))))
+               (process-environment
+                (append (list "PI_OFFLINE=1" "PI_SKIP_VERSION_CHECK=1"
+                              "PI_TELEMETRY=0"
+                              (concat "PI_CODING_AGENT_DIR=" agent-dir))
+                        process-environment))
+               (transport (pichat-transport-resolve project-dir))
+               (done nil) (result nil) cancel)
+          (with-temp-file (expand-file-name "mcp.json" agent-dir)
+            (insert (json-serialize
+                     (list :mcpServers
+                           (list :probe (list :command python
+                                              :args (vector fixture)
+                                              :exposure "direct"
+                                              :toolExposure (list :other "hidden")))))))
+          (unwind-protect
+              (progn
+                (setq cancel
+                      (pichat-mcp-discovery-start
+                       transport project-dir pichat-test-pi-executable
+                       (lambda (servers errors)
+                         (setq result (cons servers errors) done t))))
+                (pichat-test-wait-until (lambda () done) 30
+                                        "isolated Pi MCP discovery")
+                (let* ((server (car (car result)))
+                       (tools (plist-get server :tools)))
+                  (should (equal "probe" (plist-get server :name)))
+                  (should (plist-get (car tools) :eligible))
+                  (should-not (plist-get (cadr tools) :eligible))
+                  (should-not (plist-get (nth 2 tools) :eligible))
+                  (should-not (plist-get (nth 3 tools) :eligible))
+                  (should-not (cdr result))))
+            (when cancel (funcall cancel)))))))
 
   (ert-deftest pichat-integration-codemode-nested-tool-completes-live ()
     (pichat-test-with-integration-session
@@ -1229,8 +1347,8 @@
               (setq buffer (pichat-chat-open session))
               (cl-letf (((symbol-function 'read-string)
                          (lambda (&rest _args) "typed value")))
-                (pichat-test-rpc-call session "prompt" (list :message "/pichat-test-input")))
-              (pichat-test-wait-for-buffer-contains buffer "[extension info]\ninput:typed value"))
+                (pichat-test-rpc-call session "prompt" (list :message "/pichat-test-input"))
+                (pichat-test-wait-for-buffer-contains buffer "[extension info]\ninput:typed value")))
           (when (buffer-live-p buffer)
             (kill-buffer buffer))))))
 
@@ -1327,8 +1445,8 @@
               (setq buffer (pichat-chat-open session))
               (cl-letf (((symbol-function 'yes-or-no-p)
                          (lambda (&rest _args) t)))
-                (pichat-test-rpc-call session "prompt" (list :message "/pichat-test-confirm")))
-              (pichat-test-wait-for-buffer-contains buffer "[extension info]\nconfirm:yes"))
+                (pichat-test-rpc-call session "prompt" (list :message "/pichat-test-confirm"))
+                (pichat-test-wait-for-buffer-contains buffer "[extension info]\nconfirm:yes")))
           (when (buffer-live-p buffer)
             (kill-buffer buffer))))))
 
@@ -1345,8 +1463,8 @@
               (setq buffer (pichat-chat-open session))
               (cl-letf (((symbol-function 'read-from-minibuffer)
                          (lambda (&rest _args) "edited text")))
-                (pichat-test-rpc-call session "prompt" (list :message "/pichat-test-editor")))
-              (pichat-test-wait-for-buffer-contains buffer "[extension info]\neditor:edited text"))
+                (pichat-test-rpc-call session "prompt" (list :message "/pichat-test-editor"))
+                (pichat-test-wait-for-buffer-contains buffer "[extension info]\neditor:edited text")))
           (when (buffer-live-p buffer)
             (kill-buffer buffer))))))
 
@@ -1363,8 +1481,8 @@
               (setq buffer (pichat-chat-open session))
               (cl-letf (((symbol-function 'completing-read)
                          (lambda (&rest _args) "beta")))
-                (pichat-test-rpc-call session "prompt" (list :message "/pichat-test-select")))
-              (pichat-test-wait-for-buffer-contains buffer "[extension info]\nselect:beta"))
+                (pichat-test-rpc-call session "prompt" (list :message "/pichat-test-select"))
+                (pichat-test-wait-for-buffer-contains buffer "[extension info]\nselect:beta")))
           (when (buffer-live-p buffer)
             (kill-buffer buffer))))))
 

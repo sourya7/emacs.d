@@ -115,7 +115,7 @@
                                  :append-system-prompt "Wait for my code-run results"))))
     (should (equal '("/opt/pi" "--mode" "rpc"
                      "--offline"
-                     "--tools" "read,edit,write"
+                     "--tools" "read,edit,write" "--no-mcp"
                      "--append-system-prompt" "Wait for my code-run results")
                    (pichat-rpc-build-command session)))))
 
@@ -125,7 +125,9 @@
         (session (pichat-session-make
                   :preset-name 'discuss
                   :preset-spec '(:name discuss :tools nil))))
-    (should (member "--no-builtin-tools" (pichat-rpc-build-command session)))))
+    (should (equal '("--no-tools" "--no-mcp")
+                   (cl-subseq (member "--no-tools" (pichat-rpc-build-command session))
+                              0 2)))))
 
 (ert-deftest pichat-rpc-build-command-ignores-default-model-for-complete-command ()
   (let ((pichat-rpc-command '("docker" "run" "image" "pi" "--mode" "rpc"))

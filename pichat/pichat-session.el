@@ -41,6 +41,7 @@
   startup-model
   preset-name
   preset-spec
+  tool-selection
   session-file
   session-file-back-stack
   session-file-forward-stack

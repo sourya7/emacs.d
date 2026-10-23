@@ -81,7 +81,7 @@
 
 (ert-deftest pichat-launch-profile-defaults-are-orthogonal-and-explicit ()
   (should (equal '(:backend pi :scope current :target inferred :reuse preferred
-                   :persistence persistent :preset default :model default
+                   :persistence persistent :preset default :tools nil :model default
                    :display-function pichat-chat-open)
                  (pichat--normalize-launch-profile nil)))
   (should (eq 'new

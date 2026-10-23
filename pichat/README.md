@@ -341,6 +341,7 @@ display behavior.
 | `e` | Ephemeral | Start Pi with `--no-session`; implies independent |
 | `m` | Choose/enter model | Select a listed model or enter an unlisted ID for only this run; implies independent |
 | `p` | Preset | Choose a named tool/prompt preset; explicit selection implies independent |
+| `x` | Tools | Narrow that preset's built-ins and select direct MCP tools for a new independent runtime |
 | `RET` | Launch | Execute the normalized profile shown in the action label |
 
 The switches compose. For example, `g e m` creates an independent global,
@@ -359,8 +360,10 @@ runtimes, not saved Pi transcripts, and cannot change an existing process.
 The built-in `manual` preset retains Pi's base prompt, selects
 `read,grep,find,ls,edit,write` and asks the agent to supply fenced code and
 wait for your run results. Other built-ins: `coding` (includes bash), `review`
-(read-only built-in tools), `discuss` (no built-in tools), and `standard`
-(Pi's defaults). Set `pichat-default-preset` to change the creation default.
+(read-only built-in tools), and `standard` (Pi's defaults). The old shipped
+`discuss` preset is no longer registered; define your own if you relied on its
+specific supplied-context instructions. Set `pichat-default-preset` to change
+the creation default.
 Define or replace a preset in `user/pichat.el`, for example:
 
 ```elisp
@@ -381,16 +384,26 @@ looks like a filename for a runtime-side file reference.
 `:system-prompt` replaces Pi's base prompt; `:append-system-prompt` adds to it.
 `:tools :default` (or omission) leaves Pi's built-in selection alone;
 `:tools nil` disables built-in tools. Explicit lists select exactly those
-built-ins. Presets reject conflicting generic Pi tool/prompt flags before
-runtime creation; use `standard` when the generic Pi arguments should govern.
+built-ins. For explicit-list presets, PiChat now disables MCP unless a direct
+MCP tool is chosen in `x Tools`. The picker prechecks the preset's built-ins,
+permits deselecting them and selecting eligible MCP tools by server, and applies
+only to a new runtime; Cancel discards changes and Reset restores the preset.
+MCP discovery connects configured servers and reports failures. Non-direct,
+hidden, disabled, unavailable, and normalization-colliding MCP tools cannot be
+selected. `standard` and custom presets with inherited tools (`:default` or
+omission) remain Pi-controlled and cannot use the Tools picker. Customizations
+are runtime properties, not saved Pi-session properties. Presets reject
+conflicting generic Pi tool/prompt flags before runtime creation; use `standard`
+when the generic Pi arguments should govern.
 Changes to definitions affect future runtimes only. For shell blocks, request
 `sh`-compatible code: the PiChat shell runner uses `sh` even when a fence is
 labelled `bash`. Run with Embark `r`, then `s` to place results in the draft;
 review and send it to continue. The subprocess timeout defaults to 120 seconds.
 
-`--tools` limits Pi's default tool selection, but MCP tools and extensions
-(including an optional PiChat tool bridge) can provide other execution paths;
-this is a workflow, **not a sandbox**. PiChat's explicit runners execute code
+The explicit tool allowlist limits direct and indirect tool availability in Pi,
+but selected MCP tools themselves may execute code or mutate files. Extensions
+(including an optional PiChat tool bridge) may also provide other execution
+paths; this is a workflow, **not a sandbox**. PiChat's explicit runners execute code
 outside Pi's tool permissions on the selected host. Presets and subprocess
 code execution work on local and structured SSH targets: SSH code runs remotely
 even when the project is mounted locally. The in-process Elisp runner is

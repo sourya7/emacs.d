@@ -74,7 +74,8 @@
           (should (eq 'manual (pichat-session-preset-name session)))
           (should (equal '("read" "grep" "find" "ls" "edit" "write")
                          (plist-get (pichat-session-preset-spec session) :tools)))
-          (should (member "--tools" (pichat-rpc-build-command session))))))))
+          (should (member "--tools" (pichat-rpc-build-command session)))
+          (should (member "--no-mcp" (pichat-rpc-build-command session))))))))
 
 (ert-deftest pichat-presets-transient-reader-offers-annotated-default ()
   (let ((pichat-default-preset 'manual))
@@ -98,6 +99,38 @@
                           '("--preset=default" "--new")) :reuse)))
   (should-error (pichat--launch-profile-from-arguments '("--preset=missing"))
                 :type 'user-error))
+
+(ert-deftest pichat-presets-explicit-tools-restrict-mcp-and-builtins ()
+  (pichat-test-with-clean-state
+    (let ((pichat-rpc-command nil))
+      (cl-letf (((symbol-function 'pichat-rpc-start) #'identity))
+        (let* ((choices '(:builtins ("read") :mcp (("ketch" . "search"))))
+               (session (pichat-start-session "/tmp/" nil
+                                             (list :preset 'manual :tools choices)))
+               (argv (pichat-rpc-build-command session)))
+          (should (member "read,mcp__ketch__search" argv))
+          (should-not (member "--no-mcp" argv))
+          (setcdr (car (plist-get choices :mcp)) "crawl")
+          (should (equal '(("ketch" . "search"))
+                         (plist-get (pichat-session-tool-selection session) :mcp))))))))
+
+(ert-deftest pichat-presets-empty-tools-disable-everything ()
+  (pichat-test-with-clean-state
+    (let ((pichat-rpc-command nil))
+      (cl-letf (((symbol-function 'pichat-rpc-start) #'identity))
+        (let ((session (pichat-start-session "/tmp/" nil
+                                             '(:preset review :tools (:builtins nil :mcp nil)))))
+          (should (equal '("--no-tools" "--no-mcp")
+                         (cl-subseq (member "--no-tools"
+                                            (pichat-rpc-build-command session))
+                                    0 2))))))))
+
+(ert-deftest pichat-presets-pass-through-rejects-customization ()
+  (pichat-test-with-clean-state
+    (should-error (pichat-start-session "/tmp/" nil
+                                        '(:preset standard :tools (:builtins nil)))
+                  :type 'user-error)
+    (should-not (pichat-session-list))))
 
 (provide 'pichat-test-presets)
 ;;; pichat-test-presets.el ends here

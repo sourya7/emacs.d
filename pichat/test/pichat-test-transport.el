@@ -119,7 +119,7 @@
                    :preset-spec '(:name manual :tools ("read" "write")
                                   :append-system-prompt "Remote manual-runner instructions"))))
     (should (equal '("/remote/bin/pi" "--mode" "rpc" "--offline"
-                     "--tools" "read,write"
+                     "--tools" "read,write" "--no-mcp"
                      "--append-system-prompt" "Remote manual-runner instructions")
                    (pichat-rpc-build-command session)))))
 

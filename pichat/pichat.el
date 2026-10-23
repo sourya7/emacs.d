@@ -17,6 +17,7 @@
 (require 'pichat-events)
 (require 'pichat-path)
 (require 'pichat-rpc)
+(require 'pichat-tool-picker)
 (require 'pichat-presets)
 (require 'pichat-pi)
 (require 'pichat-chat)
@@ -283,11 +284,13 @@ session over the global `pichat-current-session'."
          (target (or (plist-get profile :target) 'inferred))
          (persistence (or (plist-get profile :persistence) 'persistent))
          (preset (or (plist-get profile :preset) 'default))
+         (tools (plist-get profile :tools))
          (model (or (plist-get profile :model) 'default))
          (explicit-reuse-p (plist-member profile :reuse))
          (reuse (or (plist-get profile :reuse)
                     (if (or (eq persistence 'ephemeral)
                             (not (eq preset 'default))
+                            tools
                             (eq model 'prompt)
                             (stringp model))
                         'new
@@ -310,6 +313,10 @@ session over the global `pichat-current-session'."
       (user-error "Obsolete :execution option; select a PiChat :preset instead"))
     (unless (or (eq preset 'default) (assq preset pichat-presets))
       (user-error "Unknown PiChat launch preset: %S" preset))
+    (when tools
+      (pichat-tool-selection-resolve
+       (pichat-presets-resolve (if (eq preset 'default)
+                                   pichat-default-preset preset)) tools))
     (unless (or (memq model '(default prompt))
                 (and (stringp model) (not (string-blank-p model))))
       (user-error "Invalid PiChat model policy: %S" model))
@@ -318,11 +325,12 @@ session over the global `pichat-current-session'."
     (when (and (eq reuse 'preferred)
                (or (eq persistence 'ephemeral)
                    (not (eq preset 'default))
+                   tools
                    (eq model 'prompt)
                    (stringp model)))
       (if explicit-reuse-p
           (user-error
-           "Preferred PiChat runtimes require persistent/default-model/default-preset launch")
+           "Preferred PiChat runtimes require persistent/default-model/default-preset/tools launch")
         (setq reuse 'new)))
     (list :backend backend
           :scope scope
@@ -330,6 +338,7 @@ session over the global `pichat-current-session'."
           :reuse reuse
           :persistence persistence
           :preset preset
+          :tools (copy-tree tools)
           :model model
           :display-function display-function)))
 
@@ -370,6 +379,7 @@ Prompted-model profiles first select a model asynchronously and return nil."
              (launch-options
               (list :persistence persistence
                     :preset (plist-get profile :preset)
+                    :tools (copy-tree (plist-get profile :tools))
                     :model (and (stringp model) model)
                     :target (unless (eq target 'inferred) target)))
              (previous-session pichat-current-session)
@@ -402,6 +412,8 @@ LAUNCH-OPTIONS supports `:persistence', `:preset', and an exact run-local
                         (if (or (null choice) (eq choice 'default))
                             pichat-default-preset choice)))
          (preset-spec (pichat-presets-resolve preset-name))
+         (tool-selection (pichat-tool-selection-resolve preset-spec
+                                               (plist-get launch-options :tools)))
          (transport-override (plist-get launch-options :transport))
          (target (plist-get launch-options :target))
          (cwd (file-name-as-directory
@@ -440,6 +452,7 @@ LAUNCH-OPTIONS supports `:persistence', `:preset', and an exact run-local
                    :persistence (plist-get normalized-options :persistence)
                    :preset-name preset-name
                    :preset-spec preset-spec
+                   :tool-selection tool-selection
                    :startup-model (plist-get normalized-options :model)
                    :scope-key (nth 0 scope)
                    :owner-scope-key (nth 0 scope)
@@ -910,8 +923,16 @@ This is the first implementation check; it does not send an LLM prompt."
                           (plist-get (pichat-get-preset (intern choice))
                                      :description))))
                    (when description (concat "  " description)))))))
-    (completing-read prompt (pichat--launch-preset-choices) nil t
-                     initial history)))
+    (let ((chosen (completing-read prompt (pichat--launch-preset-choices) nil t
+                                   initial history))
+          (scope (transient-scope)))
+      (when (and (plist-get scope :tool-selection)
+                 (not (equal chosen initial)))
+        (unless (yes-or-no-p "Discard customized Tools for the new preset? ")
+          (user-error "Preset change cancelled"))
+        (setf (plist-get scope :tool-selection) nil
+              (plist-get scope :tool-target) nil))
+      chosen)))
 
 (defun pichat--launch-target-argument (arguments)
   "Return normalized target selected in Transient ARGUMENTS."
@@ -942,8 +963,10 @@ This is the first implementation check; it does not send an LLM prompt."
                            (and (string= name "default") 'default)
                            (user-error "Unknown PiChat preset: %s" name)))
                    'default))
+         (tools (plist-get context :tool-selection))
          (independent-p (or (member "--new" arguments)
-                            ephemeral-p prompt-p (not (eq preset 'default)))))
+                            ephemeral-p prompt-p tools
+                            (not (eq preset 'default)))))
     (pichat--normalize-launch-profile
      (list :backend 'pi
            :scope (if global-p 'global 'current)
@@ -951,6 +974,7 @@ This is the first implementation check; it does not send an LLM prompt."
            :reuse (if independent-p 'new 'preferred)
            :persistence (if ephemeral-p 'ephemeral 'persistent)
            :preset preset
+           :tools tools
            :model (if prompt-p 'prompt 'default)
            :display-function (or (plist-get context :display-function)
                                  #'pichat-chat-open)))))
@@ -978,8 +1002,45 @@ This is the first implementation check; it does not send an LLM prompt."
     (transient-get-value) (transient-scope))))
 
 (defun pichat--launch-transient-init-value (object)
-  "Initialize Transient prefix OBJECT with safe empty launch switches."
-  (oset object value nil))
+  "Initialize Transient prefix OBJECT with safe launch switches."
+  (oset object value (copy-sequence (plist-get (oref object scope) :launch-args))))
+
+(defun pichat--launch-tools-description ()
+  "Show selected-option styling for a customized Tools selection."
+  (if (plist-get (transient-scope) :tool-selection)
+      (propertize "Tools" 'face 'transient-value)
+    "Tools"))
+
+(transient-define-suffix pichat-launch-tools ()
+  "Customize the selected preset's tools for this new runtime."
+  (interactive)
+  (let* ((args (transient-args 'pichat-launch))
+         (context (transient-scope))
+         (profile (pichat--launch-profile-from-arguments args context))
+         (preset (plist-get profile :preset))
+         (spec (pichat-presets-resolve
+                (if (eq preset 'default) pichat-default-preset preset)))
+         (directory (plist-get context :directory))
+         (target (plist-get profile :target))
+         (scope (pichat--resolve-launch-scope
+                 (plist-get profile :scope) directory target))
+         (transport (pichat-transport-resolve
+                     (nth 1 scope) (unless (eq target 'inferred) target))))
+    (when (and pichat-rpc-command (eq (pichat-transport-kind transport) 'local))
+      (user-error "Tools cannot customize a complete Pi command wrapper"))
+    (pichat-tool-picker-open
+     spec (plist-get context :tool-selection) (nth 1 scope) transport
+     pichat-pi-executable
+     (lambda (result)
+       (let ((next (copy-sequence context)))
+         (unless (eq result :cancel)
+           (setq next (plist-put next :tool-selection result))
+           (setq next (plist-put next :tool-target
+                                 (and result (list directory
+                                                   (plist-get profile :scope)
+                                                   target)))))
+         (setq next (plist-put next :launch-args args))
+         (transient-setup 'pichat-launch nil nil :scope next))))))
 
 (transient-define-suffix pichat-launch-execute (arguments context)
   "Execute a PiChat launch from Transient ARGUMENTS and CONTEXT."
@@ -987,6 +1048,12 @@ This is the first implementation check; it does not send an LLM prompt."
    (list (transient-args 'pichat-launch)
          (transient-scope)))
   (let ((profile (pichat--launch-profile-from-arguments arguments context)))
+    (when (and (plist-get profile :tools)
+               (not (equal (plist-get context :tool-target)
+                           (list (plist-get context :directory)
+                                 (plist-get profile :scope)
+                                 (plist-get profile :target)))))
+      (user-error "Tools were selected for another target or scope; reopen x Tools"))
     (when (and (eq (plist-get profile :scope) 'current)
                (functionp (plist-get context :current-scope-function)))
       (let ((selected-scope
@@ -1016,7 +1083,8 @@ This is the first implementation check; it does not send an LLM prompt."
    ["Configuration"
     ("p" "Preset" "--preset=" :choices pichat--launch-preset-choices
      :reader pichat--launch-read-preset)
-    ("m" "Choose/enter model" "--model")]]
+    ("m" "Choose/enter model" "--model")
+    ("x" pichat-launch-tools :description pichat--launch-tools-description)]]
   [["Action"
     ("RET" pichat-launch-execute
      :description pichat--launch-action-description)]]

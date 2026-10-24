@@ -8,6 +8,43 @@
 
 (require 'pichat-test-support)
 
+(ert-deftest pichat-reconfigure-preset-label-commits-and-rolls-back-with-configuration ()
+  (dolist (empty '(nil t))
+    (dolist (fail '(nil t))
+      (with-temp-buffer
+        (let* ((session (pichat-session-make
+                         :preset-name 'manual :preset-spec '(:name manual)))
+               (operation (list :session session :chat (current-buffer)
+                                :empty-unwritten empty
+                                :previous '(:preset-spec (:name manual))
+                                :active-configuration '(:preset-spec (:name coding))))
+               (commit (lambda (&rest _)
+                         (should (eq 'coding (pichat-session-preset-name session)))
+                         (let ((pichat-chat-session session))
+                           (should (string-match-p "P:coding"
+                                                   (pichat-chat--mode-line-status))))
+                         (when fail (error "Injected commit failure"))))
+               finished)
+          (cl-letf (((symbol-function 'pichat-reconfigure--verify-idle-state) #'ignore)
+                    ((symbol-function 'pichat-reconfigure-settings-mismatches) #'ignore)
+                    ((symbol-function 'pichat-reconfigure-validate-empty-replacement) #'ignore)
+                    ((symbol-function 'pichat-reconfigure-validate-reload) #'ignore)
+                    ((symbol-function 'pichat-reconfigure--send)
+                     (lambda (_op _phase _command _args callback)
+                       (funcall callback nil)))
+                    ((symbol-function 'pichat-chat-commit-staged-restart) commit)
+                    ((symbol-function 'pichat-chat-commit-staged-empty-restart) commit)
+                    ((symbol-function 'pichat-reconfigure--finish)
+                     (lambda (&rest _) (setq finished t))))
+            (if fail
+                (should-error (pichat-reconfigure--synchronize operation nil))
+              (pichat-reconfigure--synchronize operation nil))
+            (should (eq finished (not fail)))
+            (should (eq (pichat-session-preset-name session)
+                        (if fail 'manual 'coding)))
+            (should (eq (plist-get (pichat-session-preset-spec session) :name)
+                        (pichat-session-preset-name session)))))))))
+
 (ert-deftest pichat-reconfigure-tools-use-captured-preset-not-changed-registry ()
   (let ((pichat-presets (copy-tree pichat-presets)))
     (pichat-make-preset 'test-snapshot :tools '("read" "edit"))

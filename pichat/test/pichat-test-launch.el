@@ -705,6 +705,15 @@
       (should (equal "exact-id" (plist-get chosen :session-id)))
       (should (equal "/saved/cwd" (plist-get chosen :cwd))))))
 
+(ert-deftest pichat-reconfigure-transient-heading-identifies-conversation-concisely ()
+  (let* ((session (pichat-session-create :id "runtime" :name "Conversation"
+                                          :transport pichat-transport-local))
+         (scope (list :origin (list :session session :session-id "session-123456")
+                      :empty-unwritten t)))
+    (cl-letf (((symbol-function 'transient-scope) (lambda (&rest _) scope)))
+      (should (equal "Reconfigure · Conversation (session-1…)"
+                     (pichat--reconfigure-menu-description))))))
+
 (ert-deftest pichat-reconfigure-transient-renders-blocked-restart ()
   (let* ((base (list :preset-spec (pichat-presets-resolve 'manual)))
          (draft (pichat-reconfigure-select-preset base 'coding))

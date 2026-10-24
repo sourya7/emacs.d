@@ -1381,18 +1381,13 @@ This is the first implementation check; it does not send an LLM prompt."
 
 (defun pichat--reconfigure-menu-description ()
   "Describe the captured runtime and conversation in the reconfigure menu."
-  (let* ((scope (transient-scope))
-         (origin (plist-get scope :origin))
+  (let* ((origin (plist-get (transient-scope) :origin))
          (session (plist-get origin :session))
          (title (or (pichat-session-name session) "Untitled conversation"))
          (id (or (plist-get origin :session-id) "unknown")))
-    (format "Reconfigure runtime · %s · %s · %s · %s%s"
-            (truncate-string-to-width title 60 nil nil "…")
-            (truncate-string-to-width id 10 nil nil "…")
-            (pichat-transport-label (pichat-session-transport session))
-            (or (pichat-session-owner-scope-label session) "independent")
-            (if (plist-get scope :empty-unwritten)
-                " · empty session will get a new Pi session ID" ""))))
+    (format "Reconfigure · %s (%s)"
+            (truncate-string-to-width title 40 nil nil "…")
+            (truncate-string-to-width id 10 nil nil "…"))))
 
 (defun pichat--reconfigure-action-description ()
   "Describe restart or no-op status of the current reconfigure draft."

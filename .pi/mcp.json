@@ -3,7 +3,7 @@
     "pichat": {
       "command": "go",
       "args": ["run", "github.com/inercia/MCPShell@v0.2.0", "mcp", "--tools", ".pi/pichat-tests.yaml"],
-      "cwd": "/home/mojo/Dev/emacs.d",
+      "cwd": ".",
       "timeout": 1200,
       "exposure": "direct",
       "description": "Run the PiChat test suites for this Emacs configuration"

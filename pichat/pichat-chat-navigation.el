@@ -341,6 +341,36 @@ assistant response exists."
        :prose-segments segments
        :markdown (mapconcat #'identity segments "")))))
 
+(defun pichat-chat-navigation-adjacent-response
+    (transcript node-key direction source-token)
+  "Return the adjacent prose-bearing assistant response in TRANSCRIPT.
+NODE-KEY must name a current assistant message; DIRECTION is `next' or
+`previous'.  Return nil at a boundary, never the latest-response fallback.
+SOURCE-TOKEN is attached to the selected response for later validation."
+  (unless (pichat-transcript-p transcript)
+    (user-error "No synchronized PiChat transcript to navigate"))
+  (unless (memq direction '(next previous))
+    (error "Unknown response direction: %S" direction))
+  (let* ((nodes (pichat-transcript-nodes transcript))
+         (index (cl-position node-key nodes :test #'equal
+                             :key #'pichat-transcript-node-key)))
+    (unless (and index
+                 (pichat-chat-navigation--assistant-node-p (nth index nodes)))
+      (user-error "PiChat response is no longer in the canonical transcript"))
+    (when-let* ((adjacent
+                 (cl-find-if
+                  (lambda (node)
+                    (and (pichat-chat-navigation--assistant-node-p node)
+                         (cl-some (lambda (content)
+                                    (eq 'prose
+                                        (pichat-transcript-content-kind content)))
+                                  (pichat-transcript-node-content node))))
+                  (if (eq direction 'next)
+                      (nthcdr (1+ index) nodes)
+                    (reverse (cl-subseq nodes 0 index))))))
+      (pichat-chat-navigation-select-response
+       transcript (pichat-transcript-node-key adjacent) source-token))))
+
 (defun pichat-chat-navigation-response-current-p
     (response transcript source-token)
   "Return non-nil when RESPONSE still identifies TRANSCRIPT and SOURCE-TOKEN.

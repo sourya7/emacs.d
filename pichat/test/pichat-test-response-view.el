@@ -32,6 +32,39 @@
    "<table><thead><tr><th>Name</th><th>Value</th></tr></thead>"
    "<tbody><tr><td>Pi</td><td>Chat</td></tr></tbody></table>"))
 
+(ert-deftest pichat-response-navigation-selects-adjacent-prose-only ()
+  (let* ((nodes (list (pichat-test-response-view--node "first" 'assistant "First")
+                      (pichat-test-response-view--node "user" 'user "Question")
+                      (pichat-transcript-node-create
+                       :kind 'message :key "tool-only" :role 'assistant
+                       :content (list (pichat-transcript-content-create
+                                       :kind 'tool-call :index 0)))
+                      (pichat-test-response-view--node "space" 'assistant "  ")
+                      (pichat-test-response-view--node "last" 'assistant "Last")))
+         (transcript (pichat-transcript-create :nodes nodes))
+         (token '(source generation)))
+    (should (equal "space"
+                   (pichat-chat-navigation-response-node-key
+                    (pichat-chat-navigation-adjacent-response
+                     transcript "first" 'next token))))
+    (let ((previous (pichat-chat-navigation-adjacent-response
+                     transcript "last" 'previous token)))
+      (should (equal "  " (pichat-chat-navigation-response-markdown previous)))
+      (should (equal token (pichat-chat-navigation-response-source-token
+                            previous))))
+    (should (equal "first"
+                   (pichat-chat-navigation-response-node-key
+                    (pichat-chat-navigation-adjacent-response
+                     transcript "space" 'previous token))))
+    (should-not (pichat-chat-navigation-adjacent-response
+                 transcript "first" 'previous token))
+    (should-not (pichat-chat-navigation-adjacent-response
+                 transcript "last" 'next token))
+    (should-error (pichat-chat-navigation-adjacent-response
+                   transcript "missing" 'next token) :type 'user-error)
+    (should-error (pichat-chat-navigation-adjacent-response
+                   transcript "user" 'next token) :type 'user-error)))
+
 (ert-deftest pichat-response-view-mode-has-read-only-snapshot-commands ()
   (with-temp-buffer
     (pichat-response-view-mode)
@@ -41,6 +74,10 @@
     (should-not truncate-lines)
     (should (eq (lookup-key pichat-response-view-mode-map (kbd "g"))
                 #'pichat-response-view-refresh))
+    (should (eq (lookup-key pichat-response-view-mode-map (kbd "n"))
+                #'pichat-response-view-next))
+    (should (eq (lookup-key pichat-response-view-mode-map (kbd "p"))
+                #'pichat-response-view-previous))
     (should (eq (lookup-key pichat-response-view-mode-map (kbd "t"))
                 #'pichat-response-view-return-to-origin))
     (should (eq (lookup-key pichat-response-view-mode-map (kbd "w"))
@@ -371,6 +408,94 @@
         (dolist (buffer (list view origin))
           (when (buffer-live-p buffer) (kill-buffer buffer)))))))
 
+(ert-deftest pichat-response-navigation-reuses-view-and-preserves-failures ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((origin (generate-new-buffer " *pichat-navigation-origin*"))
+          view current position refreshed returned
+          (display-buffer-overriding-action '((display-buffer-same-window)))
+          (pichat-response-view-convert-function
+           (lambda (markdown) (format "<p>%s</p>" markdown))))
+      (unwind-protect
+          (progn
+            (switch-to-buffer origin)
+            (setq current t)
+            (setq view
+                  (pichat-response-view-open
+                   (pichat-test-response-view--response "first" "First")
+                   (pichat-view-capture-origin)
+                   (lambda (response)
+                     (setq refreshed (pichat-chat-navigation-response-node-key
+                                      response))
+                     response)
+                   (lambda (response)
+                     (setq returned (pichat-chat-navigation-response-node-key
+                                     response))
+                     position)
+                   "navigation"
+                   (lambda (response direction)
+                     (unless current (user-error "source changed"))
+                     (pcase (list (pichat-chat-navigation-response-node-key
+                                   response) direction)
+                       (`("first" next)
+                        (pichat-test-response-view--response "last" "Last"))
+                       (`("last" previous)
+                        (pichat-test-response-view--response "first" "First"))))))
+            (with-current-buffer view
+              (setq position 1)
+              (goto-char (point-max))
+              (pichat-response-view-next)
+              (should (eq view (current-buffer)))
+              (should (= (point) (point-min)))
+              (should (equal "Last" pichat-response-view-source-markdown))
+              (pichat-response-view-copy-markdown)
+              (should (equal "Last" (current-kill 0 t)))
+              (pichat-response-view-refresh)
+              (should (equal "last" refreshed))
+              (let ((text (buffer-string))
+                    (identity pichat-response-view-response))
+                (goto-char (point-max))
+                (let ((at-boundary (point)))
+                  (pichat-response-view-next)
+                  (should (= at-boundary (point))))
+                (should (equal text (buffer-string)))
+                (should (eq identity pichat-response-view-response))
+                (cl-letf (((symbol-function 'pichat-response-view--rendered-string)
+                           (lambda (&rest _) (error "render failure"))))
+                  (should-error (pichat-response-view-previous)))
+                (should (eq identity pichat-response-view-response))
+                (should (equal text (buffer-string)))
+                (setq current nil)
+                (should-error (pichat-response-view-previous) :type 'user-error)
+                (should (equal text (buffer-string)))
+                (setq current t))
+              (pichat-response-view-return-to-origin))
+            (should-not (buffer-live-p view))
+            (should (eq origin (current-buffer)))
+            (should (equal "last" returned)))
+        (dolist (buffer (list view origin))
+          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
+(ert-deftest pichat-response-navigation-rejects-dead-origin ()
+  (save-window-excursion
+    (let ((origin (generate-new-buffer " *pichat-dead-navigation-origin*"))
+          view)
+      (unwind-protect
+          (progn
+            (switch-to-buffer origin)
+            (setq view (pichat-response-view-open
+                        (pichat-test-response-view--response "first" "First")
+                        (pichat-view-capture-origin) #'ignore #'ignore
+                        "dead" (lambda (&rest _) (error "must not run"))))
+            (kill-buffer origin)
+            (with-current-buffer view
+              (let ((text (buffer-string)))
+                (should-error (pichat-response-view-next) :type 'user-error)
+                (should (equal text (buffer-string)))
+                (should (equal "First" pichat-response-view-source-markdown)))))
+        (dolist (buffer (list view origin))
+          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
 (ert-deftest pichat-chat-view-response-uses-canonical-node-at-point ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
@@ -409,6 +534,26 @@
               (should (equal "assistant-first"
                              (pichat-chat-navigation-response-node-key
                               pichat-response-view-response)))
+              (should (equal "first response"
+                             pichat-response-view-source-markdown))
+              (pichat-response-view-next)
+              (should (equal "latest response"
+                             pichat-response-view-source-markdown))
+              (pichat-response-view-previous)
+              (should (equal "first response"
+                             pichat-response-view-source-markdown))
+              (with-current-buffer chat
+                (cl-incf pichat-chat--source-generation))
+              (should-error (pichat-response-view-next) :type 'user-error)
+              (should (equal "first response"
+                             pichat-response-view-source-markdown))
+              (with-current-buffer chat
+                (cl-decf pichat-chat--source-generation)
+                (setq-local pichat-chat--canonical-transcript
+                            (pichat-transcript-create
+                             :nodes (list (pichat-test-response-view--node
+                                           "user-only" 'user "Question")))))
+              (should-error (pichat-response-view-next) :type 'user-error)
               (should (equal "first response"
                              pichat-response-view-source-markdown)))
             (should (eq (lookup-key pichat-chat-mode-map (kbd "C-c C-h"))

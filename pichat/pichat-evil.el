@@ -68,7 +68,9 @@ remain in their original mode maps."
     (kbd "q") #'pichat-session-manager-preview-quit
     (kbd "g r") #'pichat-session-manager-preview-refresh)
   (evil-define-key* 'normal pichat-response-view-mode-map
-    (kbd "g r") #'pichat-response-view-refresh)
+    (kbd "g r") #'pichat-response-view-refresh
+    (kbd "]r") #'pichat-response-view-next
+    (kbd "[r") #'pichat-response-view-previous)
   (with-eval-after-load 'pichat-artifact-result
     (evil-define-key* 'normal pichat-artifact-result-mode-map
       (kbd "s") #'pichat-artifact-result-share

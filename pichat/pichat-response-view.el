@@ -91,6 +91,9 @@
 (defvar-local pichat-response-view-return-function nil
   "Origin-buffer callback returning the response's current position.")
 
+(defvar-local pichat-response-view-adjacent-function nil
+  "Origin-buffer callback selecting an adjacent canonical response.")
+
 (defconst pichat-response-view--safe-html-tags
   '(html body main article section header footer nav aside figure div p br hr
     h1 h2 h3 h4 h5 h6 ul ol li dl dt dd blockquote pre code kbd samp var
@@ -345,6 +348,35 @@ When PRESERVE-POINT is non-nil, keep the approximate reading position."
     (pichat-response-view--replace-rendering response width t)
     (message "PiChat response view refreshed")))
 
+(defun pichat-response-view--navigate (direction)
+  "Replace this snapshot with the adjacent response in DIRECTION.
+Leave the current snapshot untouched on a boundary or failure."
+  (let* ((origin pichat-response-view-origin-buffer)
+         (function pichat-response-view-adjacent-function)
+         (response pichat-response-view-response))
+    (unless (buffer-live-p origin)
+      (user-error "PiChat response origin is no longer live; snapshot preserved"))
+    (unless (functionp function)
+      (user-error "PiChat response navigation is unavailable; snapshot preserved"))
+    (let ((adjacent (with-current-buffer origin (funcall function response direction))))
+      (if (not adjacent)
+          (message "No %s settled assistant response" direction)
+        (unless (pichat-chat-navigation-response-p adjacent)
+          (error "Invalid adjacent PiChat response"))
+        (pichat-response-view--replace-rendering
+         adjacent (window-body-width (selected-window)))
+        (message "%s settled assistant response" (capitalize (symbol-name direction)))))))
+
+(defun pichat-response-view-next ()
+  "Show the next settled prose-bearing assistant response."
+  (interactive)
+  (pichat-response-view--navigate 'next))
+
+(defun pichat-response-view-previous ()
+  "Show the previous settled prose-bearing assistant response."
+  (interactive)
+  (pichat-response-view--navigate 'previous))
+
 (defun pichat-response-view--url-at-point ()
   "Return the rendered response URL at point, including at its end."
   (or (get-text-property (point) 'pichat-response-view-url)
@@ -401,6 +433,8 @@ When PRESERVE-POINT is non-nil, keep the approximate reading position."
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map pichat-view-mode-map)
     (define-key map (kbd "g") #'pichat-response-view-refresh)
+    (define-key map (kbd "n") #'pichat-response-view-next)
+    (define-key map (kbd "p") #'pichat-response-view-previous)
     (define-key map (kbd "t") #'pichat-response-view-return-to-origin)
     (define-key map (kbd "w") #'pichat-response-view-copy-markdown)
     map)
@@ -414,10 +448,12 @@ When PRESERVE-POINT is non-nil, keep the approximate reading position."
   (pichat-response-view--install-face-remaps))
 
 (defun pichat-response-view-open
-    (response origin refresh-function return-function &optional source-name)
+    (response origin refresh-function return-function &optional source-name
+              adjacent-function)
   "Open rendered RESPONSE associated with ORIGIN.
 REFRESH-FUNCTION and RETURN-FUNCTION are called in ORIGIN with the response
-identity.  SOURCE-NAME is used only to name the snapshot buffer."
+identity.  SOURCE-NAME is used only to name the snapshot buffer.
+ADJACENT-FUNCTION is called in ORIGIN with the current response and direction."
   (unless (pichat-chat-navigation-response-p response)
     (error "Invalid canonical PiChat response"))
   (let ((buffer
@@ -430,7 +466,8 @@ identity.  SOURCE-NAME is used only to name the snapshot buffer."
             (setq-local pichat-response-view-origin-buffer
                         (plist-get origin :buffer))
             (setq-local pichat-response-view-refresh-function refresh-function)
-            (setq-local pichat-response-view-return-function return-function))
+            (setq-local pichat-response-view-return-function return-function)
+            (setq-local pichat-response-view-adjacent-function adjacent-function))
           (pichat-view-display buffer origin 'kill)
           (with-current-buffer buffer
             (pichat-response-view--replace-rendering

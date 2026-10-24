@@ -215,6 +215,8 @@
   (sharmaso/mode-keys
     :keymaps 'pichat-response-view-mode-map
     "r" '(pichat-response-view-refresh :which-key "Refresh response")
+    "n" '(pichat-response-view-next :which-key "Next response")
+    "p" '(pichat-response-view-previous :which-key "Previous response")
     "t" '(pichat-response-view-return-to-origin :which-key "Return to response")
     "w" '(pichat-response-view-copy-markdown :which-key "Copy Markdown")
     "y" '(pichat-response-view-copy-link-at-point :which-key "Copy link URL")))

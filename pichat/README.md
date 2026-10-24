@@ -88,7 +88,10 @@ Native Emacs response-view keys are:
 
 - `g` — explicitly refresh and rerender the same canonical response at the
   current window width
-- `t` — return to that response in its originating chat
+- `n` / `p` — show the next / previous settled assistant response with prose
+  from the same canonical transcript, skipping tool-only messages; boundaries
+  leave the current snapshot unchanged
+- `t` — return to the currently displayed response in its originating chat
 - `w` — copy the snapshot's exact canonical Markdown
 - `q` — close the response view
 - `RET`, `w`, or `?` on a rendered link — open, copy, or describe its destination
@@ -96,9 +99,12 @@ Native Emacs response-view keys are:
   copy the link using the local `SPC m y` menu or its `M-x` command)
 
 Response views are snapshots and do not update automatically while an assistant
-streams. Refresh and return validate both the source identity and assistant node;
-if the chat dies, rebinds, or no longer projects the response, the existing
-snapshot remains readable but those operations are rejected. Copying exact
+streams. Navigation reuses the same view buffer and starts at the beginning of
+its next response; `g`, `t`, and `w` then refer to that response. Refresh,
+navigation, and return validate both the source identity and assistant node;
+if the chat dies, rebinds, or the response disappears from the canonical
+transcript, the existing snapshot remains readable but those operations are
+rejected. Return also requires that the response is still projected in chat. Copying exact
 Markdown remains available from the snapshot.
 
 Assistant Markdown and embedded HTML are untrusted. PiChat uses the configured
@@ -602,7 +608,9 @@ PiChat-specific close/return policy instead of Evil Collection's generic
 `quit-window`. History uses `j/k` for entries, `RET` to jump, `za` to fold,
 `zv` to preview, and `gr` to refresh. The runtime manager uses `RET` to open,
 `zv` to toggle its preview, and `gr` to refresh. Runtime and response previews
-also use `gr` to refresh. The local
+also use `gr` to refresh. In rendered response views, `]r` / `[r` navigate
+next/previous settled prose responses without taking over Evil's `n` / `N`
+search repeat. The local
 `SPC m` menus provide preview, details, and other PiChat actions without
 taking over Vim's `/`, `n/N`, `v`, `f`, `t`, or `C-o` in Normal state. In chat,
 `[[` / `]]` move between user messages, `[a` / `]a` between activity-group

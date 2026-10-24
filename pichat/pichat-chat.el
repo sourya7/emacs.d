@@ -4446,6 +4446,16 @@ and finally the prompt while Pi is running."
      (pichat-chat-navigation-response-node-key response)
      token)))
 
+(defun pichat-chat--response-view-adjacent (response direction)
+  "Find an adjacent settled RESPONSE in DIRECTION, rejecting stale sources."
+  (let ((token (pichat-chat--source-token)))
+    (unless (pichat-chat-navigation-response-current-p
+             response pichat-chat--canonical-transcript token)
+      (user-error "PiChat response source changed; snapshot preserved"))
+    (pichat-chat-navigation-adjacent-response
+     pichat-chat--canonical-transcript
+     (pichat-chat-navigation-response-node-key response) direction token)))
+
 (defun pichat-chat--response-view-origin-position (response)
   "Return RESPONSE's current canonical display position or reject it."
   (let ((token (pichat-chat--source-token)))
@@ -4480,7 +4490,8 @@ and finally the prompt while Pi is running."
     (unless response (user-error "No settled assistant response to view"))
     (pichat-response-view-open
      response origin #'pichat-chat--response-view-refresh
-     #'pichat-chat--response-view-origin-position (buffer-name))))
+     #'pichat-chat--response-view-origin-position (buffer-name)
+     #'pichat-chat--response-view-adjacent)))
 
 ;;;###autoload
 (defun pichat-chat-export-transcript-to-markdown ()

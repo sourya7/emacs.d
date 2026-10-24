@@ -63,7 +63,16 @@ remain in their original mode maps."
     (kbd "q") #'pichat-session-manager-quit
     (kbd "RET") #'pichat-session-manager-open-chat
     (kbd "z v") #'pichat-session-manager-toggle-preview
-    (kbd "g r") #'pichat-session-manager-refresh)
+    (kbd "g r") #'pichat-session-manager-refresh
+    (kbd "g c") #'pichat-session-manager-new
+    (kbd "g C") #'pichat-session-manager-new-in-scope
+    (kbd "g L") #'pichat-session-manager-launch
+    (kbd "g b") #'pichat-session-manager-browse-saved
+    (kbd "g k") #'pichat-session-manager-stop
+    (kbd "g d") #'pichat-session-manager-forget
+    (kbd "g m") #'pichat-session-manager-make-default
+    (kbd "g D") #'pichat-session-manager-diagnostics
+    (kbd "r") #'pichat-session-manager-name)
   (evil-define-key* 'normal pichat-session-manager-preview-mode-map
     (kbd "q") #'pichat-session-manager-preview-quit
     (kbd "g r") #'pichat-session-manager-preview-refresh)

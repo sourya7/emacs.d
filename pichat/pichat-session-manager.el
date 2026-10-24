@@ -861,7 +861,15 @@ known project or manually chosen directory; N uses the selected owner scope; +
 opens the full launch menu; b loads a saved source into a new runtime.  k stops,
 d forgets a stopped runtime, e names a session, m makes a live runtime the
 scope default, D shows diagnostics, g refreshes, and q buries this buffer.
-Killing this buffer never stops or forgets a runtime."
+Killing this buffer never stops or forgets a runtime.
+
+With Evil (`pichat-evil-setup'), Evil's Normal-state keys shadow the plain
+bindings above, so the same actions use state-specific keys: RET opens, z v
+toggles the preview, g c starts a project runtime, g C uses the selected owner
+scope, g L opens the launch menu, g b loads a saved source, g k stops, g d
+forgets, r names, g m makes the scope default, g D shows diagnostics, g r
+refreshes, and q buries this buffer.  Vim navigation (h/j/k/l, w/b/e, gg/G,
+C-o) stays usable in this buffer."
   (setq-local default-directory
               (file-name-as-directory
                (expand-file-name

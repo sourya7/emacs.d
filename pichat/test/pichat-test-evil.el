@@ -71,6 +71,17 @@
                         #'pichat-session-manager-refresh))
             (should (eq (key-binding (kbd "z v"))
                         #'pichat-session-manager-toggle-preview))
+            (dolist (binding
+                     '(("g c" . pichat-session-manager-new)
+                       ("g C" . pichat-session-manager-new-in-scope)
+                       ("g L" . pichat-session-manager-launch)
+                       ("g b" . pichat-session-manager-browse-saved)
+                       ("g k" . pichat-session-manager-stop)
+                       ("g d" . pichat-session-manager-forget)
+                       ("g m" . pichat-session-manager-make-default)
+                       ("g D" . pichat-session-manager-diagnostics)
+                       ("r" . pichat-session-manager-name)))
+              (should (eq (key-binding (kbd (car binding))) (cdr binding))))
             (should (eq (key-binding (kbd "C-o")) #'evil-jump-backward)))
           (with-temp-buffer
             (pichat-session-manager-preview-mode)

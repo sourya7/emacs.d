@@ -518,7 +518,8 @@
 (ert-deftest pichat-reference-chat-region-writes-only-selected-text ()
   (pichat-test-with-temp-dir dir
     (let ((pichat-reference-temp-directory dir)
-          (pichat-path-mappings nil))
+          (pichat-path-mappings nil)
+          (transient-mark-mode t))
       (with-temp-buffer
         (setq-local major-mode 'pichat-chat-mode)
         (insert "transcript\nselected\nprompt")

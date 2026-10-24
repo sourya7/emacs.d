@@ -8,6 +8,8 @@
 
 (require 'pichat-test-support)
 
+(defvar bufferlo-mode)
+
 ;;; Session, scope, reference, and UI fixture tests
 
 (ert-deftest pichat-chat-new-session-cancellation-does-not-refresh-or-claim-success ()
@@ -344,6 +346,138 @@
               (should (equal "editable prompt" (pichat-chat--input-text)))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+(ert-deftest pichat-reference-targets-current-bufferlo-tab-not-last-runtime ()
+  (let* ((here (generate-new-buffer " *reference here*"))
+         (elsewhere (generate-new-buffer " *reference elsewhere*"))
+         (pichat-current-session nil)
+         (bufferlo-mode t))
+    (unwind-protect
+        (progn
+          (dolist (buffer (list here elsewhere))
+            (with-current-buffer buffer
+              (setq-local major-mode 'pichat-chat-mode)))
+          (let ((pichat-current-session
+                 (pichat-session-make :buffer elsewhere)))
+            (cl-letf (((symbol-function 'bufferlo-local-buffer-p)
+                       (lambda (buffer &rest _args) (eq buffer here)))
+                      ((symbol-function 'completing-read)
+                       (lambda (&rest _args) (ert-fail "Should not prompt"))))
+              (with-temp-buffer
+                (should (eq here (pichat-reference--target-buffer)))))))
+      (kill-buffer here)
+      (kill-buffer elsewhere))))
+
+(ert-deftest pichat-reference-asks-when-tab-has-no-chat-or-multiple-chats ()
+  (let* ((first (generate-new-buffer " *reference first*"))
+         (second (generate-new-buffer " *reference second*"))
+         (bufferlo-mode t)
+         choices)
+    (unwind-protect
+        (progn
+          (dolist (buffer (list first second))
+            (with-current-buffer buffer
+              (setq-local major-mode 'pichat-chat-mode)))
+          (cl-letf (((symbol-function 'completing-read)
+                     (lambda (_prompt names &rest _args)
+                       (push names choices)
+                       (buffer-name second)))
+                    ((symbol-function 'bufferlo-local-buffer-p)
+                     (lambda (&rest _args) nil)))
+            (with-temp-buffer
+              (should (eq second (pichat-reference--target-buffer)))
+              (should (= 2 (length (car choices))))))
+          (cl-letf (((symbol-function 'completing-read)
+                     (lambda (_prompt names &rest _args)
+                       (should (= 2 (length names)))
+                       (buffer-name second)))
+                    ((symbol-function 'bufferlo-local-buffer-p)
+                     (lambda (&rest _args) t)))
+            (with-temp-buffer
+              (should (eq second (pichat-reference--target-buffer)))
+              (should (eq second (pichat-reference--target-buffer t))))))
+      (kill-buffer first)
+      (kill-buffer second))))
+
+(ert-deftest pichat-reference-does-not-auto-target-sole-chat-in-another-tab ()
+  (let ((chat (generate-new-buffer " *reference other tab*"))
+        (bufferlo-mode t)
+        prompted)
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (setq-local major-mode 'pichat-chat-mode))
+          (cl-letf (((symbol-function 'bufferlo-local-buffer-p)
+                     (lambda (&rest _args) nil))
+                    ((symbol-function 'completing-read)
+                     (lambda (&rest _args)
+                       (setq prompted t)
+                       (buffer-name chat))))
+            (with-temp-buffer
+              (should (eq chat (pichat-reference--target-buffer)))
+              (should prompted))))
+      (kill-buffer chat))))
+
+(ert-deftest pichat-reference-falls-back-to-project-scope-without-bufferlo ()
+  (let* ((first (generate-new-buffer " *reference project*"))
+         (second (generate-new-buffer " *reference other*"))
+         (bufferlo-mode nil))
+    (unwind-protect
+        (progn
+          (dolist (pair (list (cons first "project") (cons second "other")))
+            (with-current-buffer (car pair)
+              (setq-local major-mode 'pichat-chat-mode)
+              (setq-local pichat-chat-session
+                          (pichat-session-make
+                           :owner-scope-key (cdr pair)))))
+          (cl-letf (((symbol-function 'pichat--project-root)
+                     (lambda (&rest _args) "/project/"))
+                    ((symbol-function 'pichat--scope-for-directory)
+                     (lambda (&rest _args) '("project" "/project/" "project")))
+                    ((symbol-function 'completing-read)
+                     (lambda (&rest _args) (ert-fail "Should not prompt"))))
+            (with-temp-buffer
+              (should (eq first (pichat-reference--target-buffer))))))
+      (kill-buffer first)
+      (kill-buffer second))))
+
+(ert-deftest pichat-reference-asks-between-independent-project-chats ()
+  (let* ((first (generate-new-buffer " *reference project one*"))
+         (second (generate-new-buffer " *reference project two*"))
+         (bufferlo-mode nil))
+    (unwind-protect
+        (progn
+          (dolist (buffer (list first second))
+            (with-current-buffer buffer
+              (setq-local major-mode 'pichat-chat-mode)
+              (setq-local pichat-chat-session
+                          (pichat-session-make :owner-scope-key "project"))))
+          (cl-letf (((symbol-function 'pichat--project-root)
+                     (lambda (&rest _args) "/project/"))
+                    ((symbol-function 'pichat--scope-for-directory)
+                     (lambda (&rest _args) '("project" "/project/" "project")))
+                    ((symbol-function 'completing-read)
+                     (lambda (_prompt names &rest _args)
+                       (should (= 2 (length names)))
+                       (buffer-name second))))
+            (with-temp-buffer
+              (should (eq second (pichat-reference--target-buffer))))))
+      (kill-buffer first)
+      (kill-buffer second))))
+
+(ert-deftest pichat-reference-chat-without-region-asks-for-file-not-chat-snapshot ()
+  (pichat-test-with-temp-dir dir
+    (let ((file (expand-file-name "source.el" dir))
+          (snapshot nil))
+      (with-temp-file file (insert "source"))
+      (cl-letf (((symbol-function 'read-file-name)
+                 (lambda (&rest _args) file))
+                ((symbol-function 'pichat-reference--buffer-temp-reference)
+                 (lambda () (setq snapshot t))))
+        (with-temp-buffer
+          (setq-local major-mode 'pichat-chat-mode)
+          (should (string-match-p "source.el" (pichat-reference--dwim-text)))
+          (should-not snapshot))))))
+
 (ert-deftest pichat-reference-file-region-uses-runtime-path-and-lines ()
   (pichat-test-with-temp-dir dir
     (let* ((file (expand-file-name "sample.el" dir))
@@ -379,6 +513,28 @@
                                  (insert-file-contents file)
                                  (buffer-string))
                                "(message \"snapshot\")")))
+            (delete-file file)))))))
+
+(ert-deftest pichat-reference-chat-region-writes-only-selected-text ()
+  (pichat-test-with-temp-dir dir
+    (let ((pichat-reference-temp-directory dir)
+          (pichat-path-mappings nil))
+      (with-temp-buffer
+        (setq-local major-mode 'pichat-chat-mode)
+        (insert "transcript\nselected\nprompt")
+        (goto-char (point-min))
+        (forward-line 1)
+        (set-mark (line-end-position))
+        (setq mark-active t)
+        (let* ((text (pichat-reference--dwim-text))
+               (file (progn
+                       (should (string-match "- `\\([^`]+\\)`" text))
+                       (match-string 1 text))))
+          (unwind-protect
+              (should (equal (with-temp-buffer
+                               (insert-file-contents file)
+                               (buffer-string))
+                             "selected"))
             (delete-file file)))))))
 
 (ert-deftest pichat-reference-nonfile-region-writes-only-selected-text ()

@@ -14,7 +14,6 @@
 (require 'thingatpt)
 (require 'pichat-path)
 
-(defvar pichat-current-session)
 (defvar pichat-chat-session)
 (defvar pichat-chat--input-start)
 (defvar pichat-reference--path-context nil
@@ -24,7 +23,11 @@
 (declare-function dired-get-marked-files "dired")
 (declare-function compilation-goto-error "compile")
 (declare-function pichat-chat--insert-prompt "pichat-chat")
+(declare-function bufferlo-local-buffer-p "bufferlo" (buffer &optional frame tabnum include-hidden))
+(declare-function pichat--project-root "pichat" (&optional directory))
+(declare-function pichat--scope-for-directory "pichat" (&optional directory force-global target-id))
 (declare-function pichat-session-buffer "pichat-session")
+(declare-function pichat-session-owner-scope-key "pichat-session")
 (declare-function pichat-session-path-context "pichat-session")
 (declare-function pichat-session-transport "pichat-session")
 
@@ -51,28 +54,55 @@ directory's OS policy."
        (derived-mode-p 'pichat-chat-mode)))
    (buffer-list)))
 
-(defun pichat-reference--read-chat-buffer ()
-  "Prompt for a PiChat chat buffer."
-  (let ((buffers (pichat-reference--chat-buffers)))
+(defun pichat-reference--read-chat-buffer (&optional buffers)
+  "Prompt for a chat among BUFFERS, or all live chats when nil."
+  (let ((buffers (or buffers (pichat-reference--chat-buffers))))
     (unless buffers
       (user-error "No live PiChat buffers"))
     (get-buffer
      (completing-read "Insert reference into PiChat buffer: "
                       (mapcar #'buffer-name buffers) nil t))))
 
+(defun pichat-reference--choose-chat (buffers)
+  "Choose a chat from BUFFERS, prompting if ambiguous."
+  (if (= (length buffers) 1)
+      (car buffers)
+    (pichat-reference--read-chat-buffer buffers)))
+
 (defun pichat-reference--target-buffer (&optional prompt)
-  "Return the PiChat buffer to receive a reference.
-When PROMPT is non-nil, always ask."
-  (cond
-   (prompt (pichat-reference--read-chat-buffer))
-   ((derived-mode-p 'pichat-chat-mode) (current-buffer))
-   ((and (boundp 'pichat-current-session)
-         pichat-current-session
-         (buffer-live-p (pichat-session-buffer pichat-current-session)))
-    (pichat-session-buffer pichat-current-session))
-   ((let ((buffers (pichat-reference--chat-buffers)))
-      (and (= (length buffers) 1) (car buffers))))
-   (t (pichat-reference--read-chat-buffer))))
+  "Return the chat to receive a reference; PROMPT always asks explicitly.
+When Bufferlo is enabled, only chats local to the selected tab are
+selected implicitly.  Otherwise use the source project scope."
+  (let ((buffers (pichat-reference--chat-buffers)))
+    (cond
+     (prompt (pichat-reference--read-chat-buffer buffers))
+     ((derived-mode-p 'pichat-chat-mode) (current-buffer))
+     ((and (bound-and-true-p bufferlo-mode)
+           (fboundp 'bufferlo-local-buffer-p))
+      (let ((local (cl-remove-if-not
+                    (lambda (buffer)
+                      (bufferlo-local-buffer-p buffer (selected-frame) nil t))
+                    buffers)))
+        ;; Never route implicitly to a chat in another tab.
+        (if local
+            (pichat-reference--choose-chat local)
+          (pichat-reference--read-chat-buffer buffers))))
+     (t
+      (let* ((scope (and (fboundp 'pichat--project-root)
+                         (pichat--project-root default-directory)
+                         (pichat--scope-for-directory default-directory)))
+             (matched (and scope
+                           (cl-remove-if-not
+                            (lambda (buffer)
+                              (with-current-buffer buffer
+                                (and pichat-chat-session
+                                     (equal (pichat-session-owner-scope-key
+                                             pichat-chat-session)
+                                            (car scope)))))
+                            buffers))))
+        (if (and scope (null matched))
+            (pichat-reference--read-chat-buffer buffers)
+          (pichat-reference--choose-chat (or matched buffers))))))))
 
 (defun pichat-reference--runtime-path (path)
   "Return the destination Pi runtime path for Emacs PATH."
@@ -251,6 +281,12 @@ When PROMPT is non-nil, always ask."
   "Return prompt text describing the current Emacs context DWIM."
   (cond
    ((use-region-p) (pichat-reference--region))
+   ((derived-mode-p 'pichat-chat-mode)
+    (let ((file (read-file-name "Reference file: " default-directory nil t)))
+      (unless (file-regular-p file)
+        (user-error "Not a regular file: %s" file))
+      (pichat-reference--format-reference-block
+       (list (pichat-reference--format-location file)))))
    ((derived-mode-p 'dired-mode) (pichat-reference--dired))
    ((derived-mode-p 'compilation-mode) (or (pichat-reference--compilation)
                                            (pichat-reference--buffer-temp-reference)))
@@ -285,7 +321,9 @@ prompt, so repeated `pichat-add-reference' calls produce one grouped list."
   "Insert a DWIM reference to the current buffer/region into a PiChat prompt.
 
 With universal prefix PROMPT-FOR-CHAT-BUFFER, ask which PiChat buffer should
-receive the reference.  Otherwise choose the target buffer DWIM-style."
+receive the reference.  Otherwise choose a chat in the current Bufferlo tab,
+or in the source project's scope when Bufferlo is unavailable; ask if
+ambiguous.  From a chat without a region, prompt for a file to reference."
   (interactive "P")
   (let* ((target (pichat-reference--target-buffer prompt-for-chat-buffer))
          (pichat-reference--path-context

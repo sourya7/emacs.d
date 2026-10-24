@@ -931,13 +931,23 @@ Additional chat keys:
 
 ## Emacs references
 
-`pichat-add-reference` inserts a lightweight reference into the active PiChat
-prompt instead of maintaining persistent Emacs-side context. It is DWIM:
-active regions in file buffers become file/line references, file buffers
+`pichat-add-reference` inserts a lightweight reference into a PiChat draft
+instead of maintaining persistent Emacs-side context; it does not send the
+draft. Invoke it from a source file, Dired, or compilation buffer. With
+Bufferlo enabled, a sole chat local to the selected tab receives the reference;
+multiple local chats require a choice, and no local chat prompts for a chat
+rather than silently targeting another tab. Without Bufferlo, chats in the
+source project's owner scope are preferred; ambiguity or no match prompts for
+a chat. `C-u M-x pichat-add-reference` always asks for the destination.
+An invocation in a chat targets that chat; without a region it prompts for a
+file to reference rather than referencing the entire transcript.
+
+Active regions in file buffers become file/line references, file buffers
 reference the current defun/symbol/line, Dired references marked files, and
 compilation buffers reference the source error location. Non-file buffers and
-regions write their contents to a temporary `.txt` file and insert its path as
-a reference; compilation buffers without a resolvable error do the same.
+regions (including selected chat text) write their contents to a temporary
+`.txt` file and insert its path as a reference; compilation buffers without a
+resolvable error do the same.
 Only the selected text is written for a region. PiChat uses Emacs's
 `make-temp-file` and does not track or delete these files. Their lifetime depends
 on the operating system's cleanup policy for the chosen directory; Emacs exit

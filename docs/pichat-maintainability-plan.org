@@ -1,0 +1,399 @@
+#+TITLE: PiChat maintainability implementation backlog
+#+TODO: TODO IN-PROGRESS BLOCKED | DONE
+#+STARTUP: overview
+#+PRIORITIES: A C B
+
+* Operating agreement
+
+This is the durable execution backlog for [[file:pichat-maintainability-review.md][the maintainability review]].
+Creating this plan does not authorize implementation of every item. Select one
+named work package per invocation; do not advance to adjacent packages automatically.
+
+- This file owns execution status, scope, dependencies, decisions, and verification.
+- The review owns findings, rationale, evidence classifications, and limitations.
+- [[file:../pichat/GLOSSARY.md][The glossary]] owns terminology. Runtime, Pi session, saved session file,
+  and Session History are distinct.
+- Before package changes, read [[file:../pichat/README.md][README]] and [[file:../pichat/TESTING_GUIDELINES.md][testing guidelines]], then revalidate the
+  relevant code and finding. Review line numbers and old counts may become stale.
+- Order below is the recommended sequence, not a rigid dependency chain. Small
+  independent fixes can run earlier. A = correctness/contracts; B = verification
+  and maintainability; C = optional interfaces and demand-driven expansion.
+- =CUSTOM_ID= values are stable work-package IDs. =DEPENDS_ON= is documentary:
+  the execution agent must check it; no Org dependency enforcement is configured.
+- Exactly one selected package should be IN-PROGRESS when practical. BLOCKED
+  records a genuine dependency or maintainer decision, not simply low priority.
+- DONE means the package's stated deliverable and acceptance checks are complete.
+  A decision/prototype may finish with "do not implement"; record that outcome.
+- Preserve existing unrelated edits. Do not create commits without authorization.
+
+** Invocation
+
+Use the existing personal =/todo= prompt with this file and an explicit subtree:
+
+#+begin_example
+/todo docs/pichat-maintainability-plan.org Work only on "W01 — Reject stale artifact execution". Implement and verify its acceptance criteria, update the relevant review resolution note, and stop. Do not commit.
+#+end_example
+
+For decision packages, the deliverable is analysis and a recorded decision, not
+an implied implementation. If maintainer approval is needed, leave the package
+BLOCKED with the exact question. Do not choose a compatibility policy silently.
+
+** Shared completion requirements
+
+These apply to every package in addition to its own checklist:
+
+- Keep scope bounded; record discoveries that need separate work as new packages.
+- Add durable behavioral tests for changed behavior, not assertions that merely
+  reproduce the old defect. Temporary review probes are supporting evidence only.
+- Run relevant checks from the testing guidelines. For package changes, run
+  =pichat/test/run-tests.sh=; use =--full= for affected real-Pi contracts when the
+  required environment is available. Record skips and unavailable verification.
+- Never claim an unavailable required check passed. Leave acceptance incomplete
+  unless the maintainer explicitly approves a narrower verification scope.
+- Record commands, results, environment/version where relevant, and limitations
+  beneath the package. Keep verbose logs in =.tmp/=, durable tests in the suite.
+- Add a brief resolution note to the corresponding review finding: resolved,
+  partially resolved, deferred, or not pursued; describe the evidence and scope.
+  Preserve original observations as historical evidence rather than erasing them.
+- Record commit references only if commits are subsequently made. Do not copy
+  the whole work log into the review or maintain a second checklist there.
+
+** Baseline and safety constraints
+
+The review's pass-3 baseline reports 822 passing full-suite tests on Pi 1.4.0,
+51 successful isolated module loads, nine observational probes, and two detected
+in-memory mutations. These are historical results, not verification of future
+changes. Coverage failed during instrumentation/reporting and supplies no metric.
+See review sections 16–17 for exact evidence and remaining gaps.
+
+Preserve canonical transcript authority, runtime/source/process identity,
+attachments and recoverable submissions, restart verification and rollback,
+local/SSH provenance, ownership and cancellation, and safe rendered content.
+Draft editing is not execution: stopped-runtime edits and verified same-source
+restart behavior must not be broken by blanket liveness or generation checks.
+
+* TODO [#A] W01 — Reject stale artifact execution
+:PROPERTIES:
+:CUSTOM_ID: W01
+:FINDINGS: ARCH-03
+:END:
+
+Evidence: captured old code reached a stub runner through real Embark dispatch
+after source rebinding. Wrong-host execution was not performed.
+
+Scope: validate captured source and execution context at the Run boundary.
+Do not redesign the runner, menus, or result-sharing API.
+
+- [ ] Define rejection behavior for stale/dead origins; require explicit destination selection if retargeting is offered.
+- [ ] Add regressions for source rebinding and invocation from a different chat context; stale targets never reach the runner.
+- [ ] Verify valid actions retain the intended runtime, host/path context, and working directory.
+- [ ] Preserve content-only copy/edit/preview of captured text.
+- [ ] Test the Embark adapter boundary as well as direct command invocation; state remaining interactive limitations.
+
+* TODO [#A] W02 — Reject command submission after source changes
+:PROPERTIES:
+:CUSTOM_ID: W02
+:FINDINGS: DUP-01
+:END:
+
+Evidence: changing the Pi session during argument collection allowed submission
+to the rebound source through a stub backend.
+
+Scope: a focused freshness fix, not the shared command-catalog refactor.
+
+- [ ] Capture and validate discovery/action context before submission, including after argument entry.
+- [ ] Cover stale discovery responses, rebind during prompting, and a valid unchanged source.
+- [ ] Verify rejection performs no backend submission and leaves draft state intact.
+- [ ] Preserve immediate command execution versus draft completion semantics.
+
+* TODO [#A] W03 — Revalidate reference destinations after collection
+:PROPERTIES:
+:CUSTOM_ID: W03
+:FINDINGS: ARCH-01; section 17.3
+:END:
+
+Evidence: synthetic re-entrancy during reference collection allowed insertion
+after source rebinding. Direct reference edits already advance editor generation.
+
+- [ ] Validate the chosen chat's captured source immediately before insertion.
+- [ ] Test source change and origin death during collection, with no stale draft mutation.
+- [ ] Preserve existing draft, pending attachments, path mappings, region precedence, and valid insertion bookkeeping.
+- [ ] Keep this narrow guard independent of the later public draft API migration.
+
+* TODO [#A] W04 — Preserve target drafts when replacement fails
+:PROPERTIES:
+:CUSTOM_ID: W04
+:FINDINGS: REL-05; ARCH-01
+:END:
+
+Evidence: an injected insertion failure left the old target draft empty while
+the compose buffer survived. This is not an observed spontaneous loss incident.
+
+- [ ] Make draft text replacement and its bookkeeping commit coherent on success or failure.
+- [ ] Test failure after deletion and during insertion; old target text and associated draft state remain recoverable/intact as specified.
+- [ ] Preserve compose text on failure and existing successful apply behavior.
+- [ ] Preserve attachments and document intentional overwrite of concurrent prompt edits.
+- [ ] Do not replace canonical/live projection rollback with a text-only transaction.
+
+* TODO [#A] W05 — Decide the Emacs-defined tool contract
+:PROPERTIES:
+:CUSTOM_ID: W05
+:FINDINGS: ARCH-04; DEAD-04
+:END:
+
+Decision only: the macro accepts =:async= but generates a one-argument function;
+the async dispatcher expects two arguments; the bridge uses the synchronous path.
+
+- [ ] Inspect current tools and downstream expectations; distinguish Emacs-defined tools from Pi-native tools.
+- [ ] Present synchronous-only versus end-to-end async support, including cancellation, errors, and compatibility costs.
+- [ ] Decide whether =:instructions= is supported prompt input or explicitly metadata-only/unsupported.
+- [ ] Record the maintainer-approved contract and migration/rejection policy, or the exact blocking question.
+- [ ] Refine W06 acceptance to match that decision without implementing it in this package.
+
+* BLOCKED [#A] W06 — Implement the approved tool contract
+:PROPERTIES:
+:CUSTOM_ID: W06
+:FINDINGS: ARCH-04
+:DEPENDS_ON: W05
+:END:
+
+Blocker: no approved synchronous-only versus async contract yet.
+
+- [ ] Implement only the selected contract across macro, registration, dispatcher, and bridge.
+- [ ] Reject unsupported options early, or implement one consistent callback/result/error/cancellation convention.
+- [ ] For async support, test abort, late completion, process death, and source/runtime ownership end to end.
+- [ ] Verify the chosen instructions behavior and update tool-author documentation.
+- [ ] Run bridge/unit tests and relevant real-Pi integration checks; preserve synchronous tool behavior and approval boundaries.
+
+* TODO [#A] W07 — Correct SSH startup diagnostic classification
+:PROPERTIES:
+:CUSTOM_ID: W07
+:FINDINGS: REL-01
+:END:
+
+Independent small fix; may be selected before W05/W06.
+
+- [ ] Correct regexp construction without broadening unrelated error classification accidentally.
+- [ ] Test TRAMP connection refusal, hostname resolution failure, and unrelated negative cases.
+- [ ] Preserve safe diagnostic summaries; distinguish classification tests from live SSH verification.
+
+* TODO [#A] W08 — Separate RPC parsing and consumer error attribution
+:PROPERTIES:
+:CUSTOM_ID: W08
+:FINDINGS: REL-02
+:END:
+
+- [ ] Distinguish malformed JSON/protocol input from dispatch and callback failures.
+- [ ] Test a valid JSON response whose callback throws, malformed input, and continued processing after failures.
+- [ ] Preserve event-handler isolation; decide how its message-only errors enter bounded diagnostics.
+- [ ] Avoid prompts/secrets in ordinary diagnostic summaries; retain explicit raw inspection.
+- [ ] Keep this a focused diagnostic change, not a new logging framework.
+
+* TODO [#A] W09 — Decide and expose the minimal draft/target boundary
+:PROPERTIES:
+:CUSTOM_ID: W09
+:FINDINGS: ARCH-01; REL-04; DUP-04; section 17
+:DEPENDS_ON: W01, W02, W03, W04
+:END:
+
+Scope: a small contract and migration of existing reference/result/compose
+consumers. No universal token or speculative plugin framework.
+
+- [ ] Decide identity semantics for same Pi session ID with pathname availability changing from nil to a path.
+- [ ] Specify separate capture/validate, append/replace, and submission responsibilities.
+- [ ] Preserve stopped-runtime draft editing and verified same-source restart semantics.
+- [ ] Cover A → B → A rebinding, dead origins, pathname changes, saved-source restart, and unwritten-empty restart.
+- [ ] Migrate reference insertion, result handoff, and compose apply without direct private-marker mutation by consumers.
+- [ ] Verify attachments, editor bookkeeping, failure preservation, and local/SSH provenance.
+
+Stop for maintainer input if source-token semantics are unresolved; do not
+silently weaken conservative rejection to make callers agree.
+
+* TODO [#B] W10 — Repair coverage tooling and make test execution reproducible
+:PROPERTIES:
+:CUSTOM_ID: W10
+:FINDINGS: TEST-06; section 16
+:END:
+
+Independent verification work; coverage repair does not block focused correctness
+fixes whose regression tests can run without instrumentation.
+
+- [ ] Reproduce and diagnose the Edebug index/report-generation failure separately from production behavior.
+- [ ] Fix or explicitly document the unsupported instrumentation case; do not report a coverage percentage from a broken run.
+- [ ] Provide reproducible dependency-enabled unit/full commands and distinguish optional skips from passing coverage.
+- [ ] Record tested Emacs/Pi/dependency versions; do not advance the Pi compatibility ledger without its required review.
+- [ ] Run the uninstrumented suite after any harness change.
+
+* TODO [#B] W11 — Extend targeted lifecycle and interactive verification
+:PROPERTIES:
+:CUSTOM_ID: W11
+:FINDINGS: TEST-04; section 16.2; section 17.2
+:DEPENDS_ON: W01, W02, W03, W04
+:END:
+
+- [ ] Select uncovered transition/failure combinations from section 17, acknowledging existing fault-injection tests.
+- [ ] Add bounded regression tests for the selected combinations and ownership/cancellation boundaries.
+- [ ] Check delayed Embark actions/collect/export in a live UI and record the exact scenarios exercised.
+- [ ] Run relevant SSH checks only with an explicitly configured/authorized test destination; otherwise record the external blocker.
+- [ ] Report tested and untested cases separately; do not claim exhaustive lifecycle coverage.
+
+* TODO [#B] W12 — Prune verified private leftovers and improve affected tests
+:PROPERTIES:
+:CUSTOM_ID: W12
+:FINDINGS: DEAD-01; DEAD-02; DEAD-06; DUP-03; TEST-01; TEST-02; TEST-04; TEST-05
+:END:
+
+- [ ] Revalidate each deletion candidate against current production, tests, generated/conventional uses, and documentation.
+- [ ] Delete only justified private leftovers; move public/extension compatibility decisions to W13.
+- [ ] Retarget valuable behavioral tests to active paths before removing obsolete wrapper tests.
+- [ ] Replace brittle documentation-wording assertions where a meaningful behavior/contract check exists.
+- [ ] Preserve mode maps, backend-state extension behavior, and security/lifecycle assertions; classify formatting tests individually.
+- [ ] Record retained candidates and reasons, not just removed line counts.
+
+* TODO [#B] W13 — Decide compatibility facades and unused public APIs
+:PROPERTIES:
+:CUSTOM_ID: W13
+:FINDINGS: DEAD-03; DEAD-04; DEAD-05; DEAD-06; TEST-03; ARCH-04
+:END:
+
+Decision-first package; lack of internal callers is not proof of a dead public API.
+
+- [ ] Audit VUI forwarding commands, unused public helpers/struct slots, and the normally registered echo tool.
+- [ ] Separate the tool-contract decision already owned by W05 from remaining retirement decisions.
+- [ ] Obtain explicit retain/deprecate/remove decisions and document downstream uncertainty.
+- [ ] Add narrowly scoped follow-up packages for approved migrations/removals; do not silently remove APIs here.
+- [ ] Retain unbound interactive commands when useful; review key exposure separately from reachability.
+
+* TODO [#B] W14 — Share command discovery without merging action semantics
+:PROPERTIES:
+:CUSTOM_ID: W14
+:FINDINGS: DUP-01; section 13 completion metadata
+:DEPENDS_ON: W02, W09
+:END:
+
+- [ ] Introduce one validated command/template/skill catalog reused by CAPF and the command picker.
+- [ ] Keep completion insertion separate from immediate execution and argument prompting.
+- [ ] Preserve source/request freshness checks through cache invalidation and late responses.
+- [ ] Reuse completion categories/annotations and structured action records; optional UI packages remain adapters.
+- [ ] Demonstrate reduced duplication without reducing stale-source regression coverage.
+
+* TODO [#B] W15 — Define and enforce operation-specific resource bounds
+:PROPERTIES:
+:CUSTOM_ID: W15
+:FINDINGS: REL-03
+:END:
+
+Static risks, not reproduced memory exhaustion. Start with archive helper capture;
+split subsequent operations into separate scoped packages before expanding work.
+
+- [ ] Specify archive stdout/stderr capture limits, result limits, timeout, cancellation owner, and cleanup.
+- [ ] Test incremental over-limit output, stalled helpers, cancellation, and terminal cleanup.
+- [ ] Inventory unfinished RPC records, diagnostic payloads, and clipboard/screenshot acquisition; record explicit follow-up decisions.
+- [ ] Never silently truncate canonical transcript data or impose an untested low cap on valid large responses.
+- [ ] Preserve binary-safe acquisition and interactive cancellation semantics in any follow-up.
+
+* TODO [#B] W16 — Profile transcript lookup and remote browsing
+:PROPERTIES:
+:CUSTOM_ID: W16
+:FINDINGS: PERF-01; REL-03; DUP-05
+:END:
+
+- [ ] Establish reproducible large-transcript/artifact and saved-file browsing fixtures with measured baselines.
+- [ ] Separate local scanning, parsing, rendering, and remote latency costs; state unavailable remote evidence.
+- [ ] Evaluate parsing only relevant prose runs for point/visible artifact actions before adding caches.
+- [ ] Compare custom Consult process mechanics against supported installed APIs without losing cancellation, preview, or provenance guards.
+- [ ] Implement only a bounded, measured improvement or record that no optimization is justified; benchmark correctness and latency afterward.
+
+* TODO [#B] W17 — Clarify one subsystem's state ownership
+:PROPERTIES:
+:CUSTOM_ID: W17
+:FINDINGS: ARCH-02; DUP-04
+:DEPENDS_ON: W09, W11
+:END:
+
+- [ ] Select one subsystem and record its state owner, lifetime, mutations, cancellation, and rollback responsibilities.
+- [ ] Identify concrete duplicated reset/snapshot lists or private cross-module dependencies to reduce.
+- [ ] Preserve operation identity, copy-on-cancel behavior, canonical/live distinctions, and source/process generation guards.
+- [ ] Refactor only that subsystem with transition tests; do not replace every plist or split files for size alone.
+- [ ] Compare ownership complexity before/after and create separately scoped follow-ups if warranted.
+
+* TODO [#B] W18 — Separate optional adapters and overloaded services incrementally
+:PROPERTIES:
+:CUSTOM_ID: W18
+:FINDINGS: ARCH-05
+:DEPENDS_ON: W09
+:END:
+
+- [ ] Choose one initial extraction: an optional adapter or saved-session service, not all module boundaries at once.
+- [ ] Define explicit inputs/public entry points instead of moving private buffer-local dependencies unchanged.
+- [ ] Keep Session History distinct from saved-session browsing and loading.
+- [ ] Preserve independent module loads and direct commands; check relevant byte-compilation/load paths.
+- [ ] Measure startup cost only if claiming a performance improvement; document remaining coupling.
+
+* TODO [#B] W19 — Consolidate completed-tool display configuration
+:PROPERTIES:
+:CUSTOM_ID: W19
+:FINDINGS: ARCH-08
+:END:
+
+- [ ] Obtain a compatibility decision for the overriding collapse boolean and canonical display policy.
+- [ ] Implement and test a pure policy decision table, including legacy settings and explicit overrides.
+- [ ] Preserve parent activity-group disclosure versus child tool display as separate concepts.
+- [ ] Document startup/live/default/buffer-local scope for changed options; do not create a second menu-owned configuration store.
+
+* TODO [#C] W20 — Prototype native transcript navigation and project integration
+:PROPERTIES:
+:CUSTOM_ID: W20
+:FINDINGS: INFRA-01; section 13; DUP-02
+:DEPENDS_ON: W09
+:END:
+
+- [ ] Prototype a source-safe Imenu index for settled active-transcript turns using existing reveal/jump behavior.
+- [ ] Test source changes, projection/repaint, folded targets, and stale index invalidation.
+- [ ] Evaluate native Imenu and optional consult-imenu interactively; keep basic navigation dependency-free.
+- [ ] Evaluate a small project-prefix/project-switch configuration integration without another project registry.
+- [ ] Record adopt/revise/reject outcomes before adding a custom picker or broad navigation-helper extraction.
+
+* TODO [#C] W21 — Evaluate one thin chat-actions Transient
+:PROPERTIES:
+:CUSTOM_ID: W21
+:FINDINGS: MENU-01; MENU-02; MENU-03; MENU-04; DUP-06; section 15
+:DEPENDS_ON: W09, W14, W20
+:END:
+
+- [ ] Identify a real discovery gap after native navigation and command-context work.
+- [ ] Prototype one menu calling existing context-validating commands; do not duplicate business logic.
+- [ ] Preserve M-x, public APIs, emergency shortcuts, and point-sensitive artifact actions.
+- [ ] Reconcile personal discovery menus rather than maintaining duplicate action inventories.
+- [ ] Record whether to adopt; defer manager/setup submenus unless usage demonstrates need.
+
+* BLOCKED [#C] W22 — Add extension descriptors only when a feature demands them
+:PROPERTIES:
+:CUSTOM_ID: W22
+:FINDINGS: ARCH-07; ARCH-06
+:DEPENDS_ON: W09
+:END:
+
+Blocker: no approved next runner/reference collector/alternate backend feature.
+This is a demand gate, not an instruction to invent one to unblock the task.
+
+- [ ] Identify the concrete extension and expected minimal implementation footprint.
+- [ ] Reuse validated transport, output capture, result ownership, and draft handoff.
+- [ ] Introduce only the descriptor/generic operation required by that feature.
+- [ ] Keep Elisp host/timeout semantics distinct; editing language-mode selection does not authorize execution.
+- [ ] Avoid a universal plugin registry or speculative backend generalization.
+
+* Milestone review policy
+
+After W01–W08, reassess the concrete fixes and tool-contract decision before
+starting broad consolidation. After W09/W14, reassess whether later ownership,
+module, and UI work still pays for itself. Reprioritization requires an explicit
+planning scope, not an incidental edit during an unrelated implementation task.
+
+Section 13's remaining adapters (revert, buttons, next-error, bookmarks) are
+parked design options, not approved deliverables. Create a bounded package only
+when a real workflow warrants one, after validating source/provenance semantics.
+
+Keep the native runtime manager, existing backend generics and small event bus,
+canonical transcript model, sanitization, and domain-specific rollback. The
+review's "keep" findings (including INFRA-02) are constraints, not rewrite tasks.

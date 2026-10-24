@@ -2,11 +2,11 @@
 
 ## Review record
 
-- **Passes:** 1 — inventory/reachability/test baseline; 2 — broader simplification, extensibility, native Emacs integration, dependency/state ownership, bridge review, and isolated behavioral probes.
-- **Reading guide:** sections 1–10 preserve the first-pass findings; **sections 11–16 contain the second-pass findings and revised priorities**. This is an evolving review, not a completed exhaustive audit.
-- **Baseline commit:** `14cd767`; working tree was clean when review began.
-- **Environment:** GNU Emacs 31.1.
-- **Changes made:** this review plus review logs and an isolated probe script under `.tmp/`. No package implementation or tracked test changes.
+- **Passes:** 1 — inventory/reachability/test baseline; 2 — simplification/extensibility review and probes; **3 — evidence revalidation, full-suite execution, isolated loads, and targeted draft/target lifecycle review**.
+- **Reading guide:** sections 1–10 retain the first-pass findings; sections 11–15 contain the second-pass analysis with explicit third-pass corrections. **Section 16 is the current verification ledger; section 17 records the targeted lifecycle pass.** This is an evolving review, not an exhaustive audit.
+- **Baseline commits:** passes 1–2 used `14cd767`. Pass 3 used `9107cea`, which only added this document under `docs/`; package/config/test sources are unchanged. Working tree was clean at the start of each review.
+- **Environment:** GNU Emacs 31.1; pass 3's real-Pi tests used installed Pi **1.4.0**.
+- **Changes made:** this review plus review scripts/logs under `.tmp/`. No package implementation or tracked test changes. The tracked `docs/` document supersedes the historical `.tmp/pichat-maintainability-review.md` copy.
 - **Terminology:** [PiChat glossary](../pichat/GLOSSARY.md) is authoritative. A **runtime** is not a **Pi session** or a **saved session file**. **Session History** means entries/branches inside the current Pi session, not saved-session browsing.
 - **Status:** recommendations, not approved implementation work. Finding IDs are stable so subsequent passes can amend or reject them.
 
@@ -32,11 +32,12 @@ The first-pass improvement list was:
 
 Read `README.md`, `GLOSSARY.md`, and `TESTING_GUIDELINES.md` completely. Inventoried all top-level package Lisp files and test Lisp files; searched definitions, references, suite registration, compatibility aliases, and command bindings. Inspected selected implementation and test bodies for the findings below, plus repository integration in `user/pichat.el`. Compared PiChat's custom async Consult stage with the installed Consult source under `.local/elpaca/sources/consult/consult.el`.
 
-This is **not** a line-by-line audit of all code. Pass 2 additionally read the TypeScript bridge and traced its Emacs execution path, inspected restart ownership/commit paths and display rollback, checked native Emacs integration contracts, and rechecked selected dead-code candidates over tracked repository files. The full restart transition matrix, remote failure matrix, and every test assertion still require deeper passes. No live GUI interaction, real-Pi integration, SSH execution, coverage instrumentation, or mutation testing was performed.
+This is **not** a line-by-line audit of all code. Pass 2 additionally read the TypeScript bridge and traced its Emacs execution path, inspected restart ownership/commit paths and display rollback, checked native Emacs integration contracts, and rechecked selected dead-code candidates over tracked repository files. Pass 3 revalidated those claims, ran the complete local suite with real Pi, checked all 51 module loads in fresh Emacs processes, and added bounded lifecycle observations and two in-memory mutation checks. Coverage instrumentation was attempted but failed; it supplies no usable coverage metric. The full restart transition matrix, remote failure matrix, and every test assertion still require deeper passes. No live GUI session or SSH execution was performed; see §16 for precise results and limits.
 
 ### Evidence classifications
 
 - **Confirmed static:** directly supported by inspected bodies/reference searches; not necessarily a runtime bug.
+- **Reproduced observation:** exercised at a named boundary, possibly with stubs or injected failures; not automatically an end-to-end user incident. Tests asserting an existing gap are observations, not regression tests for the desired fix.
 - **Strong candidate:** no in-repository production caller, but external Lisp callers, autoloads, or dynamic invocation may exist.
 - **Design proposal:** a potential simplification requiring a prototype/behavioral comparison.
 - **Keep:** superficially duplicate or custom behavior that currently has a substantive reason to exist.
@@ -90,12 +91,12 @@ The three largest production files account for 9,036 lines, approximately **38%*
 
 ### DUP-01 — Command discovery has two implementations with different freshness guarantees
 
-**Priority: high. Evidence: confirmed overlap; behavioral defect not reproduced.**
+**Priority: high. Evidence: confirmed overlap; pass 3 reproduced a source-change gap during argument collection.**
 
 - `pichat/pichat-commands.el:14–47`: `pichat-command-run` fetches `get_commands`, schedules a picker, and submits directly through the backend. The picker checks runtime liveness.
 - `pichat/pichat-chat-completion.el:41–133`: completion has source-generation/source-key/request-sequence tracking, validated command records, explicit loading/failure state, and stale-callback rejection.
 
-Both expose commands/templates/skills, but command picker work can outlive its original source context. Its liveness checks do not themselves establish that the runtime still hosts the same Pi session. This is a divergence risk, not proof that the current RPC layer permits every stale callback scenario.
+Both expose commands/templates/skills, but command picker work can outlive its original source context. Its liveness checks do not themselves establish that the runtime still hosts the same Pi session. Pass 3 changed the runtime's Pi session ID during the stubbed argument prompt and observed submission to the rebound source through a stubbed backend. This reproduces the command-boundary gap after discovery, without claiming that every late RPC callback bypasses transport guards. No actual prompt was submitted by that probe.
 
 **Recommendation:** one command-catalog service, with CAPF and picker as consumers. Keep their UX distinct: CAPF edits a draft; the picker currently executes. Capture and validate origin/source identity before delayed prompting and before submission. Explicitly decide whether picker execution should continue to submit immediately or insert into the draft; do not change that behavior as an incidental refactor.
 
@@ -221,7 +222,7 @@ Public names without `--` deserve an API decision even if not documented. Record
 - `pichat-tools-call-async` (`pichat-tools.el:111`). No caller found. `pichat-tools-execute-json` uses synchronous `pichat-tools-call`, which rejects async tools.
 - `pichat-rpc-get-messages` (`pichat-rpc.el:812`). Unused RPC wrapper; canonical synchronization uses entries.
 
-The async tool API is more concerning than an unused RPC convenience wrapper: `pichat-define-tool` accepts `:async`, but the inspected bridge execution path rejects such tools. Also, the defining macro produces a one-argument function while the async dispatcher describes a two-argument callback convention. Manually constructed tool records may differ.
+The async tool API is more concerning than an unused RPC convenience wrapper: `pichat-define-tool` accepts `:async`, but the inspected bridge execution path rejects such tools. Also, the defining macro produces a one-argument function while the async dispatcher describes a two-argument callback convention. Manually constructed tool records may differ. ARCH-04 records the stronger pass-2 reproduction, reconfirmed in pass 3; the retirement/support decision remains open.
 
 **Recommendation:** audit the full bridge contract, then either support async tools end-to-end or remove/deprecate the exposed async option. Treat this as a capability/API mismatch candidate, not a claim that every possible external caller is broken. Apply the same question to tool `:instructions`: is it intentionally metadata-only, or expected to affect prompts?
 
@@ -258,7 +259,7 @@ These are guarded by optional dependency availability in the isolated `emacs -Q`
 
 **Pass 2 update:** reran the same 759 tests with the installed source directories for Consult, Embark, Evil, Orderless, Compat, and goto-chg on `load-path`: **759 passed, 0 skipped, 0 unexpected**. No packages were installed. Log: `.tmp/pichat-maintainability-pass2-tests.log`. This closes the four skip gaps for this review environment, but does not replace a repeatable integration job or interactive UI testing.
 
-Static scan found **830 literal `ert-deftest` forms** across test Lisp, with **no duplicate names**. That number is not the default registered test count: real-Pi definitions are conditional, and SSH has a separate runner. No `:expected-result` declarations or obvious `(should t)` placeholders were found by the targeted scan. The explicit `ert-skip` found in SSH testing concerns a host lacking Python; `skip-unless` also guards optional integrations.
+Static scan found **830 literal `ert-deftest` forms** across test Lisp, with **no duplicate names**. Pass 3 reconciled this as **759 unit + 63 conditional real-Pi + 8 separate SSH tests**. The real-Pi definitions span `pichat-test-integration.el` (59) and `pichat-test-sessions-integration.el` (4). No `:expected-result` declarations or obvious `(should t)` placeholders were found by the targeted scan. The explicit `ert-skip` found in SSH testing concerns a host lacking Python; `skip-unless` also guards optional integrations.
 
 ### TEST-01 — Documentation wording test is low-value and brittle
 
@@ -323,7 +324,7 @@ These are organization signals, not failure gates. Restart coverage is distribut
 4. Opt-in isolated SSH run before transport-sensitive changes.
 5. Coverage analysis as triage, followed by targeted mutation/fault injection for high-risk state transitions.
 
-No package installation or coverage run was undertaken in this review. Test deletion should be justified by replaced/retired behavior, not by line counts or lack of recent failures.
+No packages were installed. Pass 3 ran the dependency-enabled full suite successfully and attempted coverage, which failed during instrumentation/reporting (§16). Test deletion should be justified by replaced/retired behavior, not by line counts or lack of recent failures.
 
 ## 6. Native Emacs / Consult simplification opportunities
 
@@ -454,7 +455,7 @@ Effort estimates are relative, not calendar commitments. Every row is **proposed
 | Consult process/identity adapter review | DUP-05 | P3 / medium | Demonstrable net reduction with remote/timeout/identity guarantees retained. |
 | Configure Ibuffer/Consult chat-buffer navigation | NATIVE-01 | P3 / small | Config-level improvement; no lifecycle side effects. |
 
-P1 means “start here for maintenance work,” not “confirmed production incident.” No urgent runtime failure was reproduced by this pass.
+P1 means “start here for maintenance work,” not “confirmed production incident.” This is the **first-pass register**; §15 supersedes its ordering, and §§16–17 distinguish subsequent reproductions from remaining risks.
 
 ## 9. Subsequent passes
 
@@ -468,7 +469,9 @@ Pass 2 addressed selected items here and broadened the review; the remaining wor
 - Inspect bridge TypeScript and Emacs tool dispatch together, especially async tools and instruction metadata.
 - Produce exact removal groups, including tests to retarget rather than delete.
 
-### Pass 3 — State/lifecycle ownership
+### State/lifecycle ownership workstream
+
+Pass 3 completed a targeted slice in §17, not the entire following workstream.
 
 Build a compact matrix for runtime stop/start/restart, source switch/new/fork/clone, chat death, and preview death. For each, list canonical/live state, owned requests/timers, compose editors, attachments/recovery, view snapshots, and caches. Compare ownership against generation checks, not just function names.
 
@@ -572,7 +575,9 @@ Adding an Org capture action, Dired attachment action, code-review handoff, or a
 
 **Native fit:** normal Emacs buffers, buffer-local state, ordinary functions, `with-current-buffer`, and existing mode hooks. No framework dependency is needed.
 
-**Acceptance:** reference insertion, result sharing, compose apply, and future integrations use the same mutation boundary; attachments remain intact; a stale origin cannot write into a different source; failed insertion preserves the original draft. Public functions must distinguish append/replace from submit.
+**Acceptance (proposed, not all existing guarantees):** reference insertion, result sharing, compose apply, and future integrations use the same mutation boundary; attachments remain intact; a stale origin cannot write into a different source; failed insertion preserves the original target draft. Public functions must distinguish append/replace from submit.
+
+**Pass 3:** direct reference insertion does advance editor generation through the normal edit hook; bypassing the setter does **not** mean it bypasses all edit bookkeeping. However, collection has no captured-source recheck before insertion, and the setter itself is not an atomic text transaction. Injected re-entrancy and mid-insert failure reproduced these separate gaps (§17). Compose is a useful explicit-callback precedent, not a complete implementation of the proposed API: it intentionally overwrites concurrent prompt edits and preserves its own editor on failure, but does not promise rollback of the old target draft.
 
 ### ARCH-02 — Group state by ownership and lifetime, not by whichever UI first needed it
 
@@ -608,7 +613,9 @@ A restart operation is a strong typed-record candidate: `pichat-reconfigure--own
 - `pichat-artifacts-embark-run` (`pichat-artifacts-embark.el:79–91`) obtains captured code, then uses **current** buffer, `default-directory`, and `pichat-chat-session` for execution. It does not validate the captured artifact origin.
 - The runner captures its sharing token when execution starts (`pichat-artifact-runner.el:393`), which cannot repair a wrong origin chosen before that point.
 
-The probe supplies a target captured from one buffer and invokes Run in another chat context. The stub runner receives the other runtime. This demonstrates the command-boundary gap, **not** that normal Embark dispatch always changes buffers or that wrong-host execution was observed end to end. A source switch while an action is delayed creates the same class of concern.
+The pass-2 probe supplies a target captured from one buffer and invokes Run in another chat context. The stub runner receives the other runtime. This demonstrates the command-boundary gap, **not** that normal Embark dispatch always changes buffers or that wrong-host execution was observed end to end.
+
+**Pass 3 strengthens this:** captured a target using the real artifact finder, reset its originating chat source, confirmed `pichat-chat-artifacts-valid-bounds` rejects it, then invoked the installed **real `embark--act` dispatcher**. Run still reached the stub runner with captured old code in the rebound chat. This is a batch delayed-action reproduction, not GUI collect/export validation or actual code execution. The installed Embark source selects an action window; it does not interpret PiChat's captured source identity for the adapter.
 
 **Recommendation:** distinguish content-only operations from context-bearing operations. Copy/inspect may keep working on immutable captured source. Run/share/jump must validate the captured target or explicitly ask for a new destination. Capture host/cwd provenance deliberately; never silently substitute the current or preferred runtime.
 
@@ -643,7 +650,7 @@ This is not proof of a startup performance problem; no load-time benchmark was r
 
 **Recommendation:** keep the public launch commands small and autoload optional commands/modules at their entry points. Separate normalized saved-session records/loading actions from Consult presentation and history tree presentation. Extract only helpers with real consumers, not a miscellaneous `utils` file. Keep explicit dependencies where a feature truly needs them.
 
-Use Emacs autoloads and `with-eval-after-load` for adapters. Add isolated load tests for each intended entry point. Do not claim that lazy loading alone creates clean APIs: ARCH-01 addresses the cross-module calls that autoloads cannot fix.
+Use Emacs autoloads and `with-eval-after-load` for adapters. Preserve independent entry-point loading. **Pass 3 checked all 51 production modules with separate `emacs -Q --batch -L pichat` require invocations: all loaded successfully.** This narrows the finding to coupling/load footprint, not an existing load-order failure. It does not test interactive commands, compilation, or startup latency. Do not claim that lazy loading alone creates clean APIs: ARCH-01 addresses the cross-module calls that autoloads cannot fix.
 
 ### ARCH-06 — Keep the existing backend/event mechanisms modest
 
@@ -698,7 +705,7 @@ These are prioritized **adapters**, not a request to implement every item. Prefe
 | **`next-error-function`** | Actual diagnostic locations, not every arbitrary tool visit | Standard next/previous diagnostic navigation can be reused where semantics fit. Do not hijack global next-error behavior merely for generic activity navigation. | Conditional |
 | **Bookmarks** | Persistent saved-session provenance + optional entry ID + custom handler | Native bookmark list/Consult bookmarks could reopen stable conversation locations. Never persist runtime IDs or raw buffer positions as durable identity. Reject ephemeral sources; preserve target qualification and second-writer checks. | Later, after target API |
 | **Display rules** | Common view display + configurable policy | Already uses `pop-to-buffer`, `quit-window`, and display function hooks. Keep Bufferlo/tab logic outside core and continue honoring `display-buffer-alist`. | Keep/improve consistency |
-| **Isearch/Occur/Consult line** | Current visible transcript text | Already available; no custom search needed for this scope. Folded/truncated-away content is not recovered by searching the buffer. Full history search needs canonical data, not a promise that `consult-line` sees everything. | Document/configure |
+| **Isearch/Occur/Consult line** | Current visible transcript text | Already available; no custom search needed for this scope. Content removed by fold rendering or truncation is not recovered by searching the buffer; ordinary invisibility overlays may instead be searchable/revealable, depending on the command. Full history search needs canonical data, not a promise that `consult-line` sees everything. | Document/configure |
 | **Minor modes/hooks** | Optional Evil/Embark/navigation adapters | Keep native major-mode behavior useful alone. Use hooks for user customization, not for hidden required initialization. | Keep |
 
 ### INFRA-01 — Imenu before a new transcript-search UI
@@ -731,6 +738,8 @@ The probe supplied a `file-error` condition with `TRAMP: connection refused` and
 `pichat-rpc--handle-line` (`pichat-rpc.el:461`) wraps both JSON decoding and object dispatch in one `condition-case`, reporting every caught error as `rpc-parse` / “Failed to parse Pi RPC output.” A valid record that fails in dispatch can be mislabeled.
 
 `pichat-emit` also catches handler errors and reports them only through `message`, without the unified diagnostic record path. Isolation is desirable; swallowing causal context is not.
+
+**Pass 3 reproduction:** dispatched a valid JSON response whose registered success callback deliberately raised `consumer failed`; the recorded origin was `rpc-parse`. This confirms misattribution at the callback boundary. Event-handler errors caught inside `pichat-emit` follow its separate message-only path; they do not all escape to this parse handler.
 
 **Recommendation:** keep decode/protocol-validation/dispatch/UI-projection stages distinct in diagnostics. Record bounded structural context such as event kind and stage, avoid raw prompts/secrets in ordinary summaries, and retain explicitly requested raw inspection. Use typed internal errors (`define-error`) for decisions owned by PiChat; retain conservative text classification only for unstructured external errors. Do not build a logging framework.
 
@@ -799,19 +808,117 @@ Use these as design exercises, not new features to implement now:
 
 **Measure success by:** fewer modules touched per feature, fewer private chat accesses outside orchestration, fewer independently maintained lifecycle lists, fewer duplicated picker/menu behaviors, and no reduction in safety or supported host semantics. Lower line count is a secondary outcome.
 
-## 16. Coverage of this second pass and remaining uncertainty
+## 16. Current verification ledger — updated by pass 3
 
-| Area | Pass 2 work | Still needed |
+This replaces the old “pass 2 work / still needed” table. **Executed tests, inspected contracts, synthetic reproductions, and design proposals are different kinds of evidence.** A completed suite is not proof that every scenario in its domain was covered.
+
+### 16.1 Revalidated data and outcomes
+
+- Source/config/test diff between `14cd767` and `9107cea`: **none**. Only this review was added to Git. Existing source line references remain applicable.
+- Recounted **51 production files / 24,054 lines**, **57 test/support files / 24,444 lines**, **830 literal test definitions with no duplicate names**, **84 top-level custom options**, and the **66/32/20** buffer-local declaration counts. These figures remain correct.
+- Rechecked DEAD-01, selected DEAD-02/04 entries, DEAD-06, and artifact-validator references against tracked text, excluding this review itself. Results support the existing candidates; they are still not proof about external or dynamically constructed calls.
+- **Full local suite, Pi 1.4.0, optional dependencies enabled: 822 passed, 0 skipped, 0 unexpected.** This comprises 759 unit and 63 real-Pi tests. Fixtures use isolated agent/session/project directories and deterministic offline providers. No SSH tests were selected.
+- Existing real-Pi tests exercised bridge schema refresh/deactivation/errors, ordinary abort/queue behavior, fork/clone/switch, independent saved-session open, and guarded restart. They do **not** establish async Emacs-tool cancellation support.
+- **51/51 isolated module loads passed**, each in a new Emacs process. This was a source-load check, not byte-compilation or performance measurement.
+- **9/9 review observations passed**, including tests which intentionally assert the current gaps. They are separate from the 822 authoritative tests and must not be advertised as regression tests for fixes.
+- **Two deliberately broken in-memory variants were detected:** bypassing compose source validation and accepting a retired restart operation each caused the selected test to fail. Functions were restored automatically; no source was mutated. This is a two-guard sanity check, not a mutation score.
+- **Coverage attempt failed:** 759 selected, 691 expected results, **68 unexpected**, followed by an `args-out-of-range` report-generation error. Instrumented traces include Edebug counter-array index errors in the focused projection path. The uninstrumented full suite passed. Treat this as an unusable instrumentation/reporting run; neither coverage percentages nor 68 production regressions are established. Root cause was not fully diagnosed.
+- Pi 1.4.0 is the exact executable tested here. `pichat/PI_COMPATIBILITY.md` still records the earlier verified/reviewed release; this review did **not** audit upstream changes or advance that compatibility ledger.
+
+### 16.2 Coverage and remaining work
+
+| Area | Evidence now obtained | Still unverified / decision needed |
 |---|---|---|
-| Dead helpers/state | Tracked-repository checks; added state candidates; distinguished generated/conventional use | Downstream user configuration and complete generated-call analysis |
-| Tool bridge | Read TypeScript; traced Emacs dispatch; reproduced API mismatch | Real-Pi abort/cancel/dynamic-tool scenarios |
-| Artifact actions | Traced capture → run → share; reproduced wrong-current-context seam | Real Embark collect/export/delayed-action behavior and stale-source UI regression test |
-| Dependencies | Require graph screening, load probe, private-call inspection | Isolated load/compile matrix and load-time profiling |
-| Restart/projection | Inspected ownership, commit, source reset, snapshot/restore | Exhaustive transition matrix and fault-injection testing |
-| Native integration | Checked Emacs hook/interface contracts; identified existing reuse and missing adapters | Live Emacs prototype, especially source-safe Imenu/revert behavior |
-| Tests | 759/759 with optional dependencies | Full real-Pi suite, SSH suite, coverage and mutation analysis |
-| Resource use | Inspected collection limits, synchronous scans/acquisition, artifact lookup | Large-log/large-transcript profiling, stalled helper tests, remote latency measurement |
-| Configuration/API | Reviewed conflicting display policy and hypothetical extension costs | Supported version/API policy and user decisions on deprecated features |
+| Dead helpers/state | Counts and tracked exact references reconfirmed; no new callers found for checked candidates | External configuration, generated calls, supported public API/alias policy; not all DEAD-02 accessors reaudited in this pass |
+| Tool bridge | Prior async/instructions probes reconfirmed; current real-Pi schema/deactivation/error tests passed | End-to-end async Emacs-tool execution and cancellation; support/deprecation choice |
+| Artifact actions | Real finder → stale source → real Embark dispatcher → stub runner reproduction; existing stale-share tests passed | Interactive collect/export/window routing and wrong-host impact; durable regression for the desired rejection |
+| Draft/target contracts | Exact source-token fields traced; source reset, share, compose, reference collection and injected edit failure exercised (§17) | Policy for pathname availability changes; validated collection/execution contexts; transactional target mutation |
+| Dependencies | Core footprint reconfirmed; 51 fresh-process loads passed | Compile matrix, autoload/API design, measured startup cost |
+| Restart/projection | Targeted ownership matrix (§17); existing fault-injection and full real-Pi restart tests passed; retired-operation mutant detected | Exhaustive phase × failure × cancellation × re-entrancy matrix; no universal rollback proof |
+| Native integration | Existing hooks/contracts inspected; no integration implementation changed | Live Imenu/revert/bookmark prototypes and UX comparison; proposals remain proposals |
+| Tests | 822/822 uninstrumented full run; two selected mutation checks | SSH suite; repair/diagnose coverage instrumentation; broader mutation analysis |
+| Resource use | Static resource/scan observations remain supported | Peak memory/latency measurements, stalled-helper tests, large transcripts and remote scans; no measured bottleneck claimed |
+| Configuration/API | Display-option precedence and backend/runner extension boundaries rechecked | Minimum optional-package versions and product decisions; Pi version coverage is separate from API policy |
 
-No review can establish that nothing was missed. This pass materially broadens the analysis and strengthens several findings with probes, while explicitly leaving the high-risk runtime/remote/interactive cases unverified. The next most useful pass is a **targeted contract/lifecycle review around the proposed draft/target boundary**, not another generic symbol-count sweep.
+### 16.3 Evidence artifacts and reproduction
+
+All artifacts below are under `.tmp/` and are gitignored, not permanent test-suite additions:
+
+| Artifact | Purpose |
+|---|---|
+| `pichat-maintainability-pass3-full-tests.log` | Successful 822-test uninstrumented full run |
+| `pichat-maintainability-pass3-static.log` | Counts and exact tracked-text reference locations |
+| `pichat-maintainability-pass3-loads.log` | Fresh-process require result for every production module |
+| `pichat-maintainability-pass3-recheck.log` | Rerun of pass-2 SSH/async/artifact/load-footprint probes |
+| `pichat-maintainability-pass3-probes.el` / `.log` | Nine named current-behavior observations, including synthetic gaps |
+| `pichat-maintainability-pass3-mutations.el` / `.log` | Two in-memory variants detected by assertion failure |
+| `pichat-maintainability-pass3-coverage.log` | Failed instrumented run and report-generation error; no usable coverage report |
+
+Full run: use the dependency-enabled command in §11 with `pichat-test-include-integration` set to `t` and `PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0` in the environment. This is the full runner's suite with the optional load paths added.
+
+Observation run:
+
+```sh
+emacs -Q --batch -L pichat -L pichat/test \
+  -L .local/elpaca/sources/compat -L .local/elpaca/sources/embark \
+  -l .tmp/pichat-maintainability-pass3-probes.el \
+  --eval '(ert-run-tests-batch-and-exit "^review-")'
+```
+
+For the mutation check, use the same load paths and load `pichat-maintainability-pass3-mutations.el` instead, without the final ERT expression. It reports the two **expected assertion failures** and exits successfully only when both variants are detected. Coverage used `pichat/test/run-coverage.sh --format lcov`, a `.tmp/` report destination via `PICHAT_COVERAGE_REPORT_FILE`, and the §11 dependency directories via `PICHAT_COVERAGE_LOAD_PATH`.
+
+The initial draft of the observation script had a parenthesis error and an uninitialized process-generation fixture; these were corrected before the final 9/9 run. They were probe-authoring errors, not package findings.
+
+## 17. Targeted draft/target lifecycle pass
+
+### 17.1 Identity is a set of contracts, not one universal token
+
+The chat source token is exactly **`(source-generation Pi-session-ID saved-file-path)`** (`pichat-chat--source-token`). It includes neither runtime ID, process generation, nor editor generation. Consumers separately retain their origin buffer. Other owners use different combinations:
+
+| Consumer | Identity/ownership checks | Consequence |
+|---|---|---|
+| Compose apply | Live target buffer + callback validating captured chat source token | Rejects ordinary rebind; intentionally permits concurrent prompt edits to be overwritten; does not require a live Pi process |
+| Result share | Live chat origin + equal chat source token + optional runner-ready predicate | Can append to a stopped runtime's draft; no automatic submission; process replacement alone is not invalidation |
+| Response navigation/refresh | Live origin callbacks + source token + canonical assistant node, and projected position for return | Snapshot copying remains independent of live navigation |
+| Submission recovery | Request identity + source generation + editor generation + current draft/image state | Prevents late rejection from replacing newer input; source reset moves pending records/images to manual recovery |
+| Slash CAPF | Source generation/key + request sequence | Same-ID pathname availability does not change its ID-based key |
+| Command picker | Runtime liveness before prompting and submission | Source change during argument collection is not rejected (DUP-01) |
+| Artifact Run | Captured code descriptor, but current-buffer execution context | Descriptor's stored source identity is not validated (ARCH-03) |
+| Reference insertion | Chosen target buffer; captured path context/transport for collection | No source revalidation after potentially re-entrant collection |
+| Restart request | `eq` operation ownership, phase, chat ownership, and replacement process/generation | Retired callbacks must not acquire a replacement attempt; copy-on-cancel is substantive |
+| History/manager previews | Source token plus their own request generation, runtime/row/buffer/window ownership checks | Do not replace these with the chat token without preserving the additional checks |
+
+These checks are necessary but not universally interchangeable. In particular, **draft editing is not execution or submission**: requiring Pi liveness for every draft edit, or invalidating every editor on a verified same-source restart, would change existing behavior.
+
+### 17.2 Bounded transition matrix
+
+This is an inspected/tested slice, not the exhaustive matrix originally proposed in §9.
+
+| Transition | Draft/attachments and targets | Async/model ownership | Evidence |
+|---|---|---|---|
+| Ordinary new/switch/fork/clone source rebind | Draft and pending images retained; in-flight submissions become recoverable; old compose/result tokens rejected. Fork may explicitly replace/copy returned prompt text. | Source generation advances; canonical/live/enrichment state and owned sync/stats/projection work reset; CAPF reset | `--reset-for-source`, `pichat-chat-input-abandon-in-flight`; existing fork/clone/input/projection tests; new observation |
+| A → B → A in one chat | Old A token stays invalid despite equal final Pi ID/path | Generation distinguishes visits | New round-trip observation |
+| Same Pi ID, pathname field nil → path | Generation and ID-based completion key remain unchanged, but compose/result token changes | No ordinary source reset | Existing file-materialization generation test plus new compose observation; see REL-04 below |
+| Stop/process generation change without source reset | Draft/source token need not change; result share remains an edit-only operation | RPC lifetime guards and pending-request cancellation are separate from draft identity | Source trace, existing RPC stop tests, synthetic stopped-share observation |
+| Verified saved-source restart | Draft and compose token retained; old canonical snapshot held through staging/failure | Process generation changes; owned operation verifies full source/entries/settings before commit | `pichat-chat-restart-staging-retains-snapshot-until-verified-commit`; full real-Pi restart tests |
+| Verified unwritten-empty restart | New source generation/ID; compose explicitly retargeted only after successful projection; draft retained | New metadata-only cache verified; failed projection preserves staging and old generation | `pichat-chat-empty-restart-projection-failure-retains-snapshot-and-draft`; real-Pi restart coverage |
+| Chat death | Compose retains its own text; result snapshot remains copyable but cannot share to dead origin; no migration to another chat | Chat releases handlers/requests/timers; active restart is cancelled/stopped even if normal stop-on-kill is disabled | Existing compose, artifact, chat cleanup and lifecycle tests |
+| Preview death or selected-row/source change | Immutable snapshots are not authority to mutate a different source | Preview request cancellation/generation/owner checks remain independent | Inspected history/manager request ownership and existing preview tests; no new interactive preview run |
+| Independent saved-source open fails | Origin runtime/draft remains separate; new runtime must be stopped/forgotten | Launch owns its new runtime and synchronization/reservation; not a rollback of the origin runtime | Existing manager cancellation/failure tests and full independent-open integration tests |
+
+A source reset is not a blanket cancellation of every runtime-owned extension facility; do not infer that from the shorthand row above. Dialog activation, process exit, restart staging, and chat kill have separate cancellation paths. Their full cross-product remains unverified.
+
+### 17.3 Corrections and newly narrowed gaps
+
+**REL-04 — Pathname availability and source-token semantics differ.** The same Pi session ID with a newly supplied pathname is treated as the same source by `pichat-chat--source-identity-changed-p`, but changes the tuple used by compose/results/responses. The new observation confirms compose rejects that transition even though source generation stays equal. This is a conservative rejection/consistency issue, not stale content being accepted. Merely writing a file whose pathname was already known does **not** change the token. The probe supplies the nil → path transition; its frequency in real Pi was not measured. Decide the contract before centralizing tokens, and do not weaken remote provenance checks to remove a false rejection.
+
+**ARCH-01 follow-up — Reference collection is not source-validated.** A synthetic callback during `pichat-reference--dwim-text` reset the selected chat source; `pichat-add-reference` still inserted the collected text. No real TRAMP/confirmation race was executed. The fix proposal is a source check immediately before insertion, not a claim that references currently fail to advance editor generation: the probe confirmed that their direct edit runs that hook.
+
+**REL-05 — Compose failure preservation does not imply target-draft rollback.** The existing `pichat-compose-replacement-failure-preserves-text` test asserts the compose buffer survives a callback error; it does not assert the old target prompt is restored. Injecting an `insert` error after `pichat-chat--set-input-text` deletes the old prompt leaves that target prompt empty, while compose text survives and editor generation has not advanced. This is a bounded fault-injection result, not observed spontaneous data loss. ARCH-01's stronger acceptance criterion requires a text transaction and explicit bookkeeping commit. That small draft transaction is distinct from full canonical/live projection rollback.
+
+**Existing test value confirmed:** projection tests already inject failures after insertion, indexing, decoration, fontification, and before commit; the uninstrumented suite passed them. The earlier “fault injection still needed” wording must not suggest there are no such tests. Remaining work is systematic transition coverage and additional failure boundaries, not starting from zero.
+
+### 17.4 Next pass
+
+The next useful correctness work is to turn the reproduced **stale execution/submission/reference** observations into tests for desired rejection, after agreeing on the narrow target/draft contract. Separately diagnose the coverage instrumentation failure before using coverage to justify deletions. Interactive Embark collect/export, SSH, broad mutation testing, and exhaustive restart/resource matrices remain open. No implementation change is authorized or made by this review.
 

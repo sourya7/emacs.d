@@ -1526,18 +1526,23 @@ mappings are configured."
     (pichat-path-resolve-from-runtime
      cwd (and session (pichat-session-path-context session)))))
 
-(defun pichat-sessions-switch-file (file &optional cwd ready source)
+(defun pichat-sessions-switch-file (file &optional cwd ready source target-session)
   "Switch the active PiChat session to FILE with its optional CWD metadata.
 FILE is host-visible and is translated to a Pi runtime path.  Call READY with
 the synchronized session after a successful switch.  SOURCE is the buffer
 whose auxiliary-view chain should close on success; it defaults to the invoking
-non-minibuffer buffer."
+non-minibuffer buffer.  TARGET-SESSION, when provided, selects the exact live
+runtime instead of resolving one from the current buffer."
   (unless (and (stringp file) (not (string-empty-p (string-trim file))))
     (user-error "No saved Pi session file was selected"))
-  (let* ((candidate (pichat-session-current))
+  (let* ((candidate (or target-session (pichat-session-current)))
          (runtime-file (pichat-sessions--runtime-file file candidate))
          (cwd-resolution (pichat-sessions--host-cwd-resolution cwd candidate))
-         (session (pichat-sessions--active-session))
+         (session (if target-session
+                      (if (pichat-session-alive-p target-session)
+                          target-session
+                        (user-error "The originating PiChat runtime is no longer live"))
+                    (pichat-sessions--active-session)))
          (_capability
           (pichat-backend-require-capability
            session 'saved-sessions "Saved-session switching"))
@@ -1901,7 +1906,15 @@ picker.  Discovery never starts a Pi process solely for browsing."
            (archive-ready (capability)
              (continue-once
               #'pichat-consult-sessions capability nil
-              (lambda (file cwd) (pichat-sessions-switch-file file cwd))))
+              (lambda (file cwd)
+                (pichat-sessions-switch-file file cwd nil buffer session))
+              nil
+              (lambda (file cwd entry-id)
+                (pichat-sessions-switch-file
+                 file cwd
+                 (lambda (switched)
+                   (pichat-sessions-list switched entry-id))
+                 buffer session))))
            (archive-unavailable (_reason)
              (continue-once #'pichat-sessions-browse-files-basic)))
         (pichat-archive-discover session buffer

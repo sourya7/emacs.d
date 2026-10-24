@@ -706,8 +706,9 @@ Chat keys:
 - `C-c C-p` — open **Session History** for the current session file
 - `C-c C-b` (or the chat-local `SPC m b` menu in this repository) — switch the
   active runtime to a selected saved session, keeping its owner scope and tab.
-  `C-u C-c C-b` forces the basic picker. Consult Embark `s` also switches a
-  candidate; `j` switches and jumps to Session History.
+  `C-u C-c C-b` forces the basic picker. In the archive-backed switch picker,
+  Consult Embark `j` switches the originating runtime and opens Session History
+  at the selected content match; `RET` switches without jumping.
 - `M-x pichat-sessions-browse-files` (or global `C-c p b` in this repository)
   — browse saved sessions and open a selection in a new independent runtime
   rooted at its recorded working directory; the existing runtime is untouched.
@@ -791,11 +792,11 @@ short session ID still distinguish them.
 summary, and lazily loaded fork-point evidence without changing Pi's active
 session. `C-c C-r` opens a bounded Consult picker for the selected session's
 resolved parent and direct children; use Consult narrowing key `p` for the
-parent and `c` for children. `RET` opens the selected session independently. With
-Embark, `s` switches the active runtime, `j` switches and opens Session History
-at a loadable best entry, and `r`
-also browses relations. Relation candidates support the same preview and Embark
-actions. `RET` loads only a resolved nested session whose source exists, and
+parent and `c` for children. `RET` opens the selected session independently in independent-open browsers,
+while the chat's switch browser uses `RET` to switch. With Embark, `j` in the
+switch browser switches the originating runtime and opens Session History at a
+loadable best entry; independent-open browsers omit switch/jump actions.
+`r` also browses relations, and relation candidates inherit the browser's actions. `RET` loads only a resolved nested session whose source exists, and
 loading still goes through ordinary PiChat path-mapping checks. Relation
 metadata has no content-match entry, so `j` opens Session History at its normal
 current position rather than treating fork evidence as loadable. `C-g` returns

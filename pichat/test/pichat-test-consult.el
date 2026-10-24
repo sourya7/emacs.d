@@ -788,6 +788,30 @@
       (should (equal (cdar calls)
                      (list capability project "resume" #'ignore t))))))
 
+(ert-deftest pichat-consult-switch-context-survives-search-replay ()
+  (let ((capability '(:identity fixture))
+        (project '(:cwd "/fixture"))
+        (jump #'ignore)
+        calls)
+    (cl-letf (((symbol-function 'pichat-archive-capability-current-p)
+               (lambda (_capability) t))
+              ((symbol-function 'pichat-consult--search)
+               (lambda (&rest args) (push (cons this-command args) calls))))
+      (pichat-consult--run-project-search
+       capability project "search" #'ignore nil nil jump)
+      (let ((replay (caar calls)))
+        (should (equal (cdar calls)
+                       (list capability project "search" #'ignore nil jump)))
+        (funcall replay)
+        (should (equal (cdar calls)
+                       (list capability project nil #'ignore nil jump))))
+      (pichat-consult--resume-context
+       (list :kind 'archive :capability capability :project project
+             :input "resume" :selection-function #'ignore
+             :jump-function jump))
+      (should (equal (cdar calls)
+                     (list capability project "resume" #'ignore nil jump))))))
+
 (ert-deftest pichat-consult-launch-selection-rejects-mutating-actions ()
   (let* ((chosen nil)
          (recipient (lambda (file cwd record)
@@ -837,6 +861,64 @@
     (should (equal '(("/saved.jsonl" "/project")
                      ("/saved.jsonl" "/project"))
                    opened))))
+
+(ert-deftest pichat-consult-switch-picker-jumps-only-after-successful-switch ()
+  (let* ((calls nil)
+         (context (list :kind 'archive
+                        :selection-function
+                        (lambda (file cwd) (push (list 'ret file cwd) calls))
+                        :jump-function
+                        (lambda (file cwd entry-id)
+                          (push (list 'jump file cwd entry-id) calls))))
+         (candidate (list :session-id "saved" :session-file "/saved.jsonl"
+                          :cwd "/project" :source-exists t :entry-id "entry-1"
+                          :entry-loadable t :browse-context context)))
+    (should (eq #'pichat-consult-jump-to-match
+                (lookup-key pichat-consult-session-switch-action-map
+                            (kbd "j"))))
+    (dolist (key '("s" "o"))
+      (should-not (lookup-key pichat-consult-session-switch-action-map
+                              (kbd key))))
+    (dolist (key '("s" "j"))
+      (should-not (lookup-key pichat-consult-session-independent-action-map
+                              (kbd key))))
+    (pichat-consult-load-session candidate)
+    (pichat-consult-jump-to-match candidate)
+    (should (equal '((jump "/saved.jsonl" "/project" "entry-1")
+                     (ret "/saved.jsonl" "/project")) calls))
+    (should-error (pichat-consult-jump-to-match
+                   (plist-put (copy-sequence candidate) :entry-loadable nil))
+                  :type 'user-error)
+    (should (= 2 (length calls)))
+    (pichat-consult-jump-to-match
+     (list :session-id "related" :session-file "/related.jsonl"
+           :source-exists t :browse-context context
+           :pichat-target-kind 'relation
+           :session-record '(:session-file "/related.jsonl"
+                             :source-exists t :cwd "/project")
+           :relation '(:direction child)))
+    (should (equal '(jump "/related.jsonl" "/project" nil) (car calls)))))
+
+(ert-deftest pichat-consult-relation-picker-inherits-switch-actions ()
+  (let* ((context (list :kind 'archive :jump-function #'ignore
+                        :selection-function #'ignore))
+         (record '(:session-id "subject" :display-title "Subject"))
+         (relations '((:direction child :parent-resolution resolved
+                       :related-session
+                       (:session-id "child" :session-file "/child.jsonl"
+                        :source-exists t :display-title "Child"))))
+         category candidates)
+    (cl-letf (((symbol-function 'pichat-consult--preview-state)
+               (lambda () #'ignore))
+              ((symbol-function 'consult--read)
+               (lambda (items &rest args)
+                 (setq candidates items category (plist-get args :category))
+                 nil)))
+      (pichat-consult--read-relations nil record relations context))
+    (should (eq category 'pichat-session-switch))
+    (should (eq (plist-get (pichat-consult--candidate-context
+                            (car candidates)) :jump-function)
+                #'ignore))))
 
 (ert-deftest pichat-consult-load-session-preserves-unrelated-active-runtime ()
   "Plain browse from a directory without a live session opens independently."
@@ -1110,8 +1192,9 @@
                (lambda (_session _buffer ok unavailable)
                  (setq success ok failure unavailable)))
               ((symbol-function 'pichat-consult-sessions)
-               (lambda (capability &optional _initial selection)
+               (lambda (capability &optional _initial selection _selection-only jump)
                  (should (functionp selection))
+                 (should (functionp jump))
                  (setq archive capability)))
               ((symbol-function 'pichat-sessions-browse-files-basic)
                (lambda () (cl-incf basic))))
@@ -1192,6 +1275,39 @@
       (funcall success 'late-capability))
     (should (equal '("/basic.jsonl") opened))
     (should-not consult)))
+
+(ert-deftest pichat-switch-browser-jump-uses-originating-runtime-after-sync ()
+  (let* ((session (pichat-session-make))
+         (other (pichat-session-make))
+         (pichat-current-session other)
+         browse-buffer selection jump switched listed)
+    (cl-letf (((symbol-function 'pichat-consult-available-p) (lambda () t))
+              ((symbol-function 'pichat-session-current)
+               (lambda (&optional _session) session))
+              ((symbol-function 'pichat-archive-discover)
+               (lambda (_session _buffer ok _fallback)
+                 (funcall ok 'capability)))
+              ((symbol-function 'pichat-consult-sessions)
+               (lambda (_capability &optional _initial select _selection-only jump-action)
+                 (setq selection select jump jump-action)))
+              ((symbol-function 'pichat-sessions-switch-file)
+               (lambda (file cwd ready source target)
+                 (setq switched (list file cwd target)
+                       browse-buffer source)
+                 (when ready (setq jump ready))))
+              ((symbol-function 'pichat-sessions-list)
+               (lambda (runtime entry-id) (setq listed (list runtime entry-id)))))
+      (with-temp-buffer
+        (let ((origin (current-buffer)))
+          (pichat-sessions-switch-files)
+          (should (functionp selection))
+          (should (functionp jump))
+          (funcall jump "/saved.jsonl" "/project" "entry-1")
+          (should (eq origin browse-buffer))))
+      (should (equal (list "/saved.jsonl" "/project" session) switched))
+      (should-not listed)
+      (funcall jump session)
+      (should (equal (list session "entry-1") listed)))))
 
 (ert-deftest pichat-sessions-browser-no-live-session-falls-back-without-starting-pi ()
   (let (basic started)

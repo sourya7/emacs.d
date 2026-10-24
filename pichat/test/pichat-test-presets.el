@@ -82,6 +82,21 @@
           (should (eq 'standard (pichat-session-preset-name session)))
           (should (equal pichat-rpc-command (pichat-rpc-build-command session))))))))
 
+(ert-deftest pichat-presets-manual-relies-on-tool-selection-not-execution-instructions ()
+  (let ((manual (pichat-presets-resolve 'manual))
+        (coding (pichat-presets-resolve 'coding))
+        (review (pichat-presets-resolve 'review)))
+    (should (equal '("read" "grep" "find" "ls" "edit" "write")
+                   (plist-get manual :tools)))
+    (should-not (plist-get manual :system-prompt))
+    (should-not (plist-get manual :append-system-prompt))
+    (should (member "bash" (plist-get coding :tools)))
+    (should (plist-get coding :append-system-prompt))
+    (should (equal '("read" "grep" "find" "ls") (plist-get review :tools)))
+    (should-not (string-match-p
+                 "do not .*\\(modify\\|execute\\)"
+                 (plist-get review :append-system-prompt)))))
+
 (ert-deftest pichat-presets-ordinary-start-captures-manual-default ()
   (pichat-test-with-clean-state
     (let ((pichat-rpc-command nil)

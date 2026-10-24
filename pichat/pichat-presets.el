@@ -128,25 +128,16 @@ or :default tools leaves Pi's default selection alone."
            (plist-get snapshot :append-system-prompt))))
 
 (pichat-make-preset 'manual
-  :description "Inspect and edit files; ask me to run code."
-  :tools '("read" "grep" "find" "ls" "edit" "write")
-  :append-system-prompt
-  (concat "In PiChat manual mode, use the available file tools for file "
-          "inspection and edits. Do not execute shell commands through other "
-          "tools. When a task needs a shell command, test run, or code "
-          "execution, provide a complete fenced code block with a language "
-          "(use sh for portable shell code), then stop and wait for the user "
-          "to run it and share the result. Selected research tools may be "
-          "used for research, but not for shell commands, tests, or arbitrary "
-          "code execution. Never claim the code ran or assume its outcome."))
+  :description "Inspect and edit files without built-in bash."
+  :tools '("read" "grep" "find" "ls" "edit" "write"))
 (pichat-make-preset 'coding
   :description "Implement changes and run checks."
   :tools '("read" "grep" "find" "ls" "edit" "write" "bash")
   :append-system-prompt "Inspect existing code before changing it. Make focused changes, run relevant checks, and report failures.")
 (pichat-make-preset 'review
-  :description "Review code without editing or built-in execution."
+  :description "Review code with read-only built-in tools."
   :tools '("read" "grep" "find" "ls")
-  :append-system-prompt "Review for correctness, regressions and missing tests. Report actionable findings with locations; do not modify files or execute code.")
+  :append-system-prompt "Review for correctness, regressions and missing tests. Report actionable findings with locations.")
 (pichat-make-preset 'standard
   :description "Use Pi's normal prompt and default built-in tools."
   :tools :default)

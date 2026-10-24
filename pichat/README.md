@@ -418,9 +418,11 @@ alone cannot prove the remote Pi child stopped, so replacing it could create
 duplicate writers. SSH saved-session launch still uses its captured target and
 path mappings.
 
-The built-in `manual` preset retains Pi's base prompt, selects
-`read,grep,find,ls,edit,write` and asks the agent to supply fenced code and
-wait for your run results. Other built-ins: `coding` (includes bash), `review`
+The built-in `manual` preset retains Pi's base prompt and selects
+`read,grep,find,ls,edit,write` without adding execution restrictions to the
+system prompt. It omits built-in `bash`; what the agent can do depends on its
+available tools, including any separately exposed extension tools. Other
+built-ins: `coding` (includes bash), `review`
 (read-only built-in tools), and `standard` (Pi's defaults). The old shipped
 `discuss` preset is no longer registered; define your own if you relied on its
 specific supplied-context instructions. Set `pichat-default-preset` to change
@@ -429,11 +431,8 @@ Define or replace a preset in `user/pichat.el`, for example:
 
 ```elisp
 (pichat-make-preset 'manual
-  :description "Inspect and edit; ask me to run code."
-  :tools '("read" "grep" "find" "ls" "edit" "write")
-  :append-system-prompt
-  `((:file ,(my/emacs-shared-dir "pichat-runner.md"))
-    "Wait for my run results before continuing."))
+  :description "Inspect and edit files without built-in bash."
+  :tools '("read" "grep" "find" "ls" "edit" "write"))
 (setq pichat-default-preset 'manual)
 ```
 
@@ -456,10 +455,11 @@ omission) remain Pi-controlled and cannot use the Tools picker. Customizations
 are runtime properties, not saved Pi-session properties. Presets reject
 conflicting generic Pi tool/prompt flags before runtime creation; use `standard`
 when the generic Pi arguments should govern.
-Changes to definitions affect future runtimes only. For shell blocks, request
-`sh`-compatible code: the PiChat shell runner uses `sh` even when a fence is
-labelled `bash`. Run with Embark `r`, then `s` to place results in the draft;
-review and send it to continue. The subprocess timeout defaults to 120 seconds.
+Changes to definitions affect future runtimes only. If you choose to run a
+shell block through PiChat's artifact runner, request `sh`-compatible code: the
+runner uses `sh` even when a fence is labelled `bash`. Run with Embark `r`,
+then `s` to place results in the draft; review and send it to continue. The
+subprocess timeout defaults to 120 seconds.
 
 The explicit tool allowlist limits direct and indirect tool availability in Pi,
 but selected MCP tools themselves may execute code or mutate files. Extensions

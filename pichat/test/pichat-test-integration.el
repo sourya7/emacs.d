@@ -9,11 +9,10 @@
 (require 'pichat-test-support)
 
 (when pichat-test-include-integration
-  (ert-deftest pichat-integration-manual-runner-omits-bash-and-appends-prompt ()
+  (ert-deftest pichat-integration-manual-omits-bash-without-prompt-override ()
     (pichat-test-with-integration-session
         (session :no-session t
-                 :script '(:turns [(:expectContextIncludes "WAIT_FOR_USER_RUN_RESULTS"
-                                    :expectTool (:name "read")
+                 :script '(:turns [(:expectTool (:name "read")
                                     :expectToolAbsent "bash"
                                     :text "manual runner ready")]))
       (let ((pichat-rpc-command nil)
@@ -24,22 +23,20 @@
             (pichat-pi-extra-args
              (list "-e" pichat-test-fake-provider-extension
                    "--model" "pichat-fake/pichat-fake"))
-            (pichat-presets (copy-tree pichat-presets))
             manual)
-        (pichat-make-preset 'integration-manual
-          :tools '("read" "edit" "write")
-          :append-system-prompt "WAIT_FOR_USER_RUN_RESULTS")
         (unwind-protect
             (progn
               (setq manual (pichat-start-session
                             project-dir nil
-                            '(:persistence ephemeral :preset integration-manual)))
+                            '(:persistence ephemeral :preset manual)))
+              (should-not (member "--append-system-prompt"
+                                  (pichat-rpc-build-command manual)))
               (pichat-test-rpc-call manual "get_state")
               (pichat-test-rpc-call manual "set_auto_retry"
                                     (list :enabled :json-false))
               (pichat-test-rpc-call manual "set_auto_compaction"
                                     (list :enabled :json-false))
-              (pichat-test-prompt-and-wait manual "verify manual-runner tools"))
+              (pichat-test-prompt-and-wait manual "verify manual preset tools"))
           (when manual
             (ignore-errors (pichat-rpc-stop manual))
             (when-let* ((proc (pichat-session-process manual)))

@@ -818,12 +818,12 @@ working directory determines the new runtime's project and display routing."
   (pichat-session-manager-refresh))
 
 (defun pichat-session-manager-diagnostics ()
-  "Open transport diagnostics for the selected runtime."
+  "Open unified cached diagnostics for the selected runtime."
   (interactive)
   (let ((session (pichat-session-manager--session-at-point)))
     (pichat-backend-require-capability
      session 'diagnostics "Transport diagnostics")
-    (pichat-show-transport-diagnostics session)))
+    (pichat-show-diagnostics session)))
 
 (defun pichat-session-manager-quit ()
   "Bury the global manager without affecting any runtime session."

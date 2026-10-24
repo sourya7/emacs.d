@@ -247,5 +247,72 @@
         (should (equal (expand-file-name "settings.json" configured-dir)
                        visited))))))
 
+(ert-deftest pichat-diagnostics-shared-records-deduplicate-with-a-bound ()
+  (let* ((record (pichat-diagnostic-create
+                  :domain 'compatibility :category 'unknown-entry
+                  :entry-id "entry" :type "context_edit"))
+         (records (pichat-diagnostic-append nil record 1)))
+    (should (equal records (pichat-diagnostic-append records record 1)))
+    (should (equal records (pichat-diagnostic-append records '(:category other) 1)))
+    (should (equal (pichat-diagnostic-summary record)
+                   "unknown-entry at entry (context_edit)"))))
+
+(ert-deftest pichat-diagnostics-unified-view-is-safe-and-does-not-retain-snapshots ()
+  (let* ((session (pichat-session-make))
+         (pichat-diagnostics-section-functions
+          (list (lambda (_session)
+                  (list (cons "Canonical transcript"
+                              (list (pichat-diagnostic-create
+                                     :domain 'compatibility
+                                     :category 'unknown-entry :entry-id "entry"
+                                     :type "context_edit")))
+                        (cons "Live tail" nil)))))
+         buffer)
+    (pichat-chat-diagnostics-record
+     session :origin 'rpc-response :message "token=secret-value"
+     :stderr "raw-private-output")
+    (unwind-protect
+        (cl-letf (((symbol-function 'pichat-view-display) #'ignore))
+          (setq buffer (pichat-show-diagnostics session))
+          (with-current-buffer buffer
+            (let ((text (buffer-string)))
+              (should (string-match-p "unknown-entry at entry (context_edit)" text))
+              (should (string-match-p "Live tail\n  none" text))
+              (should (string-match-p "Session History\n  unavailable" text))
+              (should-not (string-match-p "secret-value\\|raw-private-output" text))))
+          (should (= 1 (length (pichat-session-diagnostics session)))))
+      (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
+(ert-deftest pichat-diagnostics-history-provider-rejects-stale-sources ()
+  (require 'pichat-sessions)
+  (let ((session (pichat-session-make)))
+    (with-temp-buffer
+      (setq major-mode 'pichat-sessions-mode)
+      (setq-local pichat-sessions-session session)
+      (setq-local pichat-sessions--source-token
+                  (pichat-sessions--session-source-token session))
+      (setq-local pichat-sessions--diagnostics
+                  (list (pichat-diagnostic-create :domain 'history :summary "warning")))
+      (should (assoc "Session History" (pichat-sessions--diagnostic-sections session)))
+      (setq-local pichat-sessions--stale-p t)
+      (should-not (pichat-sessions--diagnostic-sections session)))))
+
+(ert-deftest pichat-diagnostics-chat-provider-rejects-rebinding-and-other-runtimes ()
+  (require 'pichat-chat)
+  (let ((session (pichat-session-make))
+        (other (pichat-session-make)))
+    (with-temp-buffer
+      (setq major-mode 'pichat-chat-mode)
+      (setq-local pichat-chat-session session)
+      (setq-local pichat-chat--source-bound-p t)
+      (setq-local pichat-chat--source-session-id (pichat-session-id session))
+      (setq-local pichat-chat--source-session-file (pichat-session-session-file session))
+      (setq-local pichat-chat--canonical-transcript
+                  (pichat-transcript-create :diagnostics nil))
+      (should (assoc "Canonical transcript" (pichat-chat--diagnostic-sections session)))
+      (should-not (pichat-chat--diagnostic-sections other))
+      (setq-local pichat-chat--source-rebinding-p t)
+      (should-not (pichat-chat--diagnostic-sections session)))))
+
 (provide 'pichat-test-chat-diagnostics)
 ;;; pichat-test-chat-diagnostics.el ends here

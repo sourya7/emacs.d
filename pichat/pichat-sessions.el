@@ -18,6 +18,7 @@
 (require 'pichat-path)
 (require 'pichat-view)
 (require 'pichat-archive)
+(require 'pichat-chat-diagnostics)
 
 (declare-function pichat-start-session "pichat"
                   (&optional cwd scope launch-options))
@@ -381,10 +382,27 @@ identities."
     (format "%s" id)))
 
 (defun pichat-sessions--bounded-diagnostic (format-string &rest args)
-  "Return a bounded tree-model diagnostic from FORMAT-STRING and ARGS."
-  (truncate-string-to-width
-   (apply #'format format-string args)
-   pichat-sessions--diagnostic-width nil nil "…"))
+  "Return a structured tree-model diagnostic from FORMAT-STRING and ARGS."
+  (pichat-diagnostic-create
+   :domain 'history :category 'tree-normalization
+   :summary (truncate-string-to-width
+             (apply #'format format-string args)
+             pichat-sessions--diagnostic-width nil nil "…")))
+
+(defun pichat-sessions--diagnostic-sections (session)
+  "Return available current Session History diagnostics for SESSION."
+  (let (sections)
+    (dolist (buffer (buffer-list))
+      (with-current-buffer buffer
+        (when (and (eq major-mode 'pichat-sessions-mode)
+                   (eq pichat-sessions-session session)
+                   (not pichat-sessions--stale-p)
+                   (equal pichat-sessions--source-token
+                          (pichat-sessions--session-source-token session)))
+          (push (cons "Session History" pichat-sessions--diagnostics) sections))))
+    sections))
+
+(add-hook 'pichat-diagnostics-section-functions #'pichat-sessions--diagnostic-sections)
 
 (defun pichat-sessions--build-active-path (nodes parents leaf-id)
   "Return a cycle-safe active-path set from LEAF-ID through PARENTS.

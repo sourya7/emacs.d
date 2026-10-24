@@ -19,6 +19,12 @@
 (require 'pichat-pi-environment)
 (require 'pichat-path)
 (require 'pichat-view)
+(require 'pichat-diagnostic)
+
+(defvar pichat-diagnostics-section-functions nil
+  "Functions taking a runtime and returning cached diagnostic sections.
+Each section is (TITLE . RECORDS).  Providers must reject stale sources and
+must not fetch data or mutate their collectors.")
 
 (defgroup pichat-diagnostics nil
   "Transport diagnostics and setup guidance for PiChat."
@@ -233,7 +239,7 @@ codes, or missing files in unrelated output."
               (pichat-chat-diagnostics-classify
                origin (or stderr message) condition program)))
          (record
-          (list :origin origin
+          (list :domain 'transport :severity 'error :origin origin
                 :category classification
                 :summary
                 (pichat-chat-diagnostics-summary
@@ -401,6 +407,43 @@ never rewritten; configure `pichat-diagnostics-interactive-command' for them."
        (pp-to-string value)
      (error (format "<unprintable: %s>" (error-message-string err))))
    pichat-diagnostics-view-value-limit))
+
+;;;###autoload
+(defun pichat-show-diagnostics (&optional session)
+  "Show safe cached diagnostics for SESSION without issuing RPC requests.
+Domain collectors keep their own lifetimes.  Missing snapshots are reported as
+unavailable.  Use `pichat-show-transport-diagnostics' explicitly for raw data."
+  (interactive)
+  (let* ((session (pichat-session-current session))
+         (buffer (get-buffer-create "*PiChat Diagnostics*")))
+    (unless session (user-error "No PiChat session"))
+    (let ((sections
+           (cons (cons "Runtime / transport"
+                       (reverse (copy-sequence
+                                 (pichat-session-diagnostics session))))
+                 (apply #'append
+                        (mapcar (lambda (provider) (funcall provider session))
+                                pichat-diagnostics-section-functions)))))
+      (with-current-buffer buffer
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert "PiChat diagnostics (cached snapshot)\n\n"
+                  "Raw details: M-x pichat-show-transport-diagnostics in the owning chat.\n\n")
+          (dolist (title '("Runtime / transport" "Canonical transcript"
+                           "Live tail" "Session History"))
+            (let ((section (assoc title sections)))
+              (insert title "\n")
+              (cond
+               ((null section) (insert "  unavailable (no current cached snapshot)\n"))
+               ((null (cdr section)) (insert "  none\n"))
+               (t (dolist (record (cdr section))
+                    (insert "  "
+                            (pichat-chat-diagnostics-safe-summary-text
+                             (pichat-diagnostic-summary record)) "\n"))))
+              (insert "\n"))))
+        (pichat-view-mode))
+      (pichat-view-display buffer nil 'bury)
+      buffer)))
 
 ;;;###autoload
 (defun pichat-show-transport-diagnostics (&optional session)

@@ -292,7 +292,10 @@ normalization without depending on Consult or querying SQLite; `pichat-consult.e
 consumes only normalized archive records. The chat layer owns event orchestration
 and its generation-scoped enrichment table.
 Canonical transcript and Pi reducer modules remain independent authorities and
-never consume this ephemeral state.
+never consume this ephemeral state. `pichat-diagnostic.el` supplies a pure shared
+record vocabulary and formatting helpers. Domain-owned collectors supply cached,
+source-validated sections to the unified diagnostics inspector; they do not
+acquire a runtime or UI dependency through that shared record module.
 
 ## Launching runtimes
 
@@ -534,7 +537,7 @@ Manager keys:
 - `k` — stop only the selected live runtime;
 - `d` — forget and clean up a stopped or failed runtime;
 - `m` — make the selected live runtime preferred for its owner scope;
-- `D` — show that runtime's transport diagnostics;
+- `D` — show that runtime's unified cached diagnostics;
 - `g` — redraw rows from cached state, without broadcasting RPC requests;
 - `q` — bury the manager;
 - `?` — describe the mode.
@@ -648,6 +651,12 @@ Chat keys:
   submissions already in flight
 - Image-only prompts are controlled by
   `pichat-attachments-allow-image-only-prompts` and are disabled by default
+- `M-x pichat-show-diagnostics` — show a safe cached snapshot of runtime
+  failures, canonical transcript and live-tail compatibility notices, and
+  available current Session History normalization warnings. This does not
+  fetch history or issue RPC requests; unavailable snapshots are labelled.
+  Each domain retains its own lifetime rather than copying snapshot warnings
+  into the runtime failure log. Reinvoke the command to refresh the snapshot.
 - `M-x pichat-show-transport-diagnostics` — explicitly inspect bounded raw
   stderr, failed RPC responses, the configured command, and recent RPC events;
   this view may contain secrets, paths, and prompt content

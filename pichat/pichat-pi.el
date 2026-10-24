@@ -11,6 +11,7 @@
 (require 'json)
 (require 'subr-x)
 (require 'pichat-transcript)
+(require 'pichat-diagnostic)
 
 (define-error 'pichat-pi-invalid-session "Invalid Pi session entries")
 
@@ -246,9 +247,9 @@ DIAGNOSE is called with category, entry id, and bounded source type."
                        (not (gethash key diagnostic-keys)))
               (puthash key t diagnostic-keys)
               (cl-incf diagnostic-count)
-              (push (list :category category
-                          :entry-id entry-id
-                          :type (caddr key))
+              (push (pichat-diagnostic-create
+                     :domain 'compatibility :category category
+                     :entry-id entry-id :type (caddr key))
                     diagnostics))))
          (normalize (content entry-id)
           (pichat-pi--normalize-content content entry-id #'diagnose))
@@ -368,14 +369,14 @@ DIAGNOSE is called with category, entry id, and bounded source type."
 
 (defun pichat-pi--live-diagnose (draft category entry-id type)
   "Append a bounded live compatibility diagnostic to DRAFT."
-  (let* ((diagnostic (list :category category
-                           :entry-id entry-id
-                           :type (pichat-pi--bounded-type-name type)))
-         (diagnostics (pichat-live-draft-diagnostics draft)))
-    (when (and (< (length diagnostics) pichat-pi--diagnostic-limit)
-               (not (cl-find diagnostic diagnostics :test #'equal)))
-      (setf (pichat-live-draft-diagnostics draft)
-            (append diagnostics (list diagnostic))))))
+  (let ((diagnostic (pichat-diagnostic-create
+                     :domain 'compatibility :category category
+                     :entry-id entry-id
+                     :type (pichat-pi--bounded-type-name type))))
+    (setf (pichat-live-draft-diagnostics draft)
+          (pichat-diagnostic-append
+           (pichat-live-draft-diagnostics draft) diagnostic
+           pichat-pi--diagnostic-limit))))
 
 (defun pichat-pi--live-normalize (draft content key)
   "Normalize live CONTENT for DRAFT node KEY."

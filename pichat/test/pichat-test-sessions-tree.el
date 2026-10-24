@@ -334,7 +334,8 @@ PARENT-ID is deliberately raw protocol metadata; model parents come from nesting
                            #'string<)))
       (should (<= 3 (length (pichat-sessions--model-diagnostics model))))
       (dolist (diagnostic (pichat-sessions--model-diagnostics model))
-        (should (<= (length diagnostic) 240))))))
+        (should (eq (plist-get diagnostic :domain) 'history))
+        (should (<= (string-width (pichat-diagnostic-summary diagnostic)) 240))))))
 
 (ert-deftest pichat-sessions-tree-active-path-is-bounded-on-malformed-parent-cycle ()
   (let ((nodes (make-hash-table :test #'equal))

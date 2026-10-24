@@ -3749,6 +3749,30 @@ This never invokes Pi RPC or reproduces a Pi container/SSH transport."
       (pichat-view-mode))
     (pichat-view-display buffer nil 'bury)))
 
+(defun pichat-chat--diagnostic-sections (session)
+  "Return current cached transcript diagnostic sections for SESSION."
+  (let (sections)
+    (dolist (buffer (buffer-list))
+      (with-current-buffer buffer
+        (when (and (eq major-mode 'pichat-chat-mode)
+                   (eq pichat-chat-session session)
+                   pichat-chat--source-bound-p
+                   (not pichat-chat--source-rebinding-p)
+                   (equal pichat-chat--source-session-id (pichat-session-id session))
+                   (equal pichat-chat--source-session-file
+                          (pichat-session-session-file session)))
+          (when (pichat-transcript-p pichat-chat--canonical-transcript)
+            (push (cons "Canonical transcript"
+                        (pichat-transcript-diagnostics pichat-chat--canonical-transcript))
+                  sections))
+          (when (pichat-live-draft-p pichat-chat--live-draft)
+            (push (cons "Live tail"
+                        (pichat-live-draft-diagnostics pichat-chat--live-draft))
+                  sections)))))
+    sections))
+
+(add-hook 'pichat-diagnostics-section-functions #'pichat-chat--diagnostic-sections)
+
 (defun pichat-chat--compatibility-diagnostics-text (transcript)
   "Return bounded status text for TRANSCRIPT compatibility diagnostics."
   (let* ((diagnostics (and (pichat-transcript-p transcript)
@@ -3758,10 +3782,9 @@ This never invokes Pi RPC or reproduces a Pi container/SSH transport."
           (mapcar
            (lambda (diagnostic)
              (truncate-string-to-width
-              (format "[Pi compatibility: %s at %s (%s)]"
-                      (or (plist-get diagnostic :category) 'unknown)
-                      (or (plist-get diagnostic :entry-id) "unknown")
-                      (or (plist-get diagnostic :type) "unknown"))
+              (format "[Pi compatibility: %s]"
+                      (pichat-chat-diagnostics-safe-summary-text
+                       (pichat-diagnostic-summary diagnostic)))
               240 nil nil "…"))
            shown)))
     (when (> (length diagnostics) (length shown))

@@ -6,17 +6,7 @@
 
 ;;; Code:
 
-(require 'pichat-test-support)
-(require 'pichat-test-sessions-preview)
-
-(defmacro pichat-test-sessions-fork--with-origin (&rest body)
-  "Install a forkable history fixture and run BODY in its origin buffer."
-  (declare (indent 0) (debug body))
-  `(let ((session (pichat-session-make :id "source" :session-file "/source")))
-     (with-temp-buffer
-       (pichat-sessions--refresh-from-response
-        (pichat-test-sessions-preview--response) session (current-buffer))
-       ,@body)))
+(require 'pichat-test-history-support)
 
 (ert-deftest pichat-sessions-fork-direct-validates-source-and-user-target ()
   (pichat-test-sessions-fork--with-origin

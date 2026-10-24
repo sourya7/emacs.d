@@ -626,15 +626,12 @@ CONTINUATION receives the authoritative response data on success."
                       (plist-get operation :retained) state entries)))
             (requested (plist-get operation :active-configuration))
             (previous (plist-get operation :previous))
-            (old-model (pichat-session-startup-model session))
-            (old-name (pichat-session-preset-name session)))
-       (setf (pichat-session-preset-name session)
-             (plist-get (plist-get requested :preset-spec) :name)
-             (pichat-session-preset-spec session)
-             (pichat-presets--copy (plist-get requested :preset-spec))
-             (pichat-session-tool-selection session)
-             (pichat-presets--copy (plist-get requested :tool-selection))
-             (pichat-session-startup-model session)
+            (old-model (pichat-session-startup-model session)))
+       (pichat-session-set-configuration
+        session
+        (pichat-presets--copy (plist-get requested :preset-spec))
+        (pichat-presets--copy (plist-get requested :tool-selection)))
+       (setf (pichat-session-startup-model session)
              (plist-get operation :active-model))
        (condition-case err
            (with-current-buffer buffer
@@ -642,12 +639,10 @@ CONTINUATION receives the authoritative response data on success."
                  (pichat-chat-commit-staged-empty-restart session cache)
                (pichat-chat-commit-staged-restart session cache)))
          (error
-          (setf (pichat-session-preset-name session) old-name
-                (pichat-session-preset-spec session)
-                (plist-get previous :preset-spec)
-                (pichat-session-tool-selection session)
-                (plist-get previous :tool-selection)
-                (pichat-session-startup-model session) old-model)
+          (pichat-session-set-configuration
+           session (plist-get previous :preset-spec)
+           (plist-get previous :tool-selection))
+          (setf (pichat-session-startup-model session) old-model)
           (signal (car err) (cdr err))))
        (pichat-reconfigure--finish operation t nil)))))
 

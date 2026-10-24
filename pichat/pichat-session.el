@@ -76,9 +76,22 @@
 ;; exist without introducing a dependency from the backend contract to RPC.
 (require 'pichat-backend-pi)
 
+(defun pichat-session-set-configuration (session preset-spec tool-selection)
+  "Install captured PRESET-SPEC and TOOL-SELECTION on SESSION.
+The captured specification is authoritative for the cached preset name.
+Callers supply owned snapshots; this function does not resolve registry values."
+  (setf (pichat-session-preset-spec session) preset-spec
+        (pichat-session-preset-name session) (plist-get preset-spec :name)
+        (pichat-session-tool-selection session) tool-selection)
+  session)
+
 (defun pichat-session-make (&rest args)
   "Create a `pichat-session' with sensible defaults and ARGS overrides."
   (let ((session (apply #'pichat-session-create args)))
+    (when (pichat-session-preset-spec session)
+      (pichat-session-set-configuration
+       session (pichat-session-preset-spec session)
+       (pichat-session-tool-selection session)))
     (unless (pichat-session-backend session)
       (setf (pichat-session-backend session) pichat-backend-pi))
     (unless (pichat-session-transport session)

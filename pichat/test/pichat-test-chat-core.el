@@ -6,7 +6,18 @@
 
 ;;; Code:
 
-(require 'pichat-test-support)
+(require 'pichat-test-chat-support)
+
+(ert-deftest pichat-chat-test-fixture-cleans-buffer-after-error-without-stopping-runtime ()
+  (pichat-test-with-unit-session (session proc)
+    (let (opened)
+      (should-error
+       (pichat-test-with-chat-buffer (buffer session)
+         (setq opened buffer)
+         (should (eq session pichat-chat-session))
+         (error "Injected scenario failure")))
+      (should-not (buffer-live-p opened))
+      (should (process-live-p proc)))))
 
 (ert-deftest pichat-chat-mode-wraps-at-window-edge-with-visual-lines ()
   (let ((pichat-chat-stop-session-on-kill nil))

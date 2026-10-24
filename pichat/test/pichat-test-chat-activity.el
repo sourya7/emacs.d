@@ -6,22 +6,10 @@
 
 ;;; Code:
 
-(require 'pichat-test-support)
+(require 'pichat-test-chat-support)
 
-(defun pichat-test-chat-activity--tool-event (id name args &optional stop-reason)
-  "Return an assistant message-end event declaring tool ID NAME ARGS.
-STOP-REASON, when non-nil, is attached to the assistant message."
-  (list :type "message_end"
-        :message (append (list :role "assistant"
-                                :content (list (list :type "toolCall" :id id
-                                               :name name :arguments args)))
-                         (and stop-reason (list :stopReason stop-reason)))))
-
-(defun pichat-test-chat-activity--finish-event (id name output)
-  "Return a successful execution-end event for ID NAME with OUTPUT."
-  (list :type "tool_execution_end" :toolCallId id :toolName name
-        :isError nil
-        :result (list :content (list (list :type "text" :text output)))))
+(defalias 'pichat-test-chat-activity--tool-event #'pichat-test-tool-event)
+(defalias 'pichat-test-chat-activity--finish-event #'pichat-test-tool-finish-event)
 
 (defun pichat-test-chat-activity--thinking-tool-event (id name thinking)
   "Return a tool-use assistant event with THINKING and tool ID NAME."
@@ -48,10 +36,7 @@ STOP-REASON, when non-nil, is attached to the assistant message."
                                                     :thinking text)))
                          (and stop-reason (list :stopReason stop-reason)))))
 
-(defun pichat-test-chat-activity--apply (draft &rest events)
-  "Apply EVENTS to DRAFT and project its live tail."
-  (dolist (event events) (pichat-pi-live-draft-apply draft event))
-  (pichat-chat--project-live-tail))
+(defalias 'pichat-test-chat-activity--apply #'pichat-test-apply-live-events)
 
 (defun pichat-test-chat-activity--ordered-blocks ()
   "Return current activity blocks ordered by buffer position."
@@ -65,41 +50,29 @@ STOP-REASON, when non-nil, is attached to the assistant message."
 
 (ert-deftest pichat-chat-activity-tool-use-continuations-share-one-live-group ()
   (pichat-test-with-unit-session (session proc)
-    (let ((pichat-chat-stop-session-on-kill nil)
-          (pichat-chat-render-markdown nil)
-          (pichat-chat-activity-group-display 'expanded)
-          (pichat-chat-show-thinking t)
-          buffer)
-      (unwind-protect
-          (progn
-            (setq buffer (pichat-chat-open session))
-            (with-current-buffer buffer
-              (pichat-test-chat-activity--apply
-               pichat-chat--live-draft
-               (pichat-test-chat-activity--thinking-tool-event
-                "continuation-1" "read" "inspect one")
-               (pichat-test-chat-activity--finish-event
-                "continuation-1" "read" "one")
-               (pichat-test-chat-activity--thinking-tool-event
-                "continuation-2" "edit" "inspect two")
-               (pichat-test-chat-activity--finish-event
-                "continuation-2" "edit" "two")
-               (pichat-test-chat-activity--thinking-tool-event
-                "continuation-3" "bash" "inspect three"))
-              (let ((blocks (pichat-test-chat-activity--ordered-blocks)))
-                (should (= 1 (length blocks)))
-                (should (equal '("continuation-1" "continuation-2"
-                                 "continuation-3")
-                               (plist-get (car blocks) :tool-ids)))
-                (should (string-match-p "Thought"
-                                        (pichat-test-buffer-text buffer)))
-                (should (string-match-p "Read a file"
-                                        (pichat-test-buffer-text buffer)))
-                (should (string-match-p "edited a file"
-                                        (pichat-test-buffer-text buffer)))
-                (should (string-match-p "ran a command"
-                                        (pichat-test-buffer-text buffer))))))
-        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+    (let ((pichat-chat-activity-group-display 'expanded)
+          (pichat-chat-show-thinking t))
+      (pichat-test-with-chat-buffer (buffer session)
+        (pichat-test-chat-activity--apply
+         pichat-chat--live-draft
+         (pichat-test-chat-activity--thinking-tool-event
+          "continuation-1" "read" "inspect one")
+         (pichat-test-chat-activity--finish-event
+          "continuation-1" "read" "one")
+         (pichat-test-chat-activity--thinking-tool-event
+          "continuation-2" "edit" "inspect two")
+         (pichat-test-chat-activity--finish-event
+          "continuation-2" "edit" "two")
+         (pichat-test-chat-activity--thinking-tool-event
+          "continuation-3" "bash" "inspect three"))
+        (let ((blocks (pichat-test-chat-activity--ordered-blocks)))
+          (should (= 1 (length blocks)))
+          (should (equal '("continuation-1" "continuation-2" "continuation-3")
+                         (plist-get (car blocks) :tool-ids)))
+          (should (string-match-p "Thought" (pichat-test-buffer-text buffer)))
+          (should (string-match-p "Read a file" (pichat-test-buffer-text buffer)))
+          (should (string-match-p "edited a file" (pichat-test-buffer-text buffer)))
+          (should (string-match-p "ran a command" (pichat-test-buffer-text buffer))))))))
 
 (ert-deftest pichat-chat-activity-tool-use-group-preserves-child-view-and-starts-new-prose-item ()
   (pichat-test-with-unit-session (session proc)

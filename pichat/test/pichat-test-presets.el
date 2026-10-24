@@ -2,6 +2,23 @@
 ;;; Code:
 (require 'pichat-test-support)
 
+(ert-deftest pichat-presets-captured-specification-controls-runtime-name ()
+  (let* ((spec (pichat-presets-resolve 'coding))
+         (tools (pichat-tool-selection-resolve spec))
+         (session (pichat-session-make :preset-name 'manual
+                                      :preset-spec spec :tool-selection tools)))
+    (should (eq 'coding (pichat-session-preset-name session)))
+    (should (equal tools (pichat-session-tool-selection session)))
+    (let ((previous (pichat-reconfigure-captured-configuration session))
+          (replacement (pichat-presets-resolve 'review)))
+      (pichat-session-set-configuration
+       session replacement (pichat-tool-selection-resolve replacement))
+      (should (eq 'review (pichat-session-preset-name session)))
+      (pichat-session-set-configuration
+       session (plist-get previous :preset-spec) (plist-get previous :tool-selection))
+      (should (eq 'coding (pichat-session-preset-name session)))
+      (should (equal tools (pichat-session-tool-selection session))))))
+
 (ert-deftest pichat-presets-validate-and-compose-emacs-readable-prompts ()
   (let ((pichat-presets (copy-tree pichat-presets))
         (file (make-temp-file "pichat-preset-")))

@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'pichat-test-chat-projection-incremental)
+(require 'pichat-test-chat-support)
 
 (defun pichat-test-focused-rollback--hash-entries (table)
   "Return stable printed entries from hash TABLE."
@@ -150,26 +151,18 @@
   "Open a located live tool fixture and evaluate BODY in its chat buffer."
   (declare (indent 0) (debug t))
   `(pichat-test-with-unit-session (session proc)
-     (let ((pichat-chat-stop-session-on-kill nil)
-           (pichat-chat-activity-group-display 'latest)
-           (pichat-chat-render-markdown nil)
+     (let ((pichat-chat-activity-group-display 'latest)
            (pichat-chat-collapse-tools-by-default nil)
-           (pichat-chat-tool-default-display 'output)
-           buffer)
-       (unwind-protect
-           (progn
-             (setq buffer (pichat-chat-open session))
-             (with-current-buffer buffer
-               (pichat-test-focused-rollback--start
-                pichat-chat--live-draft "committed prose" "old.el")
-               (pichat-chat--project-live-tail)
-               (should (overlayp
-                        (plist-get
-                         (gethash "rollback-tool"
-                                  pichat-chat--live-tool-blocks)
-                         :overlay)))
-               ,@body))
-         (when (buffer-live-p buffer) (kill-buffer buffer))))))
+           (pichat-chat-tool-default-display 'output))
+       (pichat-test-with-chat-buffer (buffer session)
+         (pichat-test-focused-rollback--start
+          pichat-chat--live-draft "committed prose" "old.el")
+         (pichat-chat--project-live-tail)
+         (should (overlayp
+                  (plist-get
+                   (gethash "rollback-tool" pichat-chat--live-tool-blocks)
+                   :overlay)))
+         ,@body))))
 
 (defun pichat-test-focused-rollback--assert-failure-restores (failure-function)
   "Assert FAILURE-FUNCTION aborts projection and restores exact prior state."

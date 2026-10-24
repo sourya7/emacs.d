@@ -6,24 +6,7 @@
 
 ;;; Code:
 
-(require 'pichat-test-support)
-
-(defun pichat-test-sessions-tree--message (id role text &optional parent-id)
-  "Return a Pi tree node for message ID with ROLE and TEXT.
-PARENT-ID is deliberately raw protocol metadata; model parents come from nesting."
-  (list :entry (append (list :type "message" :id id)
-                       (when parent-id (list :parentId parent-id))
-                       (list :message (list :role role :content text)))
-        :children nil))
-
-(defun pichat-test-sessions-tree--entry (id type &rest properties)
-  "Return a Pi tree node carrying ID, TYPE, and PROPERTIES."
-  (list :entry (append (list :type type :id id) properties)
-        :children nil))
-
-(defun pichat-test-sessions-tree--set-children (node children)
-  "Set NODE's Pi tree CHILDREN and return NODE."
-  (plist-put node :children children))
+(require 'pichat-test-history-support)
 
 (ert-deftest pichat-sessions-tree-model-handles-empty-and-linear-history ()
   (let ((empty (pichat-sessions--tree-model-from-data
@@ -170,16 +153,6 @@ PARENT-ID is deliberately raw protocol metadata; model parents come from nesting
       (should (= 1501 (length ordered)))
       (should (equal "deep-1500" (car ordered)))
       (should (equal "deep-0" (car (last ordered)))))))
-
-(defun pichat-test-sessions-tree--response (roots leaf-id)
-  "Return a get_tree response for ROOTS and LEAF-ID."
-  (list :data (list :tree roots :leafId leaf-id)))
-
-(defun pichat-test-sessions-tree--line-for-id (id)
-  "Return the rendered history line carrying ID."
-  (pichat-sessions--goto-id id)
-  (buffer-substring-no-properties (line-beginning-position)
-                                  (line-end-position)))
 
 (ert-deftest pichat-sessions-tree-render-marks-active-path-and-real-branches ()
   (let* ((old-leaf (pichat-test-sessions-tree--message

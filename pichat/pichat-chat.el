@@ -884,32 +884,43 @@ retarget compose editors opened for the original empty session."
       (pichat-chat--refresh-header session)
       cache)))
 
+(defun pichat-chat-owned-buffer (session &optional current-source)
+  "Return SESSION's exact chat buffer, or nil.
+When CURRENT-SOURCE is non-nil, require a bound matching source and reject
+rebinding and retained restart snapshots.  Otherwise only ownership is checked."
+  (let ((buffer (and session (pichat-session-buffer session))))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (when (and (derived-mode-p 'pichat-chat-mode)
+                   (eq pichat-chat-session session)
+                   (or (not current-source)
+                       (and pichat-chat--source-bound-p
+                            (not pichat-chat--source-rebinding-p)
+                            (not pichat-chat--restart-staging)
+                            (equal pichat-chat--source-session-id
+                                   (pichat-session-id session))
+                            (equal pichat-chat--source-session-file
+                                   (pichat-session-session-file session)))))
+          buffer)))))
+
 (defun pichat-chat-canonical-entry-cache (session)
   "Return SESSION's current settled entry cache, or nil.
 The returned cache is authoritative Pi data owned by SESSION's live chat buffer;
 callers must treat it as read-only.  A cache for an older rebound source or a
 staged read-only restart snapshot is never returned."
-  (let ((buffer (and session (pichat-session-buffer session))))
-    (when (buffer-live-p buffer)
-      (with-current-buffer buffer
-        (and (derived-mode-p 'pichat-chat-mode)
-             (eq pichat-chat-session session)
-             (not pichat-chat--restart-staging)
-             (pichat-entry-cache-p pichat-chat--entry-cache)
-             (equal (pichat-entry-cache-session-id pichat-chat--entry-cache)
-                    (pichat-session-id session))
-             pichat-chat--entry-cache)))))
+  (when-let* ((buffer (pichat-chat-owned-buffer session)))
+    (with-current-buffer buffer
+      (and (not pichat-chat--restart-staging)
+           (pichat-entry-cache-p pichat-chat--entry-cache)
+           (equal (pichat-entry-cache-session-id pichat-chat--entry-cache)
+                  (pichat-session-id session))
+           pichat-chat--entry-cache))))
 
 (defun pichat-chat-pending-user-input-count (session)
   "Return cached pending user-input count for SESSION's exact chat."
-  (let ((buffer (and session (pichat-session-buffer session))))
-    (if (buffer-live-p buffer)
-        (with-current-buffer buffer
-          (if (and (derived-mode-p 'pichat-chat-mode)
-                   (eq pichat-chat-session session))
-              pichat-chat--pending-ui-count
-            0))
-      0)))
+  (if-let* ((buffer (pichat-chat-owned-buffer session)))
+      (buffer-local-value 'pichat-chat--pending-ui-count buffer)
+    0))
 
 (defun pichat-chat-open (session &optional synchronize)
   "Open chat buffer for SESSION.
@@ -3751,25 +3762,15 @@ This never invokes Pi RPC or reproduces a Pi container/SSH transport."
 
 (defun pichat-chat--diagnostic-sections (session)
   "Return current cached transcript diagnostic sections for SESSION."
-  (let (sections)
-    (dolist (buffer (buffer-list))
-      (with-current-buffer buffer
-        (when (and (eq major-mode 'pichat-chat-mode)
-                   (eq pichat-chat-session session)
-                   pichat-chat--source-bound-p
-                   (not pichat-chat--source-rebinding-p)
-                   (equal pichat-chat--source-session-id (pichat-session-id session))
-                   (equal pichat-chat--source-session-file
-                          (pichat-session-session-file session)))
-          (when (pichat-transcript-p pichat-chat--canonical-transcript)
-            (push (cons "Canonical transcript"
-                        (pichat-transcript-diagnostics pichat-chat--canonical-transcript))
-                  sections))
-          (when (pichat-live-draft-p pichat-chat--live-draft)
-            (push (cons "Live tail"
-                        (pichat-live-draft-diagnostics pichat-chat--live-draft))
-                  sections)))))
-    sections))
+  (when-let* ((buffer (pichat-chat-owned-buffer session t)))
+    (with-current-buffer buffer
+      (append
+       (when (pichat-transcript-p pichat-chat--canonical-transcript)
+         (list (cons "Canonical transcript"
+                     (pichat-transcript-diagnostics pichat-chat--canonical-transcript))))
+       (when (pichat-live-draft-p pichat-chat--live-draft)
+         (list (cons "Live tail"
+                     (pichat-live-draft-diagnostics pichat-chat--live-draft))))))))
 
 (add-hook 'pichat-diagnostics-section-functions #'pichat-chat--diagnostic-sections)
 

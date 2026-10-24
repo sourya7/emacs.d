@@ -6,7 +6,7 @@
 
 ;;; Code:
 
-(require 'pichat-test-sessions-clone)
+(require 'pichat-test-history-support)
 
 (ert-deftest pichat-sessions-rebind-transactions-commit-persisted-origins ()
   (pichat-test-sessions-fork--with-origin

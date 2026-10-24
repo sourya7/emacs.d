@@ -2516,25 +2516,57 @@ SOURCE-TOKEN identifies the pre-fork source and ORIGIN-BUFFER owns the command."
        (message "Fork created, but prompt restoration returned an unknown result%s"
                 warning)))))
 
-(defun pichat-sessions--finish-fork (context text)
-  "Focus the rebound chat for CONTEXT and restore fork response TEXT."
-  (let* ((session (plist-get context :session))
-         (existing (pichat-session-buffer session))
-         (buffer (if (buffer-live-p existing)
-                     existing
+(defun pichat-sessions--complete-chat-transition (session origin &optional prepare)
+  "Open or reuse SESSION's chat and complete the transition from ORIGIN.
+Run PREPARE in that chat before moving to its prompt and completing the view.
+Return the chat buffer, or nil if no live buffer was obtained."
+  (let* ((existing (pichat-session-buffer session))
+         (buffer (if (buffer-live-p existing) existing
                    (pichat-chat-open session t))))
     (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (when prepare (funcall prepare))
+        (goto-char (point-max)))
+      (pichat-view-complete buffer origin)
+      buffer)))
+
+(defun pichat-sessions--finish-fork (context text)
+  "Focus the rebound chat for CONTEXT and restore fork response TEXT."
+  (let (result)
+    (when (pichat-sessions--complete-chat-transition
+           (plist-get context :session) (plist-get context :origin-buffer)
+           (when (stringp text)
+             (lambda () (setq result (pichat-chat-input-restore-fork-text text)))))
       (if (stringp text)
-          (let ((result
-                 (with-current-buffer buffer
-                   (prog1 (pichat-chat-input-restore-fork-text text)
-                     (goto-char (point-max))))))
-            (pichat-view-complete buffer (plist-get context :origin-buffer))
-            (pichat-sessions--fork-result-message context result))
-        (with-current-buffer buffer
-          (goto-char (point-max)))
-        (pichat-view-complete buffer (plist-get context :origin-buffer))
+          (pichat-sessions--fork-result-message context result)
         (message "PiChat fork created, but Pi did not return prompt text; existing draft was preserved")))))
+
+(defun pichat-sessions--branch-response (context operation finish response response-session)
+  "Handle a branch RESPONSE for CONTEXT and OPERATION, then call FINISH.
+Cancellation and state synchronization are shared; FINISH owns fork/clone
+semantics and receives the original response data."
+  (let ((session (plist-get context :session))
+        (data (plist-get response :data)))
+    (if (plist-get data :cancelled)
+        (message "PiChat %s cancelled; session history was unchanged" operation)
+      (pichat-backend-get-state
+       response-session
+       (lambda (_state-response state-session)
+         (if (eq state-session session)
+             (progn
+               (pichat-sessions--commit-rebind-origin context)
+               (funcall finish context data))
+           (message "PiChat %s changed sessions, but returned state for an unexpected owner"
+                    operation)))
+       (lambda (state-response _state-session)
+         (message
+          "PiChat %s succeeded and session changed, but state synchronization failed: %s"
+          operation (pichat-sessions--transaction-error-text state-response)))))))
+
+(defun pichat-sessions--branch-failure (operation response _response-session)
+  "Report an OPERATION RPC failure from RESPONSE."
+  (message "PiChat %s failed: %s" operation
+           (pichat-sessions--transaction-error-text response)))
 
 (defun pichat-sessions--request-fork (context)
   "Execute the complete fork UI transaction captured by CONTEXT."
@@ -2543,25 +2575,11 @@ SOURCE-TOKEN identifies the pre-fork source and ORIGIN-BUFFER owns the command."
     (pichat-backend-require-capability session 'branching "Session forking")
     (pichat-rpc-fork
      session id
-     (lambda (response response-session)
-       (if (plist-get (plist-get response :data) :cancelled)
-           (message "PiChat fork cancelled; session history was unchanged")
-         (let ((text (plist-get (plist-get response :data) :text)))
-           (pichat-backend-get-state
-            response-session
-            (lambda (_state-response state-session)
-              (if (eq state-session session)
-                  (progn
-                    (pichat-sessions--commit-rebind-origin context)
-                    (pichat-sessions--finish-fork context text))
-                (message "PiChat fork changed sessions, but returned state for an unexpected owner")))
-            (lambda (state-response _state-session)
-              (message
-               "PiChat fork succeeded and session changed, but state synchronization failed: %s"
-               (pichat-sessions--transaction-error-text state-response)))))))
-     (lambda (response _response-session)
-       (message "PiChat fork failed: %s"
-                (pichat-sessions--transaction-error-text response))))))
+     (apply-partially
+      #'pichat-sessions--branch-response context "fork"
+      (lambda (captured data)
+        (pichat-sessions--finish-fork captured (plist-get data :text))))
+     (apply-partially #'pichat-sessions--branch-failure "fork"))))
 
 ;;;###autoload
 (defun pichat-sessions-preview-fork ()
@@ -2693,15 +2711,9 @@ constructs or sends a source path.  Use `pichat-sessions-browse-files' instead."
 
 (defun pichat-sessions--finish-clone (context)
   "Focus the cloned chat after authoritative state arrives for CONTEXT."
-  (let* ((session (plist-get context :session))
-         (existing (pichat-session-buffer session))
-         (buffer (if (buffer-live-p existing)
-                     existing
-                   (pichat-chat-open session t))))
-    (when (buffer-live-p buffer)
-      (with-current-buffer buffer
-        (goto-char (point-max)))
-      (pichat-view-complete buffer (plist-get context :origin-buffer))
+  (let ((session (plist-get context :session)))
+    (when (pichat-sessions--complete-chat-transition
+           session (plist-get context :origin-buffer))
       (message "Cloned current active branch into session %s"
                (pichat-sessions--clone-identity session)))))
 
@@ -2711,24 +2723,10 @@ constructs or sends a source path.  Use `pichat-sessions-browse-files' instead."
     (pichat-backend-require-capability session 'branching "Session cloning")
     (pichat-rpc-clone
      session
-     (lambda (response response-session)
-       (if (plist-get (plist-get response :data) :cancelled)
-           (message "PiChat clone cancelled; session history was unchanged")
-         (pichat-backend-get-state
-          response-session
-          (lambda (_state-response state-session)
-            (if (eq state-session session)
-                (progn
-                  (pichat-sessions--commit-rebind-origin context)
-                  (pichat-sessions--finish-clone context))
-              (message "PiChat clone changed sessions, but returned state for an unexpected owner")))
-          (lambda (state-response _state-session)
-            (message
-             "PiChat clone succeeded and session changed, but state synchronization failed: %s"
-             (pichat-sessions--transaction-error-text state-response))))))
-     (lambda (response _response-session)
-       (message "PiChat clone failed: %s"
-                (pichat-sessions--transaction-error-text response))))))
+     (apply-partially
+      #'pichat-sessions--branch-response context "clone"
+      (lambda (captured _data) (pichat-sessions--finish-clone captured)))
+     (apply-partially #'pichat-sessions--branch-failure "clone"))))
 
 ;;;###autoload
 (defun pichat-sessions-clone-current ()
@@ -2746,16 +2744,9 @@ constructs or sends a source path.  Use `pichat-sessions-browse-files' instead."
 (defun pichat-sessions--focus-navigated-session
     (session direction target source)
   "Focus SESSION after navigation in DIRECTION to TARGET from SOURCE."
-  (let* ((existing (pichat-session-buffer session))
-         (buffer (if (buffer-live-p existing)
-                     existing
-                   (pichat-chat-open session t))))
-    (when (buffer-live-p buffer)
-      (with-current-buffer buffer
-        (goto-char (point-max)))
-      (pichat-view-complete buffer source)
-      (message "PiChat moved %s to source session: %s"
-               direction (pichat-sessions--shorten target 200)))))
+  (when (pichat-sessions--complete-chat-transition session source)
+    (message "PiChat moved %s to source session: %s"
+             direction (pichat-sessions--shorten target 200))))
 
 (defun pichat-sessions--request-source-navigation
     (session direction target current remaining opposite source)

@@ -6,8 +6,7 @@
 
 ;;; Code:
 
-(require 'pichat-test-support)
-(require 'pichat-test-sessions-tree)
+(require 'pichat-test-history-support)
 
 (defun pichat-test-sessions-navigation--linear-response ()
   "Return a three-entry linear tree response."
@@ -39,9 +38,7 @@
 (defmacro pichat-test-sessions-navigation--with-history (response &rest body)
   "Install RESPONSE in a temporary history buffer and evaluate BODY."
   (declare (indent 1) (debug (form body)))
-  `(with-temp-buffer
-     (pichat-sessions--refresh-from-response
-      ,response (pichat-session-make) (current-buffer))
+  `(pichat-test-with-history ((pichat-session-make) ,response)
      ,@body))
 
 (ert-deftest pichat-sessions-movement-follows-visible-rows-and-boundaries ()

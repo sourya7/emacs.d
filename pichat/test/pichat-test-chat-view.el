@@ -6,7 +6,7 @@
 
 ;;; Code:
 
-(require 'pichat-test-support)
+(require 'pichat-test-chat-support)
 
 (defun pichat-test-chat-view--transcript (&optional suffix)
   "Return a long one-node transcript ending with optional SUFFIX."
@@ -34,23 +34,13 @@
 
 (defun pichat-test-chat-view--tool-event (id name path)
   "Return a tool-use event declaring ID with NAME and PATH."
-  (list :type "message_end"
-        :message (list :role "assistant" :stopReason "toolUse"
-                       :content (list (list :type "toolCall" :id id
-                                            :name name
-                                            :arguments (list :path path))))))
+  (pichat-test-tool-event id name (list :path path) "toolUse"))
 
-(defun pichat-test-chat-view--tool-finish-event (id name output)
-  "Return a successful tool execution event for ID, NAME, and OUTPUT."
-  (list :type "tool_execution_end" :toolCallId id :toolName name
-        :isError nil
-        :result (list :content (list (list :type "text" :text output)))))
+(defalias 'pichat-test-chat-view--tool-finish-event #'pichat-test-tool-finish-event)
 
 (defun pichat-test-chat-view--apply-events (&rest events)
   "Apply live draft EVENTS and project the resulting live tail."
-  (dolist (event events)
-    (pichat-pi-live-draft-apply pichat-chat--live-draft event))
-  (pichat-chat--project-live-tail))
+  (apply #'pichat-test-apply-live-events pichat-chat--live-draft events))
 
 (defun pichat-test-chat-view--anchor-at (position)
   "Return the observable node key and offset at POSITION."

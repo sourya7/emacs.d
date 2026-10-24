@@ -304,6 +304,7 @@
     (with-temp-buffer
       (setq major-mode 'pichat-chat-mode)
       (setq-local pichat-chat-session session)
+      (setf (pichat-session-buffer session) (current-buffer))
       (setq-local pichat-chat--source-bound-p t)
       (setq-local pichat-chat--source-session-id (pichat-session-id session))
       (setq-local pichat-chat--source-session-file (pichat-session-session-file session))
@@ -311,6 +312,12 @@
                   (pichat-transcript-create :diagnostics nil))
       (should (assoc "Canonical transcript" (pichat-chat--diagnostic-sections session)))
       (should-not (pichat-chat--diagnostic-sections other))
+      (setq-local pichat-chat--restart-staging '(:snapshot t))
+      (should-not (pichat-chat--diagnostic-sections session))
+      (setq-local pichat-chat--restart-staging nil)
+      (setf (pichat-session-buffer session) nil)
+      (should-not (pichat-chat--diagnostic-sections session))
+      (setf (pichat-session-buffer session) (current-buffer))
       (setq-local pichat-chat--source-rebinding-p t)
       (should-not (pichat-chat--diagnostic-sections session)))))
 

@@ -176,6 +176,18 @@ The fake provider must be deterministic and offline. It should consume a per-tes
 
 A registered fake provider must include inert `baseUrl`, `apiKey`, and `api` values because Pi requires them when custom models are defined, even if `streamSimple` performs no HTTP request.
 
+## Shared test support
+
+Keep reusable mechanics in support modules rather than requiring another test
+suite for its fixtures:
+
+- `test/pichat-test-support.el`: isolated runtimes, processes, RPC waits, and files.
+- `test/pichat-test-history-support.el`: tree builders and temporary history buffers.
+- `test/pichat-test-chat-support.el`: chat-buffer cleanup and live-event builders.
+
+Keep scenario-specific display policies, window layouts, and behavioral assertions
+in the test suite. Support modules should not register ERT tests.
+
 ## Writing good tests
 
 A good PiChat test has:

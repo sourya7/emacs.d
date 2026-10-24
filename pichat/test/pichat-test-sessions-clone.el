@@ -6,7 +6,7 @@
 
 ;;; Code:
 
-(require 'pichat-test-sessions-fork)
+(require 'pichat-test-history-support)
 
 (ert-deftest pichat-sessions-clone-targets-current-active-branch-not-row ()
   (pichat-test-sessions-fork--with-origin

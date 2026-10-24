@@ -6,8 +6,7 @@
 
 ;;; Code:
 
-(require 'pichat-test-support)
-(require 'pichat-test-sessions-tree)
+(require 'pichat-test-history-support)
 
 (defun pichat-test-sessions-visibility--ids (model filter &optional query folded)
   "Return visible IDs from MODEL under FILTER, QUERY, and FOLDED."

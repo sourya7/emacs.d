@@ -1,0 +1,13 @@
+mcp:
+  description: Run the PiChat test suites in this Emacs repository.
+  tools:
+    - name: test
+      description: Run the regular PiChat ERT test suite (without RPC integration tests).
+      run:
+        command: pichat/test/run-tests.sh 2>&1
+        timeout: 10m
+    - name: test_full
+      description: Run the full PiChat ERT test suite, including RPC integration tests.
+      run:
+        command: pichat/test/run-tests.sh --full 2>&1
+        timeout: 20m

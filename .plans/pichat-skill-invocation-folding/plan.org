@@ -1,0 +1,50 @@
+#+TITLE: Fold Pi skill invocations in PiChat
+#+TODO: TODO IN-PROGRESS BLOCKED | DONE
+#+PLAN_ID: pichat-skill-invocation-folding
+#+PLAN_STATUS: draft
+#+PLAN_CREATED: 2026-10-25T19:48:02+00:00
+#+PLAN_UPDATED: 2026-10-25T19:48:53Z
+
+* Goal
+Keep expanded Pi skill instructions out of the default PiChat chat-buffer view, matching Pi's TUI: show a compact skill invocation and the user's trailing request, with the full skill text available on demand. Do not alter the prompt sent to Pi or the saved Pi session.
+
+* Scope
+- Included: presentation of Pi's exact skill-block user messages in the canonical transcript (including reopened saved sessions) and, if user messages can appear there, the live tail; an accessible per-invocation expand/collapse action; tests and PiChat rendering/key documentation.
+- Excluded: changing Pi's skill expansion, command picker/completion, other user messages, tool/activity-group folding, Session History and saved-session browser previews, and changing Markdown export or the authoritative transcript.
+
+* Acceptance criteria
+- A valid Pi skill invocation is collapsed by default to a bounded row identifying the skill (e.g. [skill] plans); trailing user request is visible as a separate user block, when present. Expanding exposes the complete skill body; collapsing hides it again without changing canonical data.
+- Works for canonical synchronization/repaint and reopening a saved Pi session. Explicit per-invocation fold choices survive repaint as appropriate and do not leak across source rebinding; if live user messages are rendered, their presentation/settlement is consistent.
+- Only the full anchored Pi skill-block shape is recognized; malformed, partial, or ordinary user text remains ordinary text. No silent loss of content for unsupported/mixed-content messages (e.g. images); preserve the full message as fallback if recognition cannot be proved safe.
+- Copy/export/model input continue to use the original message text; folding is display-only. Existing activity/tool folds, prompt editing, navigation, and unchanged user messages still behave normally.
+- Focused ERT tests cover parser acceptance/rejection, rendering and interaction, repaint/source changes, and regression cases; pichat/test/run-tests.sh passes. If integration is warranted for Pi-generated skill expansion, use isolated fake-provider RPC test and run --full; record actual results.
+
+* Approach and decisions
+- Upstream Pi expands /skill:name args into a persisted user text message: <skill name="…" location="…">, a newline, skill text (including References are relative to …), </skill>, then optional blank line and args. See Pi v1.4.0 packages/coding-agent/src/core/agent-session.ts (parseSkillBlock and _expandSkillCommand), src/modes/interactive/interactive-mode.ts (user case), and components/skill-invocation-message.ts: collapsed [skill] name, full body when expanded, arguments as a separate UserMessageComponent. In TUI expansion also follows the tool-output expansion action. The local /home/mojo/Dev/pi checkout is version 0.84.1; recheck installed Pi 1.4.0 shape before implementation (upstream v1.4.0 component was reviewed during research).
+- PiChat pichat/pichat-commands.el submits the slash command unchanged. pichat/pichat-pi.el builds authoritative user nodes; pichat/pichat-render.el pichat-render--node-fragment currently displays pichat-render--plain-content verbatim. Implement a conservative presentation-only recognizer and node-identity-keyed view state, without rewriting pichat-transcript-node content or decoding at submission time. Decide the safest placement with existing render-context/logical-fragment pipeline, buffer-local disclosure controls and projection transaction rollback in pichat/pichat-chat.el; reuse existing header interaction conventions from pichat/pichat-chat-activity-ui.el where appropriate. Avoid a global expand-all binding unless necessary; individual fold controls are sufficient for PiChat.
+- Prefer full-text fallback for non-text/multiple-text-part ambiguity rather than accidentally hiding attachments or unmatched markup. Preserve canonical-model export via pichat/pichat-chat-navigation.el; the chat projection can differ from the exact Markdown source. Consult pichat/GLOSSARY.md and README.md for terminology; update them only as needed. Related maintainability plan .plans/pichat-maintainability/plan.org has command-catalog work; do not duplicate it.
+
+* Tasks
+** TODO Confirm installed Pi skill-block grammar and PiChat user-content/projection seams
+   Verify valid and nonmatching examples, text/image handling, canonical vs live paths, and state lifetime/rollback before implementation.
+** TODO Add strict skill-invocation presentation and per-message disclosure
+   Default to collapsed; retain exact content in transcript; expose full text and trailing request separately; integrate per-source state with repaint/settlement and safe fallback.
+** TODO Cover behavior with focused parser/render/UI and regression tests
+   Include with/without args, malformed or partial tags, ordinary user messages, image/mixed content fallback, repeated invocation identities, repaint/source switch, export and navigation.
+** TODO Document controls and run verification
+   Update PiChat docs where users discover chat folding; run pichat/test/run-tests.sh; assess isolated real-Pi --full test and report whether it ran (never claim success without evidence).
+
+* Checkpoint
+- Plan status: draft
+- Selected scope: none (planning only)
+- Last verified result: plans.py check reports this plan OK; implementation tests not run
+- Next action: review/approve this plan; on an explicit run request, recheck the installed Pi format, then start the first TODO task
+- Blockers: none
+
+* Verification
+- 2026-10-25T19:48:53Z: plans.py check reports this plan OK; no implementation tests run (planning only).
+
+* History
+- 2026-10-25T19:48:02+00:00: Created as draft.
+- 2026-10-25T19:48:10Z: Recorded upstream rendering research, implementation seams, acceptance criteria and test scope; no implementation.
+- 2026-10-25T19:48:53Z: Validated plan structure with plans.py check.

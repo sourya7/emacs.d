@@ -2,18 +2,33 @@
 #+TODO: TODO IN-PROGRESS BLOCKED | DONE
 #+STARTUP: overview
 #+PRIORITIES: A C B
+#+PLAN_ID: pichat-maintainability
+#+PLAN_STATUS: ready
+#+PLAN_CREATED: 2026-10-24T16:19:02Z
+#+PLAN_UPDATED: 2026-10-25T19:41:46Z
+
+* Goal
+Address the reviewed PiChat maintainability and correctness findings through bounded, independently selected work packages without weakening runtime, source, transcript or draft safety.
+
+* Scope
+- Included: W01–W22 and their recorded dependencies and verification obligations; review resolutions in =docs/pichat-maintainability-review.md=.
+- Excluded: automatically implementing every package, broad unapproved rewrites, or speculative extension work without a concrete need. Each invocation requires an explicitly selected package and scope.
+
+* Acceptance criteria
+- Each selected package has its deliverable and acceptance checks verified or an explicit documented defer/reject decision; review findings retain their historical evidence and receive resolution notes.
+- Shared completion requirements below are satisfied for implemented changes. The overall plan is done only when every remaining package is reconciled (including blocked/optional work), not merely when one package finishes.
 
 * Operating agreement
 
-This is the durable execution backlog for [[file:pichat-maintainability-review.md][the maintainability review]].
+This is the durable execution backlog for [[file:../../docs/pichat-maintainability-review.md][the maintainability review]].
 Creating this plan does not authorize implementation of every item. Select one
 named work package per invocation; do not advance to adjacent packages automatically.
 
 - This file owns execution status, scope, dependencies, decisions, and verification.
 - The review owns findings, rationale, evidence classifications, and limitations.
-- [[file:../pichat/GLOSSARY.md][The glossary]] owns terminology. Runtime, Pi session, saved session file,
+- [[file:../../pichat/GLOSSARY.md][The glossary]] owns terminology. Runtime, Pi session, saved session file,
   and Session History are distinct.
-- Before package changes, read [[file:../pichat/README.md][README]] and [[file:../pichat/TESTING_GUIDELINES.md][testing guidelines]], then revalidate the
+- Before package changes, read [[file:../../pichat/README.md][README]] and [[file:../../pichat/TESTING_GUIDELINES.md][testing guidelines]], then revalidate the
   relevant code and finding. Review line numbers and old counts may become stale.
 - Order below is the recommended sequence, not a rigid dependency chain. Small
   independent fixes can run earlier. A = correctness/contracts; B = verification
@@ -28,11 +43,13 @@ named work package per invocation; do not advance to adjacent packages automatic
 
 ** Invocation
 
-Use the existing personal =/todo= prompt with this file and an explicit subtree:
+Use the plans skill with this managed record and an explicitly named work package:
 
 #+begin_example
-/todo docs/pichat-maintainability-plan.org Work only on "W01 — Reject stale artifact execution". Implement and verify its acceptance criteria, update the relevant review resolution note, and stop. Do not commit.
+/skill:plans run pichat-maintainability W01
 #+end_example
+
+Work only on W01, implement and verify its acceptance criteria, update the relevant review resolution note, and stop. Do not commit. Selecting a package never authorizes adjacent packages.
 
 For decision packages, the deliverable is analysis and a recorded decision, not
 an implied implementation. If maintainer approval is needed, leave the package
@@ -182,6 +199,8 @@ Independent small fix; may be selected before W05/W06.
 :CUSTOM_ID: W08
 :FINDINGS: REL-02
 :END:
+
+Related but distinct: [[file:../pichat-diagnostics-improvements/plan.org][the diagnostics improvements plan]] owns runtime-scoped inspector and setup work. W08 owns RPC parsing/consumer error attribution; coordinate interfaces without copying task lists.
 
 - [ ] Distinguish malformed JSON/protocol input from dispatch and callback failures.
 - [ ] Test a valid JSON response whose callback throws, malformed input, and continued processing after failures.
@@ -397,3 +416,18 @@ when a real workflow warrants one, after validating source/provenance semantics.
 Keep the native runtime manager, existing backend generics and small event bus,
 canonical transcript model, sanitization, and domain-specific rollback. The
 review's "keep" findings (including INFRA-02) are constraints, not rewrite tasks.
+
+* Checkpoint
+- Plan status: ready
+- Selected scope: migration only; no work package selected or implemented.
+- Last verified result: 20 TODO and 2 BLOCKED work packages and all W01–W22 IDs preserved; links resolve; =plans.py check --all= OK for five records and helper tests 3 OK. Review's 822-test baseline is historical, not rerun.
+- Next action: explicitly request one named work package (e.g. W01); revalidate its finding and dependencies before execution.
+- Blockers: W06 awaits the W05 contract decision; W22 awaits a concrete approved extension need. Neither blocks independent packages.
+
+* Verification
+- 2026-10-25: moved the tracked execution backlog from =docs/pichat-maintainability-plan.org= to this single managed plan. Preserved all 22 headings, states, IDs and resolved all five relative file links; =plans.py check --all= OK for five records, =list --all= shows ready 0/22, helper tests 3 OK. No PiChat implementation or tests run for the migration. Historical pass-3 results remain in the linked review.
+
+* History
+- 2026-10-24T16:19:02Z: Initial tracked plan committed (timestamp sourced from the original file's first commit; not claimed as its drafting time).
+- 2026-10-25T19:40:35Z: On explicit request moved the original tracked backlog into .plans, updated relative links and /skill:plans invocation, preserved W01–W22 statuses and stable IDs. No work package begun.
+- 2026-10-25T19:41:46Z: Validated original work-package headings and IDs, linked files, managed inventory, and helper tests; ready for an explicitly selected package.

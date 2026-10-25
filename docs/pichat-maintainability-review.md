@@ -9,6 +9,7 @@
 - **Changes made:** this review plus review scripts/logs under `.tmp/`. No package implementation or tracked test changes. The tracked `docs/` document supersedes the historical `.tmp/pichat-maintainability-review.md` copy.
 - **Terminology:** [PiChat glossary](../pichat/GLOSSARY.md) is authoritative. A **runtime** is not a **Pi session** or a **saved session file**. **Session History** means entries/branches inside the current Pi session, not saved-session browsing.
 - **Status:** recommendations, not approved implementation work. Finding IDs are stable so subsequent passes can amend or reject them.
+- **Execution backlog:** `../.plans/pichat-maintainability/plan.org` is the single authoritative work-package checklist; the former `docs/pichat-maintainability-plan.org` was moved there without starting implementation.
 
 ### Executive assessment
 

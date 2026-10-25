@@ -33,6 +33,16 @@ rollback; their edits never enter prompt undo history. Canonical reconstruction,
 status changes outside the live tail, and uncertain marker topology retain the
 complete-display rollback transaction.
 
+Pi skill invocations in user messages appear as compact `▶ [skill] name`
+headers, with any trailing request shown as a separate user block. On a header,
+press `RET` or `TAB` (or click) to expand the exact skill block and request;
+repeat to collapse it. Press `w` on the header to copy the original full Pi
+message (ordinary region copying copies only visible text). Explicit choices
+survive repaint of the same source but reset on source rebinding. This is
+display-only: Pi's message, canonical export, and saved session file remain
+unchanged. Mixed image/text messages and unrecognized
+skill markup retain the ordinary user display.
+
 User messages are rendered only from authoritative Pi events.  Unknown protocol
 data is normalized to bounded diagnostics rather than printed as raw objects.
 Consecutive thinking and tool calls are presented in source-ordered activity
@@ -699,6 +709,9 @@ Commands:
 - `M-x pichat-add-reference` — insert a DWIM Emacs reference into a PiChat prompt
 
 Chat keys:
+
+- `RET` / `TAB` or mouse-1 on a skill header — expand/collapse that invocation
+- `w` on a skill header — copy its original full Pi message
 
 - `RET` — send prompt in Emacs state or Evil Insert state; in Evil Normal state, move as usual
 - `S-RET` — insert newline

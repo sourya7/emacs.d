@@ -27,7 +27,8 @@
   activity-views
   activity-latest-key
   activity-live-p
-  activity-header-renderer)
+  activity-header-renderer
+  skill-views)
 
 (cl-defstruct (pichat-render-fragment
                (:constructor pichat-render-fragment-create)
@@ -389,6 +390,67 @@ ACTIVITY-MEMBER-P is non-nil, apply the activity member/body visual levels."
               content)
              ""))
 
+(defun pichat-render--skill-block (text)
+  "Return (NAME BODY ARGUMENTS) for an exact Pi skill block in TEXT.
+Return nil for partial blocks or ambiguous trailing content."
+  (when (and (stringp text)
+             (string-match
+              "\\`<skill name=\"\\([[:alnum:]_-]+\\)\" location=\"[^\"<>\n]+\">\n"
+              text))
+    (let* ((name (match-string 1 text))
+           (body-start (match-end 0))
+           (close (string-match "\n</skill>" text body-start)))
+      (when close
+        (let ((tail (substring text (+ close (length "\n</skill>")))))
+          (when (or (string-empty-p tail)
+                    (and (string-prefix-p "\n\n" tail)
+                         (> (length tail) 2)))
+            (list name (substring text body-start close)
+                  (unless (string-empty-p tail) (substring tail 2)))))))))
+
+(defvar pichat-render-skill-header-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET") #'pichat-chat-toggle-skill-at-point)
+    (define-key map (kbd "TAB") #'pichat-chat-toggle-skill-at-point)
+    (define-key map (kbd "w") #'pichat-chat-copy-skill-at-point)
+    (define-key map [mouse-1] #'pichat-chat-toggle-skill-at-point)
+    map)
+  "Keymap on skill invocation headers in a PiChat chat buffer.")
+
+(defun pichat-render--skill-user-fragment (node context)
+  "Return presentation for skill invocation NODE under CONTEXT, or nil."
+  (let* ((parts (pichat-transcript-node-content node))
+         (text (and (= (length parts) 1)
+                    (eq (pichat-transcript-content-kind (car parts)) 'prose)
+                    (pichat-transcript-content-text (car parts))))
+         (parsed (pichat-render--skill-block text)))
+    (when parsed
+      (let* ((key (pichat-transcript-node-key node))
+             (expanded (equal (cdr (assoc key (pichat-render-context-skill-views
+                                               context))) text))
+             (header (pichat-render--text-fragment
+                      (propertize
+                       (format "%s [skill] %s" (if expanded "▼" "▶")
+                               (truncate-string-to-width (car parsed) 80 nil nil "…"))
+                       'keymap pichat-render-skill-header-map
+                       'mouse-face 'highlight
+                       'help-echo "RET/TAB/click: fold skill; w: copy original message"
+                       'pichat-skill-key key
+                       'pichat-skill-text text)
+                      '(font-lock-face pichat-user-block-face))))
+        (pichat-render--concat
+         (delq nil
+               (list header
+                     (when expanded
+                       (pichat-render--text-fragment
+                        (pichat-render--user-block text)
+                        '(font-lock-face pichat-user-block-face)))
+                     (when (and (not expanded) (nth 2 parsed))
+                       (pichat-render--text-fragment
+                        (pichat-render--user-block (nth 2 parsed))
+                        '(font-lock-face pichat-user-block-face)))))
+         "\n\n")))))
+
 (defun pichat-render--user-block (text)
   "Return Pi-style user block for TEXT."
   (mapconcat (lambda (line) (concat "▌ " line))
@@ -430,11 +492,12 @@ ACTIVITY-MEMBER-P is non-nil, apply the activity member/body visual levels."
             (_
              (pcase role
                ('user
-                (pichat-render--text-fragment
-                 (pichat-render--user-block
-                  (pichat-render--plain-content
-                   (pichat-transcript-node-content node)))
-                 '(font-lock-face pichat-user-block-face)))
+                (or (pichat-render--skill-user-fragment node context)
+                    (pichat-render--text-fragment
+                     (pichat-render--user-block
+                      (pichat-render--plain-content
+                       (pichat-transcript-node-content node)))
+                     '(font-lock-face pichat-user-block-face))))
                ('custom
                 (pichat-render--concat
                  (list

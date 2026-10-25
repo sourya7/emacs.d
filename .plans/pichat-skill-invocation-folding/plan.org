@@ -1,9 +1,9 @@
 #+TITLE: Fold Pi skill invocations in PiChat
 #+TODO: TODO IN-PROGRESS BLOCKED | DONE
 #+PLAN_ID: pichat-skill-invocation-folding
-#+PLAN_STATUS: draft
+#+PLAN_STATUS: done
 #+PLAN_CREATED: 2026-10-25T19:48:02+00:00
-#+PLAN_UPDATED: 2026-10-25T19:48:53Z
+#+PLAN_UPDATED: 2026-10-25T20:00:00Z
 
 * Goal
 Keep expanded Pi skill instructions out of the default PiChat chat-buffer view, matching Pi's TUI: show a compact skill invocation and the user's trailing request, with the full skill text available on demand. Do not alter the prompt sent to Pi or the saved Pi session.
@@ -25,26 +25,31 @@ Keep expanded Pi skill instructions out of the default PiChat chat-buffer view, 
 - Prefer full-text fallback for non-text/multiple-text-part ambiguity rather than accidentally hiding attachments or unmatched markup. Preserve canonical-model export via pichat/pichat-chat-navigation.el; the chat projection can differ from the exact Markdown source. Consult pichat/GLOSSARY.md and README.md for terminology; update them only as needed. Related maintainability plan .plans/pichat-maintainability/plan.org has command-catalog work; do not duplicate it.
 
 * Tasks
-** TODO Confirm installed Pi skill-block grammar and PiChat user-content/projection seams
+** DONE Confirm installed Pi skill-block grammar and PiChat user-content/projection seams
    Verify valid and nonmatching examples, text/image handling, canonical vs live paths, and state lifetime/rollback before implementation.
-** TODO Add strict skill-invocation presentation and per-message disclosure
+** DONE Add strict skill-invocation presentation and per-message disclosure
    Default to collapsed; retain exact content in transcript; expose full text and trailing request separately; integrate per-source state with repaint/settlement and safe fallback.
-** TODO Cover behavior with focused parser/render/UI and regression tests
+** DONE Cover behavior with focused parser/render/UI and regression tests
    Include with/without args, malformed or partial tags, ordinary user messages, image/mixed content fallback, repeated invocation identities, repaint/source switch, export and navigation.
-** TODO Document controls and run verification
+** DONE Document controls and run verification
    Update PiChat docs where users discover chat folding; run pichat/test/run-tests.sh; assess isolated real-Pi --full test and report whether it ran (never claim success without evidence).
 
 * Checkpoint
-- Plan status: draft
-- Selected scope: none (planning only)
-- Last verified result: plans.py check reports this plan OK; implementation tests not run
-- Next action: review/approve this plan; on an explicit run request, recheck the installed Pi format, then start the first TODO task
+- Plan status: done
+- Selected scope: complete plan
+- Last verified result: unit suite 790 tests (784 passed, 6 optional skips); full suite retry 853 tests (847 passed, 6 optional skips); git diff --check clean
+- Next action: none; complete, leave record unarchived
 - Blockers: none
 
 * Verification
+- 2026-10-25T20:00:00Z: After adding explicit original-message copy from header, unit suite passed 790/790 (6 skips); first --full retry had unrelated pichat-consult-archive-process-classifies-caller-and-availability-failures failure, which passed isolated; second --full retry passed 853/853 (6 skips). git diff --check clean.
+- 2026-10-25T19:55:45Z: pichat/test/run-tests.sh passed (790, 784 expected, 6 optional skipped); git diff --check clean. Full --full run passed at 2026-10-25T19:55:25Z (853, 847 expected, 6 optional skipped); no new real-Pi skill-expansion integration scenario was added because installed 1.4.0 exporter grammar was inspected and normalization/rendering are covered by fixtures.
 - 2026-10-25T19:48:53Z: plans.py check reports this plan OK; no implementation tests run (planning only).
 
 * History
+- 2026-10-25T20:00:00Z: Added header copy-original control and verified final version; recorded transient unrelated full-suite failure and clean retry.
+- 2026-10-25T19:56:00Z: Completed selected scope: strict single-text skill presentation and per-node disclosure, source reset, focused tests and README controls; verified unit and full suites.
+- 2026-10-25T19:52:00Z: Run requested for complete plan; clean worktree, installed Pi 1.4.0 HTML exporter confirms anchored block grammar; inspected canonical/live projection and normalized content.
 - 2026-10-25T19:48:02+00:00: Created as draft.
 - 2026-10-25T19:48:10Z: Recorded upstream rendering research, implementation seams, acceptance criteria and test scope; no implementation.
 - 2026-10-25T19:48:53Z: Validated plan structure with plans.py check.

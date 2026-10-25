@@ -321,6 +321,9 @@ from final newlines or redisplay edge cases."
 (defvar-local pichat-chat--live-activity-blocks nil
   "Activity group blocks owned by the live-tail region.")
 
+(defvar-local pichat-chat--skill-view-states nil
+  "Explicit skill expansions keyed by node identity and original text.")
+
 (defvar-local pichat-chat--activity-view-states nil
   "Explicit activity disclosure states keyed by source-local identity.")
 
@@ -535,6 +538,7 @@ user messages, activity groups, and tool blocks."
               (make-hash-table :test #'equal))
   (setq-local pichat-chat--live-activity-blocks
               (make-hash-table :test #'equal))
+  (setq-local pichat-chat--skill-view-states (make-hash-table :test #'equal))
   (setq-local pichat-chat--activity-view-states
               (make-hash-table :test #'equal))
   (setq-local pichat-chat--tool-auxiliary-details
@@ -745,6 +749,7 @@ When DEFER-SYNC is non-nil, wait for a subsequent authoritative state reply."
         pichat-chat--canonical-activity-blocks (make-hash-table :test #'equal)
         pichat-chat--live-activity-blocks (make-hash-table :test #'equal)
         pichat-chat--activity-view-states (make-hash-table :test #'equal)
+        pichat-chat--skill-view-states (make-hash-table :test #'equal)
         pichat-chat--tool-auxiliary-details
         (make-hash-table :test #'equal)
         pichat-chat--tool-enrichments
@@ -2112,6 +2117,11 @@ Signal a user error when thinking control is disabled or unavailable."
      :activity-views (plist-get activity :views)
      :activity-latest-key nil
      :activity-live-p nil
+     :skill-views (when (hash-table-p pichat-chat--skill-view-states)
+                    (let (views)
+                      (maphash (lambda (key text) (push (cons key text) views))
+                               pichat-chat--skill-view-states)
+                      views))
      :activity-header-renderer
      (apply-partially #'pichat-chat-activity-ui-format-header
                       pichat-chat--tool-enrichments
@@ -2797,6 +2807,11 @@ projection.  Without pending work it remains immediately visible."
      :activity-views (plist-get activity :views)
      :activity-latest-key (plist-get activity :latest-key)
      :activity-live-p t
+     :skill-views (when (hash-table-p pichat-chat--skill-view-states)
+                    (let (views)
+                      (maphash (lambda (key text) (push (cons key text) views))
+                               pichat-chat--skill-view-states)
+                      views))
      :activity-header-renderer
      (apply-partially #'pichat-chat-activity-ui-format-header
                       pichat-chat--tool-enrichments
@@ -3552,6 +3567,45 @@ ordinary browser opens retain their existing state-ready contract."
   "Set BLOCK to an explicit summary display."
   (pichat-chat-tool-ui-collapse-block
    block pichat-chat--tool-view-states (pichat-chat--tool-ui-context)))
+
+;;;###autoload
+(defun pichat-chat-copy-skill-at-point ()
+  "Copy the original Pi user message for the skill header at point."
+  (interactive)
+  (let ((text (get-text-property (point) 'pichat-skill-text)))
+    (unless text (user-error "No skill invocation header at point"))
+    (kill-new (substring-no-properties text))
+    (message "Copied original skill invocation")))
+
+;;;###autoload
+(defun pichat-chat-toggle-skill-at-point (&optional event)
+  "Toggle the skill invocation at point without changing Pi's message."
+  (interactive (list (and (listp last-command-event) last-command-event)))
+  (when event (posn-set-point (event-end event)))
+  (let* ((key (get-text-property (point) 'pichat-skill-key))
+         (text (get-text-property (point) 'pichat-skill-text)))
+    (unless (and key text) (user-error "No skill invocation header at point"))
+    (let ((previous (gethash key pichat-chat--skill-view-states)))
+      (if (equal previous text)
+          (remhash key pichat-chat--skill-view-states)
+        (puthash key text pichat-chat--skill-view-states))
+      (condition-case err
+          (pichat-chat--reproject-display-options)
+        (error
+         (if previous
+             (puthash key previous pichat-chat--skill-view-states)
+           (remhash key pichat-chat--skill-view-states))
+         (signal (car err) (cdr err))))
+      (when-let* ((start (marker-position pichat-chat--canonical-start))
+                  (end (marker-position pichat-chat--live-end)))
+        (let ((position start) found)
+          (while (and (< position end) (not found))
+            (if (equal (get-text-property position 'pichat-skill-key) key)
+                (setq found position)
+              (setq position (or (next-single-property-change
+                                  position 'pichat-skill-key nil end)
+                                 end))))
+          (when found (goto-char found)))))))
 
 (defun pichat-chat--activity-at-point ()
   "Return activity header block at point, if any."

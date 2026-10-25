@@ -1,0 +1,59 @@
+#+TITLE: Deliver queued follow-ups after manual compaction
+#+TODO: TODO IN-PROGRESS BLOCKED | DONE
+#+PLAN_ID: deliver-queued-follow-ups-after-manual-compaction
+#+PLAN_STATUS: draft
+#+PLAN_CREATED: 2026-10-25T22:55:56+00:00
+#+PLAN_UPDATED: 2026-10-25T22:56:04Z
+
+* Goal
+Deliver a follow-up submitted during manual compaction automatically after successful compaction, without requiring an unrelated prompt to wake the agent.
+
+* Scope
+- Included: PiChat manual-compaction/follow-up coordination, safe dispatch and recovery, regression coverage, user-facing documentation.
+- Excluded: delayed scheduling, changing automatic-compaction semantics, unrelated queue redesign, upstream Pi modifications, commits and compatibility-watermark changes.
+- Related but separate: [[file:../pichat-delayed-follow-up/plan.org][delayed follow-up scheduling]] adds timers and compact-then-continue jobs; this plan fixes immediate follow-ups only and does not duplicate that work.
+
+* Acceptance criteria
+- A follow-up submitted while PiChat-requested manual compaction is running starts automatically after correlated successful completion, without an unrelated prompt or synthetic conversation message.
+- Multiple follow-ups preserve order and configured delivery mode; no message is lost or delivered twice. Existing queued messages must not be cleared and reconstructed from text alone if that would lose images or other semantics.
+- Failed, aborted or ambiguously completed compaction never silently dispatches the waiting follow-up; retained text is recoverable and the UI explains its disposition.
+- A source rebind, runtime stop/restart, stale callback, repeated completion notification or overlapping ordinary submission cannot dispatch into the wrong Pi session or duplicate work.
+- Ordinary in-run follow-ups and automatic-compaction continuation remain unchanged. Unsent draft and attachments remain intact.
+- Focused ERT and isolated real-Pi fake-provider integration tests pass; unit and full suite results are recorded.
+
+* Approach and decisions
+- User confirmed the observed compaction was manual. Static inspection of installed Pi 1.4.0 shows manual =compact()= emits =compaction_end= and returns without consuming queued messages; automatic compaction checks =agent.hasQueuedMessages()= to continue.
+- =pichat/pichat-chat.el=: =pichat-chat-follow-up= forwards immediately through =pichat-rpc-follow-up=; =pichat-chat-compact= sends =compact=; the compaction-end handler only refreshes stats/transcript. =pichat/pichat-rpc.el= implements the RPC wrappers.
+- Resolve the dispatch mechanism before implementation: verify whether supported RPC can resume an existing queue without a fabricated prompt. If not, prefer narrowly scoped Emacs-owned pending submissions during manual compaction, released through the normal submission path after correlated success, rather than enqueueing work that cannot wake itself. Record how earlier native queued messages and delivery modes are preserved; ask the user if a required tradeoff changes the acceptance contract.
+- Correlate the initiating compaction response with runtime/source/process identity; do not treat any compaction-end event as blanket permission to send. Revalidate current activity before dispatch and define races with an ordinary prompt explicitly.
+- Use terminology from =pichat/GLOSSARY.md=. Inspect current submission/recovery, lifecycle guards and backend capabilities before adding state; avoid unconditional backend-specific behavior in generic code.
+- Existing integration coverage includes manual compaction success/failure and steering/follow-up queue round-trips in =pichat/test/pichat-test-integration.el=. Extend focused behavioral coverage using existing isolated fake-provider support.
+
+* Tasks
+** TODO Reproduce the gap and finalize safe dispatch design
+- Add or run a bounded isolated reproduction with real Pi and fake provider; inspect current supported RPC and submission/lifecycle APIs.
+- Record the chosen queue ownership, ordering, delivery-mode, cancellation and recovery contract before coding. Resolve any acceptance-changing limitation with the user.
+** TODO Implement manual-compaction follow-up coordination
+- Track only the necessary correlated operation/pending state, preserve prompt content, and dispatch once after verified success with source/process/activity guards.
+- Handle failures, cancellation, disconnects, source changes and overlapping submissions without silent loss or unintended execution.
+** TODO Add regression tests across the Pi boundary
+- Cover successful compaction with a mid-compaction follow-up and no extra prompt; multiple messages/modes; compaction failure/abort; stale callbacks/rebinding/restart; duplicate notifications; overlapping submission; ordinary and automatic-compaction follow-ups.
+- Assert observable context/order, queue disposition and bounded settlement; isolate all Pi state and avoid real credentials/model APIs.
+** TODO Document behavior and verify
+- Update =pichat/README.md= and glossary only if terminology changes; document recovery and any supported limitations.
+- Run =pichat/test/run-tests.sh= and =pichat/test/run-tests.sh --full=; record exact Pi version and failures. Report focused test-file sizes per testing guidelines.
+
+* Checkpoint
+- Plan status: draft
+- Selected scope: none (planning only; no implementation authorized)
+- Last verified result: relevant PiChat queue/compaction handlers and installed Pi 1.4.0 implementation inspected; manual/automatic continuation difference identified statically. No runtime reproduction yet.
+- Next action: review and approve the plan; on execution, start by reproducing the gap and resolving the supported dispatch mechanism.
+- Blockers: dispatch mechanism remains a design question for the first task, not an established implementation; no external blocker identified.
+
+* Verification
+- Planning only: no PiChat tests run and no implementation files changed.
+- =plans.py check deliver-queued-follow-ups-after-manual-compaction=: OK.
+
+* History
+- 2026-10-25T22:55:56+00:00: Created as draft using the plans helper at the user's request.
+- 2026-10-25T22:56:04Z: Recorded confirmed manual-compaction scope, static findings, acceptance checks and implementation tasks; linked separate delayed-scheduling proposal without modifying it.

@@ -5,7 +5,7 @@
 #+PLAN_ID: pichat-maintainability
 #+PLAN_STATUS: active
 #+PLAN_CREATED: 2026-10-24T16:19:02Z
-#+PLAN_UPDATED: 2026-10-25T21:09:02Z
+#+PLAN_UPDATED: 2026-10-25T22:51:05Z
 
 * Goal
 Address the reviewed PiChat maintainability and correctness findings through bounded, independently selected work packages without weakening runtime, source, transcript or draft safety.
@@ -165,14 +165,30 @@ after source rebinding. Direct reference edits already advance editor generation
 - [ ] Preserve existing draft, pending attachments, path mappings, region precedence, and valid insertion bookkeeping.
 - [ ] Keep this narrow guard independent of the later public draft API migration.
 
-* TODO [#A] W04 — Preserve target drafts when replacement fails
+* TODO [#A] W04 — Preserve target drafts when replacement fails (deferred)
 :PROPERTIES:
 :CUSTOM_ID: W04
 :FINDINGS: REL-05; ARCH-01
+:EXECUTION_STATUS: deferred
 :END:
 
 Evidence: an injected insertion failure left the old target draft empty while
 the compose buffer survived. This is not an observed spontaneous loss incident.
+
+Maintainer decision (2026-10-25): deferred pending a realistic trigger, not
+completed or permanently rejected. Inspection found no ordinary built-in UI
+action that reliably causes the required insertion error; modification hooks
+are inhibited during replacement. The rollback weakness remains valid, but
+compose text survives and current evidence does not justify prioritizing it
+over concrete bugs. Revisit only for a reproducible ordinary workflow, a user
+report, or a related change that makes this failure boundary relevant, with
+explicit approval before implementation. Skip W04 during normal queue selection.
+
+The TODO state retains incomplete acceptance checks because the plan's task
+vocabulary has no deferred state; the heading/property records intentional
+deferral, not an external blocker. W09/W11 still name W04 as a dependency:
+reconcile that requirement explicitly when selecting them rather than treating
+this deferral as implemented rollback or silently resuming W04.
 
 - [ ] Make draft text replacement and its bookkeeping commit coherent on success or failure.
 - [ ] Test failure after deletion and during insertion; old target text and associated draft state remain recoverable/intact as specified.
@@ -447,15 +463,17 @@ review's "keep" findings (including INFRA-02) are constraints, not rewrite tasks
 
 * Checkpoint
 - Plan status: active
-- Selected scope: W02 complete; no adjacent package started. W01 is committed as =ba2e6a61=; W02 remains uncommitted.
+- Selected scope: W04 deferral decision only; no implementation. W01 and W02 are committed as =ba2e6a61= and =e7c30a63=.
 - Last verified result: focused command/CAPF 17/17; unit 802/809 and full 865/872 expected with 7 optional skips, 0 unexpected on Emacs 31.1 / Pi 1.4.0. Compilation clean; diff whitespace check clean. GUI/live SSH not claimed.
-- Next action: await an explicitly named remaining work package or commit request; do not advance automatically.
+- Next action: await an explicitly named remaining work package; W03 is next in order and W04 is deferred pending a realistic trigger. Do not advance automatically or implement W04 without renewed approval.
 - Blockers: W06 awaits the W05 contract decision; W22 awaits a concrete approved extension need. Neither blocks independent packages.
 
 * Verification
+- 2026-10-25: W04 deferral is bookkeeping only; retained injected-failure evidence and incomplete acceptance checks, recorded reconsideration criteria and downstream dependency implications. No production code changes or tests run for this decision.
 - 2026-10-25: moved the tracked execution backlog from =docs/pichat-maintainability-plan.org= to this single managed plan. Preserved all 22 headings, states, IDs and resolved all five relative file links; =plans.py check --all= OK for five records, =list --all= shows ready 0/22, helper tests 3 OK. No PiChat implementation or tests run for the migration. Historical pass-3 results remain in the linked review.
 
 * History
+- 2026-10-25T22:51:05Z: User approved deferring W04 pending a realistic trigger; retained the rollback finding and unchecked implementation criteria, added a scoped REL-05 review note, and recorded that W09/W11 dependencies require explicit reconciliation. W02 commit confirmed as =e7c30a63=. No implementation or commit for this update.
 - 2026-10-25T21:09:02Z: Completed W02 only: captured command context/revalidation, public-entry-point regressions, strengthened quit fixture, scoped DUP-01 resolution, focused/unit/full and byte-compilation verification. No commit or adjacent work.
 - 2026-10-25T21:03:13Z: User selected W02 only; started focused command submission freshness work from clean jj working copy.
 - 2026-10-25T20:40:39Z: Completed approved W01 correction: declared runner policies, captured destination snapshots, independent handoff identity, regression coverage, README/review updates and full-suite verification. Destination pickers deferred.

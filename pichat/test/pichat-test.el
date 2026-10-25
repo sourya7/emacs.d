@@ -23,6 +23,7 @@
 (require 'pichat-test-chat-live)
 (require 'pichat-test-chat-input)
 (require 'pichat-test-chat-completion)
+(require 'pichat-test-commands)
 (require 'pichat-test-chat-tools)
 (require 'pichat-test-chat-activity)
 (require 'pichat-test-chat-skills)

@@ -11,26 +11,66 @@
 (require 'pichat-backend)
 (require 'pichat-rpc)
 
-(defun pichat-command--prompt-and-run (session commands)
-  "Prompt for one of COMMANDS and run it in SESSION.
-A quit from either minibuffer prompt cancels the operation silently."
-  (when (pichat-session-alive-p session)
-    (condition-case nil
-        (let* ((choices (mapcar
-                         (lambda (cmd)
-                           (cons (format "/%s  [%s] %s"
-                                         (plist-get cmd :name)
-                                         (plist-get cmd :source)
-                                         (or (plist-get cmd :description) ""))
-                                 cmd))
-                         commands))
-               (choice (completing-read "Pi command: " choices nil t))
-               (cmd (cdr (assoc choice choices)))
-               (args (read-string (format "/%s args: " (plist-get cmd :name))))
-               (message (string-trim (concat "/" (plist-get cmd :name) " " args))))
-          (when (pichat-session-alive-p session)
-            (pichat-backend-submit-prompt session message)))
-      (quit nil))))
+(defun pichat-command--capture-context (session)
+  "Return a predicate validating SESSION's current discovery/action context.
+Submission requires the same process lifetime and Pi source.  If a chat owns
+SESSION, also retain its buffer ownership and source generation, without
+requiring the chat module for callers that have no chat."
+  (let* ((process (pichat-session-process session))
+         (generation (pichat-session-process-generation session))
+         (id (pichat-session-id session))
+         (file (pichat-session-session-file session))
+         (buffer (pichat-session-buffer session))
+         (chat-p (and (buffer-live-p buffer)
+                      (local-variable-p 'pichat-chat-session buffer)
+                      (local-variable-p 'pichat-chat--source-generation buffer)))
+         (source-generation
+          (and chat-p (buffer-local-value 'pichat-chat--source-generation buffer))))
+    (lambda ()
+      (and (pichat-session-alive-p session)
+           (eq process (pichat-session-process session))
+           (equal generation (pichat-session-process-generation session))
+           (equal id (pichat-session-id session))
+           (equal file (pichat-session-session-file session))
+           (eq buffer (pichat-session-buffer session))
+           (or (null buffer) (buffer-live-p buffer))
+           (or (not chat-p)
+               (and (local-variable-p 'pichat-chat-session buffer)
+                    (local-variable-p 'pichat-chat--source-generation buffer)
+                    (eq session (buffer-local-value 'pichat-chat-session buffer))
+                    (equal source-generation
+                           (buffer-local-value 'pichat-chat--source-generation buffer))))))))
+
+(defun pichat-command--current-p (current-p)
+  "Check CURRENT-P and explain why stale command work was cancelled."
+  (if (funcall current-p) t
+    (message "Pi command cancelled: runtime or source changed; invoke the picker again")
+    nil))
+
+(defun pichat-command--prompt-and-run (session commands &optional current-p)
+  "Prompt for one of COMMANDS and run it in SESSION while CURRENT-P holds.
+CURRENT-P retains the context captured before command discovery; direct calls
+capture it before prompting.  Quit at either prompt cancels silently."
+  (let ((current-p (or current-p (pichat-command--capture-context session))))
+    (when (pichat-command--current-p current-p)
+      (condition-case nil
+          (let* ((choices (mapcar
+                           (lambda (cmd)
+                             (cons (format "/%s  [%s] %s"
+                                           (plist-get cmd :name)
+                                           (plist-get cmd :source)
+                                           (or (plist-get cmd :description) ""))
+                                   cmd))
+                           commands))
+                 (choice (completing-read "Pi command: " choices nil t))
+                 (cmd (cdr (assoc choice choices)))
+                 (args (and (pichat-command--current-p current-p)
+                            (read-string (format "/%s args: " (plist-get cmd :name)))))
+                 (message (and args
+                               (string-trim (concat "/" (plist-get cmd :name) " " args)))))
+            (when (and message (pichat-command--current-p current-p))
+              (pichat-backend-submit-prompt session message)))
+        (quit nil)))))
 
 ;;;###autoload
 (defun pichat-command-run (&optional session)
@@ -39,12 +79,15 @@ A quit from either minibuffer prompt cancels the operation silently."
   (let ((session (pichat-session-current session)))
     (unless session (user-error "No current PiChat session"))
     (pichat-backend-require-capability session 'commands "Pi commands")
-    (pichat-rpc-get-commands
-     session
-     (lambda (response response-session)
-       (run-at-time
-        0 nil #'pichat-command--prompt-and-run response-session
-        (plist-get (plist-get response :data) :commands))))))
+    (let ((current-p (pichat-command--capture-context session)))
+      (pichat-rpc-get-commands
+       session
+       (lambda (response response-session)
+         (when (and (eq session response-session)
+                    (pichat-command--current-p current-p))
+           (run-at-time
+            0 nil #'pichat-command--prompt-and-run session
+            (plist-get (plist-get response :data) :commands) current-p)))))))
 
 (provide 'pichat-commands)
 ;;; pichat-commands.el ends here

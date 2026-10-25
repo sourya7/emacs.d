@@ -103,6 +103,8 @@ Both expose commands/templates/skills, but command picker work can outlive its o
 
 **Validation:** delayed response followed by source rebinding; source changes while reading arguments; failure/malformed command list; cancellation; current CAPF behavior; picker execution versus draft insertion.
 
+**W02 resolution (2026-10-25): freshness gap resolved; catalog duplication remains for W14.** The picker captures process identity/generation, Pi session ID and saved-file path before discovery, plus associated chat ownership/source generation when present. It revalidates the response runtime and captured context before scheduling, before the deferred picker, after command selection, and after argument entry immediately before submission. Stale work reports cancellation without backend submission or draft changes. Tests exercise each boundary, same-ID generation changes, chat death/ownership changes and runtime stop/replacement-generation changes, with a valid unchanged-source control. The existing cancellation test now uses a live inert process and proves both prompts were reached. Picker execution remains immediate; CAPF remains draft-only. Unit/full suites and focused command/CAPF tests pass. Re-entrancy is fixture-driven, not a claim of manual GUI or live SSH verification; command normalization/error handling and shared catalog work are not changed here.
+
 ### DUP-02 — Marker-table navigation repeats small algorithms
 
 **Priority: low/medium. Evidence: confirmed similar code.**

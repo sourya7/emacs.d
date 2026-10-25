@@ -1,0 +1,46 @@
+#+TITLE: PiChat rendered-response navigation
+#+TODO: TODO IN-PROGRESS BLOCKED | DONE
+#+PLAN_ID: pichat-response-navigation
+#+PLAN_STATUS: done
+#+PLAN_CREATED: 2026-10-25T19:03:23+00:00
+#+PLAN_UPDATED: 2026-10-25T19:07:39Z
+
+* Goal
+Enable next/previous navigation across settled assistant prose in the rendered response view, preserving the canonical transcript and the originating Pi session's active source.
+
+* Scope
+- Included: adjacent response selection, safe same-buffer navigation, native/Evil/personal bindings, documentation and tests.
+- Excluded: replacing the view with markdown-preview; navigating the live tail or a different source.
+- Original design: [[file:legacy/pichat-response-navigation-plan.md][legacy design]] (original: .tmp/pichat-response-navigation-plan.md).
+- Original execution record: [[file:legacy/20261024-000001-pichat-response-navigation.org][legacy execution]] (original: .tmp/pi-todos/20261024-000001-pichat-response-navigation.org). The copies are historical evidence, not another active checklist.
+
+* Acceptance criteria
+- Adjacent prose-bearing assistant responses navigate in canonical order and preserve snapshot on boundaries, stale source, and render errors.
+- Native n/p, Evil ]r/[r, and user mode-key actions work without replacing Evil search bindings.
+- Tests and documentation verify the agreed scope. See original design for detailed behavior and test cases.
+
+* Approach and decisions
+- Archived import of a completed legacy Markdown/Org pair. The original execution record marks every section DONE, with checklists complete and no blockers.
+- Source inspection on import confirms selector in pichat/pichat-chat-navigation.el, navigation commands and bindings in pichat/pichat-response-view.el, Evil/user mappings, tests, and README text. Commit c18388f includes implementation and tests.
+- Whitespace-only prose remains eligible; absent or non-assistant current identity is an error rather than a boundary (legacy execution decision).
+
+* Tasks
+** DONE Select adjacent canonical prose-bearing responses
+** DONE Validate origin and preserve same-buffer snapshot on navigation failures
+** DONE Bind native, Evil, and user actions; update documentation
+** DONE Verify tests and reconcile the original scope
+
+* Checkpoint
+- Plan status: done
+- Selected scope: historical completed work; no new implementation.
+- Last verified result: original execution record reports unit suite exit 0 (757 tests, 753 expected, 0 unexpected, 4 skipped) and a user-run targeted Evil test (1 expected, 0 unexpected). Historical unit log at /tmp/pichat-output-1DI88B.txt was present and its summary inspected on import; targeted test was not rerun here.
+- Next action: none. This record was directly archived on import.
+- Blockers: none recorded in the original execution record.
+
+* Verification
+- Historical evidence only: unit suite summary inspected in /tmp/pichat-output-1DI88B.txt, 757 tests, 753 expected, 0 unexpected, 4 skipped (2026-10-23). Legacy execution record reports separate Evil-enabled targeted pass; its log was not independently checked here.
+- Import did not rerun PiChat tests or claim fresh implementation verification. Source and commit c18388f checked for presence; no fresh behavior test performed.
+
+* History
+- 2026-10-25T19:03:23+00:00: Created by helper for import; populated from previously completed records.
+- 2026-10-25: Classified done from recorded completion and inspected historical evidence, then archived directly. Originals under .tmp/ left unchanged.

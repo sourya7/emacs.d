@@ -1,0 +1,96 @@
+#+TITLE: Roll out the global project-plans skill
+#+TODO: TODO IN-PROGRESS BLOCKED | DONE
+#+PLAN_ID: plan-skill-rollout
+#+PLAN_STATUS: done
+#+PLAN_CREATED: 2026-10-25T00:00:00Z
+#+PLAN_UPDATED: 2026-10-25T19:31:56Z
+
+* Goal
+Make the new global plans skill practical across projects: test its lifecycle, migrate selected legacy plans safely, refine rough edges, and eventually remove the competing execution instructions in /todo.
+
+* Scope
+- Included: trial in this repository; selected imports from .tmp; improvements to the global skill and helper based on actual use; explicitly chosen removal of /todo after the workflow stabilized.
+- Excluded: bulk migration or deletion of .tmp files; unrequested implementation of the legacy plans; automatic changes to Git ignore or tracking policy; modifying /todo before an explicit decision.
+
+* Acceptance criteria
+- A new plan can be created, listed, scoped, resumed, reconciled and archived with one authoritative Org record; a trial documents any failures or ambiguities.
+- One completed Markdown/Org pair and one unfinished legacy plan are imported only after choosing them and reviewing their current state; originals and verification evidence remain intact.
+- Helper tests cover any workflow defects fixed during the trial; listing and checks reflect the imported plans correctly.
+- The explicitly chosen /todo removal leaves the plans skill as the sole plan workflow; no compatibility prompt creates a competing execution record.
+- Archive or cancel this rollout plan only when its scope and verification are reconciled.
+
+* Approach and decisions
+- Global skill: ~/.pi/agent/skills/plans/SKILL.md; workflow: references/lifecycle.md; helper: scripts/plans.py.
+- Former execution prompt (removed in Phase 5): ~/.pi/agent/prompts/todo.md (through its symlink to /home/mojo/Dev/skills/prompts/todo.md).
+- Existing examples: .tmp/pichat-response-navigation-plan.md and .tmp/pi-todos/20261024-000001-pichat-response-navigation.org (completed pair); .tmp/pichat-diagnostics-improvement-plan.md (proposed, not executed). These are candidates, not preapproved migration targets.
+- Use .plans/<id>/plan.org as the source of truth for each imported plan; keep links to legacy records, including evidence and provenance. Preserve their original files.
+- Decide whether .plans/ belongs in Git only after trialing the workflow; do not alter ignore rules silently.
+
+* Tasks
+** DONE Phase 1: Establish the initial global skill
+- Initial SKILL.md, lifecycle reference, Org template, helper and two helper tests were created in the previous conversation turn.
+- Verification reported then: python3 scripts/test_plans.py passed 2 tests; helper list/check returned "No plans found" in this project. No project plans existed at that time.
+** DONE Phase 2: Trial the lifecycle with a real project plan
+*** DONE Inspect this draft and choose an initial execution scope
+- Inventory/validation verified on 2026-10-25: helper list finds this active plan and check reports OK. Selected scope: Phase 2 only, per the multi-phase default; Phases 3–5 remain out of scope.
+*** DONE Trial scope selection, checkpointing, resume/reconcile and closeout on real work without duplicating the execution record
+- Promoted this record from draft to active, selected Phase 2 only, marked one leaf active at a time and persisted its scope and next action in Checkpoint.
+- Reloaded the record with =plans.py show plan-skill-rollout= after the checkpoint edit and reconciled its phase/task state against the test output. This exercises a same-invocation resume/readback, not an interrupted or cross-session resume.
+- =plans.py check= and =list= passed during the active phase. Archive safety and fresh-plan creation were exercised in the helper's sandbox tests; the active rollout record must not be archived.
+- No duplicate execution Org file created; only this record exists under .plans/.
+*** DONE Record friction, correctness issues and evidence in this plan
+- Friction: this record was initially written manually when bash was unavailable; helper's =new= works in sandbox but has not yet created a plan in this repository. Revisit in Phase 4 if needed.
+- Friction: checkpoint text does not update automatically on status transitions (it still said "draft" after promotion). Reconcile it on every transition; consider validation of stale checkpoint/status in Phase 4.
+- Limitation: =check= validates format/task consistency, not real verification, timestamp accuracy, or a cross-session resume. The provisional creation timestamp remains explicitly approximate.
+- Result: Phase 2 complete in this invocation, with phases 3–5 untouched. No in-scope blockers.
+** DONE Phase 3: Import representative legacy plans
+*** DONE Select and inspect one completed Markdown/Org pair; verify actual outcome and preserve its sources and evidence
+- Imported the completed response-navigation design and DONE execution record; confirmed implementation files/tests and commit c18388f, and inspected historical unit log: 757 tests, 753 expected, 0 unexpected, 4 skipped. Separate Evil result is from the original record, not rerun here.
+- Directly archived the completed managed record at .plans/archive/pichat-response-navigation/plan.org. Historical source copies are inside its legacy/ directory; .tmp originals were preserved. No fresh PiChat test claim.
+*** DONE Select and inspect one unfinished plan; verify its state and import its next action without claiming completion
+- Imported .tmp/pichat-diagnostics-improvement-plan.md as .plans/pichat-diagnostics-improvements/plan.org, status draft, 0/11 tasks DONE. Its original says proposed and no implementation; source still shows shared diagnostics buffers and old customization command.
+- Preserved the full original proposal as legacy/pichat-diagnostics-improvement-plan.md for context; managed Org tasks alone own progress. Next action: review scope and start Phase 1 when requested; no implementation in this import.
+*** DONE Validate inventory and ensure legacy originals remain unchanged
+- =plans.py check --all= reports OK for all three managed records. Normal =list= shows diagnostics and rollout; =list --all= also shows archived response navigation.
+- SHA-256 hashes match for each imported source copy and its .tmp original (completed pair and unfinished proposal). No .tmp files were moved or deleted.
+- Helper tests rerun: 2 OK. This phase imports two representative plans, not every historical .tmp plan; remaining legacy plans were not assessed.
+** DONE Phase 4: Refine and verify the global workflow
+*** DONE Address issues found in the trial and import; expand helper tests where appropriate
+- Added explicit =Plan status= in every checkpoint and helper validation against the header, plus a required next action. Added UTC timestamp validation and updated-before-created detection; accuracy of a reported timestamp still requires human judgment.
+- Updated skill/lifecycle/template and all three existing managed records. Clarified fallback when bash is unavailable: do not invent timestamps or claim checks were run.
+- Helper tests expanded from 2 to 3 and passed; no change to /todo or pichat implementation.
+*** DONE Re-test creation, listing, validation, selected-scope execution and safe archival
+- Isolated project trial passed: helper =new=, in-place Phase 1 scope/status update with Phase 2 still TODO, =list= (1/2), =show=, =check=, refusal to archive active plan, then completion (2/2), archive, =list --all= and =check --all=.
+- Helper unit tests: 3 OK; all three real managed records pass =check --all=. Current active rollout record remains unarchived; no adjacent phase begun.
+- Limits remain: helper cannot verify that implementation/tests really happened, and actual cross-session resume has not been exercised; document evidence in the plan and reread checkpoint on resume.
+** DONE Phase 5: Replace /todo with the plans skill
+*** DONE Decide whether to retain a /todo compatibility command
+- User explicitly chose to replace /todo entirely, without a wrapper. Use /skill:plans new, run, resume, list, etc. directly.
+*** DONE Remove the standalone /todo prompt and verify no duplicate managed execution record can be created through it
+- Removed the prompt after explicit user approval; no compatibility wrapper retained. Verified /todo file absent, skill SKILL.md present, and only the existing rollout plan record used in this invocation. No new .tmp/pi-todos invocation file created (directory remains at its earlier mtime).
+- Updated skill and lifecycle instructions to point at /skill:plans directly. Helper tests 3 OK and =plans.py check --all= passed. Actual interactive Pi command discovery is not exercised here; use /reload in a running Pi session.
+
+* Checkpoint
+- Plan status: done
+- Selected scope: archival of the completed rollout plan, explicitly requested by the user.
+- Last verified result: rollout 11/11 DONE and =plans.py check --all= OK; /todo prompt absent and plans skill present. Interactive command discovery not tested.
+- Next action: none after archive; use /skill:plans for new work.
+- Blockers: none.
+
+* Verification
+- 2026-10-25: ran python3 ~/.pi/agent/skills/plans/scripts/test_plans.py: 2 tests OK, including sandbox creation, listing, validation and archival.
+- Ran plans.py check: .plans/plan-skill-rollout/plan.org OK; plans.py list initially showed the draft with 1/11 completed leaf tasks.
+- Phase 2: =list= and =check= succeeded while active; =show= reread the checkpoint. Helper tests rerun: 2 OK. Archive exercised in sandbox tests only, not on this unfinished plan.
+- Creation timestamp is approximate (the exact time was unavailable when this record was created); updated timestamp is UTC from the system clock.
+- Phase 3: =check --all= OK for three managed records; helper tests 2 OK; matching SHA-256 hashes for all three imported legacy files. Historical response-navigation unit log inspected, not rerun.
+- Phase 4: helper tests 3 OK; isolated new/scoped run/list/show/check/guarded archive/all checks passed; =check --all= OK in current project.
+- Phase 5: /todo prompt removed from symlinked prompt directory; plans skill still present, no replacement prompt or new invocation plan; helper tests 3 OK and =check --all= OK. Reload Pi to refresh interactive commands.
+
+* History
+- 2026-10-25: Drafted rollout phases after initial global skill was implemented. No legacy files or prompt templates were changed.
+- 2026-10-25T18:57:02Z: Verified helper tests and project inventory/check; no rollout implementation begun.
+- 2026-10-25T19:00:55Z: Completed Phase 2 trial and documented limits; phases 3–5 not started.
+- 2026-10-25T19:04:30Z: Completed Phase 3 representative imports; completed response-navigation record archived directly, diagnostics imported as draft; .tmp originals preserved.
+- 2026-10-25T19:20:54Z: Completed Phase 4 checkpoint validation, UTC/next-action guardrails and isolated lifecycle retest; Phase 5 not started.
+- 2026-10-25T19:30:42Z: User chose no /todo compatibility command; prompt removed. Reconciled entire rollout as done, not archived.
+- 2026-10-25T19:31:56Z: User explicitly requested archival; closed record and moved it to .plans/archive/plan-skill-rollout/.

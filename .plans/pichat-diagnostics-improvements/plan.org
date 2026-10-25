@@ -1,0 +1,56 @@
+#+TITLE: PiChat diagnostics improvements
+#+TODO: TODO IN-PROGRESS BLOCKED | DONE
+#+PLAN_ID: pichat-diagnostics-improvements
+#+PLAN_STATUS: draft
+#+PLAN_CREATED: 2026-10-25T19:03:23+00:00
+#+PLAN_UPDATED: 2026-10-25T19:07:39Z
+
+* Goal
+Make safe cached diagnostics the primary troubleshooting entry point, keep sensitive raw evidence behind an explicit action, and ensure diagnostic actions target the inspected PiChat runtime.
+
+* Scope
+- Included: runtime-owned inspector views, safe snapshot UI, setup actions and probe wording, documentation, tests and compatibility.
+- Excluded: automatic repair, raw export, consolidated diagnostic retention, comprehensive provider health checks and unrelated command removal.
+- Imported design: [[file:legacy/pichat-diagnostics-improvement-plan.md][legacy proposal]] (original: .tmp/pichat-diagnostics-improvement-plan.md). It is preserved as historical design/context; tasks below are the authoritative work checklist.
+
+* Acceptance criteria
+- Reports for runtimes A and B coexist; actions from A's report never fall back to B, including after stop/forget.
+- Safe refresh reads caches only, avoids RPC/process activity, and never includes raw transport data; raw inspection remains explicit and warned.
+- Setup/probe actions use the viewed runtime and backend capabilities; setup process reuse requires matching target/context.
+- Tests cover ownership, safety, stale-source behavior, nested view closure, bindings and compatibility. Run pichat/test/run-tests.sh; relevant RPC integration coverage uses --full per pichat/TESTING_GUIDELINES.md. Verify user bindings in a live Emacs session.
+
+* Approach and decisions
+- Imported as draft, not implemented. At import, pichat/pichat-chat-diagnostics.el still uses shared *PiChat Diagnostics* and *PiChat Transport Diagnostics* buffers and has the old pichat-diagnostics-customize-transport command; no evidence of these proposed changes being implemented.
+- Before implementation, read pichat/README.md, pichat/GLOSSARY.md and pichat/TESTING_GUIDELINES.md. Keep the glossary's runtime vs Pi session and Session History terminology.
+- The legacy proposal holds the detailed behavior and design options; reconcile it against current code before promoting this plan to ready. Proposed keybindings are not final until conflicts are checked.
+
+* Tasks
+** TODO Phase 1: Runtime-owned inspector views
+*** TODO Give safe and raw inspector views explicit runtime ownership and stable per-runtime buffers
+*** TODO Keep actions owner-correct across stop/forget, with safe identity headers and nested q behavior
+*** TODO Add ownership and view-lifecycle regression tests
+** TODO Phase 2: Primary safe diagnostics interface
+*** TODO Refresh all four cached sections safely; distinguish none from unavailable and stale source
+*** TODO Offer explicit warned raw view and validate proposed native/Evil bindings
+*** TODO Test cache-only behavior, redaction, warning, and navigation
+** TODO Phase 3: Separate inspection from setup
+*** TODO Add capability-aware setup chooser and accurately describe the bounded Pi executable/version probe
+*** TODO Match interactive setup terminal reuse to launch context; preserve wrapper requirements
+*** TODO Correct customization command name with compatibility alias and test setup ownership
+** TODO Phase 4: Documentation and compatibility
+*** TODO Update pichat/README.md, glossary if needed, and user/pichat.el bindings
+*** TODO Verify aliases, manager actions, full regression checks and live Emacs usage
+
+* Checkpoint
+- Plan status: draft
+- Selected scope: none (imported proposal only).
+- Last verified result: import inspection found existing shared inspector buffers and old customization name; no implementation tests run for this proposal.
+- Next action: review the imported proposal and current code; if approved, start Phase 1 only.
+- Blockers: no dependency blocker; proposed bindings and scope need review before implementation.
+
+* Verification
+- Original proposal explicitly states no implementation changes. Import verified the existing shared buffer names and old command in source; no tests run and no work marked DONE.
+
+* History
+- 2026-10-25T19:03:23+00:00: Created by helper for import.
+- 2026-10-25: Imported as draft from .tmp/pichat-diagnostics-improvement-plan.md. Original left unchanged; no implementation started.

@@ -1,0 +1,26 @@
+#+TITLE: PiChat rendered-response navigation
+#+TODO: TODO IN-PROGRESS BLOCKED | DONE
+
+Reference: [[file:../pichat-response-navigation-plan.md][response navigation plan]]. Scope: full plan; no Markdown-preview replacement.
+
+* DONE Canonical adjacent-response selection
+  - [X] Select adjacent prose-bearing assistant nodes in canonical order without latest-response fallback.
+  - [X] Verify focused tests for ordering, empty/tool-only skipping, boundaries and missing current identity.
+  Decision: whitespace-only prose is eligible; absent or non-assistant current identity is an error, not a boundary.
+  Verification: user-run unit suite passed 753/757, 0 unexpected; adjacent selector test passed.
+* DONE Origin validation and safe same-buffer navigation
+  - [X] Validate source/response in chat before navigating; reject dead or rebound origins.
+  - [X] Reuse view buffer; preserve current snapshot on boundary, validation and render failures.
+  - [X] Verify copy, refresh and return use the selected response.
+  Verification: user-run unit suite passed both new view navigation tests.
+* DONE Native, Evil and local menu bindings; documentation
+  - [X] Native n/p; Evil ]r/[r without changing n/N; local SPC m menu.
+  - [X] Document behavior; no glossary terminology change needed.
+  - [X] Verify optional Evil bindings with Evil on load-path.
+  Verification: native assertions passed in unit suite; user-run Evil-enabled targeted test passed 1/1, 0 unexpected.
+* DONE Verification and reconciliation
+  - [X] Add focused unit and optional Evil tests.
+  - [X] User ran =pichat/test/run-tests.sh=; exit 0, 757 tests, 753 expected, 0 unexpected, 4 skipped (see /tmp/pichat-output-1DI88B.txt).
+  - [X] User ran Evil-enabled targeted batch test; exit 0, 1 expected, 0 unexpected.
+  - [X] Reconciled the full-plan scope with the implementation and user-reported test results.
+  No in-scope blockers remain. The unit suite's Evil skip is covered by the targeted run; the three other skips are unrelated.

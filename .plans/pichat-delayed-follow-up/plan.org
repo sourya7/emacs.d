@@ -1,0 +1,54 @@
+#+TITLE: PiChat delayed follow-up scheduling
+#+TODO: TODO IN-PROGRESS BLOCKED | DONE
+#+PLAN_ID: pichat-delayed-follow-up
+#+PLAN_STATUS: draft
+#+PLAN_CREATED: 2026-10-25T19:37:17+00:00
+#+PLAN_UPDATED: 2026-10-25T19:37:49Z
+
+* Goal
+Let a user schedule one opt-in, Emacs-owned continuation for the exact owning PiChat chat: either prompt with =continue= after a delay, or compact successfully and then prompt. Fail closed if ownership or conversation state changes; never silently queue work in another Pi session.
+
+* Scope
+- Included: bounded relative-duration scheduling, status/replacement/cancellation controls, source- and process-safe dispatch, tests, and documentation.
+- Excluded: automatic quota/reset detection, account switching, daemon or persistent jobs, silent recovery after restart, exactly-once guarantees on lost RPC responses, and changes to Pi's immediate follow-up queue.
+- Design provenance: [[file:legacy/pichat-delayed-follow-up-plan.md][imported full proposal]] (original: [[file:../../.tmp/pichat-delayed-follow-up-plan.md][.tmp proposal]]). This Org record alone owns future task status; the legacy copy is reference material, not an execution tracker.
+
+* Acceptance criteria
+- A live, idle, synchronized Pi-backed chat can schedule, inspect, replace with confirmation, and cancel at most one delayed job; the unsent draft and attachments remain unchanged.
+- A job fires no earlier than its due time and submits one normal prompt only after verifying exact chat/runtime, Pi session, source/process generations, active branch, model, and idle/empty-queue state. A source switch, restart, intervening work, busy state, lost ownership, or ambiguous RPC outcome must not cause an unintended prompt.
+- Compact-then-continue prompts only after correlated successful compaction and renewed same-source/idle validation; failed or ambiguous compaction never prompts.
+- ERT and isolated real-Pi fake-provider tests cover timers, cancellation, rebinding, stale callbacks and the ordering of compaction and continuation; =pichat/test/run-tests.sh= and =pichat/test/run-tests.sh --full= results are recorded. Document controls and Emacs-lifetime limitations using terminology from =pichat/GLOSSARY.md=.
+
+* Approach and decisions
+- On import, inspected =pichat-chat-follow-up=, =pichat-chat-compact=, status/source-token helpers and existing RPC functions; no =pichat-chat-schedule= or =pichat-chat-cancel-schedule= definition found. This is an unimplemented proposal, not previously completed work.
+- Follow the full legacy design for proposed state machine, ownership checks, error handling and verification matrix. Recheck Pi RPC and PiChat APIs when execution is requested; importing does not approve or implement the design.
+- Use Emacs one-shot timers and existing PiChat RPC/backend operations; a Pi =follow_up= is an immediate post-run queue, not a delayed schedule. Preserve the distinction between runtime, Pi session and saved session file per =pichat/GLOSSARY.md=.
+
+* Tasks
+** TODO Recheck design against current PiChat and Pi RPC behavior
+- Resolve timer/branch validation, model-change and compact-response details before coding; keep the bounded v1 contract and record any necessary design changes here.
+** TODO Implement scheduling state and chat controls
+- Add duration parsing, one-job-per-chat timer/state machine, schedule/cancel/status UI and cleanup without touching the user's draft.
+** TODO Enforce ownership and fail-closed continuation dispatch
+- Capture source/process/branch/model identity, cancel on invalidation, revalidate at due time and submit only one correlated normal prompt; report ambiguous outcomes without automatic retry.
+** TODO Implement compact-then-continue sequencing
+- Continue only after correlated successful compact and renewed state/branch checks; suppress stale callbacks and cancellation races.
+** TODO Add deterministic unit and isolated real-Pi integration coverage
+- Cover timing, state transitions, rebinding/restarts, busy/queued state, error paths, no duplicate prompts and successful/failed compact ordering as specified by the legacy proposal.
+** TODO Document behavior and verify supported suites
+- Update =pichat/README.md=, run unit and full RPC suites, report failures and limitations; do not silently update =PI_COMPATIBILITY.md= watermarks.
+
+* Checkpoint
+- Plan status: draft
+- Selected scope: none (import only; no implementation authorized)
+- Last verified result: original and legacy copy have identical SHA-256; =plans.py check --all= OK for all four records; helper tests 3 OK; =list= shows this draft 0/6.
+- Next action: review the imported scope and current APIs; when implementation is explicitly requested, start the first TODO task only.
+- Blockers: none; approval to implement has not been requested.
+
+* Verification
+- 2026-10-25: imported proposal without executing it; original and legacy copy both SHA-256 =8eb6bf4dfee5582dcd8d68d7e0b4904b2b820e36daa14613ae162285f48470da=. =plans.py check --all= OK for four records, =list= shows draft 0/6, helper tests 3 OK. No PiChat tests run for this planning-only import.
+
+* History
+- 2026-10-25T19:37:17+00:00: Created as draft using the plans helper.
+- 2026-10-25T19:37:23Z: Imported only the selected delayed-follow-up proposal; preserved its original and a verbatim legacy reference. No other .tmp plans imported.
+- 2026-10-25T19:37:49Z: Validated inventory and structure, source-copy checksum and helper tests; remains draft.

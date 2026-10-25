@@ -127,7 +127,9 @@ Before testing a newer Pi release:
    recorded `last_reviewed_pi` with the installed `pi --version`; explicit old
    and new refs are also accepted. Set `PI_UPSTREAM_DIR` to reuse a full local
    checkout of the upstream Pi repository. The report scans `rpc.md`,
-   `rpc-commands.md`, and `json.md`; watermark blob IDs identify `rpc.md`.
+   `rpc-commands.md`, `json.md`, `session-format.md`, and `compaction.md`;
+   watermark blob IDs identify `rpc.md`. Before marking the expanded review
+   complete, backfill session-format/compaction changes predating this scan.
 2. Give every reported RPC overview, command, or event-document commit a
    disposition in the compatibility ledger. Inspect the implementation diff
    too when the documentation alone does not establish client impact.

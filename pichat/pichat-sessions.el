@@ -137,7 +137,8 @@ rows."
   "Session-history filters in cycle order.")
 
 (defconst pichat-sessions--bookkeeping-types
-  '("label" "custom" "model_change" "thinking_level_change" "session_info")
+  '("label" "custom" "model_change" "thinking_level_change" "session_info"
+    "context_edit" "usage")
   "Entry types hidden by the default history filters.")
 
 (defvar pichat-sessions--summary-cache (make-hash-table :test #'equal)
@@ -310,6 +311,15 @@ identities."
         (or (plist-get (plist-get entry :message) :role) "message")
       type)))
 
+(defun pichat-sessions--context-edit-description (entry)
+  "Return a bounded, content-free summary of context edit ENTRY."
+  (format "%s %s"
+          (if (null (plist-get entry :replacement)) "Omit" "Replace")
+          (let ((target (plist-get entry :targetId)))
+            (if (stringp target)
+                (pichat-sessions--shorten target 80)
+              "unknown target"))))
+
 (defun pichat-sessions--entry-info (entry node)
   "Return readable summary for ENTRY from normalized tree NODE."
   (let* ((type (pichat-sessions--normalized-entry-type entry))
@@ -365,6 +375,9 @@ identities."
              (format "session: %s"
                      (or (plist-get entry :name)
                          (plist-get entry :sessionName) "info")))
+            ("context_edit"
+             (format "context edit: %s"
+                     (pichat-sessions--context-edit-description entry)))
             (_
              (or (plist-get entry :name)
                  (plist-get entry :sessionName)
@@ -2306,6 +2319,11 @@ canonical entry cache."
        (pichat-sessions--preview-insert-section
         (format "CUSTOM: %s" (or (plist-get entry :customType) "custom"))
         ""))
+      ("context_edit"
+       (pichat-sessions--preview-insert-section
+        "CONTEXT EDIT"
+        (format "%s (model context only; raw history unchanged)"
+                (pichat-sessions--context-edit-description entry))))
       (_
        (pichat-sessions--preview-insert-section
         (upcase (replace-regexp-in-string "_" " " (or type "ENTRY")))

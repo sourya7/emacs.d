@@ -627,8 +627,8 @@ This repo loads PiChat through `user/pichat.el`.
 Exact tested Pi releases and previously reviewed upstream RPC changes are
 recorded in [`PI_COMPATIBILITY.md`](./PI_COMPATIBILITY.md). Before testing an
 upgrade, run `pichat/test/report-upstream-rpc-changes.sh` to list changes to
-Pi's RPC overview, command, and event documentation since the recorded review
-watermark. Compatibility is advanced only after the
+Pi's RPC and session-format/compaction documentation since the recorded review
+watermark. Earlier session-format changes require a separate backfill. Compatibility is advanced only after the
 complete real-Pi suite passes; see [`TESTING_GUIDELINES.md`](./TESTING_GUIDELINES.md).
 
 Commands:
@@ -825,7 +825,10 @@ Session History starts with the `no-tools` filter. Filters cycle with `F` in thi
 - `no-tools` — `default` without tool-result rows;
 - `user-only` — user-message rows only;
 - `labeled-only` — entries carrying resolved Pi labels, not raw label records;
-- `all` — every valid entry, including bookkeeping rows.
+- `all` — every valid entry, including bookkeeping rows. Pi `context_edit`
+  entries are hidden by the default filters and shown here with their target and
+  omission/replacement kind; replacement content is not rendered. These edits
+  affect future model context, not the raw conversation transcript.
 
 A non-current assistant entry containing only tool calls is hidden unless it
 represents an error or abort. The current position remains represented when a

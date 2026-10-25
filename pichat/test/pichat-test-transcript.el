@@ -172,6 +172,44 @@
                            diagnostics)))
     (should-not (string-match-p "must-not-render" (format "%S" transcript)))))
 
+(ert-deftest pichat-pi-canonical-transcript-context-edits-preserve-raw-history ()
+  (let* ((entries
+          '((:type "message" :id "user" :parentId nil
+             :message (:role "user" :content "Original prompt"))
+            (:type "message" :id "answer" :parentId "user"
+             :message (:role "assistant" :content "Original answer"))
+            (:type "context_edit" :id "omit" :parentId "answer"
+             :targetId "answer" :replacement nil)
+            (:type "context_edit" :id "replace" :parentId "omit"
+             :targetId "user" :replacement "Private replacement")
+            (:type "message" :id "next" :parentId "replace"
+             :message (:role "user" :content "Next prompt"))
+            (:type "message" :id "other" :parentId "answer"
+             :message (:role "assistant" :content "Other branch"))))
+         (cache (pichat-pi-entry-cache-full "context-edit" nil entries "replace"))
+         (initial (pichat-pi-build-canonical-transcript cache))
+         (updated (pichat-pi-build-canonical-transcript
+                   (pichat-pi-entry-cache-merge cache nil "next")))
+         (other (pichat-pi-build-canonical-transcript
+                 (pichat-pi-entry-cache-merge cache nil "other"))))
+    (should (equal '("user" "answer" "omit" "replace")
+                   (mapcar (lambda (entry) (plist-get entry :id))
+                           (pichat-pi-entry-cache-active-branch cache))))
+    (dolist (case (list (cons initial '("user" "answer"))
+                        (cons updated '("user" "answer" "next"))
+                        (cons other '("user" "answer" "other"))))
+      (let ((transcript (car case)))
+        (should (equal (cdr case)
+                       (mapcar #'pichat-transcript-node-key
+                               (pichat-transcript-nodes transcript))))
+        (should-not (pichat-transcript-diagnostics transcript))
+        (should-not (string-match-p "Private replacement"
+                                    (format "%S" transcript)))))
+    (should (equal "Original answer"
+                   (pichat-transcript-content-text
+                    (car (pichat-transcript-node-content
+                          (cadr (pichat-transcript-nodes initial)))))))))
+
 (ert-deftest pichat-pi-canonical-transcript-ignores-persisted-system-messages ()
   (let* ((entries
           '((:type "message" :id "system" :parentId nil

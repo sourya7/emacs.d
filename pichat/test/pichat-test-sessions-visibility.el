@@ -50,7 +50,12 @@
            (pichat-test-sessions-tree--entry
             "thinking" "thinking_level_change" :thinkingLevel "high")
            (pichat-test-sessions-tree--entry
-            "session" "session_info" :name "named session"))))
+            "session" "session_info" :name "named session")
+           (pichat-test-sessions-tree--entry
+            "edit" "context_edit" :targetId "user"
+            :replacement "Never display replacement")
+           (pichat-test-sessions-tree--entry
+            "usage" "usage" :kind "cache_warm"))))
     (pichat-sessions--tree-model-from-data
      (list :tree nodes :leafId "user"))))
 
@@ -82,8 +87,29 @@
     ;; current-position fallback policy.
     (should (equal '("user" "labeled")
                    (pichat-test-sessions-visibility--ids model 'labeled-only)))
-    (should (= 12 (length
+    (should (= 14 (length
                    (pichat-test-sessions-visibility--ids model 'all))))))
+
+(ert-deftest pichat-sessions-context-edit-is-bookkeeping-with-safe-summary ()
+  (let ((model (pichat-test-sessions-visibility--fixture)))
+    (should-not (member "edit" (pichat-test-sessions-visibility--ids model 'default)))
+    (should-not (member "edit" (pichat-test-sessions-visibility--ids model 'no-tools)))
+    (should (member "edit" (pichat-test-sessions-visibility--ids model 'all)))
+    (should (equal '("edit") (pichat-test-sessions-visibility--ids
+                              model 'all "context_edit")))
+    (should-not (string-match-p
+                 "Never display replacement"
+                 (pichat-sessions--model-node-summary model "edit")))))
+
+(ert-deftest pichat-sessions-context-edit-preview-keeps-replacement-private ()
+  (let ((entry (list :id "edit" :type "context_edit"
+                     :entry '(:type "context_edit" :id "edit"
+                              :targetId "user"
+                              :replacement "Never display replacement"))))
+    (with-temp-buffer
+      (pichat-sessions-insert-preview-path (list entry) "edit")
+      (should (string-match-p "Replace user" (buffer-string)))
+      (should-not (string-match-p "Never display replacement" (buffer-string))))))
 
 (ert-deftest pichat-sessions-visibility-handles-tool-only-assistants-and-current-leaf ()
   (let* ((tool-content

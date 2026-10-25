@@ -5,15 +5,17 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 compatibility_file="$repo_root/pichat/PI_COMPATIBILITY.md"
 upstream_url="https://github.com/earendil-works/pi.git"
 rpc_path="packages/coding-agent/docs/rpc.md"
-rpc_paths=("$rpc_path" "packages/coding-agent/docs/rpc-commands.md"
-           "packages/coding-agent/docs/json.md")
+contract_paths=("$rpc_path" "packages/coding-agent/docs/rpc-commands.md"
+                "packages/coding-agent/docs/json.md"
+                "packages/coding-agent/docs/session-format.md"
+                "packages/coding-agent/docs/compaction.md")
 temporary_checkout=""
 
 usage() {
   cat <<'EOF'
 usage: pichat/test/report-upstream-rpc-changes.sh [OLD_REF] [NEW_REF]
 
-Report upstream RPC overview, command, and event doc commits between two Pi refs.
+Report upstream RPC and session-format contract doc commits between two Pi refs.
 With no OLD_REF, use last_reviewed_pi from pichat/PI_COMPATIBILITY.md.
 With no NEW_REF, use the version reported by pi --version.
 
@@ -123,13 +125,13 @@ if ! git -C "$upstream_dir" merge-base --is-ancestor "$old_commit" "$new_commit"
 fi
 
 changes="$(git -C "$upstream_dir" log --reverse \
-  --format='%H%x09%cs%x09%s' "$old_commit..$new_commit" -- "${rpc_paths[@]}")"
+  --format='%H%x09%cs%x09%s' "$old_commit..$new_commit" -- "${contract_paths[@]}")"
 
 echo
 if [[ -z "$changes" ]]; then
-  echo "No upstream RPC documentation commits occur in this range."
+  echo "No upstream RPC/session-format documentation commits occur in this range."
 else
-  echo "Upstream RPC documentation commits requiring ledger dispositions:"
+  echo "Upstream RPC/session-format documentation commits requiring ledger dispositions:"
   echo
   while IFS=$'\t' read -r commit date subject; do
     printf -- '- %s [%s](https://github.com/earendil-works/pi/commit/%s) %s\n' \

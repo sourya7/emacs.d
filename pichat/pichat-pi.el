@@ -359,7 +359,9 @@ DIAGNOSE is called with category, entry id, and bounded source type."
                                                   (plist-get entry :targetId)
                                                   :label
                                                   (plist-get entry :label)))))))
-            ((or "custom" "custom_entry" "branch_summary") nil)
+            ;; Context edits change future model input, not raw UI history.
+            ((or "custom" "custom_entry" "branch_summary" "context_edit"
+                 "usage") nil)
             (_ (diagnose 'unknown-entry entry-id type)))))
       (pichat-transcript-validate
        (pichat-transcript-create

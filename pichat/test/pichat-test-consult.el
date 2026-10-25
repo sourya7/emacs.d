@@ -245,6 +245,23 @@
     (should (eq capability (plist-get record :archive-capability)))
     (should-not (pichat-consult--decode-candidate "not json" capability))))
 
+(ert-deftest pichat-consult-skill-title-is-presentation-only ()
+  (let* ((original "<skill name=\"plans\" location=\"/skills/plans\">\nbody\n</skill>\n\nrun plan")
+         (object (pichat-test-archive--metadata
+                  :sessionId "skill-session" :firstUserPrompt original
+                  :title original :displayTitle "[skill] plans — run plan"))
+         (candidate (pichat-consult--decode-candidate
+                     (json-serialize object :false-object :json-false
+                                     :null-object nil)
+                     '(:identity test)))
+         (record (pichat-consult--target candidate)))
+    (should (string-match-p (regexp-quote "[skill] plans — run plan")
+                            candidate))
+    (should-not (string-match-p "<skill" candidate))
+    (should (equal original (plist-get record :first-user-prompt)))
+    (should (equal original (plist-get record :title)))
+    (should (equal "skill-session" (plist-get record :session-id)))))
+
 (ert-deftest pichat-consult-archive-identities-use-hidden-exact-uniqueness ()
   (let* ((search-fields
           '(:matchKind "content" :score 1.0 :matchCount 1

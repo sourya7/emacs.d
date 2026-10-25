@@ -839,6 +839,11 @@ pushing all metadata out of view. The complete session record remains the
 selection, preview, and Embark target, so duplicate visible ID/title prefixes
 cannot select the wrong session. Customize
 `pichat-sessions-completion-title-width` to adjust the identity column.
+When the active pi-archive helper recognizes a complete Pi skill invocation as
+the title prompt, its display title shows `[skill] name — trailing request`
+(or `[skill] name` without a request). The saved-session browser uses that
+archive-provided title without changing the original archived prompt or the
+compatibility title; explicit session names still take precedence.
 
 Field queries can be combined: `name:"session name"` searches explicit names,
 `text:"exact phrase"` requires one visible message to match, and `role:user` or

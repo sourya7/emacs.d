@@ -11,6 +11,20 @@
   "Preset used when creating a runtime without an explicit selection."
   :type 'symbol :group 'pichat-presets)
 
+(defcustom pichat-append-system-prompt nil
+  "Shared instructions appended after every preset's prompt additions.
+Accepts literal text, (:file ABSOLUTE-PATH), an ordered list of these,
+or nil.  Files are read by Emacs when resolving a preset.  The combined
+text is captured in the runtime snapshot and sent with one
+--append-system-prompt argument; existing runtimes are not changed.
+A preset's replacement system prompt remains separate."
+  :type '(choice (const :tag "None" nil)
+                 (string :tag "Text")
+                 (list :tag "File" (const :file) file)
+                 (repeat :tag "Fragments"
+                         (choice string (list (const :file) file))))
+  :group 'pichat-presets)
+
 (defvar pichat-presets nil
   "Ordered alist mapping preset names to configuration plists.")
 
@@ -109,6 +123,8 @@ or :default tools leaves Pi's default selection alone."
     (user-error "Unknown PiChat preset: %S" name))
   (let ((spec (pichat-get-preset name)))
     (pichat-presets--validate name spec)
+    (pichat-presets--validate
+     name (list :append-system-prompt pichat-append-system-prompt))
     (list :name name :description (plist-get spec :description)
           :tools (if (plist-member spec :tools)
                      (let ((tools (plist-get spec :tools)))
@@ -118,7 +134,12 @@ or :default tools leaves Pi's default selection alone."
                    :default)
           :system-prompt (pichat-presets--prompt (plist-get spec :system-prompt))
           :append-system-prompt
-          (pichat-presets--prompt (plist-get spec :append-system-prompt)))))
+          (pichat-presets--prompt
+           (cl-loop for source in (list (plist-get spec :append-system-prompt)
+                                        pichat-append-system-prompt)
+                    append (if (pichat-presets--source-p source)
+                               (list source)
+                             source))))))
 
 (defun pichat-presets-overrides-p (snapshot)
   "Return non-nil when SNAPSHOT changes Pi tools or prompt."

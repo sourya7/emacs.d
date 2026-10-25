@@ -25,6 +25,11 @@
                     pichat-select-model pichat-stop-session
                     pichat-add-reference pichat-smoke-test))
 
+(setq pichat-append-system-prompt
+      "Prefer bare URLs over descriptive Markdown links.
+Prefer bullets unless a table materially helps comparison.
+Keep tables narrow and pad columns for monospace readability.")
+
 ;; (setq pichat-targets
 ;;       '((lima-devbox
 ;;          :kind ssh

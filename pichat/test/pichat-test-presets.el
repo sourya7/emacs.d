@@ -164,5 +164,68 @@
                   :type 'user-error)
     (should-not (pichat-session-list))))
 
+(ert-deftest pichat-presets-shared-prompt-composes-and-captures-one-argument ()
+  (pichat-test-with-clean-state
+    (let ((pichat-presets (copy-tree pichat-presets))
+          (pichat-rpc-command nil)
+          (pichat-pi-extra-args nil)
+          (file (make-temp-file "pichat-shared-prompt-")))
+      (unwind-protect
+          (progn
+            (with-temp-file file (insert "Shared file"))
+            (pichat-make-preset 'test-shared
+              :system-prompt "Replacement"
+              :append-system-prompt '("Preset one" "Preset two"))
+            (let ((pichat-append-system-prompt
+                   (list "Shared text" (list :file file))))
+              (cl-letf (((symbol-function 'pichat-rpc-start) #'identity))
+                (let* ((session (pichat-start-session
+                                 "/tmp/" nil '(:preset test-shared)))
+                       (argv (pichat-rpc-build-command session))
+                       (expected "Preset one\n\nPreset two\n\nShared text\n\nShared file\n"))
+                  (should (= 1 (cl-count "--append-system-prompt" argv
+                                         :test #'equal)))
+                  (should (equal expected
+                                 (cadr (member "--append-system-prompt" argv))))
+                  (should (equal "Replacement\n"
+                                 (cadr (member "--system-prompt" argv))))
+                  (with-temp-file file (insert "Changed file"))
+                  (setq pichat-append-system-prompt "Changed setting")
+                  (should (equal argv (pichat-rpc-build-command session)))
+                  (should (equal "Preset one\n\nPreset two\n\nChanged setting\n"
+                                 (plist-get (pichat-presets-resolve 'test-shared)
+                                            :append-system-prompt)))))))
+        (delete-file file)))))
+
+(ert-deftest pichat-presets-shared-prompt-applies-without-preset-additions ()
+  (dolist (name '(manual standard))
+    (let ((pichat-append-system-prompt "Shared"))
+      (let ((snapshot (pichat-presets-resolve name)))
+        (should (equal "Shared\n" (plist-get snapshot :append-system-prompt)))
+        (should-not (plist-get snapshot :system-prompt))
+        (should (pichat-presets-overrides-p snapshot)))))
+  (let ((pichat-append-system-prompt nil))
+    (should-not (plist-get (pichat-presets-resolve 'standard)
+                          :append-system-prompt))))
+
+(ert-deftest pichat-presets-shared-prompt-rejects-invalid-sources ()
+  (dolist (source '(" " 42 (:file "relative.md") ("Valid" "")
+                    (:file "/definitely/missing/pichat-shared.md")))
+    (let ((pichat-append-system-prompt source))
+      (should-error (pichat-presets-resolve 'standard) :type 'user-error))))
+
+(ert-deftest pichat-presets-shared-prompt-rejects-conflicting-launch-options ()
+  (pichat-test-with-clean-state
+    (let ((pichat-append-system-prompt "Shared")
+          (pichat-rpc-command nil)
+          (pichat-pi-extra-args '("--append-system-prompt" "Other")))
+      (should-error (pichat-start-session "/tmp/" nil '(:preset standard))
+                    :type 'user-error)
+      (setq pichat-pi-extra-args nil
+            pichat-rpc-command '("wrapper" "pi" "--mode" "rpc"))
+      (should-error (pichat-start-session "/tmp/" nil '(:preset standard))
+                    :type 'user-error)
+      (should-not (pichat-session-list)))))
+
 (provide 'pichat-test-presets)
 ;;; pichat-test-presets.el ends here

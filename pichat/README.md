@@ -442,6 +442,26 @@ literal strings, `(:file ABSOLUTE-PATH)`, or ordered lists of those fragments.
 Resolved prompts end with a newline so Pi does not mistake literal text that
 looks like a filename for a runtime-side file reference.
 `:system-prompt` replaces Pi's base prompt; `:append-system-prompt` adds to it.
+
+Set `pichat-append-system-prompt` for shared instructions across all presets,
+including `manual` and `standard`. It accepts the same prompt source formats
+and defaults to nil. For example:
+
+```elisp
+(setq pichat-append-system-prompt
+      "Prefer bare URLs over descriptive Markdown links.
+Prefer bullets unless a table materially helps comparison.
+Keep tables narrow and pad columns for monospace readability.")
+```
+
+PiChat concatenates the preset's additions followed by these shared instructions
+and sends one `--append-system-prompt` argument. A replacement `:system-prompt`
+remains separate. The resolved text is captured in the runtime snapshot;
+changing the setting or its files does not update existing runtimes. Start a
+new runtime, or explicitly select the preset again in the reconfiguration menu
+to resolve the current instructions before confirming the restart.
+
+
 `:tools :default` (or omission) leaves Pi's built-in selection alone;
 `:tools nil` disables built-in tools. Explicit lists select exactly those
 built-ins. For explicit-list presets, PiChat now disables MCP unless a direct
@@ -454,7 +474,8 @@ selected. `standard` and custom presets with inherited tools (`:default` or
 omission) remain Pi-controlled and cannot use the Tools picker. Customizations
 are runtime properties, not saved Pi-session properties. Presets reject
 conflicting generic Pi tool/prompt flags before runtime creation; use `standard`
-when the generic Pi arguments should govern.
+when the generic Pi arguments should govern, and leave
+`pichat-append-system-prompt` nil if supplying a generic appended-prompt flag.
 Changes to definitions affect future runtimes only. If you choose to run a
 shell block through PiChat's artifact runner, request `sh`-compatible code: the
 runner uses `sh` even when a fence is labelled `bash`. Run with Embark `r`,
@@ -471,7 +492,8 @@ even when the project is mounted locally. The in-process Elisp runner is
 unavailable for SSH Pi sessions. A complete local `pichat-rpc-command` wrapper
 cannot be amended safely: presets with tool or prompt overrides are rejected
 before startup. Set the default preset to `standard` for such a wrapper, and
-put any desired tool/prompt flags in its complete command instead.
+leave `pichat-append-system-prompt` nil, and put any desired tool/prompt flags
+in its complete command instead.
 
 An independent runtime is a separate Pi RPC process retained in the manager but
 not marked `★` as the scope's preferred runtime. “Independent” does not mean

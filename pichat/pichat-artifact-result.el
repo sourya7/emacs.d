@@ -14,6 +14,10 @@
   "Maximum characters per section of a code-run report inserted into a draft."
   :type 'integer :group 'pichat-artifact-result)
 
+(defvar pichat-artifact-result--handoff-context nil
+  "Dynamically bound (ORIGIN TOKEN) for an explicitly captured artifact action.
+Execution may outlive or occur outside ORIGIN; never recapture its new source.")
+
 (defvar-local pichat-artifact-result--origin nil)
 (defvar-local pichat-artifact-result--token nil)
 (defvar-local pichat-artifact-result--report-function nil)
@@ -31,8 +35,12 @@
 REPORT-FUNCTION runs in the result buffer and returns a bounded report.
 READY-FUNCTION, when non-nil, must return non-nil before sharing is allowed.
 Copy remains available while a run is active or its origin has changed."
-  (setq-local pichat-artifact-result--origin origin
-              pichat-artifact-result--token token
+  (setq-local pichat-artifact-result--origin
+              (if pichat-artifact-result--handoff-context
+                  (car pichat-artifact-result--handoff-context) origin)
+              pichat-artifact-result--token
+              (if pichat-artifact-result--handoff-context
+                  (cadr pichat-artifact-result--handoff-context) token)
               pichat-artifact-result--report-function report-function
               pichat-artifact-result--ready-function ready-function))
 

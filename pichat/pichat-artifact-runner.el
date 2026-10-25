@@ -33,19 +33,28 @@ owning Pi runtime through its captured path mappings."
   :type 'number :group 'pichat-artifact-runner)
 
 (defvar pichat-artifact-runner-specs
-  '((python :aliases ("python" "python3" "py") :start pichat-artifact-runner--script
-            :executable "python3" :extension ".py")
-    (javascript :aliases ("javascript" "js" "node") :start pichat-artifact-runner--script
-                :executable "node" :extension ".js")
-    (shell :aliases ("sh" "shell" "bash") :start pichat-artifact-runner--script
-           :executable "sh" :extension ".sh")
-    (elisp :aliases ("elisp" "emacs-lisp") :start pichat-artifact-runner--elisp)
-    (mermaid :aliases ("mermaid" "mmd") :start pichat-artifact-mermaid--run))
-  "Named runner definitions; :start receives code, directory, session and spec.")
+  '((python :context origin-host :aliases ("python" "python3" "py")
+            :start pichat-artifact-runner--script :executable "python3" :extension ".py")
+    (javascript :context origin-host :aliases ("javascript" "js" "node")
+                :start pichat-artifact-runner--script :executable "node" :extension ".js")
+    (shell :context origin-host :aliases ("sh" "shell" "bash")
+           :start pichat-artifact-runner--script :executable "sh" :extension ".sh")
+    (elisp :context emacs :aliases ("elisp" "emacs-lisp")
+           :start pichat-artifact-runner--elisp)
+    (mermaid :context local-independent :aliases ("mermaid" "mmd")
+             :start pichat-artifact-mermaid--run))
+  "Named runner definitions; :start receives code, directory, session and spec.
+:context must be `origin-host', `local-independent', or `emacs'.
+Local-independent runners use local temporary storage, not the origin cwd.
+Emacs runners evaluate in-process and reject SSH origins.
+SESSION describes captured provenance, including output path accessibility;
+it need not represent a live RPC process.")
 
 (defun pichat-artifact-runner-register (spec)
   "Register SPEC with a unique ID, language aliases and start function."
-  (unless (and (symbolp (car spec))
+  (unless (and (memq (plist-get (cdr spec) :context)
+                     '(origin-host local-independent emacs))
+               (symbolp (car spec))
                (cl-every #'stringp (plist-get (cdr spec) :aliases))
                (symbolp (plist-get (cdr spec) :start)))
     (error "Invalid runner specification"))
@@ -430,11 +439,49 @@ owning Pi runtime through its captured path mappings."
     (if (file-remote-p found) (file-local-name found) found)))
 
 (defun pichat-artifact-runner-run (code language directory &optional session)
-  "Run exact CODE using LANGUAGE on SESSION's host, or locally without SESSION.
+  "Run exact CODE using LANGUAGE's declared execution context policy.
+For origin-host runners, SESSION supplies the host (local without SESSION).
 DIRECTORY is the originating Emacs directory; for SSH the captured session's
-runtime cwd, not DIRECTORY, determines where the subprocess runs."
-  (let ((spec (pichat-artifact-runner-select language)))
-    (funcall (plist-get (cdr spec) :start) code directory session spec)))
+runtime cwd, not DIRECTORY, determines where the subprocess runs.
+Local-independent runners ignore DIRECTORY and use local temporary storage."
+  (pichat-artifact-runner-start
+   code (pichat-artifact-runner-select language) directory session))
+
+(defun pichat-artifact-runner-capture-session (session)
+  "Snapshot SESSION's execution and publication provenance, without RPC state."
+  (when session
+    (pichat-session-create
+     :transport (copy-tree (pichat-session-transport session) t)
+     :path-context (copy-tree
+                    (or (pichat-session-path-context session)
+                        (pichat-transport-path-context
+                         (pichat-session-transport session) pichat-path-mappings)) t)
+     :runtime-cwd (pichat-session-runtime-cwd session)
+     :emacs-cwd (pichat-session-emacs-cwd session)
+     :rpc-command (copy-tree (pichat-session-rpc-command session)))))
+
+(defun pichat-artifact-runner-start (code spec directory session &optional handoff)
+  "Execute CODE with selected SPEC and captured DIRECTORY and SESSION.
+HANDOFF, when supplied, is (ORIGIN TOKEN), independent of execution context.
+Reject unknown policies rather than silently executing locally.  Runners retain
+responsibility for executable checks, resource limits, and cancellation."
+  (let ((policy (plist-get (cdr spec) :context))
+        (pichat-artifact-result--handoff-context handoff))
+    (pcase policy
+      ('local-independent
+       (setq directory (file-name-as-directory temporary-file-directory)))
+      ('origin-host
+       (unless (and (stringp directory) (file-name-absolute-p directory))
+         (user-error "Captured execution directory is unavailable; select the artifact again")))
+      ('emacs
+       (when (and session
+                  (eq (pichat-transport-kind (pichat-session-transport session)) 'ssh))
+         (user-error "Emacs Lisp runs in this Emacs, not on the SSH Pi host")))
+      (_ (user-error "Runner %s must declare an execution context policy" (car spec))))
+    (when (and (eq policy 'local-independent) (file-remote-p directory))
+      (user-error "Local-independent runners require local temporary storage"))
+    (let ((default-directory directory))
+      (funcall (plist-get (cdr spec) :start) code directory session spec))))
 
 (defun pichat-artifact-runner--elisp (code directory session _spec)
   "Run CODE in Emacs, rejecting a remote SESSION."

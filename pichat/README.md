@@ -175,10 +175,23 @@ Run supports Python (`python`, `python3`, `py` -> `python3`), JavaScript
 Docker-backed Mermaid (`mermaid`, `mmd`), and in-process Emacs Lisp
 (`elisp`, `emacs-lisp`). Missing or unknown language
 prompts for a runner; selecting an editing mode does not select a runner.
-Python, JavaScript, and shell runners use an argv-based temporary script on the originating Pi
-session's host: locally for a local session, or through its SSH/TRAMP transport
-in the session's runtime cwd for SSH. A locally mounted project with SSH Pi
-still runs on the SSH host. The result view identifies the host, cwd, code,
+Python, JavaScript, and shell runners use an argv-based temporary script on the
+captured execution host: locally for a local runtime, or through its captured
+SSH/TRAMP transport and runtime working directory for SSH. A locally mounted project with SSH Pi
+still runs on the SSH host. Captured code remains runnable after its chat switches
+sources, stops, or closes, including from a delayed Embark action. Run never
+substitutes the currently selected chat's host or directory; an unavailable
+captured destination fails without a local fallback. Result handoff is separate:
+`s` still requires the original chat source; otherwise copy the report.
+
+Runner specifications declare a `:context` policy: `origin-host` for captured
+host/cwd execution, `local-independent` for local temporary-workspace execution
+(such as Mermaid), or `emacs` for in-process evaluation with SSH-origin rejection.
+New runners must declare a policy; missing or unknown policies are rejected.
+The shared dispatcher supplies the selected context; each runner retains its own
+execution, permission/download, resource-limit, and cleanup controls. Its `:start`
+function creates and sets up any result view before returning, so the existing
+result API retains the captured handoff destination independently of execution. The result view identifies the host, cwd, code,
 argv, merged stdout/stderr and exit status. Missing interpreters are checked
 on the execution host. The default timeout is 120 seconds
 (`pichat-artifact-runner-timeout`); `q` stops a running process and removes its

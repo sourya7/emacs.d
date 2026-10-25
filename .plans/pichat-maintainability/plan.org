@@ -3,9 +3,9 @@
 #+STARTUP: overview
 #+PRIORITIES: A C B
 #+PLAN_ID: pichat-maintainability
-#+PLAN_STATUS: ready
+#+PLAN_STATUS: active
 #+PLAN_CREATED: 2026-10-24T16:19:02Z
-#+PLAN_UPDATED: 2026-10-25T19:41:46Z
+#+PLAN_UPDATED: 2026-10-25T20:40:39Z
 
 * Goal
 Address the reviewed PiChat maintainability and correctness findings through bounded, independently selected work packages without weakening runtime, source, transcript or draft safety.
@@ -89,7 +89,7 @@ local/SSH provenance, ownership and cancellation, and safe rendered content.
 Draft editing is not execution: stopped-runtime edits and verified same-source
 restart behavior must not be broken by blanket liveness or generation checks.
 
-* TODO [#A] W01 — Reject stale artifact execution
+* DONE [#A] W01 — Preserve explicit artifact execution destinations
 :PROPERTIES:
 :CUSTOM_ID: W01
 :FINDINGS: ARCH-03
@@ -98,14 +98,29 @@ restart behavior must not be broken by blanket liveness or generation checks.
 Evidence: captured old code reached a stub runner through real Embark dispatch
 after source rebinding. Wrong-host execution was not performed.
 
-Scope: validate captured source and execution context at the Run boundary.
-Do not redesign the runner, menus, or result-sharing API.
+Revised scope (user approved): replace blanket source freshness rejection with declared runner execution policies, captured destination snapshots, and independently validated result handoff. Implement approved proposal steps 1–5 only. No destination pickers, implicit retargeting, runner sandbox redesign, or adjacent packages.
 
-- [ ] Define rejection behavior for stale/dead origins; require explicit destination selection if retargeting is offered.
-- [ ] Add regressions for source rebinding and invocation from a different chat context; stale targets never reach the runner.
-- [ ] Verify valid actions retain the intended runtime, host/path context, and working directory.
-- [ ] Preserve content-only copy/edit/preview of captured text.
-- [ ] Test the Embark adapter boundary as well as direct command invocation; state remaining interactive limitations.
+- [X] Declare and validate local-independent, origin-host, and in-process Emacs runner policies.
+- [X] Snapshot execution provenance rather than retain a mutable runtime reference.
+- [X] Allow captured content after source rebinding, origin death, and invocation elsewhere without silently changing execution destination.
+- [X] Preserve the original result handoff token; stale origins cannot receive automatic draft insertion.
+- [X] Verify generic policy behavior, batch Embark dispatch, regression/full suites, and document interactive/SSH limits.
+
+Revised resolution: runner specs explicitly declare =:context=; missing/unknown policies fail. Captured lightweight session snapshots retain transport, SSH runtime cwd, mappings and wrapper provenance without RPC state. Local-independent runners receive local temporary storage; origin-host execution retains the captured destination; Emacs evaluation retains SSH rejection. Actions select once and pass original handoff identity separately through result setup, never recapturing a rebound source or the invocation chat. No source-liveness gate or implicit retargeting. README and ARCH-03 resolution updated.
+
+Revised verification (2026-10-25, Emacs 31.1, Pi 1.4.0):
+- =pichat/test/run-tests.sh=: 793/800 expected, 0 unexpected, 7 optional skips.
+- =pichat/test/run-tests.sh --full=: 856/863 expected, 0 unexpected, same 7 optional skips (optional Embark/Consult/Evil/Orderless dependencies absent from wrapper load-path; Docker opt-in disabled).
+- Dependency-enabled focused artifact/Mermaid run: 61/63 expected, 0 unexpected, only 2 Docker opt-in skips. Added =-L .local/elpaca/sources/compat -L .local/elpaca/sources/embark= and selected =^pichat-\\(artifacts\\|mermaid\\)-=. Real batch Embark dispatch exercised with execution stubbed; generic local renderer and Mermaid dispatch tested after chat death; original handoff remains stale rather than rebound.
+- Four changed production modules byte-compiled to =.tmp/pichat-w01-bytecode/=; existing optional Embark/Markdown declaration and long docstring warnings, no compilation errors. Initial compile command failed by binding the compiler variable before loading =bytecomp=; corrected invocation loads =bytecomp= first. No =*.elc= written under =pichat/=. =git diff --check= clean.
+- Focused file sizes: artifact suite 1415 lines, Mermaid suite 240 lines. Logs in =.tmp/pichat-w01-policy-{unit,full,focused}.log= and =.tmp/pichat-w01-bytecompile.log=.
+- Live SSH, real Docker, and GUI collect/export were not exercised. Host/path selection and failure/no-fallback behavior are fixture-tested, not live remote verification. Destination pickers remain deferred; stale sharing retains the copy-report fallback. No adjacent work package started.
+
+The original source-freshness acceptance checklist was superseded by the approved policy correction above. Content-only copy/edit/preview and existing runner controls remain constraints.
+
+Superseded initial resolution (too restrictive; retained as history): Run rejects dead/rebound origins, different-chat invocation, replaced runtime, changed Emacs working directory, and invalid settled prose. It rechecks after runner selection (which may prompt). No retargeting is offered: reselect the artifact in its chat. The captured runtime carries target/transport and runtime cwd; the captured Emacs cwd is passed to the runner. No runner or result-sharing redesign.
+
+Verification (2026-10-25, Emacs batch, Pi 1.4.0): =pichat/test/run-tests.sh= 787/794 expected, 7 optional skips (including Embark); =pichat/test/run-tests.sh --full= 851/858 expected, 7 optional skips after final edits; dependency-enabled focused artifact tests (including real =embark--act= with stub runner) 48/48 passed after final edits; =git diff --check= clean. No actual artifact code was executed by the new dispatch tests. GUI collect/export, interactive window selection, and live SSH artifact execution remain unverified for this package; W11 separately owns expanded interactive/SSH coverage. Review ARCH-03 has a scoped resolution note.
 
 * TODO [#A] W02 — Reject command submission after source changes
 :PROPERTIES:
@@ -418,16 +433,20 @@ canonical transcript model, sanitization, and domain-specific rollback. The
 review's "keep" findings (including INFRA-02) are constraints, not rewrite tasks.
 
 * Checkpoint
-- Plan status: ready
-- Selected scope: migration only; no work package selected or implemented.
-- Last verified result: 20 TODO and 2 BLOCKED work packages and all W01–W22 IDs preserved; links resolve; =plans.py check --all= OK for five records and helper tests 3 OK. Review's 822-test baseline is historical, not rerun.
-- Next action: explicitly request one named work package (e.g. W01); revalidate its finding and dependencies before execution.
+- Plan status: active
+- Selected scope: W01 policy correction steps 1–5 complete; no adjacent packages started.
+- Last verified result: unit 793/800 and full 856/863 expected on Emacs 31.1 / Pi 1.4.0, 7 optional skips; dependency-enabled artifact/Mermaid 61/63 expected with only 2 Docker skips. Compilation successful with recorded warnings; batch Embark dispatch fixture verified. GUI/live SSH/Docker remain unverified.
+- Next action: request a named remaining work package or explicitly scope destination-picker follow-up; do not advance automatically.
 - Blockers: W06 awaits the W05 contract decision; W22 awaits a concrete approved extension need. Neither blocks independent packages.
 
 * Verification
 - 2026-10-25: moved the tracked execution backlog from =docs/pichat-maintainability-plan.org= to this single managed plan. Preserved all 22 headings, states, IDs and resolved all five relative file links; =plans.py check --all= OK for five records, =list --all= shows ready 0/22, helper tests 3 OK. No PiChat implementation or tests run for the migration. Historical pass-3 results remain in the linked review.
 
 * History
+- 2026-10-25T20:40:39Z: Completed approved W01 correction: declared runner policies, captured destination snapshots, independent handoff identity, regression coverage, README/review updates and full-suite verification. Destination pickers deferred.
+- 2026-10-25T20:33:38Z: User approved revising W01: trust explicit execution of captured content, snapshot destinations, separate sharing identity, and declare runner policies. Initial blanket source rejection superseded; no destination picker authorized.
+- 2026-10-25T20:23:30Z: Completed W01 only; added Run validation, regression tests and ARCH-03 resolution; checked focused and full suites. Overall backlog remains active.
+- 2026-10-25T20:19:38Z: Selected W01 on explicit user confirmation; began action-boundary inspection. No dependency on other packages.
 - 2026-10-24T16:19:02Z: Initial tracked plan committed (timestamp sourced from the original file's first commit; not claimed as its drafting time).
 - 2026-10-25T19:40:35Z: On explicit request moved the original tracked backlog into .plans, updated relative links and /skill:plans invocation, preserved W01–W22 statuses and stable IDs. No work package begun.
 - 2026-10-25T19:41:46Z: Validated original work-package headings and IDs, linked files, managed inventory, and helper tests; ready for an explicitly selected package.

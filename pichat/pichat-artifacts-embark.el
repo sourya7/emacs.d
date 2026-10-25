@@ -79,17 +79,27 @@ origin window.  Direct runner calls already focus their result normally."
 (defun pichat-artifacts-embark-run (target)
   "Explicitly execute code TARGET outside Pi's tool permission boundary."
   (let* ((artifact (pichat-artifacts-embark--descriptor target))
-         (origin (current-buffer))
-         (origin-window (selected-window))
-         (result (pichat-artifact-runner-run
-                  (pichat-artifact-payload artifact)
-                  (pichat-artifact-metadata artifact)
-                  default-directory pichat-chat-session)))
-    ;; Embark may reselect the target window after the action has displayed
-    ;; its result.  Wait until that command finishes before selecting the view.
-    (run-at-time 0 nil #'pichat-artifacts-embark--focus-result
-                 result origin-window origin)
-    result))
+         (identity (pichat-artifact-identity artifact))
+         (origin (nth 0 identity))
+         (session (nth 4 identity))
+         (directory (nth 5 identity))
+         (origin-window (selected-window)))
+    (unless (eq (pichat-artifact-type artifact) 'code)
+      (user-error "Only code artifacts can be run"))
+    (let* ((spec (pichat-artifact-runner-select (pichat-artifact-metadata artifact)))
+           (policy (plist-get (cdr spec) :context)))
+      ;; Historical descriptors lacking destination provenance must never fall
+      ;; back to the current chat.  Local-independent renderers need only text.
+      (when (and (memq policy '(origin-host emacs))
+                 (not (and session directory)))
+        (user-error "Captured execution destination unavailable; select the artifact again"))
+      (let ((result (pichat-artifact-runner-start
+                     (pichat-artifact-payload artifact) spec directory session
+                     (list origin (nth 1 identity)))))
+        ;; Embark may reselect the target window after displaying the result.
+        (run-at-time 0 nil #'pichat-artifacts-embark--focus-result
+                     result origin-window origin)
+        result))))
 (defun pichat-artifacts-embark-copy-link (target)
   "Copy destination of link TARGET."
   (kill-new (pichat-artifact-payload (pichat-artifacts-embark--descriptor target))))

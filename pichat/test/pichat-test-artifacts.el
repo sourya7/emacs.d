@@ -149,6 +149,218 @@
             (should (equal (buffer-string) "puts 'hello'\n"))))
       (when (buffer-live-p preview) (kill-buffer preview)))))
 
+(ert-deftest pichat-artifacts-run-preserves-destination-across-rebind-and-other-chat ()
+  (let ((chat (generate-new-buffer " *artifact-origin*"))
+        (other (generate-new-buffer " *artifact-other*"))
+        target session calls)
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (pichat-chat-mode)
+            (setq session (pichat-session-create :transport pichat-transport-local)
+                  pichat-chat-session session)
+            (let ((inhibit-read-only t) (pichat-chat--inhibit-edit-guard t))
+              (insert (propertize "```sh\necho hi\n```\n" 'pichat-prose t
+                                  'pichat-node-role 'assistant 'pichat-node-key 'a))
+              (set-marker pichat-chat--canonical-start (point-min))
+              (set-marker pichat-chat--canonical-end (point-max)))
+            (goto-char (point-min))
+            (setq target (cadr (pichat-artifacts-embark-target))))
+          (with-current-buffer other
+            (pichat-chat-mode)
+            (setq pichat-chat-session (pichat-session-create :transport pichat-transport-local)))
+          (cl-letf (((symbol-function 'pichat-artifact-runner--script)
+                     (lambda (&rest args) (push args calls) chat))
+                    ((symbol-function 'run-at-time) (lambda (&rest _) nil)))
+            (with-current-buffer other (pichat-artifacts-embark-run target))
+            (with-current-buffer chat
+              (should (equal (caar calls) "echo hi\n"))
+              (should (equal (cadar calls) default-directory))
+              (should (equal (pichat-session-transport (nth 2 (car calls)))
+                             (pichat-session-transport session)))
+              (should-not (eq (nth 2 (car calls)) session))
+              (setq pichat-chat-session (pichat-session-create :transport pichat-transport-local))
+              (cl-incf pichat-chat--source-generation)
+              (setq default-directory "/changed/"))
+            (let ((before (car calls)))
+              (with-current-buffer other
+                (pichat-artifacts-embark-run target)
+                (pichat-artifacts-embark-copy-body target)
+                (should (equal (current-kill 0) "echo hi\n")))
+              (should (equal (car calls) before)))))
+      (when (buffer-live-p chat) (kill-buffer chat))
+      (when (buffer-live-p other) (kill-buffer other)))))
+
+(ert-deftest pichat-artifacts-run-keeps-captured-destination-through-runner-selection ()
+  (with-temp-buffer
+    (pichat-chat-mode)
+    (setq pichat-chat-session (pichat-session-create :transport pichat-transport-local))
+    (let ((inhibit-read-only t) (pichat-chat--inhibit-edit-guard t))
+      (insert (propertize "```unknown\nx\n```\n" 'pichat-prose t
+                          'pichat-node-role 'assistant 'pichat-node-key 'a))
+      (set-marker pichat-chat--canonical-start (point-min))
+      (set-marker pichat-chat--canonical-end (point-max)))
+    (goto-char (point-min))
+    (let ((target (cadr (pichat-artifacts-embark-target))) calls)
+      (cl-letf (((symbol-function 'pichat-artifact-runner-select)
+                 (lambda (_) (cl-incf pichat-chat--source-generation)
+                   (car pichat-artifact-runner-specs)))
+                ((symbol-function 'pichat-artifact-runner--script)
+                 (lambda (&rest _) (setq calls t) nil))
+                ((symbol-function 'run-at-time) (lambda (&rest _) nil)))
+        (pichat-artifacts-embark-run target)
+        (should calls)))))
+
+(ert-deftest pichat-artifacts-embark-dispatch-preserves-stale-run-destination ()
+  (unless (require 'embark nil t) (ert-skip "Embark unavailable"))
+  (let ((chat (generate-new-buffer " *artifact-embark-stale*")) target calls)
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer chat)
+          (pichat-chat-mode)
+          (setq pichat-chat-session (pichat-session-create :transport pichat-transport-local))
+          (let ((inhibit-read-only t) (pichat-chat--inhibit-edit-guard t))
+            (insert (propertize "```sh\necho hi\n```\n" 'pichat-prose t
+                                'pichat-node-role 'assistant 'pichat-node-key 'a))
+            (set-marker pichat-chat--canonical-start (point-min))
+            (set-marker pichat-chat--canonical-end (point-max)))
+          (goto-char (point-min))
+          (setq target (cadr (pichat-artifacts-embark-target)))
+          (cl-incf pichat-chat--source-generation)
+          (cl-letf (((symbol-function 'pichat-artifact-runner--script)
+                     (lambda (code directory session _spec)
+                       (setq calls (list code directory session)) nil))
+                    ((symbol-function 'run-at-time) (lambda (&rest _) nil)))
+            (embark--act 'pichat-artifacts-embark-run
+                         (list :type 'pichat-code-block :target target))
+            (should (equal (car calls) "echo hi\n"))
+            (should (equal (cadr calls) default-directory))
+            (should-not (eq (nth 2 calls) pichat-chat-session))))
+      (when (buffer-live-p chat) (kill-buffer chat)))))
+
+(ert-deftest pichat-artifacts-run-retains-destination-after-origin-death ()
+  (let ((chat (generate-new-buffer " *artifact-dead*")) target calls)
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (pichat-chat-mode)
+            (setq pichat-chat-session (pichat-session-create :transport pichat-transport-local))
+            (let ((inhibit-read-only t) (pichat-chat--inhibit-edit-guard t))
+              (insert (propertize "```sh\nx\n```\n" 'pichat-prose t
+                                  'pichat-node-role 'assistant 'pichat-node-key 'a))
+              (set-marker pichat-chat--canonical-start (point-min))
+              (set-marker pichat-chat--canonical-end (point-max)))
+            (goto-char (point-min))
+            (setq target (cadr (pichat-artifacts-embark-target)))
+            (setq default-directory "/tmp/"))
+          (cl-letf (((symbol-function 'pichat-artifact-runner--script)
+                     (lambda (&rest args) (push args calls) nil))
+                    ((symbol-function 'run-at-time) (lambda (&rest _) nil)))
+            (pichat-artifacts-embark-run target)
+            (kill-buffer chat)
+            (pichat-artifacts-embark-run target)
+            (should (= (length calls) 2))
+            (should (equal (car calls) (cadr calls)))))
+      (when (buffer-live-p chat) (kill-buffer chat)))))
+
+(ert-deftest pichat-artifacts-execution-snapshot-retains-ssh-and-path-provenance ()
+  (let* ((transport (pichat-transport--create
+                     :kind 'ssh :tramp-prefix "/ssh:old-host:" :remote-path '("/old/bin")
+                     :mappings '(("/mounted" . "/remote"))))
+         (paths (pichat-path-context--create :mappings '(("/mounted" . "/remote"))))
+         (session (pichat-session-create :transport transport :path-context paths
+                                         :runtime-cwd "/old/project/"
+                                         :rpc-command '("wrapper" "pi")))
+         (captured (pichat-artifact-runner-capture-session session)))
+    ;; Mutate both the runtime's slots and nested configuration in place.
+    (setf (pichat-session-runtime-cwd session) "/new/project/"
+          (pichat-transport-tramp-prefix transport) "/ssh:new-host:"
+          (car (pichat-transport-remote-path transport)) "/new/bin"
+          (cdar (pichat-path-context-mappings paths)) "/new-remote"
+          (car (pichat-session-rpc-command session)) "new-wrapper")
+    (should (equal (pichat-session-runtime-cwd captured) "/old/project/"))
+    (should (equal (pichat-transport-tramp-prefix (pichat-session-transport captured))
+                   "/ssh:old-host:"))
+    (should (equal (pichat-transport-remote-path (pichat-session-transport captured))
+                   '("/old/bin")))
+    (should (equal (pichat-path-context-mappings (pichat-session-path-context captured))
+                   '(("/mounted" . "/remote"))))
+    (should (equal (pichat-session-rpc-command captured) '("wrapper" "pi")))
+    (cl-letf (((symbol-function 'file-directory-p) (lambda (_) t)))
+      (should (equal (cdr (pichat-artifact-runner--context "/mounted/project/" captured))
+                     '("/old/project/" "/ssh:old-host:/old/project/"))))))
+
+(ert-deftest pichat-artifacts-unavailable-origin-host-never-falls-back ()
+  (let ((session (pichat-session-create :transport pichat-transport-local)) called)
+    (cl-letf (((symbol-function 'file-directory-p) (lambda (_) nil))
+              ((symbol-function 'pichat-transport-make-process)
+               (lambda (&rest _) (setq called t))))
+      (should-error (pichat-artifact-runner-start
+                     "echo x" (assq 'shell pichat-artifact-runner-specs)
+                     "/unavailable-captured-directory/" session)
+                    :type 'user-error)
+      (should-not called))))
+
+(ert-deftest pichat-artifacts-runners-require-declared-context ()
+  (let ((pichat-artifact-runner-specs nil) called)
+    (should-error (pichat-artifact-runner-register '(bad :aliases ("bad") :start ignore)))
+    (dolist (policy '(nil unknown))
+      (should-error
+       (pichat-artifact-runner-start
+        "x" (list 'bad :context policy :start (lambda (&rest _) (setq called t)))
+        "/tmp/" nil)
+       :type 'user-error))
+    (should-not called)))
+
+(ert-deftest pichat-artifacts-local-independent-policy-survives-stale-and-dead-chat ()
+  (let ((chat (generate-new-buffer " *artifact-generic-render*"))
+        (view (generate-new-buffer " *artifact-generic-result*"))
+        (pichat-artifact-runner-specs (copy-tree pichat-artifact-runner-specs))
+        target token seen)
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (pichat-chat-mode)
+            (setq pichat-chat-session
+                  (pichat-session-create :transport
+                   (pichat-transport--create :kind 'ssh :tramp-prefix "/ssh:origin:")))
+            (let ((inhibit-read-only t) (pichat-chat--inhibit-edit-guard t))
+              (insert (propertize "```test-render\ndiagram\n```\n" 'pichat-prose t
+                                  'pichat-node-role 'assistant 'pichat-node-key 'a))
+              (set-marker pichat-chat--canonical-start (point-min))
+              (set-marker pichat-chat--canonical-end (point-max)))
+            (goto-char (point-min))
+            (setq target (cadr (pichat-artifacts-embark-target))
+                  token (pichat-chat--source-token))
+            (cl-incf pichat-chat--source-generation))
+          (pichat-artifact-runner-register
+           '(test-render :context local-independent :aliases ("test-render")
+                         :start pichat-test-artifacts--unused))
+          (cl-letf (((symbol-function 'pichat-test-artifacts--unused)
+                     (lambda (code directory session _spec)
+                       (setq seen (list code directory default-directory session))
+                       (with-current-buffer view
+                         ;; A future local renderer can use the existing result API.
+                         (pichat-artifact-result-setup (current-buffer) nil (lambda () "report")))
+                       view))
+                    ((symbol-function 'run-at-time) (lambda (&rest _) nil)))
+            (with-temp-buffer (pichat-artifacts-embark-run target))
+            (should (equal (car seen) "diagram\n"))
+            (should (equal (nth 1 seen) (file-name-as-directory temporary-file-directory)))
+            (should (equal (nth 1 seen) (nth 2 seen)))
+            (with-current-buffer view
+              (should (eq pichat-artifact-result--origin chat))
+              (should (equal pichat-artifact-result--token token))
+              (should-error (pichat-artifact-result-share) :type 'user-error))
+            (kill-buffer chat)
+            (pichat-artifacts-embark-run target)
+            (with-current-buffer view
+              (should-error (pichat-artifact-result-share) :type 'user-error)
+              (pichat-artifact-result-copy-report)
+              (should (equal (current-kill 0) "report")))))
+      (when (buffer-live-p chat) (kill-buffer chat))
+      (when (buffer-live-p view) (kill-buffer view)))))
+
 (ert-deftest pichat-artifacts-embark-run-focuses-result-after-menu-restore ()
   (save-window-excursion
     (delete-other-windows)
@@ -162,6 +374,14 @@
           (progn
             (switch-to-buffer chat)
             (pichat-chat-mode)
+            (setq pichat-chat-session (pichat-session-create :transport pichat-transport-local))
+            (let ((inhibit-read-only t) (pichat-chat--inhibit-edit-guard t))
+              (insert (propertize source 'pichat-prose t
+                                  'pichat-node-role 'assistant 'pichat-node-key 'a))
+              (set-marker pichat-chat--canonical-start (point-min))
+              (set-marker pichat-chat--canonical-end (point-max)))
+            (goto-char (point-min))
+            (setq target (cadr (pichat-artifacts-embark-target)))
             (let ((display-buffer-overriding-action
                    '((display-buffer-pop-up-window)
                      (inhibit-same-window . t))))

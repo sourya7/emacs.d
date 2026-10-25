@@ -4,6 +4,7 @@
 ;;; Code:
 (require 'pichat-chat)
 (require 'pichat-artifacts)
+(require 'pichat-artifact-runner)
 (require 'cl-lib)
 (defvar avy-action)
 (declare-function avy-process "avy" (candidates &optional overlay-fn cleanup-fn))
@@ -38,7 +39,9 @@
                       (mapcar (lambda (artifact)
                                 (setf (pichat-artifact-identity artifact)
                                       (list (current-buffer) (pichat-chat--source-token)
-                                            node source))
+                                            node source
+                                            (pichat-artifact-runner-capture-session pichat-chat-session)
+                                            default-directory))
                                 (list artifact (+ start (pichat-artifact-start artifact))
                                       (+ start (pichat-artifact-end artifact))))
                               (pichat-artifacts-parse source))))))
@@ -54,7 +57,7 @@
 
 (defun pichat-chat-artifacts-valid-bounds (artifact)
   "Return current bounds for ARTIFACT, or nil after source change or repaint."
-  (pcase-let ((`(,buffer ,token ,node ,source) (pichat-artifact-identity artifact)))
+  (pcase-let ((`(,buffer ,token ,node ,source . ,_) (pichat-artifact-identity artifact)))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
         (when (equal token (pichat-chat--source-token))

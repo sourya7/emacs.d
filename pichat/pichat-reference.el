@@ -23,6 +23,7 @@
 (declare-function dired-get-marked-files "dired")
 (declare-function compilation-goto-error "compile")
 (declare-function pichat-chat--insert-prompt "pichat-chat")
+(declare-function pichat-chat--source-token "pichat-chat")
 (declare-function bufferlo-local-buffer-p "bufferlo" (buffer &optional frame tabnum include-hidden))
 (declare-function pichat--project-root "pichat" (&optional directory))
 (declare-function pichat--scope-for-directory "pichat" (&optional directory force-global target-id))
@@ -323,19 +324,25 @@ prompt, so repeated `pichat-add-reference' calls produce one grouped list."
 With universal prefix PROMPT-FOR-CHAT-BUFFER, ask which PiChat buffer should
 receive the reference.  Otherwise choose a chat in the current Bufferlo tab,
 or in the source project's scope when Bufferlo is unavailable; ask if
-ambiguous.  From a chat without a region, prompt for a file to reference."
+ambiguous.  From a chat without a region, prompt for a file to reference.
+Cancel if the destination chat or its source changes during collection."
   (interactive "P")
   (let* ((target (pichat-reference--target-buffer prompt-for-chat-buffer))
+         (session (with-current-buffer target pichat-chat-session))
+         (source-token (with-current-buffer target (pichat-chat--source-token)))
          (pichat-reference--path-context
-          (with-current-buffer target
-            (and (boundp 'pichat-chat-session)
-                 pichat-chat-session
-                 (pichat-session-path-context pichat-chat-session))))
+          (and session (pichat-session-path-context session)))
          (pichat-reference--transport
-          (with-current-buffer target
-            (and pichat-chat-session
-                 (pichat-session-transport pichat-chat-session))))
+          (and session (pichat-session-transport session)))
          (text (pichat-reference--dwim-text)))
+    ;; Collection may prompt or wait for file I/O.  Draft editing does not
+    ;; require a running process, but must retain the chosen source and owner.
+    (unless (and (buffer-live-p target)
+                 (with-current-buffer target
+                   (and (derived-mode-p 'pichat-chat-mode)
+                        (eq session pichat-chat-session)
+                        (equal source-token (pichat-chat--source-token)))))
+      (user-error "Reference destination changed; invoke pichat-add-reference again"))
     (pichat-reference--insert-into-chat target text)
     (deactivate-mark)
     (pop-to-buffer target)

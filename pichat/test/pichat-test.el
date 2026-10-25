@@ -32,6 +32,7 @@
 (require 'pichat-test-render)
 (require 'pichat-test-approval-tools)
 (require 'pichat-test-sessions-reference)
+(require 'pichat-test-reference)
 (require 'pichat-test-session-completion)
 (require 'pichat-test-session-manager)
 (require 'pichat-test-archive)

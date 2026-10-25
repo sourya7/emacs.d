@@ -162,9 +162,10 @@ another copy behind. The separate code-edit buffer remains an ordinary editor.
 
 Run supports Python (`python`, `python3`, `py` -> `python3`), JavaScript
 (`javascript`, `js`, `node` -> `node`), shell (`sh`, `shell`, `bash` -> `sh`),
-and in-process Emacs Lisp (`elisp`, `emacs-lisp`). Missing or unknown language
+Docker-backed Mermaid (`mermaid`, `mmd`), and in-process Emacs Lisp
+(`elisp`, `emacs-lisp`). Missing or unknown language
 prompts for a runner; selecting an editing mode does not select a runner.
-Subprocess runners use an argv-based temporary script on the originating Pi
+Python, JavaScript, and shell runners use an argv-based temporary script on the originating Pi
 session's host: locally for a local session, or through its SSH/TRAMP transport
 in the session's runtime cwd for SSH. A locally mounted project with SSH Pi
 still runs on the SSH host. The result view identifies the host, cwd, code,
@@ -201,6 +202,39 @@ Emacs once before publication to remote storage; high-volume SSH runs can
 therefore incur network overhead. `s` waits for completion and publication;
 `w` can copy a labelled partial report while the run is active. Nothing is
 sent automatically.
+
+Mermaid fences render only on explicit `r`, using **local Docker beside Emacs**,
+including when the originating Pi runtime uses SSH. No Docker, Mermaid, or
+project access is needed on the remote host. Install Docker locally; the default
+image is `ghcr.io/mermaid-js/mermaid-cli/mermaid-cli:11.12.0`. Customize
+`pichat-artifact-mermaid-image` to use another pinned version or digest.
+If the image is missing and the daemon is reachable, PiChat asks before
+asynchronously downloading it. Declining leaves the source unchanged. Image
+pulls use host network access; the renderer container itself has no network.
+Docker checks, downloads, rendering, and cleanup are asynchronous, with bounded
+logs in the result view. Each execution stage uses the runner timeout; downloads
+have a five-minute timeout. Docker itself is never installed automatically.
+
+The Docker daemon must be local (a Unix socket); remote Docker contexts and
+`DOCKER_HOST` overrides are rejected. Only a private temporary workspace is
+mounted, not the project or home directory. CPU, memory, process count, PNG
+size, and dimensions are limited. The container is created before being started,
+so cancelling during creation can wait for that operation before removing it.
+Cleanup continues asynchronously after quit. If Docker does not respond,
+PiChat reports the owned container and workspace for manual inspection instead
+of claiming cleanup succeeded. Forcefully exiting Emacs can interrupt cleanup.
+These controls are defense in depth, **not a sandbox guarantee**.
+
+The result view shows the local PNG path and, where supported, an image preview.
+A successful PNG is retained in Emacs's temporary directory after closing or
+sharing the view, until OS cleanup or explicit deletion. Disposable input,
+configuration, and intermediate output are removed after container cleanup.
+Failed publication removes its incomplete retained copy. There is no separate
+SSH preview copy and no automatic remote upload. For SSH-origin chats, `s`
+shares source/status/diagnostics but does not advertise the local PNG as a remote
+path. For local runtimes, a resolved PNG path can appear in the report. Sharing
+never attaches an image or sends the draft automatically; remote image
+publication/attachment is a separate, currently unimplemented action.
 
 Emacs Lisp instead evaluates synchronously **in this running Emacs process**,
 with access to its live packages, variables, and functions; it does not need

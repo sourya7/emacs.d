@@ -45,7 +45,8 @@ Keep tables narrow and pad columns for monospace readability.")
 
 (my/add-all-to-list 'display-buffer-alist
                     '(("\\`\\*PiChat:" (display-buffer-same-window))
-                      ("\\`\\*PiChat Sessions" (display-buffer-same-window))))
+                      ("\\`\\*PiChat Sessions" (display-buffer-same-window))
+                      ("\\`\\*PiChat Response:" (display-buffer-same-window))))
 
 (declare-function bufferlo-local-buffer-p "bufferlo"
                   (buffer &optional frame tabnum include-hidden))

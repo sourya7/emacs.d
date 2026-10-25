@@ -32,12 +32,28 @@ owning Pi runtime through its captured path mappings."
   "Maximum seconds allowed to publish an output file over TRAMP."
   :type 'number :group 'pichat-artifact-runner)
 
-(defconst pichat-artifact-runner-specs
-  '((python "python3" ".py" ("python" "python3" "py"))
-    (javascript "node" ".js" ("javascript" "js" "node"))
-    (shell "sh" ".sh" ("sh" "shell" "bash"))
-    (elisp nil nil ("elisp" "emacs-lisp")))
-  "Runner, executable, extension, and explicit language aliases.")
+(defvar pichat-artifact-runner-specs
+  '((python :aliases ("python" "python3" "py") :start pichat-artifact-runner--script
+            :executable "python3" :extension ".py")
+    (javascript :aliases ("javascript" "js" "node") :start pichat-artifact-runner--script
+                :executable "node" :extension ".js")
+    (shell :aliases ("sh" "shell" "bash") :start pichat-artifact-runner--script
+           :executable "sh" :extension ".sh")
+    (elisp :aliases ("elisp" "emacs-lisp") :start pichat-artifact-runner--elisp)
+    (mermaid :aliases ("mermaid" "mmd") :start pichat-artifact-mermaid--run))
+  "Named runner definitions; :start receives code, directory, session and spec.")
+
+(defun pichat-artifact-runner-register (spec)
+  "Register SPEC with a unique ID, language aliases and start function."
+  (unless (and (symbolp (car spec))
+               (cl-every #'stringp (plist-get (cdr spec) :aliases))
+               (symbolp (plist-get (cdr spec) :start)))
+    (error "Invalid runner specification"))
+  (setq pichat-artifact-runner-specs
+        (append (cl-remove (car spec) pichat-artifact-runner-specs :key #'car)
+                (list spec))))
+(autoload 'pichat-artifact-mermaid--run "pichat-artifact-mermaid")
+
 (defvar-local pichat-artifact-runner--process nil)
 (defvar-local pichat-artifact-runner--timer nil)
 (defvar-local pichat-artifact-runner--file nil)
@@ -58,13 +74,17 @@ owning Pi runtime through its captured path mappings."
 (defvar-local pichat-artifact-runner--output-bytes 0)
 (defvar-local pichat-artifact-runner--discarded-bytes 0)
 (defvar-local pichat-artifact-runner--capture-error nil)
+(defvar-local pichat-artifact-runner--plan nil)
+(defvar-local pichat-artifact-runner--result-error nil)
+(defvar-local pichat-artifact-runner--artifact-file nil)
+(defvar-local pichat-artifact-runner--artifact-runtime-path nil)
 
 (define-derived-mode pichat-artifact-runner-result-mode pichat-artifact-result-mode
   "PiChat-Code-Run" "Read-only output from an explicit code subprocess.")
 
 (defun pichat-artifact-runner-select (language)
   "Return runner spec for LANGUAGE, prompting for unknown or missing language."
-  (or (cl-find-if (lambda (spec) (member (downcase (or language "")) (nth 3 spec)))
+  (or (cl-find-if (lambda (spec) (member (downcase (or language "")) (plist-get (cdr spec) :aliases)))
                   pichat-artifact-runner-specs)
       (assoc (intern (completing-read "Run with: "
                                     (mapcar (lambda (spec) (symbol-name (car spec)))
@@ -135,8 +155,9 @@ owning Pi runtime through its captured path mappings."
   (let ((pichat-artifact-result-share-limit
          (or pichat-artifact-runner--share-limit
              pichat-artifact-result-share-limit)))
-    (format "Ran with %s — %s\n\nExecuted script:\n%s\n\n%s\n%s"
-            (file-name-nondirectory pichat-artifact-runner--executable)
+    (format "Ran with %s — %s%s%s\n\nExecuted script:\n%s\n\n%s\n%s"
+            (or (plist-get pichat-artifact-runner--plan :label)
+                (file-name-nondirectory pichat-artifact-runner--executable))
             (pcase pichat-artifact-runner--status
               ('running "running (partial output)")
               ('publishing "publishing output (not ready to share)")
@@ -144,6 +165,16 @@ owning Pi runtime through its captured path mappings."
               ('exit (format "exit %s" pichat-artifact-runner--exit))
               ('signal (format "signal (status %s)" pichat-artifact-runner--exit))
               (_ "unknown"))
+            (cond (pichat-artifact-runner--artifact-runtime-path
+                   (format "\nRendered PNG: %s" pichat-artifact-runner--artifact-runtime-path))
+                  (pichat-artifact-runner--artifact-file
+                   "\nRendered PNG is not verified Pi-accessible; see the result view")
+                  (t ""))
+            (if pichat-artifact-runner--result-error
+                (format "\nRender error: %s"
+                        (pichat-artifact-result-bounded
+                         pichat-artifact-runner--result-error))
+              "")
             (pichat-artifact-runner--fence
              (pichat-artifact-result-bounded pichat-artifact-runner--code))
             (pichat-artifact-runner--agent-output-description)
@@ -155,8 +186,18 @@ owning Pi runtime through its captured path mappings."
   (when (timerp pichat-artifact-runner--timer)
     (cancel-timer pichat-artifact-runner--timer))
   (setq pichat-artifact-runner--timer nil)
-  (when (process-live-p pichat-artifact-runner--process)
-    (delete-process pichat-artifact-runner--process))
+  (if-let* ((stop (plist-get pichat-artifact-runner--plan :stop)))
+      (funcall stop)
+    (when (process-live-p pichat-artifact-runner--process)
+      (delete-process pichat-artifact-runner--process)))
+  (when-let* ((cleanup (plist-get pichat-artifact-runner--plan :cleanup)))
+    (setq pichat-artifact-runner--plan
+          (plist-put pichat-artifact-runner--plan :cleanup nil))
+    (condition-case err
+        (funcall cleanup)
+      (error (setq pichat-artifact-runner--result-error
+                   (format "Cleanup failed: %s" (error-message-string err)))
+             (message "PiChat runner: %s" pichat-artifact-runner--result-error))))
   (when pichat-artifact-runner--file
     (ignore-errors (delete-file pichat-artifact-runner--file))
     (setq pichat-artifact-runner--file nil))
@@ -247,6 +288,14 @@ owning Pi runtime through its captured path mappings."
             (cancel-timer pichat-artifact-runner--timer))
           (setq pichat-artifact-runner--timer nil)
           (pichat-artifact-runner--publish)
+          (when (and (eq (process-status process) 'exit)
+                     (= pichat-artifact-runner--exit 0)
+                     (not pichat-artifact-runner--terminal-reason))
+            (when-let* ((finish (plist-get pichat-artifact-runner--plan :finish)))
+              (condition-case err
+                  (funcall finish)
+                (error (setq pichat-artifact-runner--result-error
+                             (error-message-string err))))))
           (setq pichat-artifact-runner--status
                 (or pichat-artifact-runner--terminal-reason
                     (if (eq (process-status process) 'exit) 'exit 'signal)))
@@ -255,7 +304,11 @@ owning Pi runtime through its captured path mappings."
             (insert (format "\nExit: %s (%s)\n%s\n"
                             pichat-artifact-runner--exit (string-trim event)
                             (pichat-artifact-runner--output-description))))
-          (pichat-artifact-runner--cleanup))))))
+          (pichat-artifact-runner--cleanup)
+          (when pichat-artifact-runner--result-error
+            (let ((inhibit-read-only t))
+              (goto-char (point-max))
+              (insert (format "Result error: %s\n" pichat-artifact-runner--result-error)))))))))
 
 (defun pichat-artifact-runner--byte-prefix (text budget)
   "Return longest character prefix of TEXT fitting in BUDGET UTF-8 bytes."
@@ -380,43 +433,57 @@ owning Pi runtime through its captured path mappings."
   "Run exact CODE using LANGUAGE on SESSION's host, or locally without SESSION.
 DIRECTORY is the originating Emacs directory; for SSH the captured session's
 runtime cwd, not DIRECTORY, determines where the subprocess runs."
-  (pcase-let* ((`(,transport ,cwd ,emacs-cwd)
-                (pichat-artifact-runner--context directory session))
-               (spec (pichat-artifact-runner-select language)))
-    (if (eq (car spec) 'elisp)
-        (progn
-          (when (eq (pichat-transport-kind transport) 'ssh)
-            (user-error "Emacs Lisp runs in this Emacs, not on the SSH Pi host"))
-          (pichat-artifact-elisp-run code directory))
-      (pichat-artifact-runner--run-process code cwd emacs-cwd transport session spec))))
+  (let ((spec (pichat-artifact-runner-select language)))
+    (funcall (plist-get (cdr spec) :start) code directory session spec)))
 
-(defun pichat-artifact-runner--run-process (code cwd emacs-cwd transport session spec)
-  "Run CODE with SPEC on TRANSPORT in CWD, visible to Emacs as EMACS-CWD."
+(defun pichat-artifact-runner--elisp (code directory session _spec)
+  "Run CODE in Emacs, rejecting a remote SESSION."
+  (pcase-let ((`(,transport ,_cwd ,_emacs-cwd)
+               (pichat-artifact-runner--context directory session)))
+    (when (eq (pichat-transport-kind transport) 'ssh)
+      (user-error "Emacs Lisp runs in this Emacs, not on the SSH Pi host"))
+    (pichat-artifact-elisp-run code directory)))
+
+(defun pichat-artifact-runner--script (code directory session spec)
+  "Run CODE as a script described by SPEC."
+  (pcase-let ((`(,transport ,cwd ,emacs-cwd)
+               (pichat-artifact-runner--context directory session)))
+    (pichat-artifact-runner--run-process code cwd emacs-cwd transport session spec)))
+
+(defun pichat-artifact-runner--run-process (code cwd emacs-cwd transport session spec
+                                                &optional plan)
+  "Run CODE with SPEC on TRANSPORT; PLAN optionally supplies argv and hooks."
   (let* ((origin (current-buffer))
          (token (pichat-artifact-result-source-token origin))
-         (executable (pichat-artifact-runner--executable (nth 1 spec)
-                                                         transport emacs-cwd))
+         (executable (pichat-artifact-runner--executable
+                      (or (plist-get plan :executable)
+                          (plist-get (cdr spec) :executable))
+                      transport emacs-cwd))
          (buffer (generate-new-buffer "*PiChat Code Run*"))
          (remote (eq (pichat-transport-kind transport) 'ssh))
          file)
     (condition-case error-data
         (progn
-          (setq file (make-temp-file
-                      (if remote
-                          (pichat-transport-runtime-file-name
-                           transport "/tmp/pichat-code-")
-                        "pichat-code-") nil (nth 2 spec)))
-          (with-temp-file file (insert code))
-          (set-file-modes file #o600)
-          (let ((script (if remote (file-local-name file) file)))
+          (unless plan
+            (setq file (make-temp-file
+                        (if remote
+                            (pichat-transport-runtime-file-name
+                             transport "/tmp/pichat-code-")
+                          "pichat-code-") nil (plist-get (cdr spec) :extension)))
+            (with-temp-file file (insert code))
+            (set-file-modes file #o600))
+          (let* ((script (and file (if remote (file-local-name file) file)))
+                 (command (if plan (cons executable (plist-get plan :args))
+                            (list executable script))))
             (with-current-buffer buffer
               (setq default-directory emacs-cwd)
               (let ((inhibit-read-only t))
                 (insert (format "Submitted code:\n%s\n\nHost: %s\nExecutable/arguments: %S\nCwd: %s\n\n[s] Share after completion  [w / g y] Copy  [q] Quit\n\nstdout/stderr:\n"
                                 code (pichat-transport-description transport)
-                                (list executable script) cwd)))
+                                command cwd)))
               (pichat-artifact-runner-result-mode)
-              (setq-local pichat-artifact-runner--file file
+              (setq-local pichat-artifact-runner--plan plan
+                          pichat-artifact-runner--file file
                           pichat-artifact-runner--captured-output ""
                           pichat-artifact-runner--preview-limit
                           (max 0 pichat-artifact-runner-output-limit)
@@ -429,26 +496,32 @@ runtime cwd, not DIRECTORY, determines where the subprocess runs."
                           pichat-artifact-runner--transport transport
                           pichat-artifact-runner--session session)
               (pichat-artifact-result-setup
-               origin token #'pichat-artifact-runner--report
+               origin token (or (plist-get plan :report)
+                                #'pichat-artifact-runner--report)
                (lambda () (not (memq pichat-artifact-runner--status
                                      '(running publishing)))))
               (add-hook 'kill-buffer-hook #'pichat-artifact-runner--cleanup nil t)
               (setq-local pichat-artifact-runner--process
                           (pichat-transport-make-process
                            transport cwd :name "pichat-code" :buffer buffer
-                           :command (list executable script)
+                           :command command
                            :coding 'utf-8-unix
                            :filter #'pichat-artifact-runner--filter
-                           :sentinel #'pichat-artifact-runner--finish))
+                           :sentinel (or (plist-get plan :sentinel)
+                                         #'pichat-artifact-runner--finish)))
               (setq-local pichat-artifact-runner--timer
                           (run-at-time pichat-artifact-runner-timeout nil
-                                       #'pichat-artifact-runner--timeout
+                                       (or (plist-get plan :timeout)
+                                           #'pichat-artifact-runner--timeout)
                                        pichat-artifact-runner--process))))
           (pichat-view-display buffer nil 'kill)
           buffer)
       (error
        (when file (ignore-errors (delete-file file)))
        (when (buffer-live-p buffer) (kill-buffer buffer))
+       (when (and plan (not (buffer-live-p buffer)))
+         (when-let* ((cleanup (plist-get plan :cleanup)))
+           (ignore-errors (funcall cleanup))))
        (signal (car error-data) (cdr error-data))))))
 (provide 'pichat-artifact-runner)
 ;;; pichat-artifact-runner.el ends here

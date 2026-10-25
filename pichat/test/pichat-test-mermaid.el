@@ -1,0 +1,217 @@
+;;; pichat-test-mermaid.el --- Local Mermaid runner tests -*- lexical-binding: t; -*-
+;;; Code:
+(require 'ert)
+(require 'cl-lib)
+(require 'pichat-artifact-mermaid)
+
+(defun pichat-test-mermaid--png (file)
+  "Write a minimal PNG header for size validation tests to FILE."
+  (with-temp-file file
+    (set-buffer-multibyte nil)
+    (insert (unibyte-string 137 80 78 71 13 10 26 10 0 0 0 13 73 72 68 82
+                            0 0 0 16 0 0 0 12))))
+
+(ert-deftest pichat-mermaid-registry-dispatch-and-generic-registration ()
+  (should (eq 'mermaid (car (pichat-artifact-runner-select "mermaid"))))
+  (let ((pichat-artifact-runner-specs (copy-tree pichat-artifact-runner-specs)))
+    (pichat-artifact-runner-register '(diagram-test :aliases ("diagram") :start ignore))
+    (should (eq 'diagram-test (car (pichat-artifact-runner-select "diagram"))))
+    (should (eq 'shell (car (pichat-artifact-runner-select "sh"))))))
+
+(ert-deftest pichat-mermaid-png-validation ()
+  (let ((file (make-temp-file "pichat-test-png-")))
+    (unwind-protect
+        (progn
+          (pichat-test-mermaid--png file)
+          (should (= 24 (pichat-artifact-mermaid--png-size file)))
+          (let ((pichat-artifact-mermaid-max-dimension 12))
+            (should-error (pichat-artifact-mermaid--png-size file)))
+          (let ((pichat-artifact-mermaid-max-bytes 23))
+            (should-error (pichat-artifact-mermaid--png-size file)))
+          (with-temp-file file (insert "not png"))
+          (should-error (pichat-artifact-mermaid--png-size file)))
+      (delete-file file))))
+
+(ert-deftest pichat-mermaid-ssh-origin-renders-locally-without-remote-file-access ()
+  (let* ((session (pichat-session-make
+                   :transport (pichat-transport--create
+                               :id 'ssh :kind 'ssh :tramp-prefix "/ssh:unreachable:")
+                   :runtime-cwd "/remote/"))
+         (process-environment (copy-sequence process-environment))
+         (view (generate-new-buffer " *mermaid-local-test*")) workspace)
+    (setenv "DOCKER_HOST" nil)
+    (unwind-protect
+        (cl-letf (((symbol-function 'executable-find)
+                   (lambda (program &optional remote)
+                     (should-not remote) (should (equal program "docker")) "/bin/docker"))
+                  ((symbol-function 'pichat-artifact-runner--run-process)
+                   (lambda (code cwd emacs-cwd transport origin _spec plan)
+                     (should (equal code "graph TD\nA-->B"))
+                     (should (eq origin session))
+                     (should (eq transport pichat-transport-local))
+                     (should-not (file-remote-p cwd))
+                     (should (equal cwd emacs-cwd))
+                     (should (equal (plist-get plan :args)
+                                    '("context" "inspect" "--format" "{{.Endpoints.docker.Host}}")))
+                     (should (equal code
+                                    (with-temp-buffer
+                                      (insert-file-contents (expand-file-name "input.mmd" workspace))
+                                      (buffer-string))))
+                     view)))
+          (let ((real-temp (symbol-function 'make-temp-file)))
+            (cl-letf (((symbol-function 'make-temp-file)
+                       (lambda (prefix &rest args)
+                         (let ((file (apply real-temp prefix args)))
+                           (when (equal prefix "pichat-mermaid-") (setq workspace file))
+                           file))))
+              ;; The result view uses local storage even with a TRAMP directory.
+              (pichat-artifact-runner-run "graph TD\nA-->B" "mermaid"
+                                          "/ssh:unreachable:/remote/" session)))
+          (should-not (pichat-artifact-mermaid--runtime-path "/tmp/image.png" session)))
+      (kill-buffer view)
+      (when (and workspace (file-directory-p workspace)) (delete-directory workspace t)))))
+
+(ert-deftest pichat-mermaid-rejects-docker-host-override ()
+  (let ((process-environment (copy-sequence process-environment)))
+    (setenv "DOCKER_HOST" "tcp://remote:2375")
+    (should-error (pichat-artifact-runner-run "graph TD" "mermaid" "/tmp/")
+                  :type 'user-error)))
+
+(ert-deftest pichat-mermaid-missing-image-requires-consent-and-pulls-asynchronously ()
+  (dolist (consent '(nil t))
+    (with-temp-buffer
+      (let* ((buffer (current-buffer))
+             (job (pichat-artifact-mermaid--job-create
+                   :stage 'inspect :image "image:1" :buffer buffer))
+             (status 1) stages prompted finished)
+        (cl-letf (((symbol-function 'process-status) (lambda (_) 'exit))
+                  ((symbol-function 'process-exit-status) (lambda (_) status))
+                  ((symbol-function 'process-buffer) (lambda (_) buffer))
+                  ((symbol-function 'pichat-artifact-mermaid--stage)
+                   (lambda (_job stage args) (push (cons stage args) stages)))
+                  ((symbol-function 'yes-or-no-p)
+                   (lambda (_) (setq prompted t) consent))
+                  ((symbol-function 'pichat-artifact-runner--finish)
+                   (lambda (&rest _) (setq finished t))))
+          (pichat-artifact-mermaid--sentinel job 'fake "failed")
+          (should (eq (caar stages) 'availability))
+          (should-not prompted)
+          (setf (pichat-artifact-mermaid--job-stage job) 'availability)
+          (setq status 0)
+          (pichat-artifact-mermaid--sentinel job 'fake "done")
+          (should prompted)
+          (if consent
+              (should (equal (car stages) '(pull "pull" "image:1")))
+            (should finished)
+            (should (string-match-p "declined" pichat-artifact-runner--result-error))))))))
+
+(ert-deftest pichat-mermaid-daemon-failure-does-not-offer-download ()
+  (with-temp-buffer
+    (let* ((buffer (current-buffer))
+           (job (pichat-artifact-mermaid--job-create :stage 'availability :buffer buffer)))
+      (cl-letf (((symbol-function 'process-status) (lambda (_) 'exit))
+                ((symbol-function 'process-exit-status) (lambda (_) 1))
+                ((symbol-function 'process-buffer) (lambda (_) buffer))
+                ((symbol-function 'yes-or-no-p) (lambda (_) (ert-fail "Unexpected pull prompt")))
+                ((symbol-function 'pichat-artifact-runner--finish) #'ignore))
+        (pichat-artifact-mermaid--sentinel job 'fake "failure")
+        (should (string-match-p "daemon unavailable" pichat-artifact-runner--result-error))))))
+
+(ert-deftest pichat-mermaid-cancelled-create-settles-before-removal ()
+  (let* ((job (pichat-artifact-mermaid--job-create :stage 'create :process 'fake))
+         (alive t) removed killed)
+    (cl-letf (((symbol-function 'process-live-p) (lambda (_) alive))
+              ((symbol-function 'run-at-time) (lambda (&rest _) nil))
+              ((symbol-function 'delete-process) (lambda (_) (setq killed t)))
+              ((symbol-function 'pichat-artifact-mermaid--cleanup)
+               (lambda (_) (setq removed t)))
+              ((symbol-function 'process-status) (lambda (_) 'exit)))
+      (pichat-artifact-mermaid--stop job)
+      (should-not killed)
+      (should-not removed)
+      (setq alive nil)
+      (pichat-artifact-mermaid--sentinel job 'fake "created")
+      (should removed))))
+
+(ert-deftest pichat-mermaid-retains-output-and-removes-failed-copy ()
+  (let* ((workspace (make-temp-file "pichat-mermaid-test-" t))
+         (job (pichat-artifact-mermaid--job-create :workspace workspace))
+         retained)
+    (unwind-protect
+        (with-temp-buffer
+          (setf (pichat-artifact-mermaid--job-buffer job) (current-buffer))
+          (pichat-test-mermaid--png (expand-file-name "output.png" workspace))
+          (cl-letf (((symbol-function 'display-images-p) (lambda () nil)))
+            (pichat-artifact-mermaid--collect job))
+          (setq retained pichat-artifact-runner--artifact-file)
+          (should (equal retained pichat-artifact-runner--artifact-runtime-path))
+          (should (= #o600 (file-modes retained)))
+          (let ((real-temp (symbol-function 'make-temp-file)) failed)
+            (cl-letf (((symbol-function 'make-temp-file)
+                       (lambda (&rest args) (setq failed (apply real-temp args))))
+                      ((symbol-function 'copy-file) (lambda (&rest _) (error "Copy failed"))))
+              (should-error (pichat-artifact-mermaid--collect job)))
+            (should-not (file-exists-p failed))))
+      (when retained (delete-file retained))
+      (delete-directory workspace t))))
+
+(defun pichat-test-mermaid--wait (predicate)
+  "Wait at most 90 seconds for PREDICATE, pumping asynchronous processes."
+  (let ((deadline (+ (float-time) 90)))
+    (while (and (not (funcall predicate)) (< (float-time) deadline))
+      (accept-process-output nil 0.05))
+    (should (funcall predicate))))
+
+(ert-deftest pichat-mermaid-real-docker-opt-in ()
+  (unless (getenv "PICHAT_TEST_MERMAID_DOCKER")
+    (ert-skip "Set PICHAT_TEST_MERMAID_DOCKER=1 with the pinned image preloaded"))
+  (dolist (source '("flowchart TD\nA-->B\n" "this is not a diagram"))
+    (let (view workspace)
+      (unwind-protect
+          (let ((real-temp (symbol-function 'make-temp-file)))
+            (cl-letf (((symbol-function 'yes-or-no-p)
+                       (lambda (_) (ert-fail "Integration tests must not download images")))
+                      ((symbol-function 'make-temp-file)
+                       (lambda (prefix &rest args)
+                         (let ((file (apply real-temp prefix args)))
+                           (when (equal prefix "pichat-mermaid-") (setq workspace file))
+                           file))))
+              (setq view (pichat-artifact-runner-run source "mermaid" temporary-file-directory))
+              (pichat-test-mermaid--wait
+               (lambda () (with-current-buffer view
+                            (not (memq pichat-artifact-runner--status '(running publishing))))))
+              (with-current-buffer view
+                (should (eq pichat-artifact-runner--status 'exit))
+                (if (string-prefix-p "flowchart" source)
+                    (progn
+                      (should (= 0 pichat-artifact-runner--exit))
+                      (should (file-exists-p pichat-artifact-runner--artifact-file))
+                      (delete-file pichat-artifact-runner--artifact-file))
+                  (should-not (= 0 pichat-artifact-runner--exit))
+                  (should-not pichat-artifact-runner--artifact-file)))
+              (pichat-test-mermaid--wait (lambda () (not (file-exists-p workspace))))))
+        (when (buffer-live-p view) (kill-buffer view))))))
+
+(ert-deftest pichat-mermaid-real-docker-cancellation-opt-in ()
+  (unless (getenv "PICHAT_TEST_MERMAID_DOCKER")
+    (ert-skip "Set PICHAT_TEST_MERMAID_DOCKER=1 with the pinned image preloaded"))
+  (dolist (cancel-stage '(create render))
+    (let ((real-stage (symbol-function 'pichat-artifact-mermaid--stage))
+          view job)
+      (unwind-protect
+          (cl-letf (((symbol-function 'yes-or-no-p)
+                     (lambda (_) (ert-fail "Integration tests must not download images")))
+                    ((symbol-function 'pichat-artifact-mermaid--stage)
+                     (lambda (j stage args)
+                       (funcall real-stage j stage args)
+                       (when (eq stage cancel-stage)
+                         (setq job j)
+                         (kill-buffer (pichat-artifact-mermaid--job-buffer j))))))
+            (setq view (pichat-artifact-runner-run "graph TD\nA-->B" "mermaid" "/tmp/"))
+            (pichat-test-mermaid--wait (lambda () job))
+            (pichat-test-mermaid--wait
+             (lambda () (not (file-exists-p (pichat-artifact-mermaid--job-workspace job))))))
+        (when (buffer-live-p view) (kill-buffer view))))))
+
+(provide 'pichat-test-mermaid)
+;;; pichat-test-mermaid.el ends here

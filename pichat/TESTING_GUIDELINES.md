@@ -73,6 +73,22 @@ and included in the draft, and check timeout/temporary-script cleanup.
 They remove their own remote output files. No test reads normal remote Pi
 settings, credentials, extensions, or sessions.
 
+## Opt-in Mermaid Docker tests
+
+With local Docker running and the configured pinned image already present:
+
+```sh
+PICHAT_TEST_MERMAID_DOCKER=1 pichat/test/run-tests.sh
+```
+
+These tests render valid/invalid source and cancel during container creation
+and rendering. They wait for asynchronous cleanup before exiting Emacs. They
+never approve image downloads. To select an existing cached digest without
+changing configuration, use batch Emacs, load `pichat-test.el`, set
+`pichat-artifact-mermaid-image`, and run ERT selector
+`"^pichat-mermaid-real-docker"`. SSH-origin local rendering is covered by unit
+fixtures and needs no SSH connection or remote Docker daemon.
+
 ## Coverage
 
 Coverage is a separate, source-only Undercover run. The normal test command

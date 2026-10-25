@@ -645,6 +645,8 @@ Findings:
 
 **Decision:** either expose a documented synchronous-only API now and reject unsupported options at registration, or implement async execution/cancellation end to end. A future async extension should provide one callable convention and one result/error/cancel contract. There is no benefit in preserving two contradictory execution contracts for hypothetical expansion.
 
+**W05 contract decision (2026-10-25): complete; implementation pending W06.** The maintainer chose direct-return synchronous Emacs-defined tools, early rejection of truthy async declarations/registrations rather than silent downgrade, and support for `:instructions` through Pi's native `promptGuidelines`. Preserve existing synchronous tools and description/`promptSnippet` behavior; use Pi's active-tool guidance machinery rather than a separate global prompt accumulator. Installed Pi 1.4.0 extension docs and its shipped dynamic-tools example informed the instructions decision. Repository searches found no async consumers; external consumers remain unknown, and public helper retirement is not implicitly authorized. Async may be added later without changing synchronous definitions. This does not restrict Pi-native tools, artifact runners, or existing extension UI requests. W06 is unblocked but not selected; no production code changed for this decision.
+
 The automatically registered `echo` tool at `pichat-tools.el:164` also deserves a product decision: if it is only a demonstration fixture, move it out of normal tool registration. It is a real bridge-visible tool today, not dead code. Do not remove it before checking bridge smoke/integration tests and user expectations.
 
 ### ARCH-05 — Separate optional UI adapters from the public entry module

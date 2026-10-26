@@ -5,6 +5,10 @@
 (require 'pichat-artifacts)
 (require 'pichat-chat-artifacts)
 (require 'pichat-artifacts-embark)
+(defvar embark-target-finders)
+(declare-function embark--act "embark" (action target &optional quit))
+(declare-function embark-select "embark" ())
+(declare-function embark-collect-direct-action-minor-mode "embark" (&optional arg))
 
 (ert-deftest pichat-artifacts-fences-preserve-body-and-info ()
   (let* ((source "before `inline`\n~~~~js extra\na\n\n~~~~\n```\n```\n~~~oops\n")
@@ -237,6 +241,80 @@
             (should (equal (cadr calls) default-directory))
             (should-not (eq (nth 2 calls) pichat-chat-session))))
       (when (buffer-live-p chat) (kill-buffer chat)))))
+
+(ert-deftest pichat-artifacts-embark-collect-export-retain-delayed-destination ()
+  (unless (require 'embark nil t) (ert-skip "Embark unavailable"))
+  ;; Also runnable unchanged in an isolated interactive terminal Emacs.
+  ;; Export for this custom type intentionally uses Embark's collect fallback.
+  (dolist (command '(embark-collect embark-export))
+    (pichat-test-with-unit-session (session proc)
+      (pichat-test-with-temp-dir directory
+        (let ((pichat-chat-stop-session-on-kill nil)
+              (kill-ring nil)
+              (source "```sh\nprintf 'w11:'; pwd\n```\n")
+              chat collection result)
+          (unwind-protect
+              (save-window-excursion
+                (delete-other-windows)
+                (setq chat (pichat-chat-open session))
+                (with-current-buffer chat
+                  (setq default-directory directory)
+                  (let ((inhibit-read-only t) (pichat-chat--inhibit-edit-guard t))
+                    (goto-char pichat-chat--canonical-start)
+                    (insert (propertize source 'pichat-prose t
+                                        'pichat-node-role 'assistant 'pichat-node-key 'a))
+                    (set-marker pichat-chat--canonical-end (point)))
+                  (goto-char pichat-chat--canonical-start)
+                  (let ((embark-target-finders '(pichat-artifacts-embark-target)))
+                    (call-interactively #'embark-select))
+                  (let ((before (buffer-list)))
+                    (call-interactively command)
+                    (setq collection
+                          (cl-find-if (lambda (buffer)
+                                        (and (not (memq buffer before))
+                                             (with-current-buffer buffer
+                                               (derived-mode-p 'embark-collect-mode))))
+                                      (buffer-list))))
+                  ;; Rebind after collection, before acting on its snapshot.
+                  (pichat-chat--reset-for-source "new-source" "/tmp/new-source.jsonl" t)
+                  (setq default-directory temporary-file-directory)
+                  (pichat-chat--set-input-text "new source draft"))
+                (should (buffer-live-p collection))
+                (pop-to-buffer collection)
+                (goto-char (point-min))
+                (embark-collect-direct-action-minor-mode 1)
+                (execute-kbd-macro (kbd "c"))
+                (should (equal "printf 'w11:'; pwd\n" (current-kill 0)))
+                (let ((before (buffer-list)))
+                  (execute-kbd-macro (kbd "r"))
+                  (setq result
+                        (cl-find-if (lambda (buffer)
+                                      (and (not (memq buffer before))
+                                           (with-current-buffer buffer
+                                             (derived-mode-p
+                                              'pichat-artifact-runner-result-mode))))
+                                    (buffer-list))))
+                (should (buffer-live-p result))
+                (should (get-buffer-window result))
+                (pichat-test-wait-until
+                 (lambda ()
+                   (with-current-buffer result
+                     (not (eq pichat-artifact-runner--status 'running))))
+                 5 "delayed collected artifact shell completion")
+                (with-current-buffer result
+                  (should (equal (concat "w11:" (directory-file-name directory) "\n")
+                                 pichat-artifact-runner--captured-output))
+                  (should-error (pichat-artifact-result-share) :type 'user-error)
+                  (should (buffer-live-p result)))
+                (with-current-buffer chat
+                  (should (equal "new source draft" (pichat-chat--input-text))))
+                (kill-buffer chat)
+                (with-current-buffer result
+                  (pichat-artifact-result-copy-report)
+                  (should (string-search "w11:" (current-kill 0)))
+                  (should-error (pichat-artifact-result-share) :type 'user-error)))
+            (dolist (buffer (list result collection chat))
+              (when (buffer-live-p buffer) (kill-buffer buffer)))))))))
 
 (ert-deftest pichat-artifacts-run-retains-destination-after-origin-death ()
   (let ((chat (generate-new-buffer " *artifact-dead*")) target calls)

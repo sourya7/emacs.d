@@ -5,7 +5,7 @@
 #+PLAN_ID: pichat-maintainability
 #+PLAN_STATUS: active
 #+PLAN_CREATED: 2026-10-24T16:19:02Z
-#+PLAN_UPDATED: 2026-10-26T01:56:04Z
+#+PLAN_UPDATED: 2026-10-26T22:23:51Z
 
 * Goal
 Address the reviewed PiChat maintainability and correctness findings through bounded, independently selected work packages without weakening runtime, source, transcript or draft safety.
@@ -412,7 +412,7 @@ Dependency sources installed at: Undercover 0.8.0 (=e7e280b=), dash 2.20.0
 Consult 3.9 (=9979fbb=), Embark 1.2 (=87e5382=), Evil 1.15.0
 (=6a3e1dd=), goto-chg 1.7.5 (=72f5565=), Orderless 1.7 (=5806e3f=).
 
-* TODO [#B] W11 — Extend targeted lifecycle and interactive verification
+* DONE [#B] W11 — Extend targeted lifecycle and interactive verification
 :PROPERTIES:
 :CUSTOM_ID: W11
 :FINDINGS: TEST-04; section 16.2; section 17.2
@@ -423,11 +423,75 @@ W04 was closed won't-do, not implemented. Select failure scenarios without
 assuming target-draft rollback; a new rollback implementation requires separate
 explicit approval.
 
-- [ ] Select uncovered transition/failure combinations from section 17, acknowledging existing fault-injection tests.
-- [ ] Add bounded regression tests for the selected combinations and ownership/cancellation boundaries.
-- [ ] Check delayed Embark actions/collect/export in a live UI and record the exact scenarios exercised.
-- [ ] Run relevant SSH checks only with an explicitly configured/authorized test destination; otherwise record the external blocker.
-- [ ] Report tested and untested cases separately; do not claim exhaustive lifecycle coverage.
+- [X] Select uncovered transition/failure combinations from section 17, acknowledging existing fault-injection tests.
+- [X] Add bounded regression tests for the selected combinations and ownership/cancellation boundaries.
+- [X] Check delayed Embark actions/collect/export in a live UI and record the exact scenarios exercised.
+- [X] Run relevant SSH checks only with an explicitly configured/authorized test destination; otherwise record the external blocker.
+- [X] Report tested and untested cases separately; do not claim exhaustive lifecycle coverage.
+
+Selected gaps: existing projection rollback, source/reset, saved/empty restart,
+shutdown, preflight and dead-chat tests already cover many failure boundaries.
+Added four regressions in existing suites, no new tracked files or production
+changes. Restart late replies cover readiness, saved-source reload, settings
+restoration and entry sync crossed with retirement, replacement operation,
+advanced phase, changed process generation and changed chat owner (20 fixture
+combinations). Both late success and failure must leave the current operation,
+callback, process and draft untouched. A positive owned-failure case proves
+validation errors stop/finish once and duplicate deliveries cannot finish again.
+Dialog scheduling covers stop followed by a new process with a reused request
+ID: an old reader cannot interact, cancel, or consume the new request; the new
+reader alone answers and pending counts/draft remain coherent.
+
+Embark regression uses actual selection/collect and selection/export (the
+custom artifact type's default collect fallback), direct keyboard actions and
+a real local shell running only =printf= and =pwd= in a temporary directory.
+After synthetic source rebind/cwd change the captured destination is retained;
+sharing rejects without changing the new draft. Copy works after origin death;
+sharing remains rejected. That same test passed in a separate live terminal
+Emacs (=noninteractive=nil=) via PTY, not the user's Emacs. This is automated
+live terminal evidence, not manual GUI/popup-menu, archive rerun, or SSH evidence.
+Observed separately: collect/export Run displays the result but leaves focus
+in the collection; the delayed focus helper only reselects a result if its
+selected origin window still contains the original chat. Record a separately
+approved focus fix if wanted; no production change is authorized by this
+verification package and the test does not claim result-focus success.
+W04 remains won't-do, no target-draft rollback tested or implemented here.
+
+Verification (2026-10-26, Emacs 31.1 / Pi 1.4.0, Embark 1.2): new tests 4/4;
+=run-tests.sh= 830/838 expected, 8 optional skips; =--with-optional= 836/838
+and =--full --with-optional= 901/903 expected, 2 Docker opt-in skips only,
+zero unexpected. The full suite includes existing real-Pi fake-provider restart
+and independent-open checks; no new model API/SSH integration was run. Live
+terminal artifact test 1/1 with both collect/export cases. Three changed suites
+compiled cleanly into =.tmp/pichat-w11-bytecode/= after adding optional Embark
+declarations; no source =*.elc=. Focused suite sizes: lifecycle 1100,
+extension UI 435, artifacts 1518 lines. Logs =.tmp/pichat-w11-{focused,unit,optional-unit,full,bytecompile,live-ui}.log=;
+live PTY reproduction =python3 .tmp/pichat-w11-live-ui.py= (temporary harness,
+not a second plan). Initial test authoring used the wrong runner mode name;
+corrected. The live harness initially used a nonexistent display predicate;
+corrected before the successful run. Focus routing was observed separately,
+not misclassified as a destination failure. Review TEST-04/section 17.4 updated.
+
+SSH blocker resolved (2026-10-26): maintainer explicitly authorized
+=lima-devbox=. Preflight confirmed writable remote =/tmp= and Pi *1.2.0* at
+=/etc/profiles/per-user/dev/bin/pi= (not local Pi 1.4.0). Ran:
+=PICHAT_TEST_SSH_DIRECTORY=/ssh:lima-devbox:/tmp/ PICHAT_TEST_SSH_PI=/etc/profiles/per-user/dev/bin/pi pichat/test/run-ssh-tests.sh=.
+All 8/8 passed, zero skips/unexpected: remote archive-helper streaming,
+readable temp references, RPC streaming/stop plus independent saved-source
+launch/sync, shell host/cwd and private spill publication, Python interpreter,
+share-only overflow/draft handoff, timeout and quit child termination/script
+cleanup. Fixtures isolate agent/session directories and use the offline fake
+provider; no normal remote credentials/settings/sessions or real model API.
+No upgrades/installations and no compatibility watermark advance. Follow-up
+remote check found no test directories containing batch PID 527278 and no
+matching test processes; tests remove their own reference/output files.
+Logs =.tmp/pichat-w11-ssh{,-preflight,-cleanup}.log=.
+
+W11 is complete for this bounded scope: four durable regressions, automated live
+terminal collect/export, and eight live SSH checks. No GUI/popup-menu, remote
+restart, broad mutation score, exhaustive transition matrix, or focus fix is
+claimed. The initial missing-authorization blocker is superseded, not silently
+waived. The overall roadmap remains active; no adjacent package or commit.
 
 * TODO [#B] W12 — Prune verified private leftovers and improve affected tests
 :PROPERTIES:
@@ -592,10 +656,10 @@ review's "keep" findings (including INFRA-02) are constraints, not rewrite tasks
 
 * Checkpoint
 - Plan status: active
-- Selected scope: W10 DONE; maintainer requested consolidation and commit of its phase. W09 committed as =65c35d88=. W04 remains won't-do.
-- Last verified result: W10 default unit 827/834 expected, optional unit 832/834 and optional full 897/899 expected; full partial coverage analysis 897/899 expected, zero unexpected, two Docker opt-in skips in optional runs. Elisp compilation/shell syntax clean.
-- Next action: await explicit selection after the requested W10 commit; do not start W11 or other packages automatically.
-- Blockers: W22 awaits a concrete approved extension need; no W09 decision blocker remains.
+- Selected scope: W11 DONE, uncommitted; local regressions, live terminal collect/export and authorized lima-devbox SSH tests complete. W10 committed as =f1e73922=. W04 remains won't-do.
+- Last verified result: W11 focused 4/4, default unit 830/838 expected, optional unit 836/838 and optional full 901/903 expected; zero unexpected, two Docker opt-in skips in optional runs. Live terminal safety test 1/1; SSH 8/8 on remote Pi 1.2.0, cleanup checked. Result-focus gap separately observed; three suites compile cleanly.
+- Next action: await explicit selection or commit request. Collect-result focus needs separate approval; do not start W12 or another package automatically.
+- Blockers: W22 awaits a concrete approved extension need; no W11 blocker remains.
 
 * Verification
 - 2026-10-26: Maintainer closed W04 as won't-do; historical injected-failure evidence retained, original implementation criteria explicitly superseded, W09/W11 implementation dependencies removed without claiming rollback. Bookkeeping/review only; W06 test evidence remains separate. No rollback code or tests added.
@@ -605,6 +669,10 @@ review's "keep" findings (including INFRA-02) are constraints, not rewrite tasks
 - 2026-10-25: moved the tracked execution backlog from =docs/pichat-maintainability-plan.org= to this single managed plan. Preserved all 22 headings, states, IDs and resolved all five relative file links; =plans.py check --all= OK for five records, =list --all= shows ready 0/22, helper tests 3 OK. No PiChat implementation or tests run for the migration. Historical pass-3 results remain in the linked review.
 
 * History
+- 2026-10-26T22:23:51Z: Completed W11 after explicitly authorized lima-devbox SSH suite passed 8/8 on remote Pi 1.2.0 with no skips or unexpected results; remote directory/process cleanup check clean. Earlier local/live-terminal evidence retained. No production fix, upgrade, adjacent work or commit.
+- 2026-10-26T22:22:55Z: Maintainer authorized lima-devbox for W11 SSH verification. Resumed W11; remote preflight found writable /tmp and Pi 1.2.0 at /etc/profiles/per-user/dev/bin/pi. No remote upgrade or commit authorized.
+- 2026-10-26T22:18:55Z: W11 local verification complete: four regressions, focused/unit/optional/full green, live isolated terminal collect/export test passed and a focus-only gap observed. Marked W11 BLOCKED for authorized SSH destination or narrower-scope acceptance; no remote connection, production fix, adjacent work or commit.
+- 2026-10-26T22:09:54Z: Started explicitly selected W11 from clean working copy after W10 commit f1e73922. Read lifecycle matrix, package terminology/testing guidance and existing cancellation tests; SSH test destination environment is absent. No adjacent work or commit authorized.
 - 2026-10-26T01:56:04Z: At the maintainer's request merged coverage bootstrap and report runner into one opt-in setup file, removed the extra runner file, and verified focused 4/4, unit 827/834, dependency-enabled full 897/899 and partial coverage unit/full 832/834 and 897/899, all zero unexpected. Commit requested; no adjacent work.
 - 2026-10-26T01:44:18Z: Completed W10 only: reproduced and isolated independent Edebug counter and report-marker faults, documented partial instrumentation, made reporting failures fatal, added four runner tests and optional dependency-enabled commands, verified unit/full and partial coverage analyses. No adjacent work or commit.
 - 2026-10-26T01:20:20Z: Started explicitly selected W10 from clean working copy. Read coverage scripts, testing guidance, glossary, review evidence and plan; installed local Emacs 31.1/Pi 1.4.0 and optional dependency directories found. No package or Pi compatibility upgrade authorized.

@@ -361,6 +361,60 @@
                 (should (zerop pichat-chat--pending-ui-count)))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+(ert-deftest pichat-extension-ui-retired-reader-cannot-consume-reused-id-after-stop ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          buffer replacement scheduled cancelled responses
+          (readers 0))
+      (unwind-protect
+          (save-window-excursion
+            (setq buffer (pichat-chat-open session))
+            (cl-letf (((symbol-function 'run-at-time)
+                       (lambda (_delay _repeat function &rest args)
+                         (push (cons function args) scheduled)
+                         'deferred))
+                      ((symbol-function 'pichat-rpc-extension-ui-cancel)
+                       (lambda (_session id) (push id cancelled)))
+                      ((symbol-function 'yes-or-no-p)
+                       (lambda (&rest _) (cl-incf readers) t))
+                      ((symbol-function 'pichat-rpc-extension-ui-confirm)
+                       (lambda (_session id value) (push (list id value) responses))))
+              (with-current-buffer buffer
+                (pichat-chat--set-input-text "keep draft")
+                (pichat-chat--on-extension-ui-request
+                 session 'extension-ui-request
+                 '(:raw (:id "reused-id" :method "confirm" :title "Old process"))))
+              (should (= 1 (length scheduled)))
+              (let ((old (car scheduled)))
+                (pichat-stop-session session)
+                (should-not (process-live-p proc))
+                (with-current-buffer buffer
+                  (should (zerop pichat-chat--pending-ui-count)))
+                (setq replacement (pichat-test--make-unit-process session))
+                (with-current-buffer buffer
+                  (pichat-chat--on-extension-ui-request
+                   session 'extension-ui-request
+                   '(:raw (:id "reused-id" :method "confirm" :title "New process"))))
+                (should (= 2 (length scheduled)))
+                (let ((before (copy-sequence cancelled)))
+                  (apply (car old) (cdr old))
+                  (should (equal before cancelled)))
+                (should (zerop readers))
+                (should-not responses)
+                (with-current-buffer buffer
+                  (should (= 1 pichat-chat--pending-ui-count)))
+                (apply (caar scheduled) (cdar scheduled))
+                (should (= 1 readers))
+                (should (equal '(("reused-id" t)) responses))
+                (with-current-buffer buffer
+                  (should (zerop pichat-chat--pending-ui-count))
+                  (should (equal "keep draft" (pichat-chat--input-text)))))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))
+        (when (and replacement (process-live-p replacement))
+          (delete-process replacement))
+        (when (and replacement (buffer-live-p (process-buffer replacement)))
+          (kill-buffer (process-buffer replacement)))))))
+
 (ert-deftest pichat-extension-ui-pending-count-requires-exact-owning-chat ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)

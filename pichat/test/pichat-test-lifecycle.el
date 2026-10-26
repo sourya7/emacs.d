@@ -356,6 +356,96 @@
                 (should (process-live-p proc)))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+(ert-deftest pichat-reconfigure-late-phase-replies-cannot-affect-a-new-owner ()
+  ;; These are delayed transport deliveries, not failures during draft insertion.
+  (dolist (request '((starting . "get_state") (loading . "switch_session")
+                     (loading . "set_thinking_level") (synchronizing . "get_entries")))
+    (dolist (transition '(retired replaced advanced-phase process-generation chat-owner))
+      (pichat-test-with-unit-session (session proc)
+        (let ((pichat-chat-stop-session-on-kill nil)
+              buffer success failure continued completed)
+          (unwind-protect
+              (progn
+                (setq buffer (pichat-chat-open session))
+                (let* ((phase (car request))
+                       (generation (pichat-session-process-generation session))
+                       (operation
+                        (list :session session :chat buffer :phase phase
+                              :token (make-symbol "restart")
+                              :replacement-process proc
+                              :replacement-generation (or generation 1)
+                              :callback (lambda (&rest args) (push args completed)))))
+                  (setf (pichat-session-process-generation session) (or generation 1)
+                        (pichat-session-restart-operation session) operation)
+                  (with-current-buffer buffer
+                    (pichat-chat--set-input-text "newer unsent draft"))
+                  (cl-letf (((symbol-function 'pichat-rpc-send)
+                             (lambda (_session _type _payload ok err)
+                               (setq success ok failure err))))
+                    (pichat-reconfigure--send
+                     operation phase (cdr request) nil
+                     (lambda (&rest _) (setq continued t))))
+                  (should success)
+                  (should failure)
+                  (pcase transition
+                    ('retired
+                     (pichat-reconfigure-cancel-operation session "cancelled"))
+                    ('replaced
+                     (pichat-reconfigure-cancel-operation session "retry")
+                     (setf (pichat-session-restart-operation session)
+                           (copy-sequence operation)))
+                    ('advanced-phase
+                     (plist-put operation :phase 'verifying))
+                    ('process-generation
+                     (cl-incf (pichat-session-process-generation session)))
+                    ('chat-owner
+                     (with-current-buffer buffer
+                       (setq pichat-chat-session (pichat-session-make)))))
+                  (let ((owner (pichat-session-restart-operation session)))
+                    (funcall success '(:data (:sessionId "late")) session)
+                    (funcall failure '(:error "late failure") session)
+                    (should-not continued)
+                    (should-not completed)
+                    (should (eq owner (pichat-session-restart-operation session)))
+                    (should (process-live-p proc))
+                    (with-current-buffer buffer
+                      (should (equal "newer unsent draft" (pichat-chat--input-text)))))
+                  ;; Restore ownership for normal chat cleanup, not a restart stop.
+                  (setf (pichat-session-restart-operation session) nil)
+                  (with-current-buffer buffer (setq pichat-chat-session session))))
+            (setf (pichat-session-restart-operation session) nil)
+            (when (buffer-live-p buffer) (kill-buffer buffer))))))))
+
+(ert-deftest pichat-reconfigure-owned-phase-reply-finishes-failure-only-once ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          buffer success failure results)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (let ((operation
+                   (list :session session :chat buffer :phase 'loading
+                         :token (make-symbol "restart")
+                         :callback (lambda (&rest args) (push args results)))))
+              (setf (pichat-session-restart-operation session) operation)
+              (cl-letf (((symbol-function 'pichat-rpc-send)
+                         (lambda (_session _type _payload ok err)
+                           (setq success ok failure err))))
+                (pichat-reconfigure--send
+                 operation 'loading "switch_session" nil
+                 (lambda (&rest _) (error "reload validation failed"))))
+              (funcall success '(:data nil) session)
+              (should (equal '((nil "reload validation failed")) results))
+              (should-not (process-live-p proc))
+              (let ((failed (pichat-session-restart-operation session)))
+                (should (eq 'failed (plist-get failed :phase)))
+                (should-not (eq operation failed))
+                (funcall success '(:data nil) session)
+                (funcall failure '(:error "duplicate failure") session)
+                (should (eq failed (pichat-session-restart-operation session)))
+                (should (= 1 (length results))))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
 (ert-deftest pichat-reconfigure-stop-then-start-reports-synchronous-shutdown-error ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil) buffer result)

@@ -1177,6 +1177,39 @@ profiles and presets that override tools or prompts are not supported;
 use a plain Pi command for those launches until a wrapper-aware command builder
 is implemented.
 
+## Emacs-defined tools
+
+The optional PiChat bridge exposes registered Emacs-defined tools to Pi. Use
+`pichat-define-tool` for short, synchronous operations: the body receives
+`params` and returns its final result directly. For example:
+
+```elisp
+(pichat-define-tool buffer-summary
+    (:description "Summarize an Emacs buffer"
+     :instructions "Prefer this tool when the buffer has unsaved changes"
+     :parameters (:type "object"
+                  :properties (:name (:type "string"))
+                  :required ["name"]))
+  (with-current-buffer (get-buffer (plist-get params :name))
+    (format "Buffer %s has %d characters" (buffer-name) (buffer-size))))
+```
+
+`:description` describes the tool and supplies its short Pi prompt snippet.
+Nonblank `:instructions` is sent as one Pi `promptGuidelines` entry while the
+tool is active; it guides the model, but does not grant permission or enforce
+behavior. Blank or absent instructions add no guidelines. Pi-native tools have
+their own extension contracts and are unaffected.
+
+`:async t` is unsupported and rejected when defining or registering an
+Emacs-defined tool; it is not silently converted into synchronous execution.
+Directly registered tools must also have nil `async-p` and string-or-nil
+`instructions`. The existing `pichat-tools-call-async` helper remains a
+synchronous callback adapter, not an asynchronous tool facility. Do not use a
+blocking subprocess or network wait in a tool body as an async workaround:
+Emacs may be unresponsive until the tool returns. Pi extension UI requests
+already support selecting among choices without adding asynchronous Emacs tool
+execution.
+
 ## Permissions
 
 Pi-native tools should be governed by Pi permission packages such as

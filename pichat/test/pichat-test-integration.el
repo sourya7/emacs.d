@@ -984,6 +984,59 @@
                                         pichat-chat--extension-statuses)))))
           (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+  (ert-deftest pichat-integration-bridge-rejects-malformed-instructions ()
+    (pichat-test-with-integration-session
+        (session :no-session t
+                 :extensions (list pichat-test-bridge-extension)
+                 :script '(:turns [(:expectToolAbsent "pichat-test-guided" :text "safe")
+                                   (:expectToolAbsent "pichat-test-guided" :text "still safe")]))
+      (let ((pichat-chat-stop-session-on-kill nil)
+            buffer)
+        (unwind-protect
+            (progn
+              (setq buffer (pichat-chat-open session))
+              (dolist (instructions '("42" "\"  \""))
+                (cl-letf (((symbol-function 'pichat-tool-bridge-definitions-json)
+                           (lambda ()
+                             (format "{\"protocolVersion\":1,\"tools\":[{\"name\":\"pichat-test-guided\",\"instructions\":%s}]}"
+                                     instructions))))
+                  (pichat-test-prompt-and-wait session "validate instructions"))
+                (with-current-buffer buffer
+                  (should (equal "sync-error:invalid-tool-definition"
+                                 (gethash "pichat-bridge"
+                                          pichat-chat--extension-statuses))))))
+          (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+  (ert-deftest pichat-integration-bridge-refreshes-tool-prompt-guidelines ()
+    (pichat-test-with-integration-session
+        (session :no-session t
+                 :extensions (list pichat-test-bridge-extension)
+                 :script '(:turns
+                           [(:expectTool (:name "pichat-test-guided")
+                             :expectContextIncludes "Prefer unsaved Emacs buffers"
+                             :text "first guideline")
+                            (:expectTool (:name "pichat-test-guided")
+                             :expectContextIncludes "Prefer saved Emacs buffers"
+                             :text "changed guideline")]))
+      (let ((pichat-chat-stop-session-on-kill nil)
+            buffer)
+        (unwind-protect
+            (progn
+              (pichat-define-tool pichat-test-guided
+                  (:description "Read a buffer" :instructions "Prefer unsaved Emacs buffers")
+                "ok")
+              (setq buffer (pichat-chat-open session))
+              (pichat-test-prompt-and-wait session "first guidance")
+              (pichat-define-tool pichat-test-guided
+                  (:description "Read a buffer" :instructions "Prefer saved Emacs buffers")
+                "ok")
+              (pichat-test-prompt-and-wait session "updated guidance")
+              (with-current-buffer buffer
+                (should (equal "synchronized:1"
+                               (gethash "pichat-bridge"
+                                        pichat-chat--extension-statuses)))))
+          (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
   (ert-deftest pichat-integration-bridge-refreshes-changed-tool-schema ()
     (pichat-test-with-integration-session
         (session :no-session t

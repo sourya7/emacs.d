@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
 
-type PiChatToolDef = { name: string; label?: string; description?: string; parameters?: unknown; mutating?: boolean };
+type PiChatToolDef = { name: string; label?: string; description?: string; instructions?: string; parameters?: unknown; mutating?: boolean };
 type PiChatToolsResponse = { protocolVersion?: number; tools?: PiChatToolDef[] };
 type SystemPromptOptions = { selectedTools: string[] };
 
@@ -38,6 +38,7 @@ export default function (pi: ExtensionAPI) {
 		return typeof candidate.name === "string" && /^[A-Za-z0-9_-]+$/.test(candidate.name)
 			&& (candidate.label === undefined || typeof candidate.label === "string")
 			&& (candidate.description === undefined || typeof candidate.description === "string")
+			&& (candidate.instructions === undefined || (typeof candidate.instructions === "string" && candidate.instructions.trim().length > 0))
 			&& (candidate.parameters === undefined || (!!candidate.parameters && typeof candidate.parameters === "object" && !Array.isArray(candidate.parameters)))
 			&& (candidate.mutating === undefined || typeof candidate.mutating === "boolean");
 	}
@@ -98,6 +99,7 @@ export default function (pi: ExtensionAPI) {
 				label: tool.label ?? tool.name,
 				description: tool.description ?? "Emacs-defined PiChat tool",
 				promptSnippet: tool.description ?? `Call Emacs tool ${tool.name}`,
+				...(tool.instructions === undefined ? {} : { promptGuidelines: [tool.instructions] }),
 				parameters: schemaForTool(tool),
 				async execute(_toolCallId, params, _signal, _onUpdate, toolCtx) {
 					const resultRaw = await toolCtx.ui.editor(TOOL_CALL_TITLE, JSON.stringify({ protocolVersion: 1, name: tool.name, params }));

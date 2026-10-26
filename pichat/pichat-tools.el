@@ -17,7 +17,16 @@
   "Registered Emacs tools keyed by tool name.")
 
 (defun pichat-tools-register (tool)
-  "Register Emacs TOOL."
+  "Register synchronous Emacs TOOL after validating its contract."
+  (unless (pichat-tool-p tool)
+    (error "Invalid Emacs tool"))
+  (when (pichat-tool-async-p tool)
+    (error "Asynchronous Emacs-defined tools are unsupported: %s"
+           (pichat-tool-name tool)))
+  (unless (or (null (pichat-tool-instructions tool))
+              (stringp (pichat-tool-instructions tool)))
+    (error "Emacs tool instructions must be a string: %s"
+           (pichat-tool-name tool)))
   (puthash (pichat-tool-name tool) tool pichat-tools-registry)
   tool)
 
@@ -26,6 +35,8 @@
 ARGS is a plist accepting :label, :description, :parameters, :instructions,
 :mutating, :async, and :native-only."
   (declare (indent 2))
+  (when (plist-get args :async)
+    (error "Asynchronous Emacs-defined tools are unsupported: %s" name))
   (let ((fn (intern (format "pichat-tool/%s" name))))
     `(progn
        (defun ,fn (params)
@@ -48,12 +59,16 @@ ARGS is a plist accepting :label, :description, :parameters, :instructions,
     (maphash
      (lambda (_ tool)
        (unless (pichat-tool-native-only-p tool)
-         (push (list :name (pichat-tool-name tool)
-                     :label (pichat-tool-label tool)
-                     :description (pichat-tool-description tool)
-                     :parameters (pichat-tool-parameters tool)
-                     :mutating (if (pichat-tool-mutating-p tool) t :json-false))
-               defs)))
+         (let ((instructions (pichat-tool-instructions tool)))
+           (push (append (list :name (pichat-tool-name tool)
+                               :label (pichat-tool-label tool)
+                               :description (pichat-tool-description tool)
+                               :parameters (pichat-tool-parameters tool)
+                               :mutating (if (pichat-tool-mutating-p tool) t :json-false))
+                         (when (and (stringp instructions)
+                                    (not (string-blank-p instructions)))
+                           (list :instructions instructions)))
+                 defs))))
      pichat-tools-registry)
     (json-serialize (list :protocolVersion 1 :tools (vconcat (nreverse defs)))
                     :false-object :json-false :null-object nil)))
@@ -95,7 +110,7 @@ this function so transports can apply their own asynchronous gate."
   (unless (pichat-tool-p tool)
     (error "Invalid Emacs tool"))
   (when (pichat-tool-async-p tool)
-    (error "Emacs tool requires asynchronous execution: %s"
+    (error "Asynchronous Emacs-defined tools are unsupported: %s"
            (pichat-tool-name tool)))
   (condition-case err
       (let ((default-directory
@@ -109,26 +124,14 @@ this function so transports can apply their own asynchronous gate."
      (list :is-error t :value (error-message-string err)))))
 
 (defun pichat-tools-call-async (tool params callback &optional session)
-  "Call TOOL with PARAMS and deliver a structured result to CALLBACK.
-Return a cancellation function for asynchronous tools, or nil after a
-synchronous callback.  SESSION supplies the dynamically bound working
-directory.  An asynchronous tool function accepts PARAMS and a result callback
-and may return a zero-argument cancellation function."
+  "Call synchronous TOOL with PARAMS and deliver its result to CALLBACK.
+Return nil after the callback.  SESSION supplies the tool's working directory.
+Asynchronous Emacs-defined tools are unsupported; this compatibility entry
+point does not defer execution or provide cancellation."
   (unless (pichat-tool-p tool)
     (error "Invalid Emacs tool"))
-  (if (not (pichat-tool-async-p tool))
-      (progn (funcall callback (pichat-tools-call tool params session)) nil)
-    (condition-case err
-        (let ((default-directory
-               (or (and session
-                        (fboundp 'pichat-session-emacs-cwd)
-                        (pichat-session-emacs-cwd session))
-                   default-directory)))
-          (funcall (pichat-tool-function tool) params callback))
-      (error
-       (funcall callback
-                (list :is-error t :value (error-message-string err)))
-       nil))))
+  (funcall callback (pichat-tools-call tool params session))
+  nil)
 
 (defun pichat-tools-result-wire (result)
   "Convert structured tool RESULT into the existing bridge wire object."

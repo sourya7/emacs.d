@@ -39,6 +39,71 @@
       (should (= 1 (length content)))
       (should (equal "tool output" (plist-get (car content) :text))))))
 
+(ert-deftest pichat-tools-rejects-async-before-definition-or-registration ()
+  (pichat-test-with-clean-state
+    (should-error
+     (macroexpand '(pichat-define-tool pichat-test-async
+                       (:description "Unsupported" :async t)
+                     "never"))
+     :type 'error)
+    (should-not (fboundp 'pichat-tool/pichat-test-async))
+    (let ((original (gethash "echo" pichat-tools-registry)))
+      (should-error
+       (pichat-tools-register
+        (pichat-tool-create :name "echo" :function #'ignore :async-p t))
+       :type 'error)
+      (should (eq original (gethash "echo" pichat-tools-registry))))
+    (should-not (string-match-p "pichat-test-async"
+                                (pichat-tools-definitions-json)))
+    (pichat-define-tool pichat-test-sync (:async nil) "sync")
+    (should (equal "sync" (plist-get
+                           (pichat-tools-call
+                            (gethash "pichat-test-sync" pichat-tools-registry)
+                            nil)
+                           :value)))))
+
+(ert-deftest pichat-tools-sync-callback-adapter-delivers-once-and-rejects-async ()
+  (pichat-test-with-clean-state
+    (let ((calls 0) results)
+      (pichat-define-tool pichat-test-callback ()
+        (cl-incf calls)
+        (error "tool failure"))
+      (should-not
+       (pichat-tools-call-async
+        (gethash "pichat-test-callback" pichat-tools-registry) nil
+        (lambda (result) (push result results))))
+      (should (= 1 calls))
+      (should (= 1 (length results)))
+      (should (plist-get (car results) :is-error))
+      (should (string-match-p "tool failure" (plist-get (car results) :value)))
+      (should-error
+       (pichat-tools-call-async
+        (pichat-tool-create :name "bad" :async-p t :function #'ignore)
+        nil #'ignore)
+       :type 'error))))
+
+(ert-deftest pichat-tools-instructions-serialize-only-nonblank-guidance ()
+  (pichat-test-with-clean-state
+    (pichat-define-tool pichat-test-guided
+        (:description "Tool description" :instructions "Prefer unsaved buffers")
+      "ok")
+    (pichat-define-tool pichat-test-blank (:instructions "  \n") "ok")
+    (pichat-define-tool pichat-test-absent () "ok")
+    (let* ((tools (plist-get (json-parse-string (pichat-tools-definitions-json)
+                                               :object-type 'plist :array-type 'list)
+                            :tools))
+           (guided (cl-find "pichat-test-guided" tools :test #'equal
+                            :key (lambda (tool) (plist-get tool :name)))))
+      (should (equal "Tool description" (plist-get guided :description)))
+      (should (equal "Prefer unsaved buffers" (plist-get guided :instructions)))
+      (should (= 1 (cl-count-if (lambda (tool) (plist-member tool :instructions))
+                                 tools))))
+    (should-error
+     (pichat-tools-register
+      (pichat-tool-create :name "invalid" :function #'ignore :instructions 42))
+     :type 'error)
+    (should-not (gethash "invalid" pichat-tools-registry))))
+
 ;;; Approval unit tests
 
 (defmacro pichat-test-with-approval-file (&rest body)

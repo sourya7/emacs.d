@@ -294,6 +294,31 @@
       (when (buffer-live-p new-compose) (kill-buffer new-compose))
       (when (buffer-live-p target) (kill-buffer target)))))
 
+(ert-deftest pichat-chat-compose-path-availability-requires-reopening-editor ()
+  (pichat-test-with-unit-session (session proc)
+    (setf (pichat-session-id session) "same"
+          (pichat-session-session-file session) nil)
+    (pichat-test-with-chat-buffer (chat session)
+      (let (compose)
+        (unwind-protect
+            (progn
+              (pichat-chat--set-input-text "original")
+              (setq compose (with-current-buffer chat
+                              (pichat-chat-open-compose-buffer)
+                              (window-buffer (selected-window))))
+              (with-current-buffer compose
+                (erase-buffer)
+                (insert "compose content"))
+              (setf (pichat-session-session-file session) "/sessions/same.jsonl")
+              (with-current-buffer chat
+                (pichat-chat--refresh-source-identity session))
+              (with-current-buffer compose
+                (should-error (pichat-chat-compose-apply) :type 'user-error)
+                (should (equal "compose content" (buffer-string))))
+              (with-current-buffer chat
+                (should (equal "original" (pichat-chat--input-text)))))
+          (when (buffer-live-p compose) (kill-buffer compose)))))))
+
 (ert-deftest pichat-chat-compose-replaces-input-without-submitting ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)

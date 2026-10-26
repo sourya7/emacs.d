@@ -5,7 +5,7 @@
 #+PLAN_ID: pichat-maintainability
 #+PLAN_STATUS: active
 #+PLAN_CREATED: 2026-10-24T16:19:02Z
-#+PLAN_UPDATED: 2026-10-26T00:55:25Z
+#+PLAN_UPDATED: 2026-10-26T01:10:13Z
 
 * Goal
 Address the reviewed PiChat maintainability and correctness findings through bounded, independently selected work packages without weakening runtime, source, transcript or draft safety.
@@ -284,7 +284,7 @@ Resolution: JSON decode, minimal object/type validation, and dispatch have disti
 
 Verification (2026-10-26, Emacs 31.1 / installed Pi 1.4.0): =^pichat-rpc-= 58/58; unit 818/825 expected and full real-Pi fake-provider 883/890 expected, zero unexpected, seven optional skips. Three new tests cover callback attribution and continued processing, invalid records versus malformed JSON, and handler isolation/bounded record. =pichat-test-rpc.el= 907 lines. Changed =pichat-rpc.el=, =pichat-events.el= and =pichat-chat-diagnostics.el= compiled without warnings to =.tmp/pichat-w08-bytecode/=. Logs in =.tmp/pichat-w08-{focused,unit,full,bytecompile}.log=. No real model API, UI or live SSH tested.
 
-* TODO [#A] W09 — Decide and expose the minimal draft/target boundary
+* DONE [#A] W09 — Decide and expose the minimal draft/target boundary
 :PROPERTIES:
 :CUSTOM_ID: W09
 :FINDINGS: ARCH-01; REL-04; DUP-04; section 17
@@ -297,15 +297,59 @@ won't-do, not implemented: failure preservation here means retaining existing
 compose/source safety and not introducing additional draft loss; it does not
 promise target-draft rollback after an injected insertion failure.
 
-- [ ] Decide identity semantics for same Pi session ID with pathname availability changing from nil to a path.
-- [ ] Specify separate capture/validate, append/replace, and submission responsibilities.
-- [ ] Preserve stopped-runtime draft editing and verified same-source restart semantics.
-- [ ] Cover A → B → A rebinding, dead origins, pathname changes, saved-source restart, and unwritten-empty restart.
-- [ ] Migrate reference insertion, result handoff, and compose apply without direct private-marker mutation by consumers.
-- [ ] Verify attachments, editor bookkeeping, failure preservation, and local/SSH provenance.
+- [X] Decide identity semantics for same Pi session ID with pathname availability changing from nil to a path.
+- [X] Specify separate capture/validate, append/replace, and submission responsibilities.
+- [X] Preserve stopped-runtime draft editing and verified same-source restart semantics.
+- [X] Cover A → B → A rebinding, dead origins, pathname changes, saved-source restart, and unwritten-empty restart.
+- [X] Migrate reference insertion, result handoff, and compose apply without direct private-marker mutation by consumers.
+- [X] Verify attachments, editor bookkeeping, failure preservation, and local/SSH provenance.
 
-Stop for maintainer input if source-token semantics are unresolved; do not
-silently weaken conservative rejection to make callers agree.
+Decision gate (2026-10-26, blocked before implementation): current
+=pichat-chat--source-identity-changed-p= treats the same Pi session ID with
+nil → path as the same source, but =pichat-chat--source-token= includes the path
+and invalidates compose/result/reference edits. The reviewed probe establishes
+a conservative rejection, not stale acceptance or a measured ordinary Pi
+transition. A contract shared by those draft consumers must distinguish path
+availability from changed path/transport provenance and from a genuine source
+rebind. No code or W09 tests have been changed.
+
+Approved decision (2026-10-26): retain conservative invalidation (A). A draft
+action captured when the saved session file path is nil must stop and ask the
+user to retry if PiChat later receives a path, even for the same Pi session ID.
+This is intentional, not a source-generation change or a rollback fix. Never
+weaken path/transport provenance, A → B → A rebinding or stopped-runtime edit
+semantics to make draft consumers agree. The decision is based on a synthetic
+probe; the ordinary frequency of nil → path materialization remains unknown.
+The approved rule is implemented by the captured target's exact source token,
+not by changing source-generation policy. The public
+=pichat-chat-draft-capture= / =pichat-chat-draft-current-p= / =pichat-chat-draft-text= /
+=pichat-chat-draft-replace= / =pichat-chat-draft-append= API owns the prompt
+marker and setter; read and edit validate the captured buffer, runtime object
+and source without requiring a live process. Reference merging retains
+concurrent same-source edits. Artifact execution destination remains captured
+separately from result handoff; delayed runs still work after origin death but
+cannot share to it. Compose uses the captured draft target for validation and
+replacement, with verified unwritten-empty retargeting after successful commit.
+Submission stays on the existing live RPC input path; none of these APIs send.
+W04's injected-failure rollback remains unimplemented.
+
+Verification (2026-10-26, Emacs 31.1 / Pi 1.4.0): focused draft,
+reference, compose, artifact and restart selector 122/123 expected, one
+Embark dependency skip; dependency-enabled Embark stale-run test 1/1.
+Unit =pichat/test/run-tests.sh= 823/830 expected; full real-Pi fake-provider
+=--full= 888/895 expected, zero unexpected and seven optional skips each.
+New tests cover nil → path during reference collection, compose apply and
+result share (copy still available), captured target rejection despite equal
+source generation, A → B → A, and stopped/concurrent draft editing without
+submission. Existing dead-origin, attachment, editor-generation, saved-source
+restart, unwritten-empty restart and mapped local/SSH-path fixtures remain green;
+real-Pi reference and both restart integration paths passed. No live SSH, GUI,
+or real model API used; pathname availability frequency remains unknown.
+Changed chat/reference/result modules compiled to =.tmp/pichat-w09-bytecode/=
+with only two pre-existing chat module warnings (obsolete =focus-in-hook=,
+late =pichat-chat--preserve-view= macro); no generated =*.elc= under =pichat/=.
+Focused test files: core 585, reference 168, artifacts 1440, navigation 599
+lines. Logs: =.tmp/pichat-w09-{focused,compose,embark,unit,full,bytecompile}.log=.
 
 * TODO [#B] W10 — Repair coverage tooling and make test execution reproducible
 :PROPERTIES:
@@ -502,10 +546,10 @@ review's "keep" findings (including INFRA-02) are constraints, not rewrite tasks
 
 * Checkpoint
 - Plan status: active
-- Selected scope: user selected W07/W08/W09; W07 and W08 DONE, W09 awaiting its recorded source-identity decision. W04 remains won't-do.
-- Last verified result: W07 focused 19/19, unit 815/822 expected; W08 focused 58/58, unit 818/825 and full 883/890 expected; zero unexpected, seven optional skips; changed modules compiled cleanly.
-- Next action: obtain maintainer's W09 nil → path source-identity rule before W09 implementation. Do not advance beyond selected scope.
-- Blockers: W09 needs a source-identity decision; W22 awaits a concrete approved extension need.
+- Selected scope: W07/W08 committed as =844eb7ea=; W09 DONE and uncommitted after maintainer-approved conservative nil → path rule. W04 remains won't-do.
+- Last verified result: W09 focused 122/123 expected plus Embark 1/1; unit 823/830 and full 888/895 expected, zero unexpected and seven optional skips; byte-compilation completed with two pre-existing chat warnings. No live SSH/GUI verification.
+- Next action: await explicit selection or commit request; do not start W10 or other packages automatically.
+- Blockers: W22 awaits a concrete approved extension need; no W09 decision blocker remains.
 
 * Verification
 - 2026-10-26: Maintainer closed W04 as won't-do; historical injected-failure evidence retained, original implementation criteria explicitly superseded, W09/W11 implementation dependencies removed without claiming rollback. Bookkeeping/review only; W06 test evidence remains separate. No rollback code or tests added.
@@ -515,6 +559,9 @@ review's "keep" findings (including INFRA-02) are constraints, not rewrite tasks
 - 2026-10-25: moved the tracked execution backlog from =docs/pichat-maintainability-plan.org= to this single managed plan. Preserved all 22 headings, states, IDs and resolved all five relative file links; =plans.py check --all= OK for five records, =list --all= shows ready 0/22, helper tests 3 OK. No PiChat implementation or tests run for the migration. Historical pass-3 results remain in the linked review.
 
 * History
+- 2026-10-26T01:10:13Z: Completed W09 only: approved conservative nil → path rule, public draft-only target boundary, reference/result/compose migrations, deterministic and real-Pi tests, README and review resolution. Unit/full and compilation verified; no commit or adjacent work.
+- 2026-10-26T01:00:47Z: Maintainer approved W09 option A after risk/likelihood discussion: nil → path invalidates old draft targets; began selected W09 implementation. W07/W08 remain committed separately; no W09 commit authorized.
+- 2026-10-26T00:55:48Z: Committed W07/W08 and their plan/review/test changes as =844eb7ea=. W09 blocked decision gate restored as uncommitted bookkeeping after that commit; no W09 implementation.
 - 2026-10-26T00:47:12Z: Completed selected W08 with parse/protocol/dispatch attribution, safe event-handler records, three durable tests, focused/unit/full and compilation checks; no unrelated diagnostics-plan inspector work. W09 decision gate next.
 - 2026-10-26T00:44:33Z: Started selected W08 after W07 focused/unit and compilation checks; preserving separate diagnostics-plan inspector ownership and UI scope.
 - 2026-10-26T00:43:58Z: Completed W07 only: correctly escaped SSH connection classification, synthetic positive/negative fixtures, safe summary checks; focused/unit/compilation green. No live SSH test; W08 next as explicitly selected.

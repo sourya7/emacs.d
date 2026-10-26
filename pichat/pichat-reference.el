@@ -15,15 +15,16 @@
 (require 'pichat-path)
 
 (defvar pichat-chat-session)
-(defvar pichat-chat--input-start)
 (defvar pichat-reference--path-context nil
   "Dynamically bound destination-session path context.")
 (defvar pichat-reference--transport nil
   "Dynamically bound destination-session transport.")
 (declare-function dired-get-marked-files "dired")
 (declare-function compilation-goto-error "compile")
-(declare-function pichat-chat--insert-prompt "pichat-chat")
-(declare-function pichat-chat--source-token "pichat-chat")
+(declare-function pichat-chat-draft-capture "pichat-chat" (&optional buffer source-token))
+(declare-function pichat-chat-draft-current-p "pichat-chat" (target))
+(declare-function pichat-chat-draft-text "pichat-chat" (target))
+(declare-function pichat-chat-draft-replace "pichat-chat" (target text &optional point-offset))
 (declare-function bufferlo-local-buffer-p "bufferlo" (buffer &optional frame tabnum include-hidden))
 (declare-function pichat--project-root "pichat" (&optional directory))
 (declare-function pichat--scope-for-directory "pichat" (&optional directory force-global target-id))
@@ -294,28 +295,18 @@ selected implicitly.  Otherwise use the source project scope."
    ((buffer-file-name) (pichat-reference--defun-or-line))
    (t (pichat-reference--buffer-temp-reference))))
 
-(defun pichat-reference--insert-into-chat (buffer text)
-  "Insert TEXT into PiChat prompt BUFFER.
-Reference blocks are merged with any existing reference block in the live
-prompt, so repeated `pichat-add-reference' calls produce one grouped list."
-  (with-current-buffer buffer
-    (unless (derived-mode-p 'pichat-chat-mode)
-      (user-error "Not a PiChat buffer: %s" (buffer-name buffer)))
-    (when (fboundp 'pichat-chat--insert-prompt)
-      (pichat-chat--insert-prompt))
-    (goto-char (point-max))
-    (if (and (pichat-reference--reference-lines text)
-             (boundp 'pichat-chat--input-start)
-             (markerp pichat-chat--input-start)
-             (marker-position pichat-chat--input-start))
-        (let* ((input (buffer-substring-no-properties
-                       pichat-chat--input-start (point-max)))
-               (merged (pichat-reference--merge-reference-text input text)))
-          (delete-region pichat-chat--input-start (point-max))
-          (insert merged))
-      (unless (or (bobp) (bolp))
-        (insert "\n"))
-      (insert text))))
+(defun pichat-reference--insert-into-chat (buffer text &optional captured-target)
+  "Insert TEXT into BUFFER's draft, merging reference blocks when possible.
+CAPTURED-TARGET retains an earlier destination across collection."
+  (let* ((target (or captured-target (pichat-chat-draft-capture buffer)))
+         (input (pichat-chat-draft-text target))
+         (at-bol (with-current-buffer buffer
+                   (save-excursion (goto-char (point-max)) (or (bobp) (bolp))))))
+    (pichat-chat-draft-replace
+     target
+     (if (pichat-reference--reference-lines text)
+         (pichat-reference--merge-reference-text input text)
+       (concat input (if at-bol "" "\n") text)))))
 
 ;;;###autoload
 (defun pichat-add-reference (&optional prompt-for-chat-buffer)
@@ -329,7 +320,7 @@ Cancel if the destination chat or its source changes during collection."
   (interactive "P")
   (let* ((target (pichat-reference--target-buffer prompt-for-chat-buffer))
          (session (with-current-buffer target pichat-chat-session))
-         (source-token (with-current-buffer target (pichat-chat--source-token)))
+         (draft-target (pichat-chat-draft-capture target))
          (pichat-reference--path-context
           (and session (pichat-session-path-context session)))
          (pichat-reference--transport
@@ -337,13 +328,9 @@ Cancel if the destination chat or its source changes during collection."
          (text (pichat-reference--dwim-text)))
     ;; Collection may prompt or wait for file I/O.  Draft editing does not
     ;; require a running process, but must retain the chosen source and owner.
-    (unless (and (buffer-live-p target)
-                 (with-current-buffer target
-                   (and (derived-mode-p 'pichat-chat-mode)
-                        (eq session pichat-chat-session)
-                        (equal source-token (pichat-chat--source-token)))))
+    (unless (pichat-chat-draft-current-p draft-target)
       (user-error "Reference destination changed; invoke pichat-add-reference again"))
-    (pichat-reference--insert-into-chat target text)
+    (pichat-reference--insert-into-chat target text draft-target)
     (deactivate-mark)
     (pop-to-buffer target)
     (message "Inserted PiChat reference into %s" (buffer-name target))))

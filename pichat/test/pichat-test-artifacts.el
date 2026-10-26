@@ -1180,6 +1180,31 @@
       (when (buffer-live-p view) (kill-buffer view))
       (when output (delete-file output)))))
 
+(ert-deftest pichat-artifact-result-path-availability-preserves-copy-not-share ()
+  (pichat-test-with-unit-session (session proc)
+    (setf (pichat-session-id session) "same"
+          (pichat-session-session-file session) nil)
+    (pichat-test-with-chat-buffer (chat session)
+      (let ((view (generate-new-buffer " *pichat-path-result*")))
+        (unwind-protect
+            (progn
+              (pichat-chat--set-input-text "original")
+              (with-current-buffer view
+                (pichat-artifact-result-mode)
+                (pichat-artifact-result-setup
+                 chat (pichat-artifact-result-source-token chat)
+                 (lambda () "captured report")))
+              (setf (pichat-session-session-file session) "/sessions/same.jsonl")
+              (with-current-buffer chat
+                (pichat-chat--refresh-source-identity session))
+              (with-current-buffer view
+                (should-error (pichat-artifact-result-share) :type 'user-error)
+                (pichat-artifact-result-copy-report)
+                (should (equal "captured report" (current-kill 0))))
+              (with-current-buffer chat
+                (should (equal "original" (pichat-chat--input-text)))))
+          (when (buffer-live-p view) (kill-buffer view)))))))
+
 (ert-deftest pichat-artifacts-subprocess-spill-share-retains-readable-file ()
   (save-window-excursion
     (let ((chat (generate-new-buffer " *pichat-spill-share-chat*"))

@@ -20,29 +20,39 @@ Execution may outlive or occur outside ORIGIN; never recapture its new source.")
 
 (defvar-local pichat-artifact-result--origin nil)
 (defvar-local pichat-artifact-result--token nil)
+(defvar-local pichat-artifact-result--draft-target nil)
 (defvar-local pichat-artifact-result--report-function nil)
 (defvar-local pichat-artifact-result--ready-function nil)
 
 (defun pichat-artifact-result-source-token (origin)
-  "Capture ORIGIN's chat source identity, or nil if it is not a chat."
+  "Capture ORIGIN's draft target, or nil if it is not a chat."
   (when (buffer-live-p origin)
     (with-current-buffer origin
       (when (derived-mode-p 'pichat-chat-mode)
-        (pichat-chat--source-token)))))
+        (pichat-chat-draft-capture origin)))))
 
 (defun pichat-artifact-result-setup (origin token report-function &optional ready-function)
   "Set up this result view for ORIGIN, TOKEN and REPORT-FUNCTION.
 REPORT-FUNCTION runs in the result buffer and returns a bounded report.
 READY-FUNCTION, when non-nil, must return non-nil before sharing is allowed.
 Copy remains available while a run is active or its origin has changed."
-  (setq-local pichat-artifact-result--origin
-              (if pichat-artifact-result--handoff-context
-                  (car pichat-artifact-result--handoff-context) origin)
-              pichat-artifact-result--token
-              (if pichat-artifact-result--handoff-context
-                  (cadr pichat-artifact-result--handoff-context) token)
-              pichat-artifact-result--report-function report-function
-              pichat-artifact-result--ready-function ready-function))
+  (let* ((source (if pichat-artifact-result--handoff-context
+                     (car pichat-artifact-result--handoff-context) origin))
+         (captured (if pichat-artifact-result--handoff-context
+                       (cadr pichat-artifact-result--handoff-context) token)))
+    (setq-local pichat-artifact-result--origin source
+                pichat-artifact-result--token captured
+                pichat-artifact-result--draft-target
+                (cond
+                 ((pichat-chat-draft-target-p captured) captured)
+                 ((and captured (buffer-live-p source)
+                       (with-current-buffer source
+                         (derived-mode-p 'pichat-chat-mode)))
+                  ;; Accept historical callers supplying a raw source token,
+                  ;; but never replace that token with the current source.
+                  (pichat-chat-draft-capture source captured)))
+                pichat-artifact-result--report-function report-function
+                pichat-artifact-result--ready-function ready-function)))
 
 (defun pichat-artifact-result-bounded (text)
   "Return TEXT bounded for sharing, with an explicit truncation marker."
@@ -68,21 +78,13 @@ Copy remains available while a run is active or its origin has changed."
   (interactive)
   (let ((report (pichat-artifact-result--report))
         (origin pichat-artifact-result--origin)
-        (token pichat-artifact-result--token))
+        (target pichat-artifact-result--draft-target))
     (when (and pichat-artifact-result--ready-function
                (not (funcall pichat-artifact-result--ready-function)))
       (user-error "Code run is active; wait to share, or copy with w (g y in Evil)"))
-    (unless (and (buffer-live-p origin)
-                 (with-current-buffer origin
-                   (and (derived-mode-p 'pichat-chat-mode)
-                        (equal token (pichat-chat--source-token)))))
+    (unless (pichat-chat-draft-current-p target)
       (user-error "Originating PiChat source changed; copy with w (g y in Evil)"))
-    (with-current-buffer origin
-      (pichat-chat--insert-prompt)
-      (let ((old (buffer-substring-no-properties
-                  pichat-chat--input-start (point-max))))
-        (pichat-chat--set-input-text
-         (concat old (if (string-empty-p old) "" "\n\n") report))))
+    (pichat-chat-draft-append target report)
     (pichat-view-return origin 'kill)
     (message "Inserted code-run result in draft; review and send explicitly")))
 

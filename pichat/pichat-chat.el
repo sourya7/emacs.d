@@ -870,7 +870,7 @@ retarget compose editors opened for the original empty session."
                  (not (equal (pichat-session-id session)
                              (plist-get staging :session-id))))
       (user-error "Empty restart did not produce a verified new Pi session"))
-    (let ((old-token (pichat-chat--source-token)))
+    (let ((old-token (pichat-chat--compose-source-token)))
       ;; Projection rollback retains the old readable snapshot on failure.
       (pichat-chat--project-restart-cache cache)
       (cl-incf pichat-chat--source-generation)
@@ -883,7 +883,7 @@ retarget compose editors opened for the original empty session."
       (pichat-chat-completion-reset
        pichat-chat--source-generation (pichat-chat--completion-source-key))
       (pichat-chat-navigation-retarget-compose
-       (pichat-session-buffer session) old-token (pichat-chat--source-token))
+       (pichat-session-buffer session) old-token (pichat-chat--compose-source-token))
       (pichat-chat--set-status 'restart nil)
       (pichat-chat--set-status 'session nil)
       (pichat-chat--refresh-header session)
@@ -4449,22 +4449,83 @@ and finally the prompt while Pi is running."
         pichat-chat--source-session-id
         pichat-chat--source-session-file))
 
-(defun pichat-chat--compose-source-token ()
-  "Return the current source identity captured by compose editors."
-  (pichat-chat--source-token))
+(cl-defstruct (pichat-chat-draft-target
+               (:constructor pichat-chat--make-draft-target))
+  "Captured chat buffer, owning runtime and source for draft-only edits."
+  buffer session source-token)
 
-(defun pichat-chat--compose-source-valid-p (token)
-  "Return non-nil when compose source TOKEN is still current."
-  (equal token (pichat-chat--source-token)))
+(defun pichat-chat-draft-capture (&optional buffer source-token)
+  "Capture BUFFER's draft target.
+Optional SOURCE-TOKEN preserves an earlier capture.
+Do not use SOURCE-TOKEN to authorize a new destination: validation still
+compares it to the source currently bound to the exact owning runtime."
+  (let ((buffer (or buffer (current-buffer))))
+    (unless (and (buffer-live-p buffer)
+                 (with-current-buffer buffer (derived-mode-p 'pichat-chat-mode)))
+      (user-error "PiChat draft target is not a live chat buffer"))
+    (with-current-buffer buffer
+      (pichat-chat--make-draft-target
+       :buffer buffer :session pichat-chat-session
+       :source-token (or source-token (pichat-chat--source-token))))))
+
+(defun pichat-chat-draft-current-p (target)
+  "Return non-nil if captured draft TARGET still owns the same chat source.
+This is an edit-only guard; a stopped runtime is still a valid draft target."
+  (and (pichat-chat-draft-target-p target)
+       (let ((buffer (pichat-chat-draft-target-buffer target)))
+         (and (buffer-live-p buffer)
+              (with-current-buffer buffer
+                (and (derived-mode-p 'pichat-chat-mode)
+                     (eq pichat-chat-session
+                         (pichat-chat-draft-target-session target))
+                     (equal (pichat-chat--source-token)
+                            (pichat-chat-draft-target-source-token target))))))))
+
+(defun pichat-chat-draft--require-current (target)
+  "Signal if captured draft TARGET no longer names its original source."
+  (unless (pichat-chat-draft-current-p target)
+    (user-error "PiChat draft destination changed; capture it again")))
+
+(defun pichat-chat-draft-text (target)
+  "Return TARGET's current editable text, including concurrent edits."
+  (pichat-chat-draft--require-current target)
+  (with-current-buffer (pichat-chat-draft-target-buffer target)
+    (pichat-chat--insert-prompt)
+    (buffer-substring-no-properties pichat-chat--input-start (point-max))))
+
+(defun pichat-chat-draft-replace (target text &optional point-offset)
+  "Replace TARGET's unsent draft with TEXT and return its final point.
+Optional POINT-OFFSET locates point within TEXT.  No submission or attachment
+mutation occurs.  Like the existing compose setter, this is not a rollback
+transaction for an injected insertion failure (W04 is won't-do)."
+  (pichat-chat-draft--require-current target)
+  (with-current-buffer (pichat-chat-draft-target-buffer target)
+    (pichat-chat--set-input-text text)
+    (when point-offset
+      (goto-char (+ (marker-position pichat-chat--input-start)
+                    (min (length text) (max 0 point-offset)))))
+    (point)))
+
+(defun pichat-chat-draft-append (target text &optional separator)
+  "Append TEXT to TARGET's current unsent draft using SEPARATOR when nonempty."
+  (let ((old (pichat-chat-draft-text target)))
+    (pichat-chat-draft-replace
+     target (concat old (if (string-empty-p old) "" (or separator "\n\n")) text))))
+
+(defun pichat-chat--compose-source-token ()
+  "Return the current draft target captured by compose editors."
+  (pichat-chat-draft-capture))
+
+(defun pichat-chat--compose-source-valid-p (target)
+  "Return non-nil when compose draft TARGET is still current."
+  (pichat-chat-draft-current-p target))
 
 (defun pichat-chat--replace-from-compose (text point-offset)
   "Replace the current prompt with TEXT and return its POINT-OFFSET position."
   (unless (derived-mode-p 'pichat-chat-mode)
     (user-error "Compose target is not a PiChat buffer"))
-  (pichat-chat--set-input-text text)
-  (goto-char (+ (marker-position pichat-chat--input-start)
-                (min (length text) (max 0 point-offset))))
-  (point))
+  (pichat-chat-draft-replace
+   (pichat-chat-draft-capture) text point-offset))
 
 ;;;###autoload
 (defun pichat-chat-open-compose-buffer ()
@@ -4473,7 +4534,8 @@ and finally the prompt while Pi is running."
   (unless pichat-chat-session (user-error "No PiChat session"))
   (let ((original-point (point)))
     (pichat-chat--insert-prompt)
-    (let* ((input-start (marker-position pichat-chat--input-start))
+    (let* ((target (pichat-chat--compose-source-token))
+           (input-start (marker-position pichat-chat--input-start))
            (raw (buffer-substring-no-properties input-start (point-max)))
            (raw-point
             (if (<= input-start original-point (point-max))
@@ -4483,10 +4545,10 @@ and finally the prompt while Pi is running."
             (pichat-chat-navigation--trimmed-text-and-point raw raw-point)))
       (pichat-view-display
        (pichat-chat-navigation-open-compose
-        (current-buffer) #'pichat-chat--replace-from-compose
+        (current-buffer)
+        (lambda (text offset) (pichat-chat-draft-replace target text offset))
         (car text-and-point) (cdr text-and-point)
-        (pichat-chat--compose-source-token)
-        #'pichat-chat--compose-source-valid-p)
+        target #'pichat-chat--compose-source-valid-p)
        nil 'kill))))
 
 (defun pichat-chat--response-view-refresh (response)

@@ -1052,6 +1052,29 @@ For mapped/container runtimes, or to override either default, set
 to Pi; an unmapped override is rejected before writing. A custom directory
 may not be cleaned automatically by the OS.
 
+## Draft target boundary
+
+Emacs integrations may capture a chat's unsent draft destination with
+`pichat-chat-draft-capture`, then check `pichat-chat-draft-current-p` and use
+`pichat-chat-draft-text`, `pichat-chat-draft-append`, or
+`pichat-chat-draft-replace`. A target belongs to one chat buffer, its owning
+runtime, and its exact captured Pi session source (including the reported
+saved-session pathname). These are draft-editing operations, **not** prompt
+submission: a stopped runtime can still receive draft text, while sending
+requires the separate live RPC submission path. They do not alter pending
+images or recoverable submissions.
+
+If PiChat learns a saved-session pathname after an action captured a nil
+pathname—even for the same Pi session ID—the old action is conservatively
+invalidated. Start the action again; it never silently retargets a different
+source. This transition has been reproduced synthetically, not measured in an
+ordinary Pi workflow. A verified restart of the same saved source retains
+its draft target; an ordinary switch, including A → B → A, does not. A
+verified unwritten-empty restart intentionally retargets existing compose
+editors only after the new source has committed. Compose replacement still
+preserves compose text on failure but does not roll back target text after an
+injected insertion failure (W04 was closed without implementing rollback).
+
 ## Saved session storage
 
 The basic saved-file picker reads local sessions from the configured directory

@@ -10,14 +10,16 @@
   (list (pichat-chat--input-text) pichat-chat--editor-generation
         pichat-chat--pending-attachments pichat-chat--recoverable-submissions))
 
-(defun pichat-test-reference--collect-scenario (mutate &optional valid)
-  "MUTATE the destination during file collection; insert only when VALID."
+(defun pichat-test-reference--collect-scenario (mutate &optional valid pathless)
+  "MUTATE the destination during file collection; insert only when VALID.
+When PATHLESS, start with a known Pi session ID but no saved-file path."
   (pichat-test-with-temp-dir dir
     (let ((file (expand-file-name "selected.el" dir)))
       (with-temp-file file (insert "source\n"))
       (pichat-test-with-unit-session (session proc)
         (setf (pichat-session-id session) "original"
-              (pichat-session-session-file session) "/sessions/original.jsonl"
+              (pichat-session-session-file session)
+              (unless pathless "/sessions/original.jsonl")
               (pichat-session-path-context session)
               (pichat-transport-path-context
                pichat-transport-local (list (cons dir "/workspace"))))
@@ -81,6 +83,16 @@
        (let ((generation pichat-chat--source-generation))
          (pichat-chat--refresh-source-identity session)
          (should (= generation pichat-chat--source-generation)))))))
+
+(ert-deftest pichat-reference-rejects-path-materialization-during-collection ()
+  (pichat-test-reference--collect-scenario
+   (lambda (session chat)
+     (setf (pichat-session-session-file session) "/sessions/materialized.jsonl")
+     (with-current-buffer chat
+       (let ((generation pichat-chat--source-generation))
+         (pichat-chat--refresh-source-identity session)
+         (should (= generation pichat-chat--source-generation)))))
+   nil t))
 
 (ert-deftest pichat-reference-rejects-changed-runtime-ownership ()
   (pichat-test-reference--collect-scenario

@@ -53,6 +53,24 @@ emacs -Q --batch -L pichat -L pichat/test \
   -f ert-run-tests-batch-and-exit
 ```
 
+## Dependency-enabled local runs
+
+To exercise optional Consult, Embark, Evil and Orderless tests rather than
+accepting their default skips, use the repository's existing Elpaca builds (or
+sources) of `compat`, `consult`, `embark`, `evil`, `goto-chg`, and `orderless`:
+
+```sh
+pichat/test/run-tests.sh --with-optional
+pichat/test/run-tests.sh --full --with-optional
+```
+
+This mode fails immediately if one of those dependency directories is missing
+or one of the optional packages cannot load. Inspect the ERT skip list: with
+these dependencies present, only the separately opted-in Docker tests should
+skip. The default runs deliberately remain dependency-minimal. Neither mode
+installs packages; `--full` still uses an isolated offline fake provider and
+requires a working supported `pi` executable.
+
 ## Opt-in SSH integration
 
 Run the isolated real-SSH transport test with a writable TRAMP parent and the
@@ -108,8 +126,9 @@ pichat/test/run-coverage.sh --format lcov
 # writes coverage/lcov.info
 ```
 
-Pass `--full` to either form to include real-Pi integration tests. For a
-repeatable agent-readable analysis, run:
+Pass `--full` to either form to include real-Pi integration tests. Add
+`--with-optional` to load and require the same dependency-enabled integration
+set as the ordinary suite. For a repeatable agent-readable analysis, run:
 
 ```sh
 pichat/test/run-coverage-analysis.sh
@@ -124,9 +143,19 @@ line ranges, and all completely uncovered definitions.
 A CI or one-off environment that does not use this configuration's Elpaca tree
 can set `PICHAT_COVERAGE_LOAD_PATH` to a colon-separated list containing
 Undercover and its `dash` and `shut-up` dependencies. Coverage runs reject
-`pichat/*.elc` because Undercover instruments source loads only. Macro-heavy
-results can be imperfect because Undercover uses Edebug; use coverage to find
-missing scenarios, not as a substitute for behavioral assertions.
+`pichat/*.elc` because Undercover instruments source loads only. The report is **partial** on Emacs 31.1 / Undercover 0.8.0: Edebug counters
+from `pichat-chat.el`'s live projection callback execute under a different
+instrumented function's counter scope. The coverage runner excludes
+`pichat-chat.el` instead of treating those synthetic `args-out-of-range`
+failures as production defects. Undercover's symbol-wide metadata also loses
+the original stop points when `pichat-reconfigure-leave-stopped` is redefined
+as a Transient suffix in another file; that original definition is omitted
+from the report with a warning. Percentages describe only the instrumented
+subset, **not whole-package coverage**. The coverage runner fails on any
+unexpected test result or reporting error; it cannot silently accept a
+failed report from Undercover's nonfatal exit hook. Undercover measures Edebug
+forms, not conventional branch coverage; use the report to triage missing
+scenarios, not to justify deletions or replace behavioral assertions.
 
 Integration tests must isolate Pi state with temporary `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`, project cwd, and session directory. They must not read normal user credentials, packages, settings, trust decisions, or sessions. CI should pin one supported Pi version and include `pi --version` in failure diagnostics.
 

@@ -5,20 +5,16 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "$script_dir/../.." && pwd)"
 
 usage() {
-  echo "usage: $0 [--full]" >&2
+  echo "usage: $0 [--full] [--with-optional]" >&2
 }
 
 coverage_args=(--format lcov)
-if [[ $# -gt 1 ]]; then
-  usage
-  exit 2
-elif [[ $# -eq 1 ]]; then
-  if [[ "$1" != "--full" ]]; then
-    usage
-    exit 2
-  fi
-  coverage_args+=(--full)
-fi
+for option in "$@"; do
+  case "$option" in
+    --full|--with-optional) coverage_args+=("$option") ;;
+    *) usage; exit 2 ;;
+  esac
+done
 
 coverage_dir="$repo_root/coverage"
 mkdir -p "$coverage_dir"

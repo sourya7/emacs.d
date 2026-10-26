@@ -10,6 +10,7 @@
 (require 'cl-lib)
 (setq load-prefer-newer t)
 (require 'pichat-test-support)
+(require 'pichat-test-coverage-tooling)
 
 (require 'pichat-test-backend-contract)
 (require 'pichat-test-rpc)

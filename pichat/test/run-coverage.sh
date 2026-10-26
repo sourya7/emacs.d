@@ -6,16 +6,21 @@ repo_root="$(cd -- "$script_dir/../.." && pwd)"
 cd "$repo_root"
 
 include_integration=nil
+with_optional=false
 format="${PICHAT_COVERAGE_FORMAT:-text}"
 
 usage() {
-  echo "usage: $0 [--full] [--format text|lcov]" >&2
+  echo "usage: $0 [--full] [--with-optional] [--format text|lcov]" >&2
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --full)
       include_integration=t
+      shift
+      ;;
+    --with-optional)
+      with_optional=true
       shift
       ;;
     --format)
@@ -41,6 +46,12 @@ if find pichat -maxdepth 1 -name '*.elc' -print -quit | grep -q .; then
 fi
 
 load_paths=()
+optional_require=()
+if [[ "$with_optional" == true ]]; then
+  source "$script_dir/optional-load-paths.sh"
+  load_paths+=("${pichat_optional_load_paths[@]}")
+  optional_require=(--eval "(dolist (feature '(consult embark evil orderless)) (require feature))")
+fi
 add_load_path() {
   if [[ -d "$1" ]]; then
     load_paths+=("-L" "$1")
@@ -76,8 +87,10 @@ export PICHAT_COVERAGE_FORMAT="$format"
 exec emacs -Q --batch \
   "${load_paths[@]}" \
   -L pichat -L pichat/test \
+  "${optional_require[@]}" \
   --eval "(setq pichat-test-include-integration ${include_integration}
                  byte-compile-warnings nil)" \
   -l pichat/test/coverage-setup.el \
+  --eval '(pichat-coverage-enable)' \
   -l pichat/test/pichat-test.el \
-  -f ert-run-tests-batch-and-exit
+  --eval '(pichat-coverage-run-tests-and-report)'

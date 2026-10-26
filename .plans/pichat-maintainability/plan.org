@@ -5,7 +5,7 @@
 #+PLAN_ID: pichat-maintainability
 #+PLAN_STATUS: active
 #+PLAN_CREATED: 2026-10-24T16:19:02Z
-#+PLAN_UPDATED: 2026-10-26T01:10:13Z
+#+PLAN_UPDATED: 2026-10-26T01:56:04Z
 
 * Goal
 Address the reviewed PiChat maintainability and correctness findings through bounded, independently selected work packages without weakening runtime, source, transcript or draft safety.
@@ -351,7 +351,7 @@ late =pichat-chat--preserve-view= macro); no generated =*.elc= under =pichat/=.
 Focused test files: core 585, reference 168, artifacts 1440, navigation 599
 lines. Logs: =.tmp/pichat-w09-{focused,compose,embark,unit,full,bytecompile}.log=.
 
-* TODO [#B] W10 — Repair coverage tooling and make test execution reproducible
+* DONE [#B] W10 — Repair coverage tooling and make test execution reproducible
 :PROPERTIES:
 :CUSTOM_ID: W10
 :FINDINGS: TEST-06; section 16
@@ -360,11 +360,57 @@ lines. Logs: =.tmp/pichat-w09-{focused,compose,embark,unit,full,bytecompile}.log
 Independent verification work; coverage repair does not block focused correctness
 fixes whose regression tests can run without instrumentation.
 
-- [ ] Reproduce and diagnose the Edebug index/report-generation failure separately from production behavior.
-- [ ] Fix or explicitly document the unsupported instrumentation case; do not report a coverage percentage from a broken run.
-- [ ] Provide reproducible dependency-enabled unit/full commands and distinguish optional skips from passing coverage.
-- [ ] Record tested Emacs/Pi/dependency versions; do not advance the Pi compatibility ledger without its required review.
-- [ ] Run the uninstrumented suite after any harness change.
+- [X] Reproduce and diagnose the Edebug index/report-generation failure separately from production behavior.
+- [X] Fix or explicitly document the unsupported instrumentation case; do not report a coverage percentage from a broken run.
+- [X] Provide reproducible dependency-enabled unit/full commands and distinguish optional skips from passing coverage.
+- [X] Record tested Emacs/Pi/dependency versions; do not advance the Pi compatibility ledger without its required review.
+- [X] Run the uninstrumented suite after any harness change.
+
+Resolution: original unmodified source-only coverage run reproduced Edebug
+counter-vector out-of-range errors in chat live projection and an independent
+out-of-buffer line-number error in Undercover's report; its test failures are
+not production regressions and its report is invalid. An instrumented callback
+body is executed under a separately instrumented callee's dynamically scoped
+=edebug-freq-count=; exclude =pichat-chat.el= from coverage (not from tests).
+Separately =pichat-reconfigure-leave-stopped= is defined in two source files;
+the second definition's Edebug marker overwrites the symbol property used by
+Undercover when reporting the first. Skip the first definition's misattributed
+stop points with a warning. This intentionally produces *partial* coverage,
+not whole-package coverage: latest LCOV contains 50/52 source files; chat is
+excluded and permissions was not loaded. An explicit report step now propagates
+failures instead of using Undercover's nonfatal exit hook. At the maintainer's
+request, the runner and bootstrap now share =coverage-setup.el=: it is safe to
+load for ordinary runner tests, while =pichat-coverage-enable= must be called
+before the suite to activate instrumentation. Four new unit tests
+check failed tests, report failures, missing LCOV output and success. A shared
+optional-dependency load-path list supplies =--with-optional= to unit/full and
+coverage scripts, requires the optional packages, and installs nothing.
+
+Verification (2026-10-26, Emacs 31.1, Pi 1.4.0): =run-tests.sh= 827/834
+expected, 7 optional skips; =run-tests.sh --with-optional= 832/834 expected,
+2 Docker opt-in skips; =run-tests.sh --full --with-optional= 897/899 expected,
+2 Docker skips. =run-coverage-analysis.sh --with-optional= 832/834 expected;
+=run-coverage-analysis.sh --full --with-optional= 897/899 expected. All five
+previously dependency-gated tests ran; zero unexpected results. Both reports
+were generated; full analysis's 83.8% covers only the instrumented subset and
+must not be used as a package-wide metric. Prior to the final fourth test,
+standalone text and LCOV coverage runners also completed successfully; the
+final full analysis reran the LCOV path with all four tests. Focused coverage
+runner tests 3/3 before the last addition, and all four passed in final suites.
+After that consolidation, default unit 827/834 expected, dependency-enabled
+full 897/899 expected, and dependency-enabled unit/full coverage analyses
+832/834 and 897/899 expected, all zero unexpected, with the same optional
+skips. Shell syntax checks and three modified/new Elisp coverage/test modules
+compiled cleanly to =.tmp/pichat-w10-bytecode/=; no generated =*.elc= under
+=pichat/=.
+Focused suite =pichat-test-coverage-tooling.el= 48 lines; suite registry 71.
+Commands/logs: =.tmp/pichat-w10-{before,focused,unit,optional-unit,full,analysis,analysis-full,bytecompile}.log=;
+coverage output in gitignored =coverage/=. No live SSH, Docker, GUI, or real
+model API was run; no Pi compatibility watermark was advanced.
+Dependency sources installed at: Undercover 0.8.0 (=e7e280b=), dash 2.20.0
+(=d746dd9=), shut-up 0.3.2 (=ed62a7f=), compat 31.1.0.0 (=90880f8=),
+Consult 3.9 (=9979fbb=), Embark 1.2 (=87e5382=), Evil 1.15.0
+(=6a3e1dd=), goto-chg 1.7.5 (=72f5565=), Orderless 1.7 (=5806e3f=).
 
 * TODO [#B] W11 — Extend targeted lifecycle and interactive verification
 :PROPERTIES:
@@ -546,9 +592,9 @@ review's "keep" findings (including INFRA-02) are constraints, not rewrite tasks
 
 * Checkpoint
 - Plan status: active
-- Selected scope: W07/W08 committed as =844eb7ea=; W09 DONE and uncommitted after maintainer-approved conservative nil → path rule. W04 remains won't-do.
-- Last verified result: W09 focused 122/123 expected plus Embark 1/1; unit 823/830 and full 888/895 expected, zero unexpected and seven optional skips; byte-compilation completed with two pre-existing chat warnings. No live SSH/GUI verification.
-- Next action: await explicit selection or commit request; do not start W10 or other packages automatically.
+- Selected scope: W10 DONE; maintainer requested consolidation and commit of its phase. W09 committed as =65c35d88=. W04 remains won't-do.
+- Last verified result: W10 default unit 827/834 expected, optional unit 832/834 and optional full 897/899 expected; full partial coverage analysis 897/899 expected, zero unexpected, two Docker opt-in skips in optional runs. Elisp compilation/shell syntax clean.
+- Next action: await explicit selection after the requested W10 commit; do not start W11 or other packages automatically.
 - Blockers: W22 awaits a concrete approved extension need; no W09 decision blocker remains.
 
 * Verification
@@ -559,6 +605,9 @@ review's "keep" findings (including INFRA-02) are constraints, not rewrite tasks
 - 2026-10-25: moved the tracked execution backlog from =docs/pichat-maintainability-plan.org= to this single managed plan. Preserved all 22 headings, states, IDs and resolved all five relative file links; =plans.py check --all= OK for five records, =list --all= shows ready 0/22, helper tests 3 OK. No PiChat implementation or tests run for the migration. Historical pass-3 results remain in the linked review.
 
 * History
+- 2026-10-26T01:56:04Z: At the maintainer's request merged coverage bootstrap and report runner into one opt-in setup file, removed the extra runner file, and verified focused 4/4, unit 827/834, dependency-enabled full 897/899 and partial coverage unit/full 832/834 and 897/899, all zero unexpected. Commit requested; no adjacent work.
+- 2026-10-26T01:44:18Z: Completed W10 only: reproduced and isolated independent Edebug counter and report-marker faults, documented partial instrumentation, made reporting failures fatal, added four runner tests and optional dependency-enabled commands, verified unit/full and partial coverage analyses. No adjacent work or commit.
+- 2026-10-26T01:20:20Z: Started explicitly selected W10 from clean working copy. Read coverage scripts, testing guidance, glossary, review evidence and plan; installed local Emacs 31.1/Pi 1.4.0 and optional dependency directories found. No package or Pi compatibility upgrade authorized.
 - 2026-10-26T01:10:13Z: Completed W09 only: approved conservative nil → path rule, public draft-only target boundary, reference/result/compose migrations, deterministic and real-Pi tests, README and review resolution. Unit/full and compilation verified; no commit or adjacent work.
 - 2026-10-26T01:00:47Z: Maintainer approved W09 option A after risk/likelihood discussion: nil → path invalidates old draft targets; began selected W09 implementation. W07/W08 remain committed separately; no W09 commit authorized.
 - 2026-10-26T00:55:48Z: Committed W07/W08 and their plan/review/test changes as =844eb7ea=. W09 blocked decision gate restored as uncommitted bookkeeping after that commit; no W09 implementation.

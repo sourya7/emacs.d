@@ -223,7 +223,7 @@ RELATIVE-PATH is used in generated source references."
           (insert "\n### Skipped tests\n\n")
           (dolist (test skipped-tests)
             (insert (format "- `%s`\n" test))))
-        (insert "\n## Overall coverage\n\n")
+        (insert "\n## Instrumented subset coverage (not whole-package coverage)\n\n")
         (insert (format "- Relevant forms: **%d**\n- Covered forms: **%d**\n- Missed forms: **%d**\n- Weighted coverage: **%.1f%%**\n"
                         total-relevant total-covered total-missed
                         (pichat-coverage--percent total-covered total-relevant)))
@@ -270,6 +270,8 @@ RELATIVE-PATH is used in generated source references."
                                 (or (plist-get record :ranges) "")))))
           (insert "No completely uncovered top-level definitions were found.\n"))
         (insert "\n## Interpretation notes\n\n")
+        (insert "- This is partial instrumentation, not whole-package coverage: `pichat-chat.el` is excluded because Undercover/Edebug counters cross an instrumented callback boundary.\n")
+        (insert "- Definitions whose Edebug stop points were replaced by a same-named definition in another source file are omitted from that file's report.\n")
         (insert "- Undercover uses Edebug and measures instrumented forms, not conventional branch coverage.\n")
         (insert "- A low percentage in a tiny adapter can represent less risk than a modest deficit in a large orchestration module.\n")
         (insert "- Skipped optional-dependency tests can make related modules appear less covered.\n")

@@ -82,10 +82,10 @@
          (model (pichat-sessions--tree-model-from-data
                  (list :tree (list node) :leafId "labeled"))))
     (should (equal "checkpoint"
-                   (pichat-sessions--model-node-label model "labeled")))
+                   (plist-get (pichat-sessions--model-node model "labeled") :label)))
     (should (equal 12345
-                   (pichat-sessions--model-node-label-timestamp
-                    model "labeled")))))
+                   (plist-get (pichat-sessions--model-node model "labeled")
+                              :label-timestamp)))))
 
 (ert-deftest pichat-sessions-tree-model-recognizes-pi-v3-shapes-and-tools ()
   (let* ((assistant
@@ -124,19 +124,25 @@
     (dolist (id '("user" "assistant" "result" "bash" "custom-role"
                   "custom-message" "compaction" "branch" "model" "thinking" "custom"
                   "label-entry" "session-info"))
-      (should (stringp (pichat-sessions--model-node-kind model id)))
-      (should (stringp (pichat-sessions--model-node-summary model id))))
+      (with-temp-buffer
+        (let* ((folded (make-hash-table :test #'equal))
+               (visible (pichat-sessions--project-visible model 'all nil folded)))
+          (pichat-sessions--render-entry-line visible id "" folded))
+        (should (equal id (get-text-property (point-min) 'pichat-session-entry-id)))
+        (should-not (string-empty-p (string-trim (buffer-string))))))
     (should (equal '((:id "call-1" :name "read"
                       :arguments (:path "README.md")))
-                   (pichat-sessions--model-node-tool-calls model "assistant")))
+                   (plist-get (pichat-sessions--model-node model "assistant") :tool-calls)))
     (should (equal '(:id "call-1" :name "read"
                      :arguments (:path "README.md"))
-                   (pichat-sessions--model-node-tool-call model "result")))
-    (should (string-match-p "read"
-                            (pichat-sessions--model-node-summary
-                             model "result")))
+                   (plist-get (pichat-sessions--model-node model "result") :tool-call)))
+    (with-temp-buffer
+      (let* ((folded (make-hash-table :test #'equal))
+             (visible (pichat-sessions--project-visible model 'all nil folded)))
+        (pichat-sessions--render-entry-line visible "result" "" folded))
+      (should (string-match-p "read" (buffer-string))))
     (should (equal "reviewer"
-                   (pichat-sessions--model-node-kind model "custom-role")))))
+                   (plist-get (pichat-sessions--model-node model "custom-role") :role)))))
 
 (ert-deftest pichat-sessions-tree-model-indexes-deep-history-iteratively ()
   (let ((node (pichat-test-sessions-tree--message

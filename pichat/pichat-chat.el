@@ -700,12 +700,6 @@ Use its scope label as a unique provisional identity until Pi reports an id."
   "Return durable explicit view key for NODE-KEY and TOOL-ID."
   (pichat-chat-tool-ui-canonical-view-key node-key tool-id))
 
-(defun pichat-chat--tool-explicit-view (node-key tool-id live-p)
-  "Return explicit view for TOOL-ID, or nil when it uses policy defaults."
-  (pichat-chat-tool-ui-explicit-view
-   pichat-chat--tool-view-states pichat-chat--source-generation
-   node-key tool-id live-p))
-
 (defun pichat-chat--cancel-sync-request ()
   "Cancel the RPC request owned by the current synchronization."
   (when (and pichat-chat--sync-request-id pichat-chat-session)
@@ -1398,12 +1392,6 @@ straightforward to exercise without synthesizing mouse input."
                        (format "W:%d" widgets))))
          "  "))
     (pichat-chat--mode-line-state-control 'not-connected)))
-
-(defun pichat-chat--label (text face)
-  "Return TEXT with stable FACE for transcript labels."
-  ;; Use `font-lock-face' rather than `face' so font-lock in text-derived
-  ;; buffers does not wipe our label styling during refontification.
-  (propertize text 'font-lock-face face))
 
 (defun pichat-chat--prompt-live-p ()
   "Return non-nil when the buffer already has a current prompt."
@@ -3506,23 +3494,6 @@ ordinary browser opens retain their existing state-ready contract."
   "Return raw event from PLIST."
   (plist-get plist :raw))
 
-(defun pichat-chat--truncate-tool-output (text)
-  "Return TEXT truncated for inline tool display when needed."
-  (pichat-chat-tool-ui-truncate-output
-   text pichat-chat-max-tool-output-chars
-   pichat-chat-tool-truncation-notice-format))
-
-(defun pichat-chat--truncate-tool-args (args)
-  "Return compact display string for tool ARGS, or nil when absent."
-  (pichat-chat-tool-ui-truncate-args args pichat-chat-max-tool-args-chars))
-
-(defun pichat-chat--tool-text (raw status text &optional state)
-  "Return rendered tool block for RAW event with STATUS, TEXT, and STATE."
-  (pichat-chat-tool-ui-text
-   raw status text (or state 'output)
-   pichat-chat-max-tool-args-chars pichat-chat-max-tool-output-chars
-   pichat-chat-tool-truncation-notice-format))
-
 (defun pichat-chat--tool-completed-display-state ()
   "Return the default display state for a completed tool block."
   (pichat-chat-tool-ui-completed-display-state
@@ -3548,25 +3519,6 @@ ordinary browser opens retain their existing state-ready contract."
         :edit-function #'pichat-chat--tool-ui-edit
         :enrichments pichat-chat--tool-enrichments
         :generation pichat-chat--source-generation))
-
-(defun pichat-chat--replace-tool-block-region (block text)
-  "Replace BLOCK's buffer range with TEXT without corrupting adjacent markers."
-  (pichat-chat-tool-ui-replace-region
-   block text (plist-get (pichat-chat--tool-ui-context) :tracked-markers)
-   #'pichat-chat--tool-ui-edit))
-
-(defun pichat-chat--render-tool-block (block)
-  "Re-render BLOCK according to its current display state."
-  (pichat-chat-tool-ui-render-block block (pichat-chat--tool-ui-context)))
-
-(defun pichat-chat--cycle-tool-state (state)
-  "Return the display state after STATE."
-  (pichat-chat-tool-ui-cycle-state state))
-
-(defun pichat-chat--collapse-tool-block (block)
-  "Set BLOCK to an explicit summary display."
-  (pichat-chat-tool-ui-collapse-block
-   block pichat-chat--tool-view-states (pichat-chat--tool-ui-context)))
 
 ;;;###autoload
 (defun pichat-chat-copy-skill-at-point ()

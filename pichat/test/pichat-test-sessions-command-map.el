@@ -30,26 +30,10 @@
                 (cdr binding)))
     (should (commandp (cdr binding)))))
 
-(ert-deftest pichat-sessions-phase-twelve-command-documentation-is-current ()
-  (should (string-match-p
-           "Session History"
-           (documentation 'pichat-chat-mode)))
-  (should (string-match-p
-           "same-file tree navigation"
-           (documentation 'pichat-chat-mode)))
-  (should (string-match-p
-           "active leaf"
-           (documentation 'pichat-sessions-list)))
-  (should (string-match-p
-           "separate from current-file Session History"
-           (documentation 'pichat-sessions-browse-files)))
-  (should (string-match-p
-           "projected visible-model index"
-           (documentation 'pichat-sessions-parent-at-point)))
-  (should (string-match-p
-           "projected visible-model index"
-           (documentation 'pichat-sessions-first-child-at-point)))
-  (should (get 'pichat-sessions-switch-at-point 'byte-obsolete-info)))
+(ert-deftest pichat-sessions-obsolete-switch-rejects-history-entry-switching ()
+  (should (get 'pichat-sessions-switch-at-point 'byte-obsolete-info))
+  (should-error (call-interactively 'pichat-sessions-switch-at-point)
+                :type 'user-error))
 
 (ert-deftest pichat-sessions-ret-jumps-to-active-chat-node-without-forking ()
   (let* ((session (pichat-session-make :id "session" :session-file "/one"))

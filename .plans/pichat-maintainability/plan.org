@@ -5,7 +5,7 @@
 #+PLAN_ID: pichat-maintainability
 #+PLAN_STATUS: active
 #+PLAN_CREATED: 2026-10-24T16:19:02Z
-#+PLAN_UPDATED: 2026-10-26T22:23:51Z
+#+PLAN_UPDATED: 2026-10-26T22:36:31Z
 
 * Goal
 Address the reviewed PiChat maintainability and correctness findings through bounded, independently selected work packages without weakening runtime, source, transcript or draft safety.
@@ -493,18 +493,85 @@ restart, broad mutation score, exhaustive transition matrix, or focus fix is
 claimed. The initial missing-authorization blocker is superseded, not silently
 waived. The overall roadmap remains active; no adjacent package or commit.
 
-* TODO [#B] W12 — Prune verified private leftovers and improve affected tests
+* DONE [#B] W12 — Prune verified private leftovers and improve affected tests
 :PROPERTIES:
 :CUSTOM_ID: W12
 :FINDINGS: DEAD-01; DEAD-02; DEAD-06; DUP-03; TEST-01; TEST-02; TEST-04; TEST-05
 :END:
 
-- [ ] Revalidate each deletion candidate against current production, tests, generated/conventional uses, and documentation.
-- [ ] Delete only justified private leftovers; move public/extension compatibility decisions to W13.
-- [ ] Retarget valuable behavioral tests to active paths before removing obsolete wrapper tests.
-- [ ] Replace brittle documentation-wording assertions where a meaningful behavior/contract check exists.
-- [ ] Preserve mode maps, backend-state extension behavior, and security/lifecycle assertions; classify formatting tests individually.
-- [ ] Record retained candidates and reasons, not just removed line counts.
+- [X] Revalidate each deletion candidate against current production, tests, generated/conventional uses, and documentation.
+- [X] Delete only justified private leftovers; move public/extension compatibility decisions to W13.
+- [X] Retarget valuable behavioral tests to active paths before removing obsolete wrapper tests.
+- [X] Replace brittle documentation-wording assertions where a meaningful behavior/contract check exists.
+- [X] Preserve mode maps, backend-state extension behavior, and security/lifecycle assertions; classify formatting tests individually.
+- [X] Record retained candidates and reasons, not just removed line counts.
+
+Resolution: tracked package/config/test references and dynamic symbol creation
+were checked against HEAD and the working tree. The only constructed PiChat
+names found in production/config are artifact target categories, defined tool
+functions and selected preset names, not these helpers. No known personal
+configuration consumer of removed names was found; arbitrary external private
+usage cannot be proven absent. Removed 17 private functions and 2 private
+state/declaration entries, 92 production lines across four existing modules:
+- Chat: =--tool-explicit-view=, =--label=, =--truncate-tool-output=,
+  =--truncate-tool-args=, =--tool-text=, =--replace-tool-block-region=,
+  =--render-tool-block=, =--cycle-tool-state=, =--collapse-tool-block=.
+- History: =pichat-sessions--short-id= and six =--model-node-= wrappers
+  (=label=, =label-timestamp=, =tool-calls=, =tool-call=, =kind=, =summary=).
+- Launcher: =pichat--session-for-scope=.
+- State: =pichat-archive--session-metadata-keys= and declared/assigned but
+  unread =pichat-sessions--visible-roots=.
+
+Retained for W13: public =pichat-chat-tool-ui-merge-block-tables= and
+=...-collapse-block= (including the newly unused collapse callee),
+=pichat-render-thinking-texts=, =pichat-render-entry-text=,
+=pichat-tool-enrichment-infer-old-text-location=, public struct =rpc=/
+=tool-registry= slots, public interactive commands/aliases and their tests.
+No public retirement policy was assumed. Active chat-owned context/edit/view
+adapters, conventionally named mode maps and =backend-state= are untouched.
+No coverage percentage was used to justify deletion.
+
+Test changes preserve behavior rather than removed seams: the cycle test uses
+the active policy helper; modification-hook checks invoke the real tool-toggle
+command in both directions; reuse tests invoke =pichat=/=pichat-global= and
+observe display/state synchronization; history tests use normalized label/tool
+fields and actual projected/rendered rows, retaining context-edit privacy.
+Docstring phrase assertions became an obsolete-property plus rejected-command
+invocation check. Existing navigation/keymap tests and concise restart/switch
+wording assertions are retained because they protect safety-relevant action
+semantics. Existing public renderer/enrichment tests and circular Emacs-side
+argument privacy are retained; one new canonical/live reducer/render test
+covers object/vector unknown payloads without raw-data leakage.
+
+Verification (Emacs 31.1 / local Pi 1.4.0): focused 16/16; =run-tests.sh=
+831/839 expected, 8 optional skips; =--with-optional= 837/839 and
+=--full --with-optional= 902/904 expected, only 2 Docker opt-in skips,
+zero unexpected. Existing backend-state, security, navigation, rollback,
+attachment, stale-source, restart and independent-open tests remain green.
+Authorized SSH suite on lima-devbox (=PICHAT_TEST_SSH_DIRECTORY=/ssh:lima-devbox:/tmp/=,
+=PICHAT_TEST_SSH_PI=/etc/profiles/per-user/dev/bin/pi=; remote Pi 1.2.0)
+passed 8/8, no skips/unexpected. Follow-up found no directories/processes
+matching test batch PID 532573. Remote agent/session state was isolated;
+no real model API was used.
+Four affected modules loaded in separate fresh Emacs processes. All 10 changed
+Elisp files compiled into =.tmp/pichat-w12-bytecode/=; production warnings
+(obsolete focus hook, docstring width, pre-existing Consult/Transient call
+signatures/interactive-use notices) reproduced from original HEAD files in
+=.tmp/pichat-w12-baseline/=. No new production warnings; no =*.elc= under
+=pichat/=. Final compile loads =hl-line= for the history test dependencies.
+Focused file sizes: core 609, modification hooks 134, sessions/reference 661,
+tree 332, visibility 292, command map 147 lines.
+
+Logs: =.tmp/pichat-w12-{focused,unit,optional-unit,full,ssh,ssh-cleanup,loads,bytecompile,baseline-bytecompile,reference-audit,dynamic-production}.log=.
+Initial authoring attempted an impossible circular JSON payload at the canonical
+cache-copy boundary and timed out; replaced with supported object/vector inputs
+while retaining the applicable circular Emacs-argument test. Initial row tests
+passed an unprojected model; corrected to use the production visible projection.
+These are test-fixture errors, not claimed production regressions. Final suites
+have zero unexpected results. Review DEAD-01/02/06, DUP-03 and TEST-01/02/04/05
+resolutions are recorded together under DEAD-01 and TEST-01/02 plus DEAD-06.
+No public API retirement, collect-result focus fix, adjacent work, upgrade or
+commit. Overall roadmap remains active; W13 requires explicit selection.
 
 * TODO [#B] W13 — Decide compatibility facades and unused public APIs
 :PROPERTIES:
@@ -656,9 +723,9 @@ review's "keep" findings (including INFRA-02) are constraints, not rewrite tasks
 
 * Checkpoint
 - Plan status: active
-- Selected scope: W11 DONE, uncommitted; local regressions, live terminal collect/export and authorized lima-devbox SSH tests complete. W10 committed as =f1e73922=. W04 remains won't-do.
-- Last verified result: W11 focused 4/4, default unit 830/838 expected, optional unit 836/838 and optional full 901/903 expected; zero unexpected, two Docker opt-in skips in optional runs. Live terminal safety test 1/1; SSH 8/8 on remote Pi 1.2.0, cleanup checked. Result-focus gap separately observed; three suites compile cleanly.
-- Next action: await explicit selection or commit request. Collect-result focus needs separate approval; do not start W12 or another package automatically.
+- Selected scope: W12 DONE, uncommitted; W11 committed as =e51c6408=. W04 remains won't-do.
+- Last verified result: W12 focused 16/16, default unit 831/839 expected, optional unit 837/839 and optional full 902/904 expected; zero unexpected, two Docker skips in optional runs. SSH 8/8 on remote Pi 1.2.0 with cleanup check; 4 fresh module loads and 10-file compilation succeeded with baseline production warnings only.
+- Next action: await explicit package selection or commit request. Public API/struct retirement remains W13; collect-result focus requires separate approval. Do not advance automatically.
 - Blockers: W22 awaits a concrete approved extension need; no W11 blocker remains.
 
 * Verification
@@ -669,6 +736,8 @@ review's "keep" findings (including INFRA-02) are constraints, not rewrite tasks
 - 2026-10-25: moved the tracked execution backlog from =docs/pichat-maintainability-plan.org= to this single managed plan. Preserved all 22 headings, states, IDs and resolved all five relative file links; =plans.py check --all= OK for five records, =list --all= shows ready 0/22, helper tests 3 OK. No PiChat implementation or tests run for the migration. Historical pass-3 results remain in the linked review.
 
 * History
+- 2026-10-26T22:36:31Z: Completed selected W12: removed 17 verified private functions plus 2 unread declarations/state entries, retargeted meaningful tests and strengthened active privacy coverage, retained public candidates for W13. Focused/unit/optional/full/SSH, fresh loads and compilation passed with baseline warnings only. No adjacent work or commit.
+- 2026-10-26T22:25:32Z: Started explicitly selected W12 from clean working copy after W11 commit e51c6408. Rechecked exact tracked references for private helper/state candidates; public names and struct compatibility remain W13. No adjacent work or commit authorized.
 - 2026-10-26T22:23:51Z: Completed W11 after explicitly authorized lima-devbox SSH suite passed 8/8 on remote Pi 1.2.0 with no skips or unexpected results; remote directory/process cleanup check clean. Earlier local/live-terminal evidence retained. No production fix, upgrade, adjacent work or commit.
 - 2026-10-26T22:22:55Z: Maintainer authorized lima-devbox for W11 SSH verification. Resumed W11; remote preflight found writable /tmp and Pi 1.2.0 at /etc/profiles/per-user/dev/bin/pi. No remote upgrade or commit authorized.
 - 2026-10-26T22:18:55Z: W11 local verification complete: four regressions, focused/unit/optional/full green, live isolated terminal collect/export test passed and a focus-only gap observed. Marked W11 BLOCKED for authorized SSH destination or narrower-scope acceptance; no remote connection, production fix, adjacent work or commit.

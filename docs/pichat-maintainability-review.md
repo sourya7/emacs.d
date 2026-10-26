@@ -194,6 +194,10 @@ Deleting the collapse wrapper would leave `pichat-chat-tool-ui-collapse-block` w
 
 **Validation before deletion:** search the full tracked repository and any supported external configuration, check dynamic symbol construction, then run the unit suite. These are private/internal helpers; no deprecation ceremony is normally needed unless external use is known.
 
+**W12 resolution (2026-10-26): private-only pruning implemented.** Rechecked the tracked package/tests and personal `core/`, `user/`, `shared/` configuration plus symbol construction; no generated/conventional callers of the removed names were found. Removed nine chat helpers (`--tool-explicit-view`, `--label`, `--truncate-tool-output`, `--truncate-tool-args`, `--tool-text`, `--replace-tool-block-region`, `--render-tool-block`, `--cycle-tool-state`, `--collapse-tool-block`), Session History's `--short-id` and six `--model-node-{label,label-timestamp,tool-calls,tool-call,kind,summary}` wrappers, and `pichat--session-for-scope`. Also removed the unused archive metadata-key constant and unread `pichat-sessions--visible-roots` slot/assignment. This is 17 private functions and two declarations/state entries, not removal based on coverage percentages. Active chat context/edit/view adapters remain.
+
+**Retained for W13:** despite the original dependent-removal recommendation, `pichat-chat-tool-ui-merge-block-tables` and `pichat-chat-tool-ui-collapse-block` have public names and are not silently retired. The same applies to `pichat-render-thinking-texts`, `pichat-render-entry-text`, `pichat-tool-enrichment-infer-old-text-location`, and their still-useful tests; public struct `rpc`/`tool-registry` slots also remain. External usage is unknown, not disproved. Mode maps, backend-state extension behavior, compatibility commands/aliases and permission/lifecycle boundaries are unchanged.
+
 ### DEAD-02 — Production functions kept alive only by tests
 
 **Priority: medium/high. Confidence: strong candidate, not blanket deletion.**
@@ -272,6 +276,8 @@ Static scan found **830 literal `ert-deftest` forms** across test Lisp, with **n
 
 **Recommendation:** remove the phrase-matching assertions or move terminology lint to a separate documentation check. Keep a focused obsolete-alias/API check only if that compatibility guarantee remains supported. Behavioral tests immediately below already test active-chat jumping, hidden-entry handling, stale-history rejection, and return-to-chat behavior.
 
+**W12 resolution:** replaced docstring phrase assertions with an obsolete-property check and actual invocation of the compatibility switch command, which must reject interpreting a history entry as a saved session file. Existing navigation, keymap and restart-confirmation tests remain; those protect user actions/safety distinctions rather than editorial wording.
+
 ### TEST-02 — Test-only wrappers disguise unused production paths
 
 **Priority: high.**
@@ -284,6 +290,8 @@ Examples:
 - `pichat-test-tool-enrichment.el:105–117`: tests a location-inference feature without an active consumer.
 
 **Recommendation:** distinguish dead test *target* from useless test *intent*. Move assertions to the production path, keep the invariant, then remove obsolete seams. A test passing through an unused wrapper contributes little confidence about the active UI.
+
+**W12 resolution:** cycle assertions now exercise the active tool-UI policy helper; foreign-change-hook assertions exercise the public tool-toggle command in both directions. Scope reuse assertions invoke `pichat`/`pichat-global` and verify display/state synchronization of the selected runtime. History tests assert normalized label/tool metadata and render actual projected rows, including context-edit replacement privacy. No valuable test was deleted merely because its wrapper was removed. An added test passes object/vector unknown payloads through canonical normalization and live reduction/rendering without leaking raw data; the existing circular Emacs tool-argument privacy test and public legacy-renderer tests remain. Final focused 16/16, unit 831/839 expected (eight optional skips), dependency-enabled unit 837/839 and full 902/904 expected (two Docker skips), SSH 8/8 on authorized lima-devbox, zero unexpected. Four fresh module loads and compilation of all ten changed Lisp files succeeded; production warnings match the pre-change baseline. No new GUI, exhaustive lifecycle, or compatibility-ledger claim.
 
 ### TEST-03 — VUI forwarding test can retire with the facade
 
@@ -791,6 +799,8 @@ Tracked-repository reference checks reconfirmed DEAD-01. Additional candidates:
 - `rpc` and `tool-registry` slots in `pichat-session`: no accessor or constructor-key use found in tracked package/config sources. Inspect downstream API expectations before altering the public struct.
 
 Do not remove `backend-state`: it is used by the fake backend contract tests and represents the documented backend-state extension point, even though Pi does not use it today. Do not remove conventionally named mode maps. This illustrates why symbol frequency is triage rather than a deletion rule.
+
+**W12 disposition:** removed the declaration-only archive constant and unread private visible-roots state; retained the public struct slots for W13's explicit compatibility decision. Backend state and all mode maps remain unchanged. See DEAD-01/TEST-02 for the bounded audit and verification.
 
 ## 15. Revised simplification roadmap
 

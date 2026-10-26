@@ -97,9 +97,11 @@
     (should (member "edit" (pichat-test-sessions-visibility--ids model 'all)))
     (should (equal '("edit") (pichat-test-sessions-visibility--ids
                               model 'all "context_edit")))
-    (should-not (string-match-p
-                 "Never display replacement"
-                 (pichat-sessions--model-node-summary model "edit")))))
+    (with-temp-buffer
+      (let* ((folded (make-hash-table :test #'equal))
+             (visible (pichat-sessions--project-visible model 'all nil folded)))
+        (pichat-sessions--render-entry-line visible "edit" "" folded))
+      (should-not (string-match-p "Never display replacement" (buffer-string))))))
 
 (ert-deftest pichat-sessions-context-edit-preview-keeps-replacement-private ()
   (let ((entry (list :id "edit" :type "context_edit"

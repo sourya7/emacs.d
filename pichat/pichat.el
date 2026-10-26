@@ -330,11 +330,6 @@ session over the global `pichat-current-session'."
       (setq pichat-current-session session)
       session)))
 
-(defun pichat--session-for-scope (&optional directory force-global)
-  "Return a live preferred runtime for DIRECTORY's scope, creating one if needed."
-  (pichat--preferred-session-for-exact-scope
-   (pichat--scope-for-directory directory force-global)))
-
 (defun pichat--exact-scope-p (scope)
   "Return non-nil when SCOPE is an exact immutable scope tuple."
   (and (listp scope)

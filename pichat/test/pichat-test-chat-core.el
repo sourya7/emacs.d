@@ -465,9 +465,9 @@
         (should-not (string-match-p "model:\\|thinking:" status))))))
 
 (ert-deftest pichat-chat-tool-state-cycle-skips-inline-output ()
-  (should (eq 'args (pichat-chat--cycle-tool-state 'summary)))
-  (should (eq 'summary (pichat-chat--cycle-tool-state 'args)))
-  (should (eq 'summary (pichat-chat--cycle-tool-state 'output))))
+  (should (eq 'args (pichat-chat-tool-ui-cycle-state 'summary)))
+  (should (eq 'summary (pichat-chat-tool-ui-cycle-state 'args)))
+  (should (eq 'summary (pichat-chat-tool-ui-cycle-state 'output))))
 
 (ert-deftest pichat-render-thinking-texts-extracts-thinking-without-normal-content ()
   (let ((content '((:type "thinking" :thinking "private reasoning")
@@ -487,6 +487,30 @@
     (setcdr circular circular)
     (should (equal "[unavailable arguments]"
                    (pichat-render-tool-args circular)))))
+
+(ert-deftest pichat-render-active-canonical-and-live-paths-keep-unknown-data-private ()
+  ;; Canonical input comes from JSON, which cannot contain circular objects;
+  ;; circular Emacs-side tool arguments remain covered by the helper test above.
+  (let ((payloads '((:secret "must-not-render") ["must-not-render"])))
+    (dolist (payload payloads)
+      (let* ((message (list :role "assistant"
+                            :content (list '(:type "text" :text "safe answer")
+                                           (list :type "futureContent" :data payload))))
+             (cache (pichat-pi-entry-cache-full
+                     "privacy" "/tmp/privacy.jsonl"
+                     (list (list :id "unknown" :type "futureEntry" :data payload)
+                           (list :id "answer" :parentId "unknown"
+                                 :type "message" :message message))
+                     "answer"))
+             (live (pichat-live-draft-empty 0)))
+        (pichat-pi-live-draft-apply live (list :type "message_end" :message message))
+        (dolist (transcript (list (pichat-pi-build-canonical-transcript cache)
+                                  (pichat-live-draft-as-transcript live)))
+          (let ((text (pichat-render-fragment-text
+                       (pichat-render-canonical transcript))))
+            (should (string-search "safe answer" text))
+            (should (string-search "unsupported content" text))
+            (should-not (string-search "must-not-render" text))))))))
 
 (ert-deftest pichat-chat-thinking-toggle-reprojects-without-source-fetch ()
   (pichat-test-with-unit-session (session proc)

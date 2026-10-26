@@ -92,7 +92,6 @@ rows."
 
 (defvar-local pichat-sessions--visible-children nil)
 
-(defvar-local pichat-sessions--visible-roots nil)
 
 (defvar-local pichat-sessions--visible-foldable nil)
 
@@ -388,12 +387,6 @@ identities."
          (format "[%s] %s" label summary)
        summary))))
 
-(defun pichat-sessions--short-id (id)
-  "Return compact display form of ID."
-  (if (and (stringp id) (> (length id) 10))
-      (substring id 0 10)
-    (format "%s" id)))
-
 (defun pichat-sessions--bounded-diagnostic (format-string &rest args)
   "Return a structured tree-model diagnostic from FORMAT-STRING and ARGS."
   (pichat-diagnostic-create
@@ -572,32 +565,6 @@ Only IDs present in NODES are included."
 (defun pichat-sessions--model-node (model id)
   "Return normalized node ID from MODEL."
   (gethash id (plist-get model :nodes)))
-
-(defun pichat-sessions--model-node-label (model id)
-  "Return resolved label for node ID in MODEL."
-  (plist-get (pichat-sessions--model-node model id) :label))
-
-(defun pichat-sessions--model-node-label-timestamp (model id)
-  "Return resolved label timestamp for node ID in MODEL."
-  (plist-get (pichat-sessions--model-node model id) :label-timestamp))
-
-(defun pichat-sessions--model-node-tool-calls (model id)
-  "Return assistant tool calls collected for node ID in MODEL."
-  (plist-get (pichat-sessions--model-node model id) :tool-calls))
-
-(defun pichat-sessions--model-node-tool-call (model id)
-  "Return correlated assistant tool call for result node ID in MODEL."
-  (plist-get (pichat-sessions--model-node model id) :tool-call))
-
-(defun pichat-sessions--model-node-kind (model id)
-  "Return display kind for node ID in MODEL."
-  (let ((node (pichat-sessions--model-node model id)))
-    (pichat-sessions--entry-kind (plist-get node :entry))))
-
-(defun pichat-sessions--model-node-summary (model id)
-  "Return display summary for node ID in MODEL."
-  (let ((node (pichat-sessions--model-node model id)))
-    (pichat-sessions--entry-info (plist-get node :entry) node)))
 
 (defun pichat-sessions--model-diagnostics (model)
   "Return bounded normalization diagnostics from MODEL."
@@ -948,7 +915,6 @@ Restore SELECTED-ID or a deterministic visible fallback and install FOLDED."
           pichat-sessions--visible-rows (plist-get projection :ordered-ids)
           pichat-sessions--visible-parents (plist-get projection :parents)
           pichat-sessions--visible-children (plist-get projection :children)
-          pichat-sessions--visible-roots (plist-get projection :roots)
           pichat-sessions--visible-foldable (plist-get projection :foldable)
           pichat-sessions--folded folded
           pichat-sessions--source-token

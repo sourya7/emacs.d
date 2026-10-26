@@ -55,11 +55,6 @@ authoritative when one exists.  Nil disables standalone discovery."
 (defconst pichat-archive--schema-version 3)
 (defconst pichat-archive--stable-api-version 1)
 (defconst pichat-archive--search-policy-version 1)
-(defconst pichat-archive--session-metadata-keys
-  '(:sessionId :sessionFile :cwd :sessionName :firstUserPrompt
-    :branchFirstUserPrompt :title :displayTitle :createdAt :latestActivityAt
-    :sourceExists :syncStatus :parentSessionPath :parentSessionId
-    :parentResolution :childCount))
 
 (defvar pichat-archive--capability-cache
   (make-hash-table :test #'eq :weakness 'key)

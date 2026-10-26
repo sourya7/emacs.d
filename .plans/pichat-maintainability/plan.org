@@ -5,7 +5,7 @@
 #+PLAN_ID: pichat-maintainability
 #+PLAN_STATUS: active
 #+PLAN_CREATED: 2026-10-24T16:19:02Z
-#+PLAN_UPDATED: 2026-10-26T00:38:14Z
+#+PLAN_UPDATED: 2026-10-26T00:55:25Z
 
 * Goal
 Address the reviewed PiChat maintainability and correctness findings through bounded, independently selected work packages without weakening runtime, source, transcript or draft safety.
@@ -252,7 +252,7 @@ Verification (2026-10-26, Emacs 31.1, installed Pi 1.4.0):
 - =pichat/test/run-tests.sh=: 814/821 expected, 0 unexpected, 7 optional skips. =pichat/test/run-tests.sh --full=: 879/886 expected, 0 unexpected, same 7 optional skips (optional Embark/Consult/Evil/Orderless dependencies and Docker opt-in). Full suite was rerun after a test edit introduced an unmatched parenthesis; corrected before final successful run.
 - =pichat-tools.el= byte-compiled to =.tmp/pichat-w06-bytecode/= without warnings; no generated =*.elc= under =pichat/=. TypeScript bridge was exercised by real Pi integration; no separate TypeScript build configuration in =pichat/bridge/=. =git diff --check= clean. Test sizes: =pichat-test-approval-tools.el= 321 lines, =pichat-test-integration.el= 2395 lines. Logs in =.tmp/pichat-w06-{focused,unit,full,bytecompile}.log=. No live SSH, GUI or real model API tested.
 
-* TODO [#A] W07 — Correct SSH startup diagnostic classification
+* DONE [#A] W07 — Correct SSH startup diagnostic classification
 :PROPERTIES:
 :CUSTOM_ID: W07
 :FINDINGS: REL-01
@@ -260,11 +260,13 @@ Verification (2026-10-26, Emacs 31.1, installed Pi 1.4.0):
 
 Independent small fix; may be selected before W05/W06.
 
-- [ ] Correct regexp construction without broadening unrelated error classification accidentally.
-- [ ] Test TRAMP connection refusal, hostname resolution failure, and unrelated negative cases.
-- [ ] Preserve safe diagnostic summaries; distinguish classification tests from live SSH verification.
+- [X] Correct regexp construction without broadening unrelated error classification accidentally.
+- [X] Test TRAMP connection refusal, hostname resolution failure, and unrelated negative cases.
+- [X] Preserve safe diagnostic summaries; distinguish classification tests from live SSH verification.
 
-* TODO [#A] W08 — Separate RPC parsing and consumer error attribution
+Resolution: use a literal =tramp:= prefix or word-delimited =regexp-opt= connection phrases, only for process-start file errors. The safe SSH summary does not include the raw hostname or secret; raw inspection remains explicit. Focused =^pichat-diagnostics-= 19/19, unit 815/822 expected with 7 optional skips, 0 unexpected; changed module byte-compiled without warnings to =.tmp/pichat-w07-bytecode/=. Diagnostic suite 351 lines. Synthetic error classification only; no live SSH destination was configured or contacted. Logs in =.tmp/pichat-w07-{focused,unit,bytecompile}.log=.
+
+* DONE [#A] W08 — Separate RPC parsing and consumer error attribution
 :PROPERTIES:
 :CUSTOM_ID: W08
 :FINDINGS: REL-02
@@ -272,11 +274,15 @@ Independent small fix; may be selected before W05/W06.
 
 Related but distinct: [[file:../pichat-diagnostics-improvements/plan.org][the diagnostics improvements plan]] owns runtime-scoped inspector and setup work. W08 owns RPC parsing/consumer error attribution; coordinate interfaces without copying task lists.
 
-- [ ] Distinguish malformed JSON/protocol input from dispatch and callback failures.
-- [ ] Test a valid JSON response whose callback throws, malformed input, and continued processing after failures.
-- [ ] Preserve event-handler isolation; decide how its message-only errors enter bounded diagnostics.
-- [ ] Avoid prompts/secrets in ordinary diagnostic summaries; retain explicit raw inspection.
-- [ ] Keep this a focused diagnostic change, not a new logging framework.
+- [X] Distinguish malformed JSON/protocol input from dispatch and callback failures.
+- [X] Test a valid JSON response whose callback throws, malformed input, and continued processing after failures.
+- [X] Preserve event-handler isolation; decide how its message-only errors enter bounded diagnostics.
+- [X] Avoid prompts/secrets in ordinary diagnostic summaries; retain explicit raw inspection.
+- [X] Keep this a focused diagnostic change, not a new logging framework.
+
+Resolution: JSON decode, minimal object/type validation, and dispatch have distinct =rpc-parse=, =rpc-protocol= (typed =pichat-rpc-invalid-record=), and =rpc-dispatch= records. The event bus retains a failing handler's condition as an =event-handler= record on its owning runtime, without re-emitting events, breaking isolation, or logging raw exceptions via =message=. Safe summaries carry no raw record or condition; explicit raw inspection retains them. Missing event type remains a compatible unknown event. This does not start the separate diagnostics inspector plan.
+
+Verification (2026-10-26, Emacs 31.1 / installed Pi 1.4.0): =^pichat-rpc-= 58/58; unit 818/825 expected and full real-Pi fake-provider 883/890 expected, zero unexpected, seven optional skips. Three new tests cover callback attribution and continued processing, invalid records versus malformed JSON, and handler isolation/bounded record. =pichat-test-rpc.el= 907 lines. Changed =pichat-rpc.el=, =pichat-events.el= and =pichat-chat-diagnostics.el= compiled without warnings to =.tmp/pichat-w08-bytecode/=. Logs in =.tmp/pichat-w08-{focused,unit,full,bytecompile}.log=. No real model API, UI or live SSH tested.
 
 * TODO [#A] W09 — Decide and expose the minimal draft/target boundary
 :PROPERTIES:
@@ -496,10 +502,10 @@ review's "keep" findings (including INFRA-02) are constraints, not rewrite tasks
 
 * Checkpoint
 - Plan status: active
-- Selected scope: W06 implemented and verified; maintainer explicitly closed W04 as won't-do, with W09/W11 dependencies reconciled. No adjacent implementation.
-- Last verified result: W06 focused tools 5/5; unit 814/821 and full 879/886 expected, 0 unexpected, 7 optional skips, on Emacs 31.1 / Pi 1.4.0. W04 change is bookkeeping only; no code/tests for rollback.
-- Next action: await explicit selection of another package after the requested commit. Do not advance automatically.
-- Blockers: W22 awaits a concrete approved extension need. W04 rollback remains unimplemented by decision, not a dependency satisfied by code.
+- Selected scope: user selected W07/W08/W09; W07 and W08 DONE, W09 awaiting its recorded source-identity decision. W04 remains won't-do.
+- Last verified result: W07 focused 19/19, unit 815/822 expected; W08 focused 58/58, unit 818/825 and full 883/890 expected; zero unexpected, seven optional skips; changed modules compiled cleanly.
+- Next action: obtain maintainer's W09 nil → path source-identity rule before W09 implementation. Do not advance beyond selected scope.
+- Blockers: W09 needs a source-identity decision; W22 awaits a concrete approved extension need.
 
 * Verification
 - 2026-10-26: Maintainer closed W04 as won't-do; historical injected-failure evidence retained, original implementation criteria explicitly superseded, W09/W11 implementation dependencies removed without claiming rollback. Bookkeeping/review only; W06 test evidence remains separate. No rollback code or tests added.
@@ -509,6 +515,10 @@ review's "keep" findings (including INFRA-02) are constraints, not rewrite tasks
 - 2026-10-25: moved the tracked execution backlog from =docs/pichat-maintainability-plan.org= to this single managed plan. Preserved all 22 headings, states, IDs and resolved all five relative file links; =plans.py check --all= OK for five records, =list --all= shows ready 0/22, helper tests 3 OK. No PiChat implementation or tests run for the migration. Historical pass-3 results remain in the linked review.
 
 * History
+- 2026-10-26T00:47:12Z: Completed selected W08 with parse/protocol/dispatch attribution, safe event-handler records, three durable tests, focused/unit/full and compilation checks; no unrelated diagnostics-plan inspector work. W09 decision gate next.
+- 2026-10-26T00:44:33Z: Started selected W08 after W07 focused/unit and compilation checks; preserving separate diagnostics-plan inspector ownership and UI scope.
+- 2026-10-26T00:43:58Z: Completed W07 only: correctly escaped SSH connection classification, synthetic positive/negative fixtures, safe summary checks; focused/unit/compilation green. No live SSH test; W08 next as explicitly selected.
+- 2026-10-26T00:42:46Z: User selected W07/W08/W09. Verified clean working copy and managed-plan structure; began W07 only, with W09 source-identity decision gate retained. No commit requested.
 - 2026-10-26T00:38:14Z: Maintainer requested commit of W06 and W04 DONE (won't-do). Replaced prior deferral with explicit rejection of W04 implementation and reconciled W09/W11 prerequisites; no rollback implementation. Commit requested; validation recorded before commit.
 - 2026-10-26T00:37:02Z: Completed W06 only: reject unsupported Emacs-defined async tools, retain synchronous callback compatibility, deliver tool instructions to Pi's prompt guidelines; add unit/real-Pi fake-provider tests, README/review resolution. Focused/unit/full, compilation, plan and whitespace checks passed; no commit or adjacent work.
 - 2026-10-26T00:31:35Z: User selected W06; working copy clean and plan check OK. Started only approved synchronous execution/early async rejection and native Pi prompt-guidelines mapping. No commit authorized.

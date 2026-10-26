@@ -744,6 +744,8 @@ The simplification principle is **use native extension interfaces at the edge; k
 
 The probe supplied a `file-error` condition with `TRAMP: connection refused` and `Could not resolve hostname example.invalid`; both classified as nil rather than `connection-failed`. This affects diagnostic specificity, not evidence of SSH transport failure. Use `regexp-opt`/`rx` or correctly escaped literals and add focused tests. Existing passing suites did not catch this case.
 
+**W07 resolution (2026-10-26):** fixed the malformed alternation with a TRAMP prefix and word-delimited connection phrases. Focused fixtures cover refused connections, hostname resolution, timeouts, unrelated lookalikes and non-start origins; the normal summary omits raw remote details. Focused 19/19 and unit 815/822 expected (seven optional skips), byte-compilation passed. These are synthetic startup conditions, not a live SSH verification.
+
 ### REL-02 — Separate parse failures from dispatch/consumer failures
 
 `pichat-rpc--handle-line` (`pichat-rpc.el:461`) wraps both JSON decoding and object dispatch in one `condition-case`, reporting every caught error as `rpc-parse` / “Failed to parse Pi RPC output.” A valid record that fails in dispatch can be mislabeled.
@@ -753,6 +755,8 @@ The probe supplied a `file-error` condition with `TRAMP: connection refused` and
 **Pass 3 reproduction:** dispatched a valid JSON response whose registered success callback deliberately raised `consumer failed`; the recorded origin was `rpc-parse`. This confirms misattribution at the callback boundary. Event-handler errors caught inside `pichat-emit` follow its separate message-only path; they do not all escape to this parse handler.
 
 **Recommendation:** keep decode/protocol-validation/dispatch/UI-projection stages distinct in diagnostics. Record bounded structural context such as event kind and stage, avoid raw prompts/secrets in ordinary summaries, and retain explicitly requested raw inspection. Use typed internal errors (`define-error`) for decisions owned by PiChat; retain conservative text classification only for unstructured external errors. Do not build a logging framework.
+
+**W08 resolution (2026-10-26):** JSON decode, minimal record-shape validation (typed invalid-record error), and dispatch now have distinct `rpc-parse`, `rpc-protocol`, and `rpc-dispatch` origins. Successful-response callback failures no longer masquerade as bad JSON; error reporting has safe bounded summaries and retains raw condition/record for explicit inspection. The event bus still isolates failing handlers and continues to later listeners, but now retains their error as a bounded `event-handler` record on the owning runtime without re-emitting another event or printing the exception in `message`. This does not build the runtime-owned inspector planned separately in `pichat-diagnostics-improvements`. Focused RPC 58/58; unit 818/825 and full real-Pi 883/890 expected, seven optional skips, 0 unexpected; changed modules byte-compiled. No live SSH check or real-model API was run.
 
 ### REL-03 — Audit memory/work bounds, not only displayed output bounds
 

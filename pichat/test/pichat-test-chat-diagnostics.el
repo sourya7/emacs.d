@@ -33,6 +33,32 @@
     '(file-missing "Setting current directory" "No such file or directory")
     "/opt/pi")))
 
+(ert-deftest pichat-diagnostics-ssh-start-classifies-connection-errors-only ()
+  (dolist (text '("TRAMP: connection refused token=private"
+                  "Could not resolve hostname example.invalid"
+                  "connection timed out" "connection failed"))
+    (ert-info (text)
+      (should (eq 'connection-failed
+                  (pichat-chat-diagnostics-classify
+                   'process-start text '(file-error "Could not start" text)
+                   "/remote/pi")))
+      (let ((summary (pichat-chat-diagnostics-summary
+                      :origin 'process-start :category 'connection-failed
+                      :message text :setup-kind 'ssh)))
+        (should (string-match-p "SSH target" summary))
+        (should-not (string-match-p "private\\|example.invalid" summary)))))
+  (dolist (text '("trampoline is unavailable" "unrelated file error"
+                  "Could not resolve hostnames in output"))
+    (ert-info (text)
+      (should-not (pichat-chat-diagnostics-classify
+                   'process-start text '(file-error "Could not start")
+                   "/remote/pi"))))
+  (should-not (pichat-chat-diagnostics-classify
+               'rpc-response "connection refused" nil "/remote/pi"))
+  (should-not (pichat-chat-diagnostics-classify
+               'process-start "connection refused" '(error "not a file error")
+               "/remote/pi")))
+
 (ert-deftest pichat-diagnostics-normal-summary-is-redacted-and-bounded ()
   (let ((pichat-diagnostics-summary-width 120))
     (let ((summary

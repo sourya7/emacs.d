@@ -446,6 +446,62 @@
       (should-not (plist-member (car errors) :line))
       (should started))))
 
+(ert-deftest pichat-rpc-valid-response-consumer-failure-is-not-a-parse-error ()
+  (pichat-test-with-unit-session (session proc)
+    (let (errors started)
+      (pichat-on 'error (lambda (_s _event plist) (push plist errors)) session)
+      (pichat-on 'agent-start (lambda (&rest _) (setq started t)) session)
+      (let ((id (pichat-rpc-send
+                 session "get_available_models" nil
+                 (lambda (&rest _) (error "secret=callback-content")))))
+        (pichat-rpc--process-filter
+         proc (format "{\"type\":\"response\",\"id\":%S,\"command\":\"get_available_models\",\"success\":true,\"data\":{}}\n{\"type\":\"agent_start\"}\n"
+                      id))
+        (should-not (gethash id (pichat-session-pending-responses session))))
+      (should started)
+      (should (= 1 (length errors)))
+      (let ((diagnostic (plist-get (car errors) :diagnostic)))
+        (should (eq 'rpc-dispatch (plist-get diagnostic :origin)))
+        (should (equal "response" (plist-get (plist-get diagnostic :response) :type)))
+        (should (string-match-p "secret=callback-content"
+                                (format "%S" (plist-get diagnostic :condition)))))
+      (should-not (string-match-p "secret=callback-content"
+                                  (plist-get (car errors) :message))))))
+
+(ert-deftest pichat-rpc-invalid-record-is-distinct-from-malformed-json ()
+  (pichat-test-with-unit-session (session proc)
+    (let (errors started)
+      (pichat-on 'error (lambda (_s _event plist) (push plist errors)) session)
+      (pichat-on 'agent-start (lambda (&rest _) (setq started t)) session)
+      (pichat-rpc--process-filter
+       proc "42\n{\"type\":73}\n{bad json}\n{\"type\":\"agent_start\"}\n")
+      (should started)
+      (should (= 3 (length errors)))
+      (should (equal '(rpc-protocol rpc-protocol rpc-parse)
+                     (mapcar (lambda (entry)
+                               (plist-get (plist-get entry :diagnostic) :origin))
+                             (nreverse errors))))
+      (dolist (entry errors)
+        (should-not (plist-member entry :line))
+        (should-not (string-match-p "42\\|73\\|bad json"
+                                    (plist-get entry :message)))))))
+
+(ert-deftest pichat-rpc-event-handler-failure-is-isolated-and-retained ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((seen 0))
+      (pichat-on 'agent-start
+                 (lambda (&rest _) (error "secret=handler-content")) session)
+      (pichat-on 'agent-start
+                 (lambda (&rest _) (cl-incf seen)) session)
+      (pichat-rpc--process-filter proc "{\"type\":\"agent_start\"}\n")
+      (should (= seen 1))
+      (let ((diagnostic (pichat-chat-diagnostics-latest session)))
+        (should (eq 'event-handler (plist-get diagnostic :origin)))
+        (should (string-match-p "secret=handler-content"
+                                (format "%S" (plist-get diagnostic :condition))))
+        (should-not (string-match-p "secret=handler-content"
+                                    (plist-get diagnostic :summary)))))))
+
 (ert-deftest pichat-rpc-response-success-dispatches-callback-and-removes-pending ()
   (pichat-test-with-unit-session (session proc)
     (let (callback-response callback-session)

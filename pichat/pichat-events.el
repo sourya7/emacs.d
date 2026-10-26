@@ -15,6 +15,10 @@
 (defvar pichat--global-handlers (make-hash-table :test #'eq)
   "Global PiChat event handlers keyed by event symbol.")
 
+(defvar pichat-events-handler-error-function nil
+  "Optional internal reporter called with SESSION, EVENT and handler error.
+A reporter must not emit another event; errors in the reporter are ignored.")
+
 (defun pichat--event-table (session)
   "Return SESSION's event handler table, creating it when needed."
   (if session
@@ -56,7 +60,10 @@ When SESSION is non-nil, unregister from SESSION's local handlers."
     (condition-case err
         (funcall handler session event plist)
       (error
-       (message "PiChat event handler error for %S: %S" event err)))))
+       (when pichat-events-handler-error-function
+         (ignore-errors
+           (funcall pichat-events-handler-error-function session event err)))
+       (message "PiChat event handler failed; inspect PiChat diagnostics")))))
 
 (provide 'pichat-events)
 ;;; pichat-events.el ends here

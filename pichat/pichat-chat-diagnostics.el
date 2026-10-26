@@ -96,7 +96,11 @@ codes, or missing files in unrelated output."
        (cond
         ((and (memq condition-symbol '(file-error file-missing))
               (string-match-p
-               "tramp\|connection refused\|connection failed\|could not resolve hostname\|connection timed out"
+               (concat "\\(?:tramp:\\|\\b"
+                       (regexp-opt '("connection refused" "connection failed"
+                                     "could not resolve hostname"
+                                     "connection timed out"))
+                       "\\b\\)")
                lower))
          'connection-failed)
         ((and (eq condition-symbol 'file-missing)
@@ -217,6 +221,9 @@ codes, or missing files in unrelated output."
                           message)))))
             ('rpc-timeout "A Pi RPC command timed out.")
             ('rpc-parse "PiChat received malformed RPC output. See `pichat-show-transport-diagnostics'.")
+            ('rpc-protocol "PiChat received an invalid RPC record. See `pichat-show-transport-diagnostics'.")
+            ('rpc-dispatch "PiChat could not process an RPC record. See `pichat-show-transport-diagnostics'.")
+            ('event-handler "A PiChat event consumer failed. See `pichat-show-transport-diagnostics'.")
             (_ (if (string-empty-p (or message ""))
                    "Unknown PiChat error"
                  message)))))

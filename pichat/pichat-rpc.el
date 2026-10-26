@@ -19,6 +19,17 @@
 (require 'pichat-pi-environment)
 (require 'pichat-chat-diagnostics)
 
+(define-error 'pichat-rpc-invalid-record "Invalid Pi RPC record")
+
+(defun pichat-rpc--report-event-handler-error (session _event condition)
+  "Retain CONDITION from a failing event handler for SESSION without re-emitting."
+  (when session
+    (pichat-chat-diagnostics-record
+     session :origin 'event-handler :message "PiChat event consumer failed"
+     :condition condition)))
+
+(setq pichat-events-handler-error-function #'pichat-rpc--report-event-handler-error)
+
 (defcustom pichat-pi-executable "pi"
   "Pi executable used when `pichat-rpc-command' is nil."
   :type 'string
@@ -458,18 +469,37 @@ separator characters.  A trailing CR is stripped for CRLF compatibility."
         (when (pichat-rpc--current-process-p session process)
           (setf (pichat-session-rpc-receive-buffer session) buf))))))
 
+(defun pichat-rpc--report-record-error (session origin condition raw)
+  "Report ORIGIN and CONDITION with RAW available only to explicit inspection."
+  (let ((diagnostic
+         (pichat-chat-diagnostics-record
+          session :origin origin :message "PiChat RPC record processing failed"
+          :condition condition :response raw)))
+    (pichat-emit session 'error
+                 :message (plist-get diagnostic :summary)
+                 :diagnostic diagnostic)))
+
 (defun pichat-rpc--handle-line (session line)
-  "Parse and dispatch one JSONL LINE for SESSION."
-  (condition-case err
-      (pichat-rpc--dispatch-object session (pichat-rpc--json-decode line))
-    (error
-     (let ((diagnostic
-            (pichat-chat-diagnostics-record
-             session :origin 'rpc-parse :message "Failed to parse Pi RPC output"
-             :condition err :response line)))
-       (pichat-emit session 'error
-                    :message (plist-get diagnostic :summary)
-                    :diagnostic diagnostic)))))
+  "Parse, validate and dispatch one JSONL LINE for SESSION."
+  (let (object (decoded nil))
+    (condition-case err
+        (setq object (pichat-rpc--json-decode line)
+              decoded t)
+      (error (pichat-rpc--report-record-error session 'rpc-parse err line)))
+    (when decoded
+      (condition-case err
+          (unless (and (consp object) (keywordp (car object))
+                       (or (not (plist-member object :type))
+                           (stringp (plist-get object :type))))
+            (signal 'pichat-rpc-invalid-record nil))
+        (pichat-rpc-invalid-record
+         (pichat-rpc--report-record-error session 'rpc-protocol err line)
+         (setq decoded nil)))
+      (when decoded
+        (condition-case err
+            (pichat-rpc--dispatch-object session object)
+          (error (pichat-rpc--report-record-error
+                  session 'rpc-dispatch err object)))))))
 
 (defun pichat-rpc--dispatch-object (session object)
   "Dispatch decoded RPC OBJECT for SESSION."

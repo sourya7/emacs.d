@@ -288,12 +288,13 @@
                :before "before-immediate-3" :content "after-immediate-3")
               (:id "delayed" :mode "delayed"
                :before "before-delayed" :content "after-delayed"
-               :delayMs 300)
+               :startReleasePath "delayed-start.release")
               (:id "failed" :mode "fail"
-               :before "before-failed" :content "unused" :delayMs 200)
+               :before "before-failed" :content "unused")
               (:id "external" :mode "external-window"
                :before "before-external" :content "tool-external"
-               :delayMs 200 :postDelayMs 600)))
+               :startReleasePath "external-start.release"
+               :endReleasePath "external-end.release")))
            (turns
             (vconcat
              (mapcan
@@ -302,8 +303,8 @@
                        (list :path "timing.txt"
                              :mode (plist-get spec :mode)
                              :content (plist-get spec :content)
-                             :delayMs (plist-get spec :delayMs)
-                             :postDelayMs (plist-get spec :postDelayMs))))
+                             :startReleasePath (plist-get spec :startReleasePath)
+                             :endReleasePath (plist-get spec :endReleasePath))))
                   (list
                    (list :toolCall
                          (list :id (plist-get spec :id)
@@ -338,7 +339,11 @@
                         (and (file-exists-p path)
                              (equal "tool-external" (read-target))))
                       4 "timing tool to open its post-mutation window")
-                     (with-temp-file path (insert "external-change")))
+                     (with-temp-file path (insert "external-change"))
+                     ;; The tool cannot finish until the external write is done.
+                     (with-temp-file (expand-file-name
+                                      (plist-get spec :endReleasePath) project-dir)
+                       (insert "release")))
                    (pichat-test-wait-for-raw-event
                     session "agent_settled" 8 settled))))
             (pichat-on
@@ -352,8 +357,18 @@
                                    (plist-get raw :toolName)))
                    (pcase type
                      ("tool_execution_start"
-                      (puthash id (plist-get (plist-get raw :args) :path) paths)
-                      (puthash id (read-target) at-start))
+                      (let* ((args (plist-get raw :args))
+                             (release (plist-get args :startReleasePath)))
+                        (puthash id (plist-get args :path) paths)
+                        ;; Immediate execution races with RPC delivery.  Do not
+                        ;; read concurrently and assume an atomic old/new value.
+                        ;; Gated tools cannot write until this observer releases
+                        ;; them; the failing tool never writes at all.
+                        (when (or release (equal "fail" (plist-get args :mode)))
+                          (puthash id (read-target) at-start))
+                        (when release
+                          (with-temp-file (expand-file-name release project-dir)
+                            (insert "release")))))
                      ("tool_execution_end"
                       (puthash id (read-target) at-end)
                       (puthash id raw end-events))))))
@@ -361,24 +376,20 @@
             (dolist (spec specs)
               (run spec (equal "external" (plist-get spec :id))))
 
-            ;; An RPC start observer races with immediate execution and may see
-            ;; either pre- or post-state.  Pi's in-process tool_call hook,
-            ;; however, reliably sees pre-state before execute.
+            ;; Only Pi's in-process tool_call hook guarantees pre-state for
+            ;; immediate execution.  RPC observers have no pre-execution barrier
+            ;; and a concurrent file read need not be an atomic old/new snapshot.
             (dolist (spec (seq-take specs 3))
               (let* ((id (plist-get spec :id))
                      (event (gethash id end-events))
                      (details (plist-get (plist-get event :result) :details)))
-                (should (member (gethash id at-start)
-                                (list (plist-get spec :before)
-                                      (plist-get spec :content))))
                 (should (equal (plist-get spec :before)
                                (plist-get details :preflightText)))
                 (should (equal (plist-get spec :content)
                                (gethash id at-end)))))
 
-            ;; A deliberate delay happens to leave enough time for an RPC
-            ;; start observer, but that is a property of this tool, not a
-            ;; protocol barrier.
+            ;; A tool-specific handshake, not RPC delivery or a fixed sleep,
+            ;; guarantees this observer reads before the delayed tool writes.
             (should (equal "before-delayed" (gethash "delayed" at-start)))
             (should (equal "after-delayed" (gethash "delayed" at-end)))
             (should
@@ -394,12 +405,14 @@
             (should (equal "before-failed" (gethash "failed" at-end)))
             (should (plist-get (gethash "failed" end-events) :isError))
 
-            ;; State observed at end can include a concurrent external change,
-            ;; so even a start/end pair cannot be attributed solely to the tool.
+            ;; Hold completion until the external write has finished: end state
+            ;; cannot be attributed solely to the tool, even with a start/end pair.
             (should (equal "before-external" (gethash "external" at-start)))
             (should (equal "external-change" (gethash "external" at-end)))
             (should-not (plist-get (gethash "external" end-events) :isError))
-            (should (= 6 (hash-table-count paths))))))))
+            (should (= 6 (hash-table-count paths)))
+            (dolist (spec specs)
+              (should (equal "timing.txt" (gethash (plist-get spec :id) paths)))))))))
 
   (ert-deftest pichat-integration-get-state-uses-real-pi-and-fake-model ()
     (pichat-test-with-integration-session

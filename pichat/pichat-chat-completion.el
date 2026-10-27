@@ -12,7 +12,7 @@
 (require 'subr-x)
 (require 'pichat-session)
 (require 'pichat-backend)
-(require 'pichat-rpc)
+(require 'pichat-command-catalog)
 
 (defvar-local pichat-chat-completion--commands nil
   "Pi command records cached for the current chat source.")
@@ -58,27 +58,15 @@
        (equal source-key pichat-chat-completion--source-key)
        (= sequence pichat-chat-completion--request-sequence)))
 
-(defun pichat-chat-completion--response-commands (response)
-  "Return valid command records from successful RESPONSE, preserving order."
-  (let ((commands (plist-get (plist-get response :data) :commands)))
-    (when (listp commands)
-      (cl-remove-if-not
-       (lambda (command)
-         (and (listp command)
-              (stringp (plist-get command :name))
-              (not (string-empty-p (plist-get command :name)))))
-       commands))))
-
 (defun pichat-chat-completion--accept-success
-    (buffer session source-generation source-key sequence response
+    (buffer session source-generation source-key sequence commands
             response-session)
-  "Accept a command RESPONSE when its captured context is still current."
+  "Accept COMMANDS when their captured context is still current."
   (when (and (buffer-live-p buffer) (eq session response-session))
     (with-current-buffer buffer
       (when (pichat-chat-completion--current-request-p
              session source-generation source-key sequence)
-        (setq pichat-chat-completion--commands
-              (pichat-chat-completion--response-commands response)
+        (setq pichat-chat-completion--commands commands
               pichat-chat-completion--status 'ready
               pichat-chat-completion--last-error nil
               pichat-chat-completion--request-id nil)))))
@@ -122,7 +110,7 @@ unavailable."
           (let ((sequence pichat-chat-completion--request-sequence))
             (setq pichat-chat-completion--status 'loading
                   pichat-chat-completion--request-id
-                  (pichat-rpc-get-commands
+                  (pichat-command-catalog-fetch
                    session
                    (apply-partially
                     #'pichat-chat-completion--accept-success
@@ -146,32 +134,6 @@ unavailable."
               (equal "extension" (plist-get command :source))))
        pichat-chat-completion--commands))))
 
-(defun pichat-chat-completion--annotation (name)
-  "Return source and description annotation for command NAME."
-  (when-let* ((command
-              (cl-find name pichat-chat-completion--commands
-                       :key (lambda (item) (plist-get item :name))
-                       :test #'equal)))
-    (let ((source (plist-get command :source))
-          (description (plist-get command :description)))
-      (concat (if (and (stringp source) (not (string-empty-p source)))
-                  (format "  [%s]" source)
-                "")
-              (if (and (stringp description)
-                       (not (string-empty-p description)))
-                  (concat " " description)
-                "")))))
-
-(defun pichat-chat-completion--table (names)
-  "Return completion table for NAMES preserving Pi's order."
-  (lambda (string predicate action)
-    (if (eq action 'metadata)
-        '(metadata
-          (category . pichat-slash-command)
-          (display-sort-function . identity)
-          (cycle-sort-function . identity))
-      (complete-with-action action names string predicate))))
-
 (defun pichat-chat-completion-capf (input-start)
   "Return slash-command completion data relative to INPUT-START.
 Completion is offered only for a slash token at the beginning of the editable
@@ -185,10 +147,10 @@ input and only while a successful command cache is available."
         (when (string-match "\\`/\\([^[:space:]]*\\)\\'" text)
           (list (+ start (match-beginning 1))
                 (point)
-                (pichat-chat-completion--table
-                 (mapcar (lambda (command) (plist-get command :name))
-                         pichat-chat-completion--commands))
-                :annotation-function #'pichat-chat-completion--annotation
+                (pichat-command-catalog-table pichat-chat-completion--commands)
+                :annotation-function
+                (apply-partially #'pichat-command-catalog-annotation
+                                 pichat-chat-completion--commands)
                 :exclusive 'no))))))
 
 (provide 'pichat-chat-completion)

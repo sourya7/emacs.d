@@ -178,5 +178,31 @@
                               (car pichat-chat-completion--commands) :name)))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+(ert-deftest pichat-chat-completion-late-failures-cannot-clear-current-catalog ()
+  (pichat-test-with-unit-session (session proc)
+    (with-temp-buffer
+      (let (requests)
+        (cl-letf (((symbol-function 'pichat-rpc-get-commands)
+                   (lambda (_session success &optional failure)
+                     (push (cons success failure) requests)
+                     "request")))
+          (pichat-chat-completion-refresh session 1 'one)
+          (let ((old (car requests)))
+            (pichat-chat-completion-refresh session 1 'one)
+            ;; A response for another runtime cannot mark this cache ready.
+            (funcall (caar requests) '(:data (:commands ((:name "wrong"))))
+                     (pichat-session-make))
+            (should (eq 'loading pichat-chat-completion--status))
+            (funcall (caar requests) '(:data (:commands ((:name "current")))) session)
+            (funcall (cdr old) '(:error "late failure") session)
+            (should (eq 'ready pichat-chat-completion--status))
+            (should (equal "current" (plist-get (car pichat-chat-completion--commands) :name)))
+            (should-not pichat-chat-completion--last-error)
+            (pichat-chat-completion-reset 2 'two)
+            (funcall (cdar requests) '(:error "old source") session)
+            (should (eq 'unavailable pichat-chat-completion--status))
+            (should-not pichat-chat-completion--commands)
+            (should-not pichat-chat-completion--last-error)))))))
+
 (provide 'pichat-test-chat-completion)
 ;;; pichat-test-chat-completion.el ends here

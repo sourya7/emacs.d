@@ -9,7 +9,7 @@
 (require 'cl-lib)
 (require 'pichat-session)
 (require 'pichat-backend)
-(require 'pichat-rpc)
+(require 'pichat-command-catalog)
 
 (defun pichat-command--capture-context (session)
   "Return a predicate validating SESSION's current discovery/action context.
@@ -52,19 +52,14 @@ requiring the chat module for callers that have no chat."
 CURRENT-P retains the context captured before command discovery; direct calls
 capture it before prompting.  Quit at either prompt cancels silently."
   (let ((current-p (or current-p (pichat-command--capture-context session))))
-    (when (pichat-command--current-p current-p)
+    (when (and commands (pichat-command--current-p current-p))
       (condition-case nil
-          (let* ((choices (mapcar
-                           (lambda (cmd)
-                             (cons (format "/%s  [%s] %s"
-                                           (plist-get cmd :name)
-                                           (plist-get cmd :source)
-                                           (or (plist-get cmd :description) ""))
-                                   cmd))
-                           commands))
-                 (choice (completing-read "Pi command: " choices nil t))
-                 (cmd (cdr (assoc choice choices)))
-                 (args (and (pichat-command--current-p current-p)
+          (let* ((choice (completing-read
+                          "Pi command: /" (pichat-command-catalog-table commands) nil t))
+                 (cmd (cl-find choice commands
+                               :key (lambda (record) (plist-get record :name))
+                               :test #'equal))
+                 (args (and cmd (pichat-command--current-p current-p)
                             (read-string (format "/%s args: " (plist-get cmd :name)))))
                  (message (and args
                                (string-trim (concat "/" (plist-get cmd :name) " " args)))))
@@ -80,14 +75,19 @@ capture it before prompting.  Quit at either prompt cancels silently."
     (unless session (user-error "No current PiChat session"))
     (pichat-backend-require-capability session 'commands "Pi commands")
     (let ((current-p (pichat-command--capture-context session)))
-      (pichat-rpc-get-commands
+      (pichat-command-catalog-fetch
        session
-       (lambda (response response-session)
+       (lambda (commands response-session)
          (when (and (eq session response-session)
                     (pichat-command--current-p current-p))
-           (run-at-time
-            0 nil #'pichat-command--prompt-and-run session
-            (plist-get (plist-get response :data) :commands) current-p)))))))
+           (if commands
+               (run-at-time
+                0 nil #'pichat-command--prompt-and-run session commands current-p)
+             (message "No Pi commands available"))))
+       (lambda (_response response-session)
+         (when (and (eq session response-session)
+                    (pichat-command--current-p current-p))
+           (message "Pi command discovery failed; invoke the picker again")))))))
 
 (provide 'pichat-commands)
 ;;; pichat-commands.el ends here

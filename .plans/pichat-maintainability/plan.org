@@ -5,7 +5,7 @@
 #+PLAN_ID: pichat-maintainability
 #+PLAN_STATUS: active
 #+PLAN_CREATED: 2026-10-24T16:19:02Z
-#+PLAN_UPDATED: 2026-10-27T02:10:17Z
+#+PLAN_UPDATED: 2026-10-27T02:38:16Z
 
 * Goal
 Address the reviewed PiChat maintainability and correctness findings through bounded, independently selected work packages without weakening runtime, source, transcript or draft safety.
@@ -710,18 +710,55 @@ No live SSH, GUI, Docker, Pi compatibility watermark advance, adjacent package
 or commit. Restart Emacs to discard already-loaded legacy definitions and old
 struct layouts; no in-place runtime migration is promised.
 
-* TODO [#B] W14 — Share command discovery without merging action semantics
+* DONE [#B] W14 — Share command discovery without merging action semantics
 :PROPERTIES:
 :CUSTOM_ID: W14
 :FINDINGS: DUP-01; section 13 completion metadata
 :DEPENDS_ON: W02, W09
 :END:
 
-- [ ] Introduce one validated command/template/skill catalog reused by CAPF and the command picker.
-- [ ] Keep completion insertion separate from immediate execution and argument prompting.
-- [ ] Preserve source/request freshness checks through cache invalidation and late responses.
-- [ ] Reuse completion categories/annotations and structured action records; optional UI packages remain adapters.
-- [ ] Demonstrate reduced duplication without reducing stale-source regression coverage.
+- [X] Introduce one validated command/template/skill catalog reused by CAPF and the command picker.
+- [X] Keep completion insertion separate from immediate execution and argument prompting.
+- [X] Preserve source/request freshness checks through cache invalidation and late responses.
+- [X] Reuse completion categories/annotations and structured action records; optional UI packages remain adapters.
+- [X] Demonstrate reduced duplication without reducing stale-source regression coverage.
+
+Resolution (2026-10-27): added =pichat-command-catalog.el= for RPC discovery,
+validated ordered records and native completion metadata. Both consumers use
+this contract; no global cache or new UI dependency. Removed completion's local
+normalizer/table/annotation and picker's formatted-label candidate construction.
+The common table uses exact names as action keys and source/description as
+annotations. Malformed names/records are omitted, duplicate exact names retain
+the first record, non-string display fields are cleared, and other provenance
+fields remain. Empty or failed picker discovery opens no minibuffer; unknown
+selection cannot request arguments or submit. Picker execution remains immediate
+and never edits the draft; CAPF only inserts. W02's captured action context and
+completion's source/request-sequence guards remain in their original owners.
+No source-identity, draft API, process-lifecycle or cache-ownership redesign.
+
+Four added regressions cover shared validated records/metadata and preserved
+provenance, malformed/empty/failed discovery, unrecognized selections, and late
+failure/wrong-runtime callbacks. Existing source-ID/path/generation, process
+lifetime, ownership/death, deferred prompting, quit and draft-preservation tests
+remain; picker tests now use the native completion protocol instead of assuming
+an alist representation. README dependency direction and DUP-01 resolution
+updated. No optional adapter, menu or adjacent roadmap implementation.
+
+Verification (Emacs 31.1 / installed Pi 1.4.0): focused command/CAPF 21/21;
+=pichat/test/run-tests.sh= 834/842 expected, eight optional skips;
+=--full --with-optional= 905/907 expected, only two Docker opt-in skips,
+zero unexpected in completed runs. The first full attempt timed out at 120s
+after recording an unrelated mutation-timing fixture failure (start observer
+read =after-immediate-33= rather than expected pre/post text). No fix or test
+change was made for it; the completed full rerun passed that test unchanged
+and finished in 139 seconds. Full mode used isolated offline real-Pi fake
+providers, not a real model API. Three production modules loaded independently
+in fresh Emacs processes; six changed/new Elisp files compiled without warnings
+to =.tmp/pichat-w14-bytecode/=. No =*.elc= under =pichat/=; =git diff --check=
+clean. Focused suite sizes: commands 207, chat-completion 208, chat-core 605
+lines. Logs: =.tmp/pichat-w14-{focused,unit,full,full-rerun,loads,bytecompile}.log=.
+No live SSH, GUI, Docker, coverage percentage, compatibility watermark change
+or commit. Overall roadmap remains active; await explicit next selection.
 
 * TODO [#B] W15 — Define and enforce operation-specific resource bounds
 :PROPERTIES:
@@ -846,10 +883,10 @@ review's "keep" findings (including INFRA-02) are constraints, not rewrite tasks
 
 * Checkpoint
 - Plan status: active
-- Selected scope: W13 DONE decisions; W23 DONE approved removals, uncommitted.
-- Last verified result: W23 focused 41/41, default unit 830/838 expected, optional full 901/903 expected; zero unexpected. Eleven fresh module loads, retained/retired API check and 16-file compilation passed; warning messages all reproduced from baseline.
-- Next action: await explicit package selection or commit request; restart Emacs before using changed struct layouts. Do not advance automatically.
-- Blockers: W22 awaits a concrete approved extension need; no W13/W23 blockers remain.
+- Selected scope: W14 DONE shared command discovery; maintainer requested commit together with the separately approved timing-test repair (jj change tsnmoqxp).
+- Last verified result: focused 21/21; default unit 834/842 expected (8 optional skips); optional full rerun 905/907 expected (2 Docker skips), zero unexpected. Three independent production loads and six-file compilation without warnings passed; initial full timing-fixture failure/timeout retained in W14 evidence.
+- Next action: await explicit next package selection; do not advance automatically.
+- Blockers: W22 awaits a concrete approved extension need; no W14 blockers remain.
 
 * Verification
 - 2026-10-26: Maintainer closed W04 as won't-do; historical injected-failure evidence retained, original implementation criteria explicitly superseded, W09/W11 implementation dependencies removed without claiming rollback. Bookkeeping/review only; W06 test evidence remains separate. No rollback code or tests added.
@@ -859,6 +896,9 @@ review's "keep" findings (including INFRA-02) are constraints, not rewrite tasks
 - 2026-10-25: moved the tracked execution backlog from =docs/pichat-maintainability-plan.org= to this single managed plan. Preserved all 22 headings, states, IDs and resolved all five relative file links; =plans.py check --all= OK for five records, =list --all= shows ready 0/22, helper tests 3 OK. No PiChat implementation or tests run for the migration. Historical pass-3 results remain in the linked review.
 
 * History
+- 2026-10-27T02:38:16Z: Maintainer requested jj commit of W14 and the subsequently approved timing-test repair together (change tsnmoqxp). Repair removes the concurrent old/new read assertion and replaces fixed timing windows with bounded release-file handshakes. Focused repair 10/10 fresh-process runs; final unit 834/842 expected and optional full 905/907 expected, zero unexpected; 17 integration-suite compile warnings match baseline exactly. Whitespace and plan validation passed. No adjacent roadmap package begun.
+- 2026-10-27T02:25:16Z: Completed selected W14 with shared catalog discovery/validation/metadata and four regressions. Preserved separate draft completion and immediate picker execution plus existing freshness guards. Focused/unit/completed optional-full green, independent loads and warning-free compilation verified; initial full timing-fixture failure and timeout recorded. No adjacent work or commit; roadmap remains active.
+- 2026-10-27T02:16:31Z: Started explicitly selected W14 from clean worktree at 1e2c988. Inspected command/CAPF discovery, existing freshness tests and package guidance. Preserve immediate picker execution and draft-only completion; no adjacent scope or commit.
 - 2026-10-27T02:10:17Z: Completed selected W23 removals and test migrations; fresh-load demo-tool regression, focused/unit/optional-full, independent loads, API checks and compilation verified. No new compile warnings versus baseline, no live SSH/GUI/Docker or commit; roadmap remains active.
 - 2026-10-27T02:02:57Z: Maintainer approved removing echo, unused struct slots and six legacy command names as sole user. Closed W13 decision gate and began explicitly requested expanded W23 implementation; preserving prior plan/review edits, no adjacent scope or commit.
 - 2026-10-27T01:58:56Z: Recorded maintainer approval to remove VUI, seven unused public helpers and pichat-tools-call-async, and retain pichat-rpc-get-messages. Added bounded W23 follow-up without implementing removals. W13 remains blocked only on remaining compatibility decisions; no production/test change or commit.

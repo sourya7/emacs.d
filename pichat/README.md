@@ -325,10 +325,17 @@ encoding, wire conversion, and optional acquisition adapters without knowing
 about chat buffers or transcript state. `pichat-chat-diagnostics.el` owns
 conservative transport/Pi-response classification, bounded session diagnostic
 records, safe summaries, explicit raw inspection, and setup launch policy; it
-does not depend on the chat mode. `pichat-chat-completion.el` owns the
-source-generation-scoped slash-command cache and completion logic; chat
-orchestration supplies source identity and prompt boundaries, and stale RPC
-callbacks cannot replace a rebound source's cache. `pichat-tool-enrichment.el`
+does not depend on the chat mode. `pichat-command-catalog.el` supplies shared command/template/skill discovery,
+validated records, and ordered completion metadata for both the command picker
+and CAPF, without owning a cache or action policy.
+`pichat-chat-completion.el` owns the source-generation-scoped slash-command
+cache and draft completion logic; chat orchestration supplies source identity
+and prompt boundaries, and stale RPC callbacks cannot replace a rebound
+source's cache. The picker retains its separately captured runtime/source
+context and immediately submits after command selection and argument entry;
+CAPF only inserts into the draft. Both use exact command names as action keys
+and source/description annotations as display metadata, without requiring
+Consult or Embark. `pichat-tool-enrichment.el`
 depends only on path
 translation and pure Lisp helpers: it normalizes partial live tool arguments,
 derives presentation-only classification and locations, and performs no file

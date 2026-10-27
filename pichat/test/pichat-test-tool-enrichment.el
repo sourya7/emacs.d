@@ -99,23 +99,6 @@
     (should-not (plist-get record :line))
     (should (equal "/remote/project/a.el:8" (plist-get record :title)))))
 
-(ert-deftest pichat-tool-enrichment-infers-only-unique-old-text-location ()
-  (should
-   (equal '(:status unique :line 2 :column 3)
-          (pichat-tool-enrichment-infer-old-text-location
-           "target" "first\n  target here\nlast")))
-  (should
-   (equal '(:status non-unique)
-          (pichat-tool-enrichment-infer-old-text-location
-           "same" "same then same")))
-  (should
-   (equal '(:status not-found)
-          (pichat-tool-enrichment-infer-old-text-location
-           "missing" "some text")))
-  (should
-   (equal '(:status unavailable)
-          (pichat-tool-enrichment-infer-old-text-location "" "some text"))))
-
 (ert-deftest pichat-tool-enrichment-renders-find-and-multi-pattern-search-titles ()
   (let ((find (pichat-tool-enrichment-build
                "find" "find" '(:pattern "*backend*.el" :path "pichat")))

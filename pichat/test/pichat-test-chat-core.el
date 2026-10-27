@@ -469,20 +469,15 @@
   (should (eq 'summary (pichat-chat-tool-ui-cycle-state 'args)))
   (should (eq 'summary (pichat-chat-tool-ui-cycle-state 'output))))
 
-(ert-deftest pichat-render-thinking-texts-extracts-thinking-without-normal-content ()
+(ert-deftest pichat-render-content-excludes-thinking-from-normal-content ()
   (let ((content '((:type "thinking" :thinking "private reasoning")
                    (:type "text" :text "final answer"))))
-    (should (equal '("private reasoning") (pichat-render-thinking-texts content)))
     (should (equal "final answer" (pichat-render-content content)))))
 
 (ert-deftest pichat-render-unknown-data-never-uses-raw-printer-fallback ()
   (let ((secret '(:future "must-not-render")))
     (should (equal "[unsupported content]"
-                   (pichat-render-content (list secret))))
-    (should-not (string-match-p
-                 "must-not-render"
-                 (pichat-render-entry-text
-                  '(:type "future" :data (:secret "must-not-render"))))))
+                   (pichat-render-content (list secret)))))
   (let ((circular (list "value")))
     (setcdr circular circular)
     (should (equal "[unavailable arguments]"

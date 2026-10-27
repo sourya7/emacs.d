@@ -31,7 +31,6 @@
 (require 'pichat-permissions)
 (require 'pichat-tool-bridge)
 (require 'pichat-bridge-transport)
-(require 'pichat-vui)
 
 (defconst pichat-directory
   (file-name-directory (or load-file-name buffer-file-name))

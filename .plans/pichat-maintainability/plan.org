@@ -5,13 +5,13 @@
 #+PLAN_ID: pichat-maintainability
 #+PLAN_STATUS: active
 #+PLAN_CREATED: 2026-10-24T16:19:02Z
-#+PLAN_UPDATED: 2026-10-26T22:36:31Z
+#+PLAN_UPDATED: 2026-10-27T02:10:17Z
 
 * Goal
 Address the reviewed PiChat maintainability and correctness findings through bounded, independently selected work packages without weakening runtime, source, transcript or draft safety.
 
 * Scope
-- Included: W01–W22 and their recorded dependencies and verification obligations; review resolutions in =docs/pichat-maintainability-review.md=.
+- Included: W01–W23 and their recorded dependencies and verification obligations; review resolutions in =docs/pichat-maintainability-review.md=.
 - Excluded: automatically implementing every package, broad unapproved rewrites, or speculative extension work without a concrete need. Each invocation requires an explicitly selected package and scope.
 
 * Acceptance criteria
@@ -573,7 +573,7 @@ resolutions are recorded together under DEAD-01 and TEST-01/02 plus DEAD-06.
 No public API retirement, collect-result focus fix, adjacent work, upgrade or
 commit. Overall roadmap remains active; W13 requires explicit selection.
 
-* TODO [#B] W13 — Decide compatibility facades and unused public APIs
+* DONE [#B] W13 — Decide compatibility facades and unused public APIs
 :PROPERTIES:
 :CUSTOM_ID: W13
 :FINDINGS: DEAD-03; DEAD-04; DEAD-05; DEAD-06; TEST-03; ARCH-04
@@ -581,11 +581,134 @@ commit. Overall roadmap remains active; W13 requires explicit selection.
 
 Decision-first package; lack of internal callers is not proof of a dead public API.
 
-- [ ] Audit VUI forwarding commands, unused public helpers/struct slots, and the normally registered echo tool.
-- [ ] Separate the tool-contract decision already owned by W05 from remaining retirement decisions.
-- [ ] Obtain explicit retain/deprecate/remove decisions and document downstream uncertainty.
-- [ ] Add narrowly scoped follow-up packages for approved migrations/removals; do not silently remove APIs here.
-- [ ] Retain unbound interactive commands when useful; review key exposure separately from reachability.
+- [X] Audit VUI forwarding commands, unused public helpers/struct slots, and the normally registered echo tool.
+- [X] Separate the tool-contract decision already owned by W05 from remaining retirement decisions.
+- [X] Obtain explicit retain/deprecate/remove decisions and document downstream uncertainty.
+- [X] Add narrowly scoped follow-up packages for approved migrations/removals; do not silently remove APIs here.
+- [X] Retain unbound interactive commands when useful; review key exposure separately from reachability.
+
+Audit (2026-10-27, HEAD =e22a4a3=): inspected definitions, tracked
+package/config/test/documentation references, aliases, constructors and dynamic
+symbol construction. No personal =user/= / =core/= consumer of the candidates
+was found. Arbitrary downstream code, dynamically supplied constructor plists
+and external keybindings remain unknown; absence of literal references is not
+proof of unused public API. No production files or tests changed.
+
+Initial recommendations (superseded where explicitly decided below):
+- Deprecate the four =pichat-vui-*= commands, preserving a loadable compatibility
+  feature while removing the eager =pichat.el= require in a separately selected
+  follow-up. Migrations: =status-dashboard= → =pichat-status=,
+  =context-manager= → =pichat-add-reference=, =session-tree= →
+  =pichat-sessions-list=. =approval-ui= opens =pichat-approval-policy-file=;
+  it must retain that exact Emacs-tool approval destination, NOT migrate to
+  =pichat-open-permissions-file= (Pi-native permission policy). Keep minimal
+  compatibility tests during deprecation; no VUI implementation is warranted.
+- Deprecate unused =pichat-tool-selection-baseline=,
+  =pichat-tools-instructions=, =pichat-render-thinking-texts=,
+  =pichat-render-entry-text=, =pichat-tool-enrichment-infer-old-text-location=,
+  =pichat-chat-tool-ui-merge-block-tables= and
+  =pichat-chat-tool-ui-collapse-block=. Preserve implementations/tests initially;
+  no universal replacement exists for the raw-entry renderer or pure location
+  inference. Do not alias raw plist APIs to canonical model APIs with different
+  contracts, add file I/O, or route callers around owned projection transactions.
+  Baseline copying is a convenience; actual selection uses =resolve=. Collected
+  instruction strings are unused; bridge registration uses per-tool instructions.
+- Deprecate =pichat-tools-call-async= in favor of synchronous =pichat-tools-call=
+  plus explicit callback delivery where needed, retaining W06's immediate
+  callback behavior/tests during migration. W05/W06 already decided synchronous
+  tools, early async rejection and native prompt guidelines; do not reopen them.
+- Remove only automatic registration of shipped =echo= in a separately approved
+  package; move example/test definitions to explicit fixtures or opt-in examples.
+  Loading =pichat-tools.el= currently registers it and normal bridge definitions
+  include it (non-mutating, not native-only). This is real tool exposure, not a
+  dead helper. Its generated =pichat-tool/echo= function and consumers require
+  an explicit migration decision; no removal happened here. Existing rejection
+  test uses the registered echo as its sentinel and must become self-contained.
+- Retain =pichat-rpc-get-messages=: inexpensive direct RPC convenience wrapper;
+  internal canonical synchronization using entries does not invalidate external
+  message consumers. Retain public =pichat-session= =rpc=/=tool-registry= slots
+  for now: removal affects generated readers/setters, constructor keywords and
+  struct layout, with little demonstrated benefit. They are compatibility-only,
+  not new state owners. =backend-state= remains the supported extension state.
+- Retain useful unbound commands and existing compatibility names: compose-send
+  (still apply-only, never submit), branch-preview, diagnostic aliases, old
+  artifact Elisp copy/share wrappers, History movement commands, and already
+  obsolete/rejecting History switch command. Keep security/stale-source tests;
+  key exposure is independent of reachability. Permission file/log commands stay
+  unchanged; their local/SSH path ownership and module placement need a separate
+  approved scope before wider advertising, not silent retirement here.
+
+Maintainer decisions (2026-10-27): remove the VUI facade and the seven unused
+public helpers enumerated above, rather than deprecate them. Remove
+=pichat-tools-call-async=; retain =pichat-rpc-get-messages=. These explicit
+retirement decisions accept unknown downstream usage; no compatibility shims
+are requested. W23 records the bounded removal follow-up; no production change
+has been made in this decision package. W05/W06's synchronous execution, early
+async rejection and prompt-guidelines contract remain unchanged.
+
+Final maintainer decision (2026-10-27): sole current user; remove shipped
+=echo=, the unused =rpc=/=tool-registry= struct slots and the six legacy command
+names explained in the audit discussion. Retain the underlying actions,
+=backend-state=, =pichat-rpc-get-messages= and the obsolete rejecting
+=pichat-sessions-switch-at-point= command. W13's decision deliverable is complete.
+The explicit removal request selects expanded W23 implementation; no
+compatibility grace period or downstream migration support is required.
+
+Verification: source/reference audit only; =git diff --check= and managed-plan
+structural validation run at closeout. No runtime tests, byte-compilation, SSH,
+GUI, Pi compatibility update or commit; unchanged production behavior needs no
+new runtime claim. Relevant existing suite sizes: approval-tools 321, chat-core
+609, tool-enrichment 184, sessions/reference 661 lines.
+
+* DONE [#B] W23 — Remove approved compatibility facade and unused helpers
+:PROPERTIES:
+:CUSTOM_ID: W23
+:FINDINGS: DEAD-02; DEAD-03; DEAD-04; TEST-03; ARCH-04
+:END:
+
+Approved retirement scope from W13; explicitly selected by the maintainer's
+removal request on 2026-10-27. Preserve pre-existing W13 plan/review edits.
+- [X] Revalidate current references before removal, including personal configuration.
+- [X] Remove =pichat-vui.el=, its eager require and facade-only test; preserve underlying status, reference, approval and Session History actions.
+- [X] Remove =pichat-tool-selection-baseline=, =pichat-tools-instructions=, =pichat-render-thinking-texts=, =pichat-render-entry-text=, =pichat-tool-enrichment-infer-old-text-location=, =pichat-chat-tool-ui-merge-block-tables= and =pichat-chat-tool-ui-collapse-block=.
+- [X] Remove =pichat-tools-call-async= and callback-adapter-only coverage; preserve synchronous result/error and unsupported-async rejection tests through active APIs.
+- [X] Retarget valuable renderer privacy/normalization assertions before deleting obsolete helper-only tests. Do not remove active shared rendering helpers or weaken stale-source/projection coverage.
+- [X] Remove shipped =echo=, unused public =rpc=/=tool-registry= struct slots and the six legacy names: =pichat-chat-compose-send=, =pichat-sessions-show-branch-at-point=, =pichat-chat-show-transport-diagnostics=, =pichat-chat-open-interactive-pi=, =pichat-artifact-elisp-copy-report= and =pichat-artifact-elisp-share=. Migrate tests to retained underlying actions.
+- [X] Update README/API migration notes; retain =pichat-rpc-get-messages=, =backend-state=, other useful commands and the obsolete rejecting History switch command.
+- [X] Run focused, unit and relevant full bridge tests plus changed-file compilation; record warnings/skips and review resolutions. No compatibility shims, async implementation or commit.
+
+Resolution (2026-10-27): completed exactly the approved removals, without shims.
+Tracked package/config references reconfirmed no active consumers beyond migrated
+tests. Deleted only the VUI module and approved definitions/slots. The artifact
+Elisp share/copy scenarios now call the shared result commands, retaining draft,
+attachment, window, dead-origin and stale-source assertions. Synchronous failure
+and early async rejection coverage now targets =pichat-tools-call=; registration
+rejection uses an explicitly registered sentinel (the previous echo lookup was
+nil after test-state reset). A new fresh-Emacs regression proves loading the
+module registers no demo tools. Retained content-thinking separation, circular
+argument privacy and W12's active canonical/live unknown-payload privacy test;
+removed only the unused location-inference scenario and facade delegation test.
+Existing backend extension, restart and bridge instruction tests remain green.
+
+Verification (Emacs 31.1 / local Pi 1.4.0): focused tools/render/enrichment/Elisp
+41/41; =pichat/test/run-tests.sh= 830/838 expected, 8 optional skips;
+=--full --with-optional= 901/903 expected, only 2 Docker opt-in skips;
+zero unexpected. Full mode used isolated offline real-Pi fake providers, not a
+model API. All 11 changed production modules loaded independently in fresh
+Emacs processes. All 16 changed Elisp files compiled into
+=.tmp/pichat-w23-bytecode/=: 22 warnings versus 24 from corresponding original
+HEAD files compiled using the same harness; no new warning messages. Remaining
+warnings are pre-existing docstring widths, Consult/Transient signatures and
+interactive use, and generated test-tool unused parameters/forward references.
+No =*.elc= under =pichat/=. Fresh loaded-package API check confirms retired
+symbols/feature absent, retained commands interactive, retained RPC/backend-state
+accessors present and registry empty. =git diff --check= clean.
+Focused suite sizes: approval-tools 331, artifacts 1518, chat-core 604,
+sessions/reference 654, tool-enrichment 167 lines. Logs:
+=.tmp/pichat-w23-{focused,unit,full,loads,api,bytecompile,baseline-bytecompile}.log=.
+No live SSH, GUI, Docker, Pi compatibility watermark advance, adjacent package
+or commit. Restart Emacs to discard already-loaded legacy definitions and old
+struct layouts; no in-place runtime migration is promised.
 
 * TODO [#B] W14 — Share command discovery without merging action semantics
 :PROPERTIES:
@@ -723,10 +846,10 @@ review's "keep" findings (including INFRA-02) are constraints, not rewrite tasks
 
 * Checkpoint
 - Plan status: active
-- Selected scope: W12 DONE, uncommitted; W11 committed as =e51c6408=. W04 remains won't-do.
-- Last verified result: W12 focused 16/16, default unit 831/839 expected, optional unit 837/839 and optional full 902/904 expected; zero unexpected, two Docker skips in optional runs. SSH 8/8 on remote Pi 1.2.0 with cleanup check; 4 fresh module loads and 10-file compilation succeeded with baseline production warnings only.
-- Next action: await explicit package selection or commit request. Public API/struct retirement remains W13; collect-result focus requires separate approval. Do not advance automatically.
-- Blockers: W22 awaits a concrete approved extension need; no W11 blocker remains.
+- Selected scope: W13 DONE decisions; W23 DONE approved removals, uncommitted.
+- Last verified result: W23 focused 41/41, default unit 830/838 expected, optional full 901/903 expected; zero unexpected. Eleven fresh module loads, retained/retired API check and 16-file compilation passed; warning messages all reproduced from baseline.
+- Next action: await explicit package selection or commit request; restart Emacs before using changed struct layouts. Do not advance automatically.
+- Blockers: W22 awaits a concrete approved extension need; no W13/W23 blockers remain.
 
 * Verification
 - 2026-10-26: Maintainer closed W04 as won't-do; historical injected-failure evidence retained, original implementation criteria explicitly superseded, W09/W11 implementation dependencies removed without claiming rollback. Bookkeeping/review only; W06 test evidence remains separate. No rollback code or tests added.
@@ -736,6 +859,11 @@ review's "keep" findings (including INFRA-02) are constraints, not rewrite tasks
 - 2026-10-25: moved the tracked execution backlog from =docs/pichat-maintainability-plan.org= to this single managed plan. Preserved all 22 headings, states, IDs and resolved all five relative file links; =plans.py check --all= OK for five records, =list --all= shows ready 0/22, helper tests 3 OK. No PiChat implementation or tests run for the migration. Historical pass-3 results remain in the linked review.
 
 * History
+- 2026-10-27T02:10:17Z: Completed selected W23 removals and test migrations; fresh-load demo-tool regression, focused/unit/optional-full, independent loads, API checks and compilation verified. No new compile warnings versus baseline, no live SSH/GUI/Docker or commit; roadmap remains active.
+- 2026-10-27T02:02:57Z: Maintainer approved removing echo, unused struct slots and six legacy command names as sole user. Closed W13 decision gate and began explicitly requested expanded W23 implementation; preserving prior plan/review edits, no adjacent scope or commit.
+- 2026-10-27T01:58:56Z: Recorded maintainer approval to remove VUI, seven unused public helpers and pichat-tools-call-async, and retain pichat-rpc-get-messages. Added bounded W23 follow-up without implementing removals. W13 remains blocked only on remaining compatibility decisions; no production/test change or commit.
+- 2026-10-27T00:52:58Z: Completed W13 audit only; recorded candidate-specific compatibility recommendations and downstream uncertainty, separated W05/W06's settled tool contract, and blocked on explicit maintainer decisions. No API retirement, migration packages, production/test changes, runtime tests, adjacent work or commit.
+- 2026-10-27T00:52:12Z: Started explicitly selected W13 from clean worktree at e22a4a3. Decision-first audit only; no production changes, adjacent work or commit authorized.
 - 2026-10-26T22:36:31Z: Completed selected W12: removed 17 verified private functions plus 2 unread declarations/state entries, retargeted meaningful tests and strengthened active privacy coverage, retained public candidates for W13. Focused/unit/optional/full/SSH, fresh loads and compilation passed with baseline warnings only. No adjacent work or commit.
 - 2026-10-26T22:25:32Z: Started explicitly selected W12 from clean working copy after W11 commit e51c6408. Rechecked exact tracked references for private helper/state candidates; public names and struct compatibility remain W13. No adjacent work or commit authorized.
 - 2026-10-26T22:23:51Z: Completed W11 after explicitly authorized lima-devbox SSH suite passed 8/8 on remote Pi 1.2.0 with no skips or unexpected results; remote directory/process cleanup check clean. Earlier local/live-terminal evidence retained. No production fix, upgrade, adjacent work or commit.

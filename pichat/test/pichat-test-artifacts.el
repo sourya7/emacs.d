@@ -1076,7 +1076,7 @@
               (should (string-match-p "Section truncated for sharing"
                                       (pichat-artifact-elisp--report
                                        pichat-artifact-elisp--result)))
-              (pichat-artifact-elisp-share))
+              (pichat-artifact-result-share))
             (should-not (buffer-live-p result-view))
             (should (= 1 (count-windows)))
             (should (eq chat (window-buffer (selected-window))))
@@ -1124,7 +1124,7 @@
             (should (= 2 (count-windows)))
             (set-window-buffer (split-window (get-buffer-window chat)) other)
             (should (= 3 (count-windows)))
-            (with-current-buffer view (pichat-artifact-elisp-share))
+            (with-current-buffer view (pichat-artifact-result-share))
             (should-not (buffer-live-p view))
             (should (= 2 (count-windows)))
             (should (get-buffer-window other))
@@ -1149,16 +1149,16 @@
               (let ((code "(with-current-buffer (get-buffer \" *pichat-elisp-origin*\") (setq pichat-chat--source-generation (1+ pichat-chat--source-generation)))"))
                 (pichat-artifact-runner-run code "elisp" temporary-file-directory))))
           (with-current-buffer view
-            (should-error (pichat-artifact-elisp-share) :type 'user-error)
-            (pichat-artifact-elisp-copy-report))
+            (should-error (pichat-artifact-result-share) :type 'user-error)
+            (pichat-artifact-result-copy-report))
           (with-current-buffer chat
             (should (equal pichat-chat--pending-attachments '(pending-image)))
             (should (equal (pichat-chat--input-text) "")))
           (should-not rpc-called)
           (kill-buffer chat)
           (with-current-buffer view
-            (should-error (pichat-artifact-elisp-share) :type 'user-error)
-            (pichat-artifact-elisp-copy-report)))
+            (should-error (pichat-artifact-result-share) :type 'user-error)
+            (pichat-artifact-result-copy-report)))
       (when (buffer-live-p view) (kill-buffer view))
       (when (buffer-live-p chat) (kill-buffer chat)))))
 
@@ -1175,10 +1175,10 @@
                         "42" "elisp" temporary-file-directory))
             (with-current-buffer chat (cl-incf pichat-chat--source-generation))
             (with-current-buffer view
-              (should-error (pichat-artifact-elisp-share) :type 'user-error)
+              (should-error (pichat-artifact-result-share) :type 'user-error)
               (should (buffer-live-p view))
               (should (eq (window-buffer (selected-window)) view))
-              (pichat-artifact-elisp-copy-report)
+              (pichat-artifact-result-copy-report)
               (should (string-match-p "Last value: 42" (current-kill 0)))
               (pichat-view-quit))
             (with-current-buffer chat

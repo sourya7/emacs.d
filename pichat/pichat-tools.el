@@ -89,19 +89,6 @@ produce its existing error response."
                   name (pichat-tool-mutating-p tool) session))))
     (error nil)))
 
-(defun pichat-tools-instructions (names)
-  "Return distinct nonblank instruction strings for registered tool NAMES."
-  (delete-dups
-   (delq nil
-         (mapcar
-          (lambda (name)
-            (let* ((tool (gethash name pichat-tools-registry))
-                   (instructions (and tool (pichat-tool-instructions tool))))
-              (and (stringp instructions)
-                   (not (string-blank-p instructions))
-                   instructions)))
-          names))))
-
 (defun pichat-tools-call (tool params &optional session)
   "Call registered TOOL with structured PARAMS and return a result plist.
 The returned plist contains =:is-error= and =:value=.  When SESSION supplies an
@@ -122,16 +109,6 @@ this function so transports can apply their own asynchronous gate."
               :value (funcall (pichat-tool-function tool) params)))
     (error
      (list :is-error t :value (error-message-string err)))))
-
-(defun pichat-tools-call-async (tool params callback &optional session)
-  "Call synchronous TOOL with PARAMS and deliver its result to CALLBACK.
-Return nil after the callback.  SESSION supplies the tool's working directory.
-Asynchronous Emacs-defined tools are unsupported; this compatibility entry
-point does not defer execution or provide cancellation."
-  (unless (pichat-tool-p tool)
-    (error "Invalid Emacs tool"))
-  (funcall callback (pichat-tools-call tool params session))
-  nil)
 
 (defun pichat-tools-result-wire (result)
   "Convert structured tool RESULT into the existing bridge wire object."
@@ -163,9 +140,6 @@ point does not defer execution or provide cancellation."
        (list :isError t
              :content (vector (list :type "text" :text "Denied by user"))))
      :false-object :json-false :null-object nil)))
-
-(pichat-define-tool echo (:label "Echo" :description "Echo input from Emacs" :parameters (:type "object" :additionalProperties t))
-  (format "%S" params))
 
 (provide 'pichat-tools)
 ;;; pichat-tools.el ends here

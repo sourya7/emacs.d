@@ -2404,9 +2404,6 @@ runtime-manager previews."
         (set-window-point (selected-window) position)
         (set-window-start (selected-window) position)))))
 
-(defalias 'pichat-sessions-show-branch-at-point
-  #'pichat-sessions-preview-branch-at-point)
-
 ;;;###autoload
 (defun pichat-sessions-preview-return-to-history ()
   "Return to the exact live history buffer that opened this preview."

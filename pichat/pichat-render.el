@@ -134,26 +134,6 @@ assistant transcript text."
   "Return readable text for Agent MESSAGE plist."
   (pichat-render-content (plist-get message :content)))
 
-(defun pichat-render-thinking-texts (content)
-  "Return non-empty thinking strings from Pi message CONTENT."
-  (when (listp content)
-    (delq nil
-          (mapcar
-           (lambda (part)
-             (when (and (listp part)
-                        (string= (plist-get part :type) "thinking"))
-               (let ((thinking (plist-get part :thinking)))
-                 (cond
-                  ((and (stringp thinking)
-                        (not (string-empty-p (string-trim thinking))))
-                   thinking)
-                  ;; Some providers persist nested text chunks for thinking in
-                  ;; provider-native forms; accept them defensively.
-                  ((listp thinking)
-                   (let ((text (pichat-render-content thinking)))
-                     (unless (string-empty-p (string-trim text)) text)))))))
-           content))))
-
 (defun pichat-render-tool-args (args)
   "Return compact string for tool ARGS."
   (condition-case _
@@ -193,24 +173,6 @@ assistant transcript text."
                                     (plist-get event :errorMessage))))
       ("auto_retry_end" "[retry ended]")
       (_ (format "[%s]" type)))))
-
-(defun pichat-render-entry-text (entry)
-  "Return readable text for a Pi session ENTRY plist."
-  (let ((type (or (plist-get entry :type) (plist-get entry :entryType))))
-    (pcase type
-      ("message" (pichat-render-message-text (plist-get entry :message)))
-      ("custom_message" (format "[custom:%s]\n%s"
-                                 (or (plist-get entry :customType) "custom")
-                                 (pichat-render-content (plist-get entry :content))))
-      ("custom_entry" (format "[entry:%s]"
-                               (or (plist-get entry :customType) "custom")))
-      ("compaction_summary" (format "[compaction summary]\n%s"
-                                     (or (plist-get entry :summary)
-                                         "[summary unavailable]")))
-      ("branch_summary" (format "[branch summary]\n%s"
-                                 (or (plist-get entry :summary)
-                                     "[summary unavailable]")))
-      (_ (format "[%s]" (or type "entry"))))))
 
 (defun pichat-render--truncate (text limit)
   "Truncate TEXT according to LIMIT with a deterministic notice."

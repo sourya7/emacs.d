@@ -34,7 +34,6 @@
   process
   process-generation
   restart-operation
-  rpc
   buffer
   stderr-buffer
   stop-requested-p
@@ -55,7 +54,6 @@
   pending-responses
   event-log
   diagnostics
-  tool-registry
   event-handlers
   rpc-receive-buffer
   rpc-ready-p

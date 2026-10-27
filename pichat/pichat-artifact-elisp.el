@@ -116,16 +116,6 @@ TEXT is a function to call when capturing is complete; WRITER is suitable for
           (pichat-artifact-result-bounded
            (or (pichat-artifact-elisp--outcome-text result) ""))))
 
-(defun pichat-artifact-elisp-copy-report ()
-  "Copy this run's report (compatibility command)."
-  (interactive)
-  (pichat-artifact-result-copy-report))
-
-(defun pichat-artifact-elisp-share ()
-  "Insert this run's report into the originating draft (compatibility command)."
-  (interactive)
-  (pichat-artifact-result-share))
-
 (define-derived-mode pichat-artifact-elisp-result-mode pichat-artifact-result-mode
   "PiChat-Elisp-Result" "Read-only result of an explicit in-process Elisp run.")
 

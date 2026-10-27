@@ -146,34 +146,6 @@ configured and Pi is therefore assumed to share Emacs's filesystem, or
                     (plist-get args :column)))))
         (list :path host-path :line line :column column)))))
 
-(defun pichat-tool-enrichment-infer-old-text-location (old-text supplied-text)
-  "Infer OLD-TEXT's unique 1-based location in SUPPLIED-TEXT.
-Both strings are supplied by the caller; this function never reads a file.
-Return a plist whose :status is `unique', `not-found', `non-unique', or
-`unavailable'.  A unique result also contains :line and :column."
-  (cond
-   ((or (not (stringp supplied-text))
-        (not (pichat-tool-enrichment--nonempty-string-p old-text)))
-    (list :status 'unavailable))
-   (t
-    (let ((regexp (regexp-quote old-text))
-          (start 0)
-          matches)
-      (while (and (< (length matches) 2)
-                  (string-match regexp supplied-text start))
-        (push (match-beginning 0) matches)
-        (setq start (max (1+ (match-beginning 0)) (match-end 0))))
-      (pcase (length matches)
-        (0 (list :status 'not-found))
-        (1
-         (let* ((position (car matches))
-                (prefix (substring supplied-text 0 position))
-                (line (1+ (cl-count ?\n prefix)))
-                (last-newline (cl-position ?\n prefix :from-end t))
-                (column (1+ (- position (if last-newline (1+ last-newline) 0)))))
-           (list :status 'unique :line line :column column)))
-        (_ (list :status 'non-unique)))))))
-
 (defun pichat-tool-enrichment--truncate (text limit)
   "Return TEXT truncated to LIMIT characters."
   (if (and (stringp text) (> (length text) limit))

@@ -17,11 +17,6 @@ Pi hash-suffixes both members of a collision."
   (concat "mcp__" (replace-regexp-in-string "[^A-Za-z0-9_]" "_" server)
           "__" (replace-regexp-in-string "[^A-Za-z0-9_]" "_" tool)))
 
-(defun pichat-tool-selection-baseline (preset)
-  "Return detached built-in baseline of PRESET or nil for pass-through."
-  (let ((tools (plist-get preset :tools)))
-    (unless (eq tools :default) (copy-sequence tools))))
-
 (defun pichat-tool-selection-resolve (preset &optional selection)
   "Resolve PRESET and optional explicit SELECTION into a runtime snapshot.
 SELECTION is a plist with :builtins and :mcp (SERVER . TOOL) pairs.

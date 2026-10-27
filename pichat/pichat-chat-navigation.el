@@ -251,8 +251,6 @@ buffer and its text intact.  Applying never submits the prompt to Pi."
        compose-buffer target point))
     (message "PiChat composition cancelled")))
 
-(defalias 'pichat-chat-compose-send #'pichat-chat-compose-apply)
-
 (defun pichat-chat-navigation--fence (text language)
   "Return a Markdown fenced block containing TEXT tagged with LANGUAGE."
   (let* ((text (or text ""))

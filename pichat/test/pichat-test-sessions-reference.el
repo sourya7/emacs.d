@@ -614,13 +614,6 @@
         (should (equal "/tmp/work" (plist-get summary :cwd)))
         (should (equal "first prompt" (plist-get summary :first-user-prompt)))))))
 
-(ert-deftest pichat-vui-status-command-falls-back-without-vui-dependency ()
-  (let (called)
-    (cl-letf (((symbol-function 'pichat-status)
-               (lambda () (interactive) (setq called t))))
-      (call-interactively #'pichat-vui-status-dashboard)
-      (should called))))
-
 (ert-deftest pichat-rpc-event-log-is-bounded ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-rpc-event-log-limit 3))

@@ -1226,12 +1226,45 @@ their own extension contracts and are unaffected.
 `:async t` is unsupported and rejected when defining or registering an
 Emacs-defined tool; it is not silently converted into synchronous execution.
 Directly registered tools must also have nil `async-p` and string-or-nil
-`instructions`. The existing `pichat-tools-call-async` helper remains a
-synchronous callback adapter, not an asynchronous tool facility. Do not use a
-blocking subprocess or network wait in a tool body as an async workaround:
+`instructions`. Emacs-side callers use `pichat-tools-call` and receive the
+result directly. Loading the tool module registers no demonstration tools;
+define each desired tool explicitly. Do not use a blocking subprocess or
+network wait in a tool body as an async workaround:
 Emacs may be unresponsive until the tool returns. Pi extension UI requests
 already support selecting among choices without adding asynchronous Emacs tool
 execution.
+
+## Removed compatibility APIs
+
+The unused VUI facade and `pichat-vui` feature have been removed. Use
+`pichat-status`, `pichat-add-reference`, and `pichat-sessions-list` directly.
+For Emacs-tool approval policy, visit `pichat-approval-policy-file`; this is
+not the Pi-native permissions file.
+
+Legacy command names have been removed; use their current equivalents:
+
+- `pichat-chat-compose-send` → `pichat-chat-compose-apply` (draft-only, not send)
+- `pichat-sessions-show-branch-at-point` → `pichat-sessions-preview-branch-at-point`
+- `pichat-chat-show-transport-diagnostics` → `pichat-show-transport-diagnostics`
+- `pichat-chat-open-interactive-pi` → `pichat-diagnostics-open-interactive-pi`
+- `pichat-artifact-elisp-copy-report` → `pichat-artifact-result-copy-report`
+- `pichat-artifact-elisp-share` → `pichat-artifact-result-share`
+
+`pichat-tools-call-async` has been removed; use synchronous `pichat-tools-call`.
+The shipped `echo` tool is no longer defined or registered. Unused
+`pichat-session` slots `rpc` and `tool-registry` (including generated accessors
+and constructor keywords) have been removed; `backend-state` remains the
+backend extension point. `pichat-rpc-get-messages` is retained.
+
+The unused public helpers `pichat-tool-selection-baseline`,
+`pichat-tools-instructions`, `pichat-render-thinking-texts`,
+`pichat-render-entry-text`, `pichat-tool-enrichment-infer-old-text-location`,
+`pichat-chat-tool-ui-merge-block-tables`, and
+`pichat-chat-tool-ui-collapse-block` have also been removed without shims.
+Per-tool instructions still reach Pi's prompt guidelines; canonical rendering,
+explicit tool disclosure, and draft/response APIs remain the active paths.
+Restart Emacs after updating: already-loaded definitions and runtime structs
+are not migrated in place.
 
 ## Permissions
 

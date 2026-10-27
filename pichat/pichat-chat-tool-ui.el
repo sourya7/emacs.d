@@ -247,11 +247,6 @@ creates block records, markers, and overlays; rendered text is never edited."
         (setq pos next)))
     blocks))
 
-(defun pichat-chat-tool-ui-merge-block-tables (first second)
-  "Return FIRST after merging tool blocks from SECOND."
-  (maphash (lambda (key value) (puthash key value first)) second)
-  first)
-
 (defun pichat-chat-tool-ui-truncate-output (text limit notice-format)
   "Return TEXT truncated at LIMIT using NOTICE-FORMAT."
   (let ((text (or text "")))
@@ -456,13 +451,6 @@ buffer-edit and view-preservation mechanics."
 (defun pichat-chat-tool-ui-cycle-state (state)
   "Return top-level display state after STATE."
   (if (eq state 'summary) 'args 'summary))
-
-(defun pichat-chat-tool-ui-collapse-block (block view-states context)
-  "Set BLOCK to an explicit summary display and render it."
-  (when block
-    (setf (plist-get block :display-state) 'summary)
-    (puthash (plist-get block :view-state-key) 'summary view-states)
-    (pichat-chat-tool-ui-render-block block context)))
 
 (defun pichat-chat-tool-ui-block-at (blocks position)
   "Return innermost BLOCKS entry containing POSITION."

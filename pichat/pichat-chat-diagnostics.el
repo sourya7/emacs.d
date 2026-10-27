@@ -507,10 +507,5 @@ paths, prompts, command arguments, provider output, and credentials."
       (pichat-view-display buffer nil 'bury)
       buffer)))
 
-(defalias 'pichat-chat-show-transport-diagnostics
-  #'pichat-show-transport-diagnostics)
-(defalias 'pichat-chat-open-interactive-pi
-  #'pichat-diagnostics-open-interactive-pi)
-
 (provide 'pichat-chat-diagnostics)
 ;;; pichat-chat-diagnostics.el ends here

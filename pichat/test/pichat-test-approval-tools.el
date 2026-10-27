@@ -10,6 +10,19 @@
 
 ;;; Tool bridge unit tests
 
+(ert-deftest pichat-tools-load-does-not-register-demo-tools ()
+  ;; Use a fresh Emacs: the suite resets the registry between scenarios.
+  (with-temp-buffer
+    (let ((status
+           (call-process
+            (expand-file-name invocation-name invocation-directory)
+            nil (current-buffer) nil
+            "-Q" "--batch" "-L" pichat-directory
+            "--eval"
+            "(progn (require 'pichat-tools) (unless (zerop (hash-table-count pichat-tools-registry)) (error \"Loading tools registered unsolicited tools\")))")))
+      (ert-info ((buffer-string))
+        (should (eql 0 status))))))
+
 (ert-deftest pichat-tools-definitions-json-encodes-single-tool-as-array ()
   (pichat-test-with-clean-state
     (pichat-define-tool pichat-test-json
@@ -47,12 +60,13 @@
                      "never"))
      :type 'error)
     (should-not (fboundp 'pichat-tool/pichat-test-async))
-    (let ((original (gethash "echo" pichat-tools-registry)))
+    (let ((original (pichat-tools-register
+                     (pichat-tool-create :name "sentinel" :function #'ignore))))
       (should-error
        (pichat-tools-register
-        (pichat-tool-create :name "echo" :function #'ignore :async-p t))
+        (pichat-tool-create :name "sentinel" :function #'ignore :async-p t))
        :type 'error)
-      (should (eq original (gethash "echo" pichat-tools-registry))))
+      (should (eq original (gethash "sentinel" pichat-tools-registry))))
     (should-not (string-match-p "pichat-test-async"
                                 (pichat-tools-definitions-json)))
     (pichat-define-tool pichat-test-sync (:async nil) "sync")
@@ -62,25 +76,21 @@
                             nil)
                            :value)))))
 
-(ert-deftest pichat-tools-sync-callback-adapter-delivers-once-and-rejects-async ()
+(ert-deftest pichat-tools-call-reports-errors-once-and-rejects-async ()
   (pichat-test-with-clean-state
-    (let ((calls 0) results)
-      (pichat-define-tool pichat-test-callback ()
-        (cl-incf calls)
-        (error "tool failure"))
-      (should-not
-       (pichat-tools-call-async
-        (gethash "pichat-test-callback" pichat-tools-registry) nil
-        (lambda (result) (push result results))))
+    (let* ((calls 0)
+           (tool (pichat-tool-create
+                  :name "failure"
+                  :function (lambda (_params)
+                              (cl-incf calls)
+                              (error "tool failure"))))
+           (result (pichat-tools-call tool nil)))
       (should (= 1 calls))
-      (should (= 1 (length results)))
-      (should (plist-get (car results) :is-error))
-      (should (string-match-p "tool failure" (plist-get (car results) :value)))
-      (should-error
-       (pichat-tools-call-async
-        (pichat-tool-create :name "bad" :async-p t :function #'ignore)
-        nil #'ignore)
-       :type 'error))))
+      (should (plist-get result :is-error))
+      (should (string-match-p "tool failure" (plist-get result :value)))
+      (setf (pichat-tool-async-p tool) t)
+      (should-error (pichat-tools-call tool nil) :type 'error)
+      (should (= 1 calls)))))
 
 (ert-deftest pichat-tools-instructions-serialize-only-nonblank-guidance ()
   (pichat-test-with-clean-state

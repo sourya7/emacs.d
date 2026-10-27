@@ -17,6 +17,7 @@ Personal GNU Emacs configuration. `init.el` loads `core/package.el`, then `user/
 - Conditional module entries use `(basename . CONDITION)`.
 - Build repository paths with `my/emacs-local-dir`, `my/emacs-shared-dir`, or `my/emacs-main-dir`; do not hardcode them.
 - Read dependency source from `.local/elpaca/sources/<package>/` instead of guessing APIs.
+- Use jj (jujutsu) for commits
 
 ## In-repo packages
 

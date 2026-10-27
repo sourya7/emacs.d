@@ -14,6 +14,7 @@
   :defer t)
 
 (use-package pichat
+  :demand t
   :ensure `(:type file
             :main ,(my/emacs-main-dir "pichat/pichat.el")
             :files ("*.el"

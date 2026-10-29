@@ -3,50 +3,52 @@
 #+PLAN_ID: discover-and-select-pi-extension-tools-in-the-pichat-launcher
 #+PLAN_STATUS: draft
 #+PLAN_CREATED: 2026-10-29T04:03:42+00:00
-#+PLAN_UPDATED: 2026-10-29T04:03:42+00:00
+#+PLAN_UPDATED: 2026-10-29T14:16:10+00:00
 
 * Goal
-Expose installed Pi extension tools in PiChat's launch Tools picker and preserve explicit runtime tool policy, including pi-web-access's dynamically activated tools. Keep registered/allowed tools distinct from tools currently declared to the model.
+Let users discover extension tools and enable or disable them through simple checkboxes in PiChat's existing x Tools picker. A checked tool must be included in the runtime's startup policy and verified active before the configured launch succeeds, without extension-specific activation adapters. Registration, permission and activation remain implementation details rather than the normal picker mental model.
 
 * Scope
-- Included: target-qualified catalogue discovery, extension selections and preset baselines, startup argument generation, captured runtime/reconfiguration integration, pi-web-access activation compatibility, diagnostics, tests and user documentation.
-- Excluded: installing/updating packages, changing user web-search settings, enabling all extension tools implicitly, replacing MCP discovery wholesale, arbitrary live-runtime tool editing, implementing an upstream Pi RPC API, commits or implementation during planning.
+- Included: target-qualified catalogue discovery, extension selections and preset baselines, startup argument generation, captured runtime/reconfiguration integration, startup activation and verification, diagnostics, tests and user documentation.
+- Excluded: pi-web-access-specific support, loader/child dependency resolution or activation groups, extension-specific adapters, installing/updating packages, changing user web-search settings, enabling all extension tools implicitly, replacing MCP discovery wholesale, arbitrary live-runtime tool editing, implementing an upstream Pi RPC API, commits or implementation during planning.
 
 * Acceptance criteria
-- The picker lists registered inactive extension tools as well as active ones, using exact registered names and exposure metadata; hidden tools cannot be selected.
+- The existing x Tools picker gains an Extension tools section with enabled/disabled checkboxes, tool names and useful descriptions. Discovery includes registered inactive tools, but the normal picker does not display inactive labels or require users to understand exposure. Hidden tools are unselectable; technical exposure/activation information belongs in optional details or diagnostics.
+- Apply, Cancel, Reset to preset and discovery refresh cover extension tools. Discovery progress/errors are clear without adding another top-level launcher option.
 - Discovery runs against the intended executable/target, cwd, environment, resource/trust configuration and relevant model, without the preset allowlist hiding candidates. It is explicit, bounded, cancellable and not repeated on each redraw.
-- Selected extension names reach the startup allowlist; unselected tools remain unavailable under Pi's policy. Existing explicit presets retain an empty extension baseline; standard stays pass-through.
+- Checked extension names reach the startup allowlist and PiChat ensures they are active before accepting a configured launch or replacement as successful, without a model request. Missing tools, rejected activation or unsupported activation semantics produce a clear failure, never silent checked-but-unavailable success. Unchecked tools are omitted under Pi's explicit selection policy. Existing explicit presets retain an empty extension baseline; standard stays pass-through.
 - Selection snapshots survive restart, retry and restore. Effective-change comparisons include extension choices, and missing/stale selections are diagnosed rather than silently broadened.
-- pi-web-access loader and child-tool dependencies are handled or explicitly diagnosed, including renamed and disabled tools. PiChat does not repeatedly force dynamically inactive tools active.
+- Enabling is an initial launch/replacement guarantee, not continuous enforcement: PiChat does not fight later extension-managed changes or repeatedly reactivate tools. State this boundary clearly in documentation; extension-specific loader dependencies remain outside scope and are not automatically resolved.
 - Catalogue protocol data is bounded and versioned, does not become conversation content, and cannot silently fall through into a model prompt when the helper command is unavailable.
 - Focused tests and pichat/test/run-tests.sh --full pass with isolated state and deterministic fake providers. Live Emacs launcher checks are recorded; README.md and GLOSSARY.md match implemented behavior.
 
 * Approach and decisions
 - Current implementation: pichat-tool-picker.el offers built-ins/MCP only; pichat-mcp-discovery.el runs pi mcp list --json; pichat-tool-selection.el accepts :builtins/:mcp; pichat-presets.el restricts explicit tool names to built-ins. pichat-reconfigure.el captures selections and compares generated arguments.
-- Recommended boundary: a dedicated minimal catalogue extension, independent of the optional Emacs-tool bridge, exposing a versioned command over a validated internal extension-UI envelope. Prefer supported APIs getAllTools/getActiveTools; do not parse package source or infer provenance from name prefixes.
+- Helper location: pichat/bridge/pichat-tool-control.ts, shipped with PiChat and separate from pichat/bridge/pichat-bridge.ts (the optional Emacs-defined-tool bridge). It owns catalogue discovery and startup enable/verification. PiChat explicitly loads it with --extension for discovery probes and runtimes requiring extension-tool configuration; no installation into ~/.pi/agent/extensions/ or separate npm package is required. Resolve local paths through PiChat's package location, not hard-coded repository paths. SSH targets need a runtime-accessible helper deployment/path strategy, to be settled in Phase 1; never pass a host-only local path to remote Pi.
+- Recommended boundary: this dedicated minimal tool-control extension exposes a versioned command over a validated internal extension-UI envelope. Prefer supported APIs getAllTools/getActiveTools; do not parse package source or infer provenance from name prefixes.
 - Use a temporary no-session RPC probe for pre-launch discovery; request the catalogue after startup readiness and close stdin for orderly shutdown. Load extensions under the intended trust policy, without the preset's restrictive --tools. Discovery executes trusted extension startup code: no-session is not a side-effect sandbox. Define handling for startup dialogs, extension errors, no-model environments, wrappers and SSH helper deployment before implementing the probe.
 - Preserve existing MCP discovery initially. Document that its shell listing cannot see extension-registered MCP servers; avoid claiming the combined catalogue is universally complete.
-- Add :extensions alongside :builtins/:mcp and a separate explicit preset extension baseline; union exact selected names into startup arguments. Keep selection permission distinct from observed activation. Preserve exposure metadata without promising activation semantics unsupported by Pi.
+- Add :extensions alongside :builtins/:mcp and a separate explicit preset extension baseline; union exact checked names into startup arguments. The user-facing contract is enabled/disabled, not merely allowed. Internally retain registration/exposure/activation metadata to validate eligibility and startup results; hide these distinctions from normal checkbox labels.
+- Extend the dedicated helper with a bounded, versioned startup enable/verify operation for the actual launched process. After startup handlers, ensure selected extension tools are active through supported Pi APIs and verify the resulting set before launch/replacement commit. Do not merely copy the probe's active set or rely on --tools alone. Establish exact ordering and unsupported-exposure behavior with real-Pi fixtures in Phase 1; fail clearly rather than claim activation that Pi cannot provide.
+- Do not continuously enforce activation or override every before_agent_start hook. Later extension-managed activation changes are outside the initial enable guarantee. No automatic loader execution, dependency expansion, eager package conversion or package-specific adapter is included.
 - Treat catalogue results as snapshots: tools can register after startup. Cache within the launch draft, invalidate on relevant context changes, and validate selected names against the actual launched runtime before accepting a successful configured launch. Do not re-use a catalogue from an unrelated live runtime.
-- Recommended pi-web-access support: a small versioned adapter for coherent extension-managed activation groups, but only if configured/renamed child membership can be established reliably. The documented generic catalogue does not expose loader dependencies or guaranteed package provenance. Phase 1 must settle a reliable adapter contract or explicitly choose generic individual selection with dependency warnings; do not guess or silently enable extras.
+- User decision: skip pi-web-access-specific integration because of its tooling/activation approach. No adapter, dependency grouping, package-specific diagnosis or compatibility test matrix is required. Its tools may appear through ordinary generic discovery; this is not a promise that arbitrary selections satisfy its loader dependencies. Do not blacklist or uninstall the package as part of this scope. Generic discovery/selection remains extension-agnostic.
 - Source baseline: installed Pi 1.4.0 docs at /nix/store/qk1fay010yp0c2kxnn7pp23z4cjj7yhw-pi-coding-agent-1.4.0/lib/pi/docs/: cli.md (Tools), extensions.md (Tool exposure, dynamic activation, lifecycle), rpc-commands.md (prompt/get_commands; no general tool catalogue command), rpc-extension-ui.md (transport), mcp.md (shell commands do not load extensions), sdk.md (SDK/CLI resource differences).
 - Additional references: installed Pi examples/extensions/dynamic-tools.ts; pichat/bridge/pichat-bridge.ts; /home/mojo/.pi/agent/npm/node_modules/pi-web-access/tool-activation.ts:63-151, index.ts:2290-2298 and README.md:1190-1222 (installed package 0.45.0). Recheck versions on execution.
 - Terminology follows pichat/GLOSSARY.md: runtime configuration is not a saved Pi session property; tool declaration is distinct from extension loading.
 
 * Tasks
-** Phase 1: Validate the catalogue and activation contracts
-*** TODO Establish supported discovery and dependency contracts
-Re-read current APIs and relevant code, reproduce the allowlist experiment with durable isolated fixtures, and decide the bounded catalogue envelope, helper capability verification, startup readiness/dialog handling, exposure policy and target delivery. Verify whether package provenance/dependency metadata is available; resolve the adapter versus explicit-warning decision before implementing it. Record any material scope decision requiring user approval.
+** Phase 1: Validate the catalogue contract
+*** TODO Establish supported discovery contracts
+Re-read current APIs and relevant code, reproduce the allowlist experiment with durable isolated fixtures, and decide the bounded catalogue envelope, helper capability verification, startup readiness/dialog handling, exposure policy and target delivery. Use only metadata actually provided by supported APIs; do not infer package provenance or loader dependencies. Establish and test a supported startup activation/verification barrier after extension startup handlers, including model-only/deferred/codemode/hidden exposure eligibility and clear failure behavior. Record any material scope decision requiring user approval.
 *** TODO Implement and verify target-qualified catalogue discovery
-Add the dedicated helper and asynchronous Emacs discovery boundary with timeout, cancellation, bounded payload validation, error states and draft-scoped invalidation. Do not contact a model. Cover inactive and session_start-registered tools, helper absence, startup failure and cleanup with real Pi fixtures.
+Add pichat/bridge/pichat-tool-control.ts and the asynchronous Emacs discovery boundary with timeout, cancellation, bounded payload validation, error states and draft-scoped invalidation. Do not contact a model. Cover inactive and session_start-registered tools, helper absence, startup failure and cleanup with real Pi fixtures.
 ** Phase 2: Integrate extension tool selection
 *** TODO Extend presets, selection snapshots and launch picker
-Add explicit extension baseline/selection support, metadata-aware UI and validation, exact-name startup argument generation and unchanged pass-through behavior. Keep MCP policy intact; distinguish observed activation from selected permission.
+Add explicit extension baseline/selection support, simple enable/disable checkboxes with descriptions inside x Tools, exact-name startup argument generation and unchanged pass-through behavior. Extend Apply/Cancel/Reset and refresh; keep technical state in details/diagnostics and MCP policy intact.
 *** TODO Integrate lifecycle validation and reconfiguration
-Carry selections through capture, effective-change detection, launch verification, restart, retry and restore. Diagnose changed/missing tools before treating a replacement as committed; preserve existing source/runtime guards and unsupported-target behavior.
-** Phase 3: Support web activation and close verification
-*** TODO Implement the agreed pi-web-access activation treatment
-Use the Phase 1 decision. Test loader-only/partial-child selection, full configured groups, disabled/renamed tools, eager/dynamic/deferred modes and saved-session activation behavior. Never claim dependency discovery based solely on naming conventions.
+Carry selections through capture, effective-change detection, restart, retry and restore. Implement startup enable/verify against the actual process before launch/replacement commit; reject missing tools or failed activation clearly. Test a registered inactive tool becoming active, failure without model calls, startup ordering, and no continuous reactivation after extensions later change state. Preserve existing source/runtime guards and unsupported-target behavior.
+** Phase 3: Close generic verification
 *** TODO Complete regression tests, live UI checks and documentation
 Run focused tests and pichat/test/run-tests.sh --full; follow TESTING_GUIDELINES.md isolation requirements. Verify launcher interaction in live Emacs, including cancel/reset and asynchronous refresh. Update README.md/GLOSSARY.md consistently; record test failures and outstanding manual checks rather than marking incomplete work done.
 
@@ -54,14 +56,17 @@ Run focused tests and pichat/test/run-tests.sh --full; follow TESTING_GUIDELINES
 - Plan status: draft
 - Selected scope: none (planning only)
 - Last verified result: prior isolated Pi 1.4.0 experiment confirmed that --tools filters getAllTools and setActiveTools cannot restore omitted extension tools; no implementation or repository test suite run.
-- Next action: review the draft; when explicitly authorized to run without a scope, execute Phase 1 only, beginning with the catalogue/dependency contract task.
-- Blockers: no external blocker; helper transport, target delivery and reliable web dependency/provenance treatment remain Phase 1 design decisions.
+- Next action: review the revised simple enabled/disabled UI and startup activation guarantee; when explicitly authorized to run without a scope, execute Phase 1 only, beginning with the catalogue and startup activation contract. pi-web-access-specific support remains excluded.
+- Blockers: no external blocker; helper path is settled as pichat/bridge/pichat-tool-control.ts, while protocol transport, SSH deployment and supported startup activation ordering/eligibility remain Phase 1 design decisions.
 
 * Verification
 - Planning evidence: source/doc inspection and temporary isolated real-Pi probe completed before plan creation. Registered probe_loader/probe_child; unrestricted startup exposed both, --tools read exposed neither, loader-only allowlist exposed only the loader, and including both exposed both. Attempted setActiveTools did not bypass the allowlist. Probe used no user credentials/configuration or model calls; temporary files were removed.
 - The experiment is not a durable regression test and does not establish full web activation, restart or SSH behavior. Recreate its assertions in the test suite during execution.
 - Implementation tests and live Emacs verification: not run (planning only).
-- Structural validation: run plans.py check for this record after editing.
+- Structural validation: run plans.py check for this record after editing; this does not verify the proposed startup activation guarantee.
 
 * History
+- 2026-10-29T14:16:10+00:00: Recorded pichat/bridge/pichat-tool-control.ts as the bundled helper path, separate from the optional Emacs-tool bridge; explicit loading and remote-path constraints documented. Planning only.
 - 2026-10-29T04:03:42+00:00: Created as draft.
+- 2026-10-29T14:03:26+00:00: Narrowed draft at user request: removed pi-web-access-specific adapter, dependency handling and compatibility task. Retained generic discovery, selection and activation-state distinction; no implementation authorized.
+- 2026-10-29T14:13:20+00:00: Revised at user request to simple enabled/disabled discovery-backed checkboxes. Removed inactive labels from normal UI and strengthened checked-tool semantics from permission-only to initial activation verified before successful launch/replacement. Retained technical state internally and excluded continuous enforcement and pi-web-access-specific handling. No implementation authorized.

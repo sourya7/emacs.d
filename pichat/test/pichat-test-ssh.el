@@ -3,6 +3,19 @@
 (require 'pichat-test-support)
 (require 'pichat-artifact-runner)
 
+(defun pichat-test-ssh--matching-process-p (pattern)
+  "Check remote processes matching PATTERN in `default-directory'.
+Reject probe errors rather than mistaking them for successful shutdown."
+  (with-temp-buffer
+    (let ((status (process-file "pgrep" nil t nil "-af" pattern)))
+      (should (memq status '(0 1)))
+      (if (= status 0)
+          (progn
+            (should-not (string-empty-p (string-trim (buffer-string))))
+            t)
+        (should (string-empty-p (string-trim (buffer-string))))
+        nil))))
+
 (ert-deftest pichat-integration-ssh-rpc-streams-and-stops-cleanly ()
   (let ((base (getenv "PICHAT_TEST_SSH_DIRECTORY")))
     (unless (and (stringp base) (file-remote-p base))
@@ -16,6 +29,11 @@
               base)))
            (prefix (file-remote-p remote-root))
            (runtime-root (file-local-name remote-root))
+           ;; Match the unique fixture path without matching pgrep itself.
+           (process-pattern
+            (concat "[p]" (substring
+                           (file-name-nondirectory
+                            (directory-file-name runtime-root)) 1)))
            (remote-project (expand-file-name "project/" remote-root))
            (runtime-project (expand-file-name "project/" runtime-root))
            (remote-agent (expand-file-name "agent/" remote-root))
@@ -75,20 +93,18 @@
                      (text (prin1-to-string (plist-get response :data))))
                 (should (string-match-p "stream ok" text)))
               (pichat-test-assert-provider-script-consumed remote-status)
+              ;; Prove this remote probe sees the live fixture before relying
+              ;; on its absence as evidence that the remote child exited.
+              (should (file-remote-p default-directory))
+              (should (pichat-test-ssh--matching-process-p process-pattern))
               (pichat-rpc-stop session)
               (pichat-test-wait-until
                (lambda () (not (pichat-session-alive-p session)))
                10 "remote Pi process stop")
-              (with-temp-buffer
-                (let ((status
-                       (process-file
-                        "pgrep" nil t nil "-af"
-                        (concat "[p]" (substring
-                                      (file-name-nondirectory
-                                       (directory-file-name runtime-root))
-                                      1)))))
-                  (should (or (= status 1)
-                              (string-empty-p (string-trim (buffer-string)))))))
+              (pichat-test-wait-until
+               (lambda ()
+                 (not (pichat-test-ssh--matching-process-p process-pattern)))
+               10 "remote Pi child disappearance (verified with pgrep)")
               ;; Launch a saved conversation on the same captured SSH target
               ;; after the original writer has stopped.  No fallback to local
               ;; paths or a different target is permitted.

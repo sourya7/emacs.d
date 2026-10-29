@@ -1,0 +1,71 @@
+#+TITLE: Enable safe SSH runtime reconfiguration
+#+TODO: TODO IN-PROGRESS BLOCKED | DONE
+#+PLAN_ID: enable-safe-ssh-runtime-reconfiguration
+#+PLAN_STATUS: draft
+#+PLAN_CREATED: 2026-10-29T04:17:38+00:00
+#+PLAN_UPDATED: 2026-10-29T04:17:38+00:00
+
+* Goal
+Remove PiChat's blanket SSH reconfiguration restriction so a supported SSH runtime can replace its startup preset/Tools and reload its Pi session, while preventing a replacement from starting when old-process termination is uncertain.
+
+* Scope
+- Included: evidence-based SSH shutdown semantics, transport-aware restart eligibility and shutdown confirmation, complete SSH reconfiguration and recovery coverage, and user documentation.
+- Preserve runtime identity, owner scope, captured SSH target/path context, run-local model, draft, canonical restart snapshot, and existing saved/unwritten Pi session semantics as defined in pichat/GLOSSARY.md.
+- Excluded: changing ordinary launch/reuse policy, enabling ephemeral reconfiguration, arbitrary-wrapper support, remote reconnection/resumption, distributed session locking, or guarantees against unrelated external Pi writers. No commits or destructive network experiments without authorization.
+
+* Acceptance criteria
+- A persistent idle SSH runtime can change preset/Tools through the existing reconfiguration UI without a blanket transport blocker.
+- A saved Pi session retains its ID, active branch, transcript and supported settings; an eligible unwritten session follows existing new-Pi-session-ID behavior.
+- Runtime ID, owner scope, chat/draft and captured destination remain stable; no local execution fallback occurs.
+- Replacement starts only after evidence tied to the old process establishes shutdown. Disconnection, probe failure, timeout, stale callback or cancellation cannot be mistaken for successful termination.
+- Failed post-stop attempts retain the read-only restart snapshot and support applicable retry/restore/leave-stopped actions without duplicate writers.
+- Existing local behavior and other preflight guards remain intact.
+- Unit suite, full real-Pi suite, and focused isolated real-SSH restart tests pass; live Emacs UI verification confirms the action is enabled and usable on SSH.
+
+* Approach and decisions
+- Relevant code: pichat/pichat-reconfigure.el (preflight-blockers, stop-and-wait and restart transaction), pichat/pichat-transport.el (TRAMP process creation), pichat/pichat-rpc.el (stop/sentinel/process generation), pichat/pichat.el (Transient menu/recovery).
+- Current guards reject non-local transport both during preflight and shutdown. pichat-rpc-stop uses delete-process; the existing restart waiter checks Emacs process liveness and session state.
+- Do not infer that SSH shutdown is broken from those guards. Inspect the installed Emacs/TRAMP implementation and relevant documented guarantees before choosing a mechanism.
+- Prefer existing reliable TRAMP process identity/termination facilities if supported by evidence. If insufficient, add the smallest transport-owned identity and bounded exit-confirmation mechanism. Do not use a broad command-line pgrep pattern as production process identity or kill unrelated processes.
+- Keep confirmation asynchronous/bounded and scoped to the captured transport, old process and process generation. A successful request to terminate is not automatically an exit confirmation. Account for PID reuse if using remote PIDs.
+- Distinguish safe retry after confirmed shutdown from uncertain old-process survival; audit recovery as well as initial restart before enabling SSH.
+- Existing source reservations are Emacs-local; this change does not promise protection against external writers.
+
+* Tasks
+** TODO Establish the SSH termination contract
+- Inspect the actual installed TRAMP make-process/delete-process/sentinel path, including remote PID ownership and connection failure behavior; record concrete source references and supported guarantees.
+- Reinspect current restart and recovery paths and determine the minimal transport-aware shutdown barrier, including timeout, cancellation and uncertain-outcome handling.
+- Use isolated fixtures to demonstrate normal termination and failure behavior; simulate connection loss in an owned test transport, never by disrupting shared TRAMP connections or the host network.
+- Record the chosen design and its limitations before implementation. Escalate if it requires substantially broader transport supervision.
+** TODO Implement transport-aware shutdown and enable SSH reconfiguration
+- Replace local-only gates with supported-capability validation and implement the selected shutdown confirmation path.
+- Preserve existing local guarantees, process-generation checks, operation ownership and bounded failure handling.
+- Audit replacement startup and retry/restore paths so uncertainty cannot bypass shutdown confirmation; retain captured target and path mappings throughout.
+** TODO Cover restart ordering and failure/recovery behavior
+- Replace the blanket-rejection regression with behavior tests for supported SSH restart and rejection of unsupported/uncertain cases.
+- Assert no replacement before confirmed exit; test timeout, probe failure, transport loss, stale callbacks, cancellation, and retry after uncertain shutdown.
+- Cover saved-session and eligible unwritten-session identity behavior, settings/transcript verification, drafts and failure snapshots, and existing local shutdown behavior.
+** TODO Verify end-to-end SSH reconfiguration and document support
+- Extend pichat/test/pichat-test-ssh.el with real reconfiguration using isolated fake-provider, agent and session state; the current test only stops one runtime and independently opens a different saved session.
+- Verify the old remote process is present before shutdown and absent before replacement, and assert stable runtime identity, same saved source/branch/settings, new configuration, and SSH destination throughout.
+- Exercise eligible unwritten restart and post-stop failure/recovery as practical with deterministic fixtures.
+- Run pichat/test/run-tests.sh, pichat/test/run-tests.sh --full, and focused real-SSH tests with the known working target below. Report test-file sizes per TESTING_GUIDELINES.md.
+- Verify the existing reconfiguration menu in live Emacs with an isolated runtime; do not restart a user's active conversation.
+- Update pichat/README.md and keep pichat/GLOSSARY.md consistent, describing supported shutdown guarantees and remaining limitations rather than an unconditional SSH ban.
+
+* Checkpoint
+- Plan status: draft
+- Selected scope: none (planning only)
+- Last verified result: prior investigation passed the strengthened real-SSH normal-stop test and unit suite; no SSH reconfiguration implementation exists yet.
+- Next action: review and approve; when execution is requested, start by establishing the actual TRAMP termination contract.
+- Blockers: none for planning; shutdown design remains an explicit investigation task.
+
+* Verification
+- Prior investigation, not execution of this plan: pichat-integration-ssh-rpc-streams-and-stops-cleanly passed (1/1, approximately 5.3 seconds) using PICHAT_TEST_SSH_DIRECTORY=/ssh:mojo@bigbox.lan:/tmp/ and PICHAT_TEST_SSH_PI=/run/current-system/sw/bin/pi, Pi 1.4.0.
+- The SSH destination is this same host, but the test uses real SSH/TRAMP. It proves normal shutdown on this setup, not network-failure guarantees or complete reconfiguration.
+- Prior test change in pichat/test/pichat-test-ssh.el adds a positive live-process baseline, rejects pgrep errors, checks remote directory context, and waits for remote process disappearance. Preserve this existing worktree change.
+- Prior unit run: 842 tests, 834 expected results, 8 skipped, 0 unexpected; log /tmp/pichat-ssh-review-unit.log is temporary supporting evidence, not a durable dependency.
+- No implementation or additional tests run as part of creating this plan.
+
+* History
+- 2026-10-29T04:17:38+00:00: Created draft after user requested a plan to remove the SSH reconfiguration restriction; captured prior evidence and separated normal-stop success from unverified failure semantics.

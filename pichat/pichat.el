@@ -1580,7 +1580,7 @@ This is the first implementation check; it does not send an LLM prompt."
   (interactive)
   (pichat--reconfigure-recovery-run 'restore))
 
-(transient-define-suffix pichat-reconfigure-leave-stopped ()
+(transient-define-suffix pichat-reconfigure-leave-stopped-action ()
   "Keep the failed runtime and readable last-synchronized snapshot stopped."
   (interactive)
   (pichat-reconfigure-leave-stopped (plist-get (transient-scope) :session))
@@ -1602,7 +1602,7 @@ This is the first implementation check; it does not send an LLM prompt."
   [["Failed restart" :description pichat--reconfigure-recovery-description
     ("r" "Retry requested" pichat-reconfigure-retry)
     ("o" "Restore previous" pichat-reconfigure-restore)
-    ("q" "Leave stopped" pichat-reconfigure-leave-stopped)]])
+    ("q" "Leave stopped" pichat-reconfigure-leave-stopped-action)]])
 
 (transient-define-prefix pichat-reconfigure-menu (&optional scope)
   "Choose a new preset or Tools for this retained runtime."

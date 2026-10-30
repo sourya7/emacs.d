@@ -147,10 +147,7 @@ Undercover and its `dash` and `shut-up` dependencies. Coverage runs reject
 from `pichat-chat.el`'s live projection callback execute under a different
 instrumented function's counter scope. The coverage runner excludes
 `pichat-chat.el` instead of treating those synthetic `args-out-of-range`
-failures as production defects. Undercover's symbol-wide metadata also loses
-the original stop points when `pichat-reconfigure-leave-stopped` is redefined
-as a Transient suffix in another file; that original definition is omitted
-from the report with a warning. Percentages describe only the instrumented
+failures as production defects. Percentages describe only the instrumented
 subset, **not whole-package coverage**. The coverage runner fails on any
 unexpected test result or reporting error; it cannot silently accept a
 failed report from Undercover's nonfatal exit hook. Undercover measures Edebug

@@ -118,5 +118,80 @@
     (puthash "start" "42; exit 0" data)
     (should-error (pichat-process-lifetime-identity data))))
 
+(ert-deftest pichat-process-lifetime-procfs-absence-and-pid-reuse-need-healthy-baseline ()
+  (dolist (mode '(live absent reused wrong-boot))
+    (dolist (require-live '(nil t))
+      (pichat-test-with-unit-session (session process)
+        (let* ((identity (pichat-test-lifetime--identity process))
+               (transport (pichat-transport--create :id 'fixture :kind 'ssh))
+               (make-local (symbol-function 'pichat-transport-make-process))
+               ready result cancel)
+          (pcase mode
+            ('absent (delete-process process))
+            ('reused (plist-put identity :start "0"))
+            ('wrong-boot (plist-put identity :boot "00000000-0000-0000-0000-000000000000")))
+          (process-put process 'pichat-lifetime identity)
+          (unwind-protect
+              (cl-letf (((symbol-function 'pichat-transport-make-process)
+                         (lambda (_transport cwd &rest args)
+                           (apply make-local pichat-transport-local cwd args))))
+                (setq cancel
+                      (pichat-process-lifetime-watch
+                       transport default-directory process 2 require-live
+                       (lambda () (setq ready t))
+                       (lambda (success reason) (setq result (list success reason)))))
+                (if (eq mode 'live)
+                    (progn
+                      (pichat-test-wait-until (lambda () ready) 2 "live procfs baseline")
+                      (should-not result)
+                      (delete-process process)
+                      (pichat-test-wait-until (lambda () result) 2 "captured lifetime exit")
+                      (should (car result)))
+                  (pichat-test-wait-until (lambda () result) 2 "absent/reused/invalid baseline")
+                  (if (or require-live (eq mode 'wrong-boot))
+                      (progn (should-not ready) (should-not (car result)))
+                    (should ready)
+                    (should (car result)))))
+            (when cancel (funcall cancel))))))))
+
+(ert-deftest pichat-process-lifetime-procfs-read-failure-after-ready-is-not-exit ()
+  (dolist (fault '(boot-change boot self-stat writer-stat))
+    (pichat-test-with-unit-session (session process)
+      (pichat-test-with-temp-dir dir
+        (let* ((identity (pichat-test-lifetime--identity process))
+               (transport (pichat-transport--create :id 'fixture :kind 'ssh))
+               (make-local (symbol-function 'pichat-transport-make-process))
+               (flag (expand-file-name "fail-probe" dir))
+               (path (pcase fault
+                       ((or 'boot-change 'boot) "/proc/sys/kernel/random/boot_id")
+                       ('self-stat "/proc/self/stat")
+                       ('writer-stat (format "/proc/%d/stat" (process-id process)))))
+               (failure (if (eq fault 'boot-change)
+                            "printf '00000000-0000-0000-0000-000000000000\\n'; return 0"
+                          "return 1"))
+               (prefix (format "cat() { if [ -f %s ] && [ \"$1\" = %s ]; then %s; fi; command cat \"$@\"; }\n"
+                               (shell-quote-argument flag) (shell-quote-argument path) failure))
+               ready result cancel)
+          (process-put process 'pichat-lifetime identity)
+          (unwind-protect
+              (cl-letf (((symbol-function 'pichat-transport-make-process)
+                         (lambda (_transport cwd &rest args)
+                           (let* ((command (plist-get args :command))
+                                  (script (car (last command))))
+                             (apply make-local pichat-transport-local cwd
+                                    (plist-put args :command (list "sh" "-c" (concat prefix script))))))))
+                (setq cancel
+                      (pichat-process-lifetime-watch
+                       transport default-directory process 2 t
+                       (lambda () (setq ready t))
+                       (lambda (success reason) (setq result (list success reason)))))
+                (pichat-test-wait-until (lambda () ready) 2 "healthy baseline before read failure")
+                (write-region "fail" nil flag nil 'silent)
+                (pichat-test-wait-until (lambda () result) 2 "unreadable procfs fails closed")
+                (should-not (car result))
+                (should (process-live-p process))
+                (should-not (pichat-process-lifetime-confirmed-p process)))
+            (when cancel (funcall cancel))))))))
+
 (provide 'pichat-test-process-lifetime)
 ;;; pichat-test-process-lifetime.el ends here

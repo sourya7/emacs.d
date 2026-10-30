@@ -280,15 +280,19 @@ It must be repeated immediately before a restart transaction stops Pi."
   (plist-put operation :observer-cancellers nil))
 
 (defun pichat-reconfigure--shutdown-safe-p (operation)
-  "Whether OPERATION has discharged every previous SSH writer obligation."
+  "Whether OPERATION retains its target and has confirmed all SSH writer exits."
   (let* ((session (plist-get operation :session))
-         (transport (and (pichat-session-p session)
-                         (pichat-session-transport session))))
-    (or (and transport (eq (pichat-transport-kind transport) 'local))
-        (and transport (eq (pichat-transport-kind transport) 'ssh)
-             (consp (plist-get operation :shutdown-obligations))
-             (cl-every #'pichat-process-lifetime-confirmed-p
-                       (plist-get operation :shutdown-obligations))))))
+         (current-transport (and (pichat-session-p session)
+                                 (pichat-session-transport session)))
+         (transport (or (plist-get operation :transport) current-transport)))
+    ;; Never reinterpret an SSH obligation as local shutdown, even if some
+    ;; intervening code has rebound the runtime's captured destination.
+    (and transport (eq transport current-transport)
+         (or (eq (pichat-transport-kind transport) 'local)
+             (and (eq (pichat-transport-kind transport) 'ssh)
+                  (consp (plist-get operation :shutdown-obligations))
+                  (cl-every #'pichat-process-lifetime-confirmed-p
+                            (plist-get operation :shutdown-obligations)))))))
 
 (defun pichat-reconfigure--prepare-shutdown (operation recovery continuation)
   "Prepare exit observers before stopping any process for OPERATION.
@@ -593,13 +597,15 @@ An operation must recheck the origin and state before stopping the process."
 (declare-function pichat--selected-file-reserved-p "pichat" (key))
 
 (defun pichat-reconfigure--owned-p (operation &optional phase)
-  "Return non-nil if OPERATION still owns its runtime and process lifetime.
+  "Return non-nil if OPERATION still owns its runtime, target and process.
 PHASE, when non-nil, must match.  Before replacement startup there is no new
 process generation to check."
   (let* ((session (plist-get operation :session))
          (buffer (plist-get operation :chat))
          (generation (plist-get operation :replacement-generation)))
     (and (eq operation (pichat-session-restart-operation session))
+         (or (null (plist-get operation :transport))
+             (eq (plist-get operation :transport) (pichat-session-transport session)))
          (or (not phase) (eq phase (plist-get operation :phase)))
          (buffer-live-p buffer)
          (eq buffer (pichat-session-buffer session))
@@ -802,6 +808,14 @@ CONTINUATION receives the authoritative response data on success."
     (pichat-reconfigure--send
      operation 'starting "get_state" nil
      (lambda (ready-state)
+       ;; Ordinary SSH launch can remain usable without Linux procfs, but a
+       ;; guarded replacement must itself be identifiable before loading the
+       ;; saved source (or committing an unwritten one).  Otherwise a failed
+       ;; reload would leave an unobservable writer that cannot be recovered.
+       (when (and (eq (pichat-transport-kind (pichat-session-transport session)) 'ssh)
+                  (not (pichat-process-lifetime-supported-p
+                        (plist-get operation :replacement-process))))
+         (user-error "Replacement Pi has no verified Linux actual-Pi process identity"))
        (plist-put operation :phase 'loading)
        (if (plist-get operation :empty-unwritten)
            (pichat-reconfigure--restore-settings operation ready-state)

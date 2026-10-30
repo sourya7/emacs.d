@@ -1,0 +1,77 @@
+#+TITLE: Unify PiChat diagnostics into a runtime troubleshooting report
+#+TODO: TODO IN-PROGRESS BLOCKED | DONE
+#+PLAN_ID: pichat-unified-diagnostics
+#+PLAN_STATUS: draft
+#+PLAN_CREATED: 2026-10-30T05:36:49+00:00
+#+PLAN_UPDATED: 2026-10-30T05:36:49+00:00
+
+* Goal
+Replace the separate safe problem summary and raw transport dump with one useful, runtime-owned troubleshooting report. Make runtime/process state, active Pi session and saved-session paths immediately useful even when no problems have been recorded; keep supporting evidence accessible without a second view.
+
+* Scope
+- Included: one diagnostics mode/buffer per runtime; cached overview and expandable evidence; all existing diagnostic domains; removal of diagnostic setup chooser and visible shortcut legends; command/menu migration, tests and documentation.
+- Preserve: runtime ownership across stop/source changes, rejection of owner-dependent actions after forget, refresh and return behavior, collector-owned retention, backend capability boundaries, and bounded evidence rendering.
+- Excluded: new health probes, automatic repair, RPC tracing/logging framework, remote filesystem checks, new retention policy, indiscriminate internal-object/environment dumps, redesign of Runtime Preview/Session History/Tool Details, and shortcut cleanup in unrelated buffers.
+- Standalone setup/configuration helpers remain available; remove their chooser from diagnostics, not useful independent commands.
+- Related completed work: [[file:../archive/pichat-diagnostics-improvements/plan.org][previous diagnostics improvements]]. Retain its ownership/lifecycle improvements; replace its two-view presentation rather than reopening its completed checklist.
+
+* Acceptance criteria
+- Exactly one diagnostics inspector per runtime. Chat, manager and retained legacy diagnostic entry points reach the same report, with no separate raw buffer/mode or confirmation navigation.
+- A healthy runtime report shows identity, process/RPC state, current Pi session identity and saved-session path, model/configuration and execution context, not merely four empty problem lists.
+- Runtime ID and Pi session ID are distinguished per pichat/GLOSSARY.md. Display both runtime and Emacs-translated session paths when different. A cached path does not imply existence or persistence on disk; disabled persistence, unavailable values and empty collections have distinct wording.
+- Overview uses retained session/chat state and non-launching local process inspection only. Opening, expanding and refreshing must not issue RPC, launch processes, fetch history, edit settings, or probe local/remote files. Missing/dead buffers and stopped runtimes render normally.
+- All four existing problem domains are represented: runtime/transport, canonical transcript, live tail and Session History. A compact empty summary must not imply unavailable/stale sources were checked and found healthy.
+- Expandable evidence includes captured launch command, startup tool selections, domain details, bounded stderr/failure records and retained incoming events. No diagnostic setup chooser or visible keybinding legends. C-h m documents actual native/Evil actions.
+- Refresh preserves ownership, return destination and useful fold state. Separate runtime reports coexist; switching the loaded Pi session does not create a second inspector for the same runtime. Forgotten-owner snapshots stay readable without fallback to another runtime.
+- Incoming events are labelled as a bounded retained subset, not a complete request/response trace. Display truncation/omission where known; never invent timestamps, dropped counts or freshness guarantees.
+- Demonstrated error scenarios have explicit evidence levels: production path, synthetic regression test, and current-Pi reproduction. Do not claim missing credentials cause process exit without verifying that behavior.
+- Focused tests, full isolated offline integration suite and live configured-Emacs navigation/mode-help checks pass; changed package modules compile with dependencies. No generated elc committed.
+
+* Approach and decisions
+- Primary command: pichat-show-diagnostics. Keep one runtime-owned inspector; route useful legacy raw-inspection entry points to it without retaining a parallel renderer. Resolve old raw-mode buffers/keymaps safely during migration; document any unavoidable reload requirement.
+- Overview order: Runtime/process; Pi session; Configuration; Execution context; Recorded problems. Suppress duplicate labels and redundant local/runtime path pairs.
+- Candidate overview fields already retained in pichat-session.el: runtime-id, state, process/process-generation, rpc-ready-p, pending-responses, rpc-send-queue, buffer, id/name/session-file, persistence, model/thinking-level, owner scope, preset/tool selections, transport and cwd. Only expose fields with trustworthy semantics; absent process data is unavailable, not zero or healthy. For SSH, do not describe Emacs transport PID as the remote Pi PID.
+- Reuse field semantics from pichat-session-manager--render-preview without coupling diagnostics to its history-fetching preview path. pichat-session-emacs-session-file supplies translated paths; verify translation does not perform I/O before using it here.
+- Evidence sections are collapsed initially, except a useful latest failure may be expanded. Preserve fold state on refresh; use explicit stable section identity. Select native/Evil bindings only after checking effective maps; mode help owns shortcut documentation.
+- No separate safe/raw workflow or repeated sensitive-data confirmation. Evidence can contain paths, prompts and credentials; document this in mode help/README. Preserve existing redaction of ordinary chat/status summaries; this redesign does not authorize leaking evidence into chat or changing collectors.
+- Current stderr is an optional bounded snapshot of the owning live stderr buffer. After teardown use retained captured stderr where available; distinguish unavailable from empty and do not reconstruct lost output. Avoid showing a stale process generation's live buffer as current.
+- Startup selections are configuration, not proof of active/healthy tools. Configured executable/command are not automatically proof of the executable/version actually running.
+- Implementation touchpoints: pichat-chat-diagnostics.el, pichat-session.el accessors, pichat-session-manager.el adapters, pichat-evil.el, user/pichat.el, README and existing diagnostics/view/manager tests.
+- Source review confirmed non-intentional process exit recording (actual state is error, not mockup failed), unsuccessful RPC response recording, unknown-content normalization and history malformed-tree diagnostics. Synthetic tests exist; live current-Pi failure reproduction has not been performed. Mockup wording and specific error combinations are illustrative, not specifications.
+
+* Tasks
+** TODO Establish reachable scenarios and the report data contract
+- Inventory each proposed field's owner, lifetime, availability and non-I/O retrieval path, including source/process-generation validity.
+- Trace failures from production input to retained diagnostic and view: unexpected process exit, rejected RPC command, malformed RPC, unsupported transcript content, history normalization and event-handler failure. Classify synthetic-only cases explicitly.
+- Reproduce representative normal state, rejected command and process termination with isolated current Pi/fake-provider support where applicable. Do not use user credentials or assume provider failure is a process crash. Record actual event/error shapes and any reporting gaps before choosing examples.
+- Finalize a concise healthy and failing report sample using verified semantics; resolve material unsupported field/behavior choices before implementation.
+** TODO Implement the unified report and expandable evidence
+- Replace dual rendering with one bounded overview/evidence snapshot while retaining collectors and runtime ownership.
+- Add session paths/configuration/process information, all problem domains and bounded evidence with accurate missing/stale/empty labels.
+- Implement folds and refresh/return behavior without new RPC, process launch or filesystem checks.
+- Cover normal/stopped/forgotten runtimes, source changes, different runtime owners, unavailable caches, truncation and secret-containing explicit evidence in focused tests.
+** TODO Consolidate commands, mode help and personal integration
+- Route old raw entry points and manager/chat actions to the single report; remove separate raw mode workflow and setup chooser/binding.
+- Keep standalone setup helpers and ordinary-chat redaction intact; remove stale raw/setup navigation from native/Evil/personal maps and tests.
+- Put actions in C-h m, not inserted legends; verify effective Evil motions and fold/refresh/return bindings. Update README and glossary only if terminology requires it.
+** TODO Verify the complete report workflow
+- Run focused diagnostics, view lifecycle, manager and Evil suites; review test-file sizes and avoid redundant private-implementation tests.
+- Run pichat/test/run-tests.sh --full --with-optional using isolated offline Pi state; report optional skips and exact tested Pi version.
+- Byte-compile changed standalone package modules with dependency load paths; remove generated bytecode. Check diffs for unintended changes.
+- Verify in configured live Emacs: healthy/failing samples, one report through all entry points, folds and refresh, mode help, native/Evil/personal bindings, selected manager row ownership, stopped/forgotten handling and return to origin. Do not disturb user runtimes or edit user settings.
+- Reconcile acceptance criteria and document any unverified SSH behavior without claiming end-to-end connectivity; stop before commits/archive unless separately requested.
+
+* Checkpoint
+- Plan status: draft
+- Selected scope: none (planning only)
+- Last verified result: source review and existing test inspection only; no new tests or runtime probes executed. Previous conversation mockups are not observed behavior.
+- Next action: review and approve this draft; when execution is requested, start with reachable scenarios and the data contract, not UI implementation.
+- Blockers: none for investigation; actual failure examples and binding choices require verification in the first task.
+
+* Verification
+- Planning inventory reviewed existing active plans and archived diagnostics plan.
+- Reviewed diagnostic rendering/classification, session caches, manager preview, RPC error/event collection, transcript normalization and relevant test references; read TESTING_GUIDELINES.md.
+- Implementation and live verification not run (planning only).
+
+* History
+- 2026-10-30T05:36:49+00:00: Created draft at user request after reviewing the two existing inspectors and agreeing on one troubleshooting report. No implementation authorized.

@@ -1,9 +1,9 @@
 #+TITLE: PiChat diagnostics improvements
 #+TODO: TODO IN-PROGRESS BLOCKED | DONE
 #+PLAN_ID: pichat-diagnostics-improvements
-#+PLAN_STATUS: active
+#+PLAN_STATUS: done
 #+PLAN_CREATED: 2026-10-25T19:03:23+00:00
-#+PLAN_UPDATED: 2026-10-30T04:11:48Z
+#+PLAN_UPDATED: 2026-10-30T04:26:33Z
 
 * Goal
 Make safe cached diagnostics the primary troubleshooting entry point, keep sensitive raw evidence behind an explicit action, and ensure diagnostic actions target the inspected PiChat runtime.
@@ -37,19 +37,25 @@ Make safe cached diagnostics the primary troubleshooting entry point, keep sensi
 *** DONE Add capability-aware setup chooser and accurately describe the bounded Pi executable/version probe
 *** DONE Match interactive setup terminal reuse to launch context; preserve wrapper requirements
 *** DONE Correct customization command name with compatibility alias and test setup ownership
-** TODO Phase 4: Documentation and compatibility
-*** TODO Update pichat/README.md, glossary if needed, and user/pichat.el bindings
-*** TODO Verify aliases, manager actions, full regression checks and live Emacs usage
+** DONE Phase 4: Documentation and compatibility
+*** DONE Update pichat/README.md, glossary if needed, and user/pichat.el bindings
+*** DONE Verify aliases, manager actions, full regression checks and live Emacs usage
 
 * Checkpoint
-- Plan status: active
-- Selected scope: Phase 3 only, complete. Stopped before Phase 4. Phase 2 and Phase 3 changes remain uncommitted; no commit requested.
-- Last verified result: 39/39 focused diagnostics/Evil tests; full dependency-enabled suite 951 total, 949 passed, 2 opt-in Docker skips, 0 unexpected. Both changed production modules strictly byte-compiled; generated elc removed. Isolated live terminal Emacs native/Evil setup menus, customization dispatch, real inert setup processes, matching reuse and environment mismatch isolation passed.
-- Test consolidation follow-up: combined all five interface tests unchanged into pichat-test-diagnostics-views.el (332 lines); removed the separate interface suite and loader entry. Focused diagnostics/Evil rerun passed 31/31; no production changes in this follow-up.
-- Next action: await authorization for Phase 4: README inspection/setup guidance and bindings, minimal glossary review only if needed, personal user/pichat.el menus and final compatibility/live configured-Emacs verification.
-- Blockers: none for completed Phase 3. Real SSH setup connectivity was not exercised; SSH launch-context handling is covered by a no-connection test.
+- Plan status: done
+- Selected scope: Phase 4 complete; all four phases and agreed acceptance checks complete. Phases 1–3 committed (cf20d188, d3bb456d); Phase 4 remains uncommitted.
+- Last verified result: 76/76 focused diagnostics/manager/Evil tests; full dependency-enabled suite 952 total, 950 passed, 2 opt-in Docker skips, 0 unexpected. Manager module strictly byte-compiled; generated elc removed. Live configured Emacs 31.1 checks passed for personal menus, native/Evil bindings, alias, selected stopped-row ownership and nested return; user's retained runtime registry remained unchanged (one runtime).
+- Next action: await user review and any requested commit/push or archival; leave this completed record unarchived until requested.
+- Blockers: none. Real SSH setup connectivity remains an optional unverified check; no SSH end-to-end claim. No glossary changes were needed.
 
 * Verification
+- Phase 4 documentation: README now has one inspection/setup section with four cached sections, none/unavailable and stale-source semantics, safe metadata, ownership/stop/forget lifetime, native/Evil keys, explicit raw warning, backend-aware setup actions, process/context reuse, wrapper requirements, precise version-probe limits and customization alias. Removed the redundant detailed chat-command list in favor of this section. Reviewed GLOSSARY.md; existing runtime/source/Session History terminology suffices, so it is unchanged.
+- Phase 4 personal menus: user/pichat.el adds chat SPC m D for pichat-show-diagnostics and diagnostic-parent SPC m r/q for refresh/return, inherited by raw reports. Existing lowercase chat d remains tool details; manager D/gD/SPC m D remain intact. Setup and raw actions already have native/Evil s/r, so no redundant personal menu entries or raw-only invalid actions added. Insert uses M-SPC m; common view Emacs-state leader simulation remains unchanged.
+- Phase 4 compatibility: changed manager capability-error operation wording from Transport diagnostics to Cached diagnostics, retaining its public row adapter and capability guard. Added one test in the existing manager suite covering native D on a stopped selected runtime despite another global runtime, cache-only safe inspection and meaningful unsupported-backend rejection. Existing customization alias test remains active; no public commands removed.
+- Phase 4 focused command: emacs -Q --batch -L .local/elpaca/builds/compat -L .local/elpaca/builds/goto-chg -L .local/elpaca/builds/evil -L pichat -L pichat/test -l pichat-test-chat-diagnostics -l pichat-test-diagnostics-views -l pichat-test-session-manager -l pichat-test-evil -f ert-run-tests-batch-and-exit — 76/76 passed. Ephemeral log: /tmp/pichat-diagnostics-phase4-focused.log.
+- Phase 4 full command: pichat/test/run-tests.sh --full --with-optional — 952 total, 950 passed, 2 opt-in Docker skips, 0 unexpected, 105.01 seconds. Ephemeral log: /tmp/pichat-diagnostics-phase4-full.log. Tests use isolated offline Pi fake-provider state, not real model APIs or user Pi state. Strict byte compilation of pichat-session-manager.el passed with warnings fatal; generated elc removed. git diff --check passed. Test-file size inventory reviewed: existing manager suite now 846 lines; no new suite.
+- Phase 4 live configured-Emacs verification: emacsclient loaded /tmp/pichat-diagnostics-phase4-configured.el in the running Emacs 31.1 daemon with actual General/Evil configuration. Loaded changed package source explicitly (Elpaca bytecode predates the work), merged current source-defined native map initializers into pre-existing Phase 1 defvar maps, evaluated only the actual personal mode-menu block from user/pichat.el, and refreshed Evil maps. No package rebuild, unrelated configuration reload or runtime restart. Initial harness checks identified the expected stale native defvar map entries; rerunning after source-key merge passed. Ephemeral log: /tmp/pichat-diagnostics-phase4-configured.log.
+- Live checks used isolated inert runtime registries and temporary chat/manager buffers, restoring the window configuration and cleaning buffers. Verified chat SPC m D, unchanged SPC m d, Insert M-SPC m D, safe/raw SPC m r/q, native g and Evil gr/r/s, manager native D/Evil gD/personal SPC m D, selected stopped-row ownership against changed global context, raw-to-safe-to-chat/manager return and customization alias. Registry count before/after remained one; no user runtime/process stopped, no Pi process launched or settings/credentials edited. Personal module was verified in live Emacs, not isolated byte compilation. SSH end-to-end remains unverified and is not required for this documentation/binding phase.
 - Phase 3: safe native/Evil s opens an explicit completion chooser. Pi executable/version, separate interactive setup and editable settings actions require the existing diagnostics capability; unsupported Pi actions are omitted with an explanatory prompt, while Customize PiChat remains available. Owner is validated before and after completion, and each Pi helper checks its capability. Raw reports do not inherit s. New pichat-diagnostics-customize opens the pichat group; pichat-diagnostics-customize-transport remains a callable compatibility alias.
 - Phase 3 probe: labels/docstring/success/failure messages now identify an executable/version check, not authentication/model/RPC or wrapper validation. The process still runs only the target executable with --version, not pichat-rpc-command, and reports through Messages rather than the cached report. No comprehensive health check added.
 - Phase 3 setup: terminal buffers retain a copied launch context (transport, effective cwd/argv/environment, exec-path and remote-path). Only live context-matched terminals are reused; mismatches, dead processes and untracked buffers are left untouched and separate runtime-labelled terminals are created. Local structured targets honor their executable; complete local wrappers still require explicit interactive argv. Matching contexts may share a live terminal across runtimes; runtime ID alone is not a reuse criterion. No user terminal is stopped to serve another context.
@@ -72,6 +78,8 @@ Make safe cached diagnostics the primary troubleshooting entry point, keep sensi
 - Original proposal explicitly states no implementation changes. Import verified the existing shared buffer names and old command in source; no tests run and no work marked DONE.
 
 * History
+- 2026-10-30T04:26:33Z: Phase 4 and whole plan complete: README consolidated, personal chat/inspector menus added, glossary reviewed unchanged, manager wording corrected and row-action regression added. 76 focused tests passed; full suite 950 passed/two optional skips; strict manager compilation and live configured-Emacs checks passed. Phase 4 uncommitted; no push or archival requested.
+- 2026-10-30T04:20:57Z: User authorized Phase 4. Reconciled prior commit d3bb456d (Phases 2–3); clean working copy. Configured Emacs daemon is available with PiChat/General loaded, but its compiled diagnostic module predates current source; live checks will explicitly load changed package sources and evaluate the relevant personal binding block without restarting any runtime.
 - 2026-10-30T04:11:48Z: Phase 3 complete after 39 focused tests, full suite (949 passed, two optional skips), strict compilation and isolated live terminal setup-menu/process checks. Added capability-aware s chooser, explicit probe wording, context-matched setup terminals, local-target executable handling and customization compatibility alias. Tests extended existing files only. Stopped before Phase 4; no commits or personal/glossary changes.
 - 2026-10-30T04:05:27Z: User authorized Phase 3 only. Existing Phase 2 work remains uncommitted. Reviewed setup launch, backend capability and environment contracts; setup terminals currently reuse one shared live process regardless of context.
 - 2026-10-30T04:04:23Z: At user request, merged the five interface tests into pichat-test-diagnostics-views.el and removed the separate suite/loader entry. All test bodies preserved; focused diagnostics/Evil checks passed 31/31. No production changes or commits; Phase 3 remains unstarted.

@@ -827,7 +827,7 @@ working directory determines the new runtime's project and display routing."
   (interactive)
   (let ((session (pichat-session-manager--session-at-point)))
     (pichat-backend-require-capability
-     session 'diagnostics "Transport diagnostics")
+     session 'diagnostics "Cached diagnostics")
     (pichat-show-diagnostics session)))
 
 (defun pichat-session-manager-quit ()

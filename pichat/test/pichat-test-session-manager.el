@@ -141,6 +141,39 @@
             (should (equal "source-two" (pichat-session-id session))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+(ert-deftest pichat-session-manager-diagnostics-inspects-selected-stopped-runtime ()
+  (pichat-test-with-clean-state
+    (let* ((selected (pichat-register-session (pichat-session-make :state 'stopped)))
+           (other (pichat-register-session (pichat-session-make :state 'error)))
+           (pichat-current-session other)
+           report)
+      (unwind-protect
+          (with-temp-buffer
+            (pichat-session-manager-mode)
+            (setq tabulated-list-entries
+                  (list (pichat-session-manager--entry selected)
+                        (pichat-session-manager--entry other)))
+            (tabulated-list-print)
+            (goto-char (point-min))
+            (should (equal (tabulated-list-get-id)
+                           (pichat-session-runtime-id selected)))
+            (cl-letf (((symbol-function 'pichat-view-display) #'ignore)
+                      ((symbol-function 'pichat-rpc-send)
+                       (lambda (&rest _) (ert-fail "Manager diagnostics issued RPC"))))
+              (setq report (call-interactively (key-binding (kbd "D")))))
+            (with-current-buffer report
+              (should (eq selected pichat-diagnostics--owner))
+              (should (eq major-mode 'pichat-diagnostics-mode))
+              (should (string-match-p "cached snapshot" (buffer-string))))
+            ;; Capability rejection uses the unified operation's name, not
+            ;; transport-only wording, and does not silently select OTHER.
+            (setf (pichat-session-backend selected) 'unsupported)
+            (let ((err (should-error (pichat-session-manager-diagnostics)
+                                     :type 'user-error)))
+              (should (string-match-p "Cached diagnostics is unavailable"
+                                      (error-message-string err)))))
+        (when (buffer-live-p report) (kill-buffer report))))))
+
 (ert-deftest pichat-session-manager-rows-present-compact-user-fields ()
   (pichat-test-with-clean-state
     (let* ((session (pichat-session-make

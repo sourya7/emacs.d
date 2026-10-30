@@ -742,6 +742,71 @@ first, otherwise chooses an existing Bufferlo location without prompting, and
 finally falls back to the current tab. The manager itself remains on demand; showing the same global
 buffer in a tab lets Bufferlo record normal local membership there.
 
+## Diagnostics: inspect versus setup
+
+Start with `M-x pichat-show-diagnostics`, or `D` on a runtime-manager row
+(Evil Normal `g D`). This is a **safe cached snapshot, not a live health
+check**. It shows four independently retained sections:
+
+- Runtime / transport failures.
+- Canonical transcript compatibility notices.
+- Live-tail compatibility notices.
+- Available current Session History normalization warnings.
+
+Opening or refreshing this report reads caches only: no history fetch, RPC
+request, process launch, or automatic raw-data access. `none` means the current
+cache contains no diagnostic records; `unavailable` means there is no current
+cached snapshot, not necessarily a failure. Source-bound sections are excluded
+when their source is stale or rebound. Their warnings are not copied into the
+runtime failure log. Safe summaries are redacted and bounded; severity/category
+and failure time appear only where retained, alongside a runtime identity and
+snapshot-time header.
+
+Safe and raw inspectors use separate buffers per runtime. Their actions retain
+the inspected runtime even after it stops; after it is forgotten, the existing
+snapshot remains readable but owner-dependent actions are rejected rather than
+selecting another runtime. See `GLOSSARY.md` for runtime versus Pi session and
+Session History terminology.
+
+Inspector keys:
+
+- `g` (Evil Normal `g r`) — rebuild the current safe or raw snapshot.
+- Safe view `r` — ask before opening sensitive raw details for that runtime.
+  The raw view can contain stderr, failed RPC responses, command arguments,
+  recent RPC events, paths, prompt content, and credentials. It retains bounded
+  records/values; **review before sharing**. Direct explicit inspection remains
+  available via `M-x pichat-show-transport-diagnostics`.
+- Safe view `s` — choose an explicit setup action, separate from inspection.
+- `q` — return/bury; raw details opened from a safe report return to that
+  report, then to its origin. Refresh preserves this return chain.
+
+Setup actions may launch a process or open editable configuration:
+
+- **Check Pi executable/version** (`pichat-diagnostics-probe-pi`) runs the target
+  executable with `--version` and reports in the echo area/`*Messages*`. It does
+  not validate authentication, model configuration, RPC startup, or
+  `pichat-rpc-command` wrappers.
+- **Open interactive Pi setup** (`pichat-diagnostics-open-interactive-pi`) opens
+  a separate terminal for `/login`, `/model`, and `/settings`. A live terminal
+  is reused only when its target/transport, working directory, effective command,
+  environment, and executable search context match. A mismatch opens another
+  terminal without stopping the existing process. Local wrappers/containers
+  require explicit `pichat-diagnostics-interactive-command`; PiChat does not
+  guess how to remove RPC arguments from arbitrary commands.
+- **Open settings file** (`pichat-diagnostics-open-settings`) visits the owning
+  local or SSH target's settings file, not `auth.json`.
+- **Customize PiChat** (`pichat-diagnostics-customize`) opens the `pichat` group.
+  `pichat-diagnostics-customize-transport` remains a compatibility alias.
+
+The chooser explains and omits unavailable Pi actions for backends without the
+required capability; Emacs customization remains available. No setup action is
+automatic, and opening diagnostics never repairs, restarts, or edits a runtime.
+
+This repository's personal menus add chat `SPC m D` for safe diagnostics and
+inspector `SPC m r` / `SPC m q` for refresh/return (including raw inspectors).
+The manager's existing `SPC m D` remains unchanged. In Insert state use
+`M-SPC m`; native mode keys remain usable without these personal menus or Evil.
+
 ## Evil integration
 
 PiChat does not depend on Evil. Evil users can start editable chat buffers ready
@@ -830,27 +895,9 @@ Chat keys:
   submissions already in flight
 - Image-only prompts are controlled by
   `pichat-attachments-allow-image-only-prompts` and are disabled by default
-- `M-x pichat-show-diagnostics` — show a safe cached snapshot of runtime
-  failures, canonical transcript and live-tail compatibility notices, and
-  available current Session History normalization warnings. This does not
-  fetch history or issue RPC requests; unavailable snapshots are labelled.
-  Each domain retains its own lifetime rather than copying snapshot warnings
-  into the runtime failure log. Reinvoke the command to refresh the snapshot.
-  Safe and raw inspectors have separate buffers per runtime. Commands invoked
-  from an inspector retain that runtime, including after it stops. After it is
-  forgotten, the snapshot remains readable but owner-dependent actions are
-  rejected. `q` returns to the invoking view or buffer, so closing raw details
-  opened from safe diagnostics returns to that safe report.
-- `M-x pichat-show-transport-diagnostics` — explicitly inspect bounded raw
-  stderr, failed RPC responses, the configured command, and recent RPC events;
-  this view may contain secrets, paths, and prompt content
-- `M-x pichat-diagnostics-open-interactive-pi` — launch plain Pi in a terminal
-  for `/login`, `/model`, and `/settings`
-- `M-x pichat-diagnostics-open-settings` — visit Pi's global `settings.json`
-- `M-x pichat-diagnostics-customize-transport` — customize diagnostic/setup
-  behavior; wrapper and container transports must set
-  `pichat-diagnostics-interactive-command` explicitly because PiChat does not
-  guess how to remove RPC arguments from arbitrary commands
+- `M-x pichat-show-diagnostics` / local `SPC m D` — safe cached diagnostics;
+  see “Diagnostics: inspect versus setup” above for inspector keys, raw-data
+  warnings, setup actions, and ownership rules
 - Ordinary chat status shows only bounded, redacted diagnostic summaries and
   distinguishes local startup/process exit failures from valid Pi RPC errors
 - `C-c C-o` — compact
@@ -1258,7 +1305,8 @@ session synchronization, and remote compilation reruns are not provided.
 
 Use `M-x pichat-path-validate-mappings` from a chat to inspect its mappings,
 `M-x pichat-diagnostics-open-settings` for the owning settings file, and
-`M-x pichat-diagnostics-probe-pi` to run `pi --version` through the transport.
+`M-x pichat-diagnostics-probe-pi` to check executable/version availability
+through the transport, not RPC, authentication, model, or wrapper health.
 
 ## Docker runtime
 

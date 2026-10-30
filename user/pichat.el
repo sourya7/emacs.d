@@ -184,6 +184,7 @@ Keep tables narrow and pad columns for monospace readability.")
     "]" '(pichat-sessions-forward-to-fork :which-key "Forward to fork")
     "z" '(pichat-chat-toggle-tool-at-point :which-key "Cycle tool display")
     "d" '(pichat-chat-show-tool-details :which-key "Tool details")
+    "D" '(pichat-show-diagnostics :which-key "Diagnostics")
     "A" '(pichat-chat-select-visible-artifact :which-key "Select artifact")
     "x" '(pichat-command-run :which-key "Command picker")
     "o" '(pichat-chat-compact :which-key "Compact")
@@ -220,6 +221,10 @@ Keep tables narrow and pad columns for monospace readability.")
   (sharmaso/mode-keys
     :keymaps 'pichat-session-manager-preview-mode-map
     "r" '(pichat-session-manager-preview-refresh :which-key "Refresh preview"))
+  (sharmaso/mode-keys
+    :keymaps 'pichat-diagnostics-mode-map
+    "r" '(pichat-diagnostics-refresh :which-key "Refresh snapshot")
+    "q" '(pichat-view-quit :which-key "Return"))
   (sharmaso/mode-keys
     :keymaps 'pichat-response-view-mode-map
     "r" '(pichat-response-view-refresh :which-key "Refresh response")

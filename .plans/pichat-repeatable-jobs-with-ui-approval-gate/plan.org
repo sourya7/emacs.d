@@ -3,115 +3,324 @@
 #+PLAN_ID: pichat-repeatable-jobs-with-ui-approval-gate
 #+PLAN_STATUS: draft
 #+PLAN_CREATED: 2026-10-30T06:19:17+00:00
-#+PLAN_UPDATED: 2026-10-30T06:20:32+00:00
+#+PLAN_UPDATED: 2026-10-30T17:29:12+00:00
 
 * Goal
-Add repeatable, named PiChat jobs with inspectable execution state and run
-history, initially usable manually and optionally runnable periodically.
-Design the user interface first, with an explicit user-acceptance gate.
+Add lightweight native PiChat jobs with reusable instructions, inspectable runs,
+optional scheduling, and optional plan-phase targeting. Preserve room for simple
+conditional chaining without building a general workflow engine. Design the UI
+first and obtain explicit user acceptance before feature implementation.
 
 * Scope
-- Included: UI design and example; reusable job definitions; asynchronous manual
-  execution; inspectable runs/results; durable definitions and run metadata;
-  optional Emacs-lifetime scheduling; tests and user documentation.
-- Excluded: execution while Emacs is closed, distributed workers, automatic
-  retries, implicit approvals, and general-purpose arbitrary Lisp job execution.
-- Implementation details below are provisional until the UI phase resolves the
-  workflows. Creating this draft does not authorize implementation.
+- Jobs DO NOT require plans. Ordinary prompt jobs and optional plan-backed jobs
+  share execution, scheduling, history, and inspection machinery.
+- Included: accepted UI example; manual/background execution; durable definitions
+  and run records; optional exact-plan-phase adapter; one-shot and fixed-interval
+  scheduling; tests and documentation. Conditional chaining is a later scope
+  requiring separate execution authorization.
+- No blanket single-run-per-project restriction. Limit overlapping occurrences
+  of a job, total concurrency, and conflicts over shared mutable resources.
+- Excluded initially: external workflow engines or new async-library dependencies,
+  execution while Emacs is closed, distributed workers, automatic retries or
+  interrupted-work replay, implicit approvals, arbitrary Lisp jobs, cron/calendar
+  recurrence, graph editors, fan-in joins, dynamic graphs, complex branching DSLs,
+  automatic worktree provisioning, sandbox guarantees, durable workflow resumption,
+  and exactly-once dispatch guarantees across crashes.
+- This remains a draft. Updating it does not authorize implementation. Phase 1
+  is the first execution scope; later phases do not start automatically.
 
 * Acceptance criteria
-- Phase 1 produces a concrete UI example covering job listing, definition
-  editing, run inspection/history, manual execution, and schedule controls.
-- The user explicitly accepts that example. Record the accepted artifact and
-  approval evidence here; silence or approval of this plan is not UI acceptance.
-- No feature implementation starts before that gate passes.
-- A named definition can be run repeatedly without mutating the preferred
-  interactive runtime; individual runs retain their own identity and state.
-- Users can inspect active/completed/failed/cancelled runs and required input,
-  access results and the owning conversation, and cancel active work.
-- Definitions and settled run metadata survive Emacs restart; interrupted runs
-  are represented honestly rather than reported as successful or blindly retried.
-- Optional scheduling invokes the same execution path as manual runs, with
-  explicit overlap, missed-run, and enable/disable behavior.
-- Required unit and isolated real-Pi integration checks pass; the approved UI
-  workflows are verified in live Emacs before whole-plan completion.
+- Phase 1 presents a concrete example for job creation, manual execution,
+  scheduling, listing, run history/results, required input, failures, and trigger
+  provenance. Cover ordinary jobs and one-shot plan-phase work, including a phase
+  that stops for human acceptance. The user explicitly accepts the example;
+  approval of the plan or silence is not UI acceptance.
+- Ordinary jobs work without plan.org. One-off submissions need not be saved as
+  named definitions; they produce ordinary runs with captured definition data.
+- Runs use fresh independent runtimes/Pi sessions without changing the preferred
+  interactive runtime, current-runtime selection, or focus. Inspection never
+  implicitly executes work. Users can cancel and inspect exact owning chats.
+- Submission acceptance, agent settlement, result synchronization, and domain
+  completion remain distinct. Agent completion alone cannot complete a phase,
+  satisfy human acceptance, or dispatch its successor.
+- Definitions and run metadata survive restart. Ambiguous/interrupted runs are
+  explicitly inspectable and never automatically retried, resumed, or declared
+  successful. Saved Pi sessions retain conversation evidence independently.
+- One active occurrence per definition and a configurable global limit apply.
+  Compatible work can run concurrently in one project; conflicting modifiers
+  sharing a workspace or authoritative plan are serialized by default.
+- Explicitly selected plan phases have stable identity, bounded authorization,
+  eligibility checks, and stop boundaries. Completed/paused/cancelled/archived,
+  unresolved-gate, changed-scope, or uncertain-execution cases cannot silently run.
+- Manual, one-shot, interval, and later conditional triggers share one admission
+  and execution path. One-shot scheduling supports a selected date/time with
+  clear timezone display. Missed starts and repeated triggers cannot cause replay
+  or unbounded queues. Plan recurrence must not become implicit failure retry.
+- If authorized, chaining uses validated outcomes, exact upstream provenance,
+  explicit field mapping and preauthorized successors. Reject cycles, malformed
+  required outputs, and duplicate dispatch in normal operation. False conditions
+  mean not triggered, not execution failure; run-only bypasses successors.
+- Required unit and isolated real-Pi integration checks pass. Accepted workflows
+  are verified in live Emacs; incomplete manual checks remain actionable tasks.
 
 * Approach and decisions
-- Consult pichat/GLOSSARY.md for runtime, Pi session, saved session file, and
-  settlement terminology; update it only if new shared concepts need definition.
-- Existing reference points: pichat-session-manager.el uses tabulated-list-mode,
-  cached row refresh, pending-input indicators, and exact-runtime actions.
-  pichat-backend.el provides lifecycle, prompt, abort, state, and transcript APIs.
-- Prefer a focused job layer over moving PiChat objects to another Emacs process.
-  Keep definitions, run records, scheduling, and runtime execution distinct.
-- Candidate UI: a separate jobs view plus run inspection/history; do not overload
-  runtime-manager rows with job-definition identity. Layout and keys are not yet agreed.
-- Candidate defaults: fresh independent runtime/Pi session per occurrence; no
-  focus stealing or automatic retry; bounded concurrency and one active run per
-  definition. Resolve skip versus coalesce during design rather than assume it.
-- Capture definition/configuration snapshots per run; distinguish submission
-  acceptance, agent settlement, synchronized results, and domain-level outcome.
-- Use native timers only to enqueue work. Generation-scoped callbacks must not
-  affect rebound sources or replacement processes. Respect target/transport and
-  startup preset boundaries; define runtime cleanup and retention explicitly.
-- Resolve storage/schema, schedule vocabulary, timezone behavior, unattended
-  interaction, retention, and recovery policy before implementing their phase.
-- Related but distinct plan: [[file:../pichat-delayed-follow-up/plan.org][PiChat delayed follow-up]].
-  Reusable job scheduling must not duplicate its conversation-message checklist.
+** Minimal concepts and sources of truth
+- Only two new primary user concepts: job (reusable instruction/settings/optional
+  trigger) and run (one attempt). Schedules/triggers are settings, not separate
+  dashboards. A plan adapter is internal, not a second plan/workflow system.
+- Reuse pichat/GLOSSARY.md terminology for runtime, Pi session, saved session
+  file, settlement, presets, targets, and source/process generations.
+- plan.org owns task/phase progress, gates and verification evidence. The job
+  record owns dispatch, timing, execution outcome and provenance. Pi owns the
+  conversation. Run history links to the plan rather than duplicating checklists.
+- Existing plans skill continues to perform plan bookkeeping. The job manager
+  must not mark tasks DONE because an agent stopped or JSON says complete.
+- Do not introduce workflow definitions/runs, workers, or a graph language now.
+  Reassess an external engine if joins or crash-resumable workflows become needed.
+
+** Shared execution and persistence
+- PiChat owns jobs, runs, admission and native timer dispatch. Reuse backend/RPC,
+  launch-profile normalization, preset/tools/model/target resolution, diagnostics,
+  canonical synchronization, and exact-runtime actions; do not scrape UI text.
+- Current pichat-start-session changes pichat-current-session; the interactive
+  launch path displays/synchronizes chats. Settlement synchronization and pending
+  extension UI are chat-owned. Add a narrow noninteractive boundary rather than
+  calling interactive launch commands and assuming they remain invisible.
+- Initially an undisplayed owning chat may reuse existing sync/UI infrastructure;
+  no large headless rewrite is required. Expose explicit readiness and synchronized
+  completion contracts. Jobs must not depend on window visibility; define safe
+  behavior for killing an owning buffer. Closing a window does not cancel work.
+- Reuse approval interactions in the owning chat. Jobs shows Needs input and
+  opens that exact chat; no second approval form or automatic approval. Resolve
+  paused/waiting runtime retention, timeouts, cleanup, and explicit continuation.
+- Persist versioned data-only records with atomic writes. Create a run record
+  before external execution. Capture stable job/run IDs, instruction/input and
+  configuration snapshots, trigger identity/kind, upstream run and optional chain
+  provenance, result and saved-session references, and dispatch disposition.
+- Keep execution lifecycle separate from domain outcome and attention reasons;
+  finalize a small state vocabulary during UI/contracts work. Distinguish agent
+  finished, synchronized result, phase complete, and human review still required.
+- Retain interrupted/uncertain state after crashes; no automatic replay across
+  the dispatch/acknowledgment gap. Snapshot applicable config/trigger rules so
+  editing a definition during a run cannot silently change that run's behavior.
+- Plan-backed runs normally retain saved sessions for auditability. Runtime
+  cleanup, run-record retention, and saved-session retention are separate policies.
+- Generation-scoped callbacks reject stale processes/sources and duplicate events.
+  Preserve captured target/path ownership. Uncertain remote shutdown must remain
+  explicit and must not release conflicting work as if the process were stopped.
+- Reuse pichat-process-lifetime.el and the existing actual-Pi identity/observer
+  mechanism for remote Pi exit confirmation; do not build a second SSH shutdown
+  checker. Linux/procfs/helper capability limits and unknown outcomes still apply.
+- Existing focused verification covers idle-runtime reconfiguration, not the full
+  cancellation of active job tools/descendants. Investigate that narrower gap:
+  confirmed Pi exit is not automatically evidence that every modifying descendant
+  stopped or that its workspace is safe to release. Reuse available lifecycle
+  evidence, define the job-specific release criterion, and retain uncertainty
+  until it is resolved rather than retrying or admitting conflicting modifiers.
+
+** Concurrency and resource ownership
+- One active occurrence per definition; small configurable global run limit.
+  Resolve skipped versus coalesced interval occurrences explicitly, with bounded
+  queues and visible reasons. Do not infer resource safety from job identity.
+- Serialize managed conflicting modifications to the same execution workspace.
+  Different projects and isolated worktrees can run in parallel unless another
+  mutable resource is shared, including the authoritative plan file.
+- Explicit read-only jobs may run together in one project. Read-only work that
+  needs a stable snapshot waits behind modifiers; work explicitly tolerant of
+  changing files may run concurrently. Resolve this choice in UI/setup, not via
+  guessed prompt text. Unknown access defaults conservatively.
+- This is coordination, not enforcement: read-only labels do not sandbox tools;
+  Emacs-local claims do not detect all external agents or manual file edits.
+  Document limits and avoid requiring a clean worktree as a substitute for safety.
+- Use a minimal internal resource-claim seam, not a generic user-facing lock DSL.
+  Resolve canonical target/workspace identity, same-plan conflicts, and claim
+  lifetime before enabling concurrent modifying runs.
+
+** Optional plan adapter and authorization
+- Start with one exact selected phase per job. Do not autonomously select the
+  next incomplete phase or infer dependencies from numbering.
+- Prefer an Org ID on the selected phase, assigned by an explicit setup action;
+  store project/plan identity, Org ID, display heading path, and authorized scope
+  snapshot. Reject missing/ambiguous targets; never retarget by phase number alone.
+- Current plans.py exposes human-readable inventory/checks, not machine-readable
+  phase eligibility. Its check validates structure, not tests or approvals. Add a
+  narrow machine-readable inspection contract in the plans skill when implementing
+  the adapter; do not scrape list output or duplicate lifecycle semantics in PiChat.
+  Changes to this shared skill must remain backward compatible and be explicitly
+  recorded/tested as cross-project scope. Prose gates are not machine proof.
+- Scheduling grants timing, not scope. Explicitly authorize the phase and resolved
+  execution policy. Recheck eligibility immediately before dispatch. Material
+  instruction/target/tool changes require review; routine TODO/checkpoint updates
+  should not invalidate authorization. Compare relevant instruction structure,
+  not a blunt whole-file hash; require review when classification is uncertain.
+- Existing user approval remains authoritative. Neither agent prose nor an agent-
+  editable result flag proves human acceptance. Define a trusted user-action path
+  and persist its evidence in the plan; unresolved approval gates stop automation.
+- A phase can finish agent work while still needing review. Do not hold a runtime
+  indefinitely just to represent a plan gate. Explicit continuation inspects the
+  current plan and obtains appropriate authorization; it is not automatic retry.
+- Completed phases do not rerun on recurring ticks. Failed/interrupted/ambiguous
+  attempts require explicit intervention instead of turning recurrence into retry.
+- Dispatch authorization is not a security sandbox for agent tools. Presets,
+  scope instructions, and documented filesystem/external-process limits still apply.
+
+** Scheduling and conditional chaining
+- Triggers: manual first; once at a selected time; fixed interval; later after an
+  eligible run. Timers enqueue only; all triggers pass the same admission checks.
+- Define interval timing, overlap, restart restoration, timeouts, and disabling
+  versus cancelling. Missed one-shot default: show missed and offer Run now, not
+  automatic startup execution. No implicit backlog replay while Emacs was closed.
+- Later chaining requires separate authorization. Define explicit successors and
+  stop boundaries; show downstream effects before starting and offer Run this job
+  only. Never let a diagnostic rerun unexpectedly launch a permanent chain.
+- Capture trigger-rule snapshots, upstream occurrence and chain provenance. Gate
+  on declared validated outcomes, not guessed prose. Pass selected fields as
+  captured inputs, not shared mutable conversation state. Reject cycles; dedupe
+  trigger/upstream-run dispatch in normal operation; surface crash ambiguity.
+- For plans, explicit multi-phase authorization can permit separate phase runs
+  (e.g. Phase 2 then Phase 3, stop before Phase 4); it does not change the plans
+  skill's default one-scope stopping rule. Do not infer a successor from adjacency.
+
+** UX and reuse
+- One Jobs view with definition details and run history, not a separate plan
+  execution dashboard. Reuse tabulated-list-mode/runtime-manager presentation
+  conventions, existing launch controls, Org plan views, chat approval UI, and
+  diagnostics. Runtime manager remains a process view, not a job-definition store.
+- Entry points: New job, Run with PiChat from a selected Org phase, and Jobs for
+  monitoring. A one-off run may use an inline definition snapshot; Save as job
+  makes it reusable without introducing a third execution concept.
+- Setup clearly shows work/scope, project, preset/tools/model/target, start time
+  or interval, successor effects and stop boundary. Resolve interactive choices
+  before scheduling rather than unexpectedly prompting at dispatch.
+- Inspection shows plain-language state/reason, scope, timestamps, trigger and
+  upstream provenance, outcome and links: Open plan, Open chat, Run details.
+  Show resource waits and missed/not-triggered reasons without failed-run noise.
+- Distinguish Run again (new attempt), Open chat (existing conversation), and
+  Continue selected scope (explicit plan-aware authorization after inspection).
+  Labels and keybindings remain subject to Phase 1 acceptance.
+
+** Research and related work
+- Reviewed dagrun commit 6ae0e25: lightweight CLI executor, no persistent scheduler
+  or live execution API. Its stock tests/race tests/vet passed, but review probes
+  reproduced ignored inline dependencies, unconditional cascading skips, wrong
+  precondition cwd, and output matches accepting a failed precondition command.
+  Avoid those classes of behavior; do not equate passing tests with proven semantics.
+- Dagu remains an external-engine alternative, not an initial dependency. Existing
+  async libraries do not replace run ownership/history or plan authorization.
+- Reuse [[file:../enable-safe-ssh-runtime-reconfiguration/plan.org][SSH runtime reconfiguration]]
+  implementation and verification. Its recorded same-host real-SSH target is
+  mojo@bigbox.lan (not literally localhost). Actual-Pi lifetime confirmation is
+  implemented; normal stop, saved/unwritten restart, and failure/restore have
+  focused passing evidence. Comprehensive failure-matrix/full integration and
+  live UI acceptance remain outstanding in that plan. Do not duplicate its
+  shutdown implementation or test checklist here; coordinate verification and
+  add only job-specific integration coverage. These are recorded results, not
+  new SSH tests run during this planning update.
+- Related but distinct: [[file:../pichat-delayed-follow-up/plan.org][PiChat delayed follow-up]].
+  Do not duplicate its conversation-message execution checklist.
 
 * Tasks
 ** Phase 1: UI design and explicit acceptance (first execution scope)
-*** TODO Design workflows and produce a concrete UI example
-Present an example here in the conversation, optionally backed by a supporting
-mockup beside this record. Show list rows, selected-job details, definition
-editing, run history/result inspection, required-input/error states, and schedule
-controls/actions. Include realistic manual and periodic jobs and explain how
-users move between views. A text mockup is acceptable; a working feature is not
-required. If a live prototype is useful, obtain agreement on that scope first.
-*** TODO Revise the UI example until the user explicitly accepts it
-Record the accepted example's location/version and the user's explicit approval
-in this record. Leave this task incomplete while awaiting feedback. Do not start
-Phase 2 merely because a mockup was presented or the overall plan was approved.
-** Phase 2: Contracts and manual execution (after UI acceptance)
-*** TODO Finalize job/run contracts and implement durable manual execution
-Resolve state transitions, definition snapshots/storage, ownership, concurrency,
-interaction, cancellation, restart recovery, runtime cleanup, result settlement,
-and execution-versus-domain outcome. Implement through existing backend/lifecycle
-boundaries; protect against stale callbacks and ambiguous submission failures.
-Add behavior-focused tests alongside implementation.
-** Phase 3: Approved inspection UI
-*** TODO Implement the accepted job and run inspection workflows
-Build the approved definition/run views and actions, including manual rerun,
-results/history, exact owning-runtime access, failure/needs-input presentation,
-and persisted metadata. Keep browsing/refresh free of implicit execution.
-Verify against the accepted example and add appropriate UI behavior tests.
-** Phase 4: Optional periodic scheduling
-*** TODO Implement schedule controls and timer dispatch
-Resolve supported intervals/calendar syntax, timezone, missed-run behavior,
-overlap policy, startup restoration, and disabling versus cancelling active work.
-Use the manual executor; prevent duplicate timers and unbounded backlogs.
-Test timer cleanup, restart behavior, and overlapping triggers deterministically.
-** Phase 5: Verification and documentation
-*** TODO Verify the complete workflows and document the feature
-Run pichat/test/run-tests.sh and pichat/test/run-tests.sh --full using isolated
-fixtures per TESTING_GUIDELINES.md. Report focused test-file sizes as instructed.
-Perform live-Emacs checks of the accepted UI, manual run, inspection/cancellation,
-required input, and periodic enable/disable behavior. Update README and glossary
-where applicable; retain unresolved manual checks as tasks, not assumed passes.
+*** TODO Produce concrete UI examples and resolve workflow choices
+Present examples in the conversation, optionally backed by a mockup beside this
+record. Cover an ordinary recurring read-only check, an unsaved one-off prompt,
+a scheduled single plan phase, a phase stopped for acceptance, and concurrent
+compatible jobs versus a conflicting workspace wait. Show creation, launch
+controls, list/detail/history navigation, results, failures/interruption, approval
+handoff to chat, trigger provenance, run-only versus future successor effects,
+and schedule enable/disable. Clarify one-shot missed starts, stable-read policy,
+plan eligibility, and run-again versus continue. A text mockup is sufficient;
+obtain agreement before building a live prototype.
+*** TODO Revise until the user explicitly accepts the UI example
+Record accepted artifact/version and explicit approval here. Presentation or
+approval of this plan is not acceptance. Stop at the phase boundary; no feature
+implementation before this gate passes.
+** Phase 2: Minimal manual execution and inspection
+*** TODO Implement shared admission, background execution, persistence and accepted UI
+Finalize small state/result contracts, definition/run schema, inline one-off
+submission, captured configuration, resource claims, bounded concurrency,
+interaction/cancellation, lifecycle and retention. Reuse existing launch/backend
+and chat facilities behind a no-focus/current-runtime-mutation boundary. Expose
+verified readiness and synchronized completion; build accepted Jobs/history/
+inspection actions. Keep browsing side-effect free and runtime identity exact.
+Test acceptance versus completion, sync failure, required input, runtime/buffer
+lifetime, cancellation and uncertain remote stop, stale/duplicate callbacks,
+resource conflicts, compatible concurrency, atomic persistence and restart
+ambiguity. Integrate existing SSH lifetime confirmation and test active-job
+cancellation/tool-descendant uncertainty before releasing a modifying workspace;
+coordinate with the SSH plan rather than copying its generic failure matrix.
+No automatic retries or replay. Document as this phase is delivered.
+** Phase 3: Optional exact-plan-phase adapter
+*** TODO Implement explicit phase targeting, eligibility and bounded authorization
+Add the narrow machine-readable plans-skill inspection contract, stable Org phase
+identity and captured scope. Preserve ordinary plan-free jobs and shared execution.
+Resolve trusted human-approval evidence and scope-change review. Reuse plans
+bookkeeping and Org/chat views; add workspace and same-plan exclusion. Reject
+completed/paused/cancelled/archived or unresolved cases conservatively. Test that
+agent completion while awaiting acceptance never advances the plan, as well as
+phase rename/deletion, changed instructions versus routine progress, manual plan
+completion, interrupted attempts, and isolated worktrees sharing one plan.
+Do not implement autonomous next-phase selection or successor dispatch here.
+** Phase 4: One-shot and fixed-interval scheduling
+*** TODO Implement native timer dispatch through shared admission
+Resolve date/time/timezone display, interval semantics, overlap/coalescing, timer
+restoration, missed starts, and disable-versus-cancel behavior. No cron/calendar
+recurrence, automatic catch-up or implicit retry of failed plan work. Test timer
+cleanup, restart, overlapping triggers, stale definitions, due-time eligibility,
+completed plan phases and bounded queues. Verify accepted schedule UI live.
+** Phase 5: Optional conditional chaining (separate authorization required)
+*** TODO Confirm authorization and implement explicit conditional successors
+Record explicit authorization before execution. If deferred, keep this task
+outstanding while verifying/documenting delivered base scope. Implement outcome
+validation, explicit input mapping, successor-rule snapshots, run-only bypass,
+upstream/chain provenance, cycle rejection and duplicate-dispatch guards. Honor
+resource claims and exact plan stop boundaries. Test false/missing/malformed
+outcomes, repeated completion events, rule changes during execution, diagnostic
+reruns, unresolved acceptance and crash ambiguity. No joins or workflow engine.
+Obtain further UI acceptance if new interactions exceed the accepted mockup.
+** Phase 6: End-to-end verification and documentation
+*** TODO Verify delivered workflows and reconcile complete agreed scope
+Add focused behavior tests throughout implementation; do not defer testing to
+this phase. Run pichat/test/run-tests.sh and --full with isolated fixtures per
+TESTING_GUIDELINES.md; report focused test-file sizes. Verify any shared plans
+helper changes independently. Live-check ordinary and plan-backed jobs, one-off
+submission, no focus stealing, history, exact-chat approvals, cancellation,
+compatible/conflicting concurrency, one-shot/interval controls, interruption,
+and chaining if authorized. Update README/glossary and shared skill docs where
+appropriate. Preserve outstanding manual checks and deferred phases as tasks;
+completing a release subset is not whole-plan completion.
 
 * Checkpoint
 - Plan status: draft
 - Selected scope: none (planning only); first execution scope is Phase 1 only
-- Last verified result: inspected glossary, README architecture/manager guidance,
-  testing guidelines, runtime-manager row/refresh code, and backend execution APIs
-- Next action: on an explicit execution request, produce the Phase 1 UI example
-  for user review; iterate until explicitly accepted, then stop at the phase boundary
-- Blockers: no planning blocker; all feature implementation is gated on UI acceptance
+- Last verified result: inspected plans skill lifecycle/helper and PiChat launch,
+  settlement and pending-input ownership; recorded native-layer and optional
+  plan-adapter design review, concurrency clarification, and research findings;
+  reread SSH plan evidence and identified active-job cancellation as the remaining
+  job-specific lifecycle question, not remote Pi exit detection from scratch
+- Next action: on explicit execution request, present Phase 1 UI examples for
+  acceptance; resolve open interaction/authorization choices and stop at that boundary
+- Blockers: no planning blocker; implementation gated on explicit UI acceptance;
+  plan adapter requires a trusted approval/eligibility contract, not prose inference
 
 * Verification
 - Feature tests and live UI checks not run (planning only).
-- Structural plan validation: plans.py check pichat-repeatable-jobs-with-ui-approval-gate passed.
+- Revised record passed plans.py check pichat-repeatable-jobs-with-ui-approval-gate.
+- External dagrun review checks are research evidence, not PiChat verification.
 
 * History
-- 2026-10-30T06:19:17+00:00: Created draft from discussion; user requires the first
-  phase to produce a UI example that they accept before feature implementation.
+- 2026-10-30T06:19:17+00:00: Created draft; user requires a UI example they accept
+  before feature implementation.
+- 2026-10-30T15:04:50+00:00: Selected lightweight native orchestration, interval
+  scheduling, explicit interruption semantics and separately authorized chaining.
+- 2026-10-30T16:41:20+00:00: At user request, incorporated detailed design review:
+  plan-free jobs and optional exact-phase adapter, stable Org identity, bounded
+  authorization, one-shot scheduling, background lifecycle seam, shared resource
+  coordination (not one-run-per-project), UI reuse, explicit successor scope and
+  expanded verification. Preserved UI gate and all earlier deferred boundaries;
+  no implementation or commit authorized by this update.
+- 2026-10-30T17:29:12+00:00: User requested SSH clarification and commit. Explicitly
+  required reuse of implemented/focused-tested process-lifetime confirmation;
+  linked outstanding verification to its owning SSH plan and narrowed jobs work
+  to active cancellation, descendant uncertainty and safe workspace release.
+  No production implementation or additional SSH tests performed.

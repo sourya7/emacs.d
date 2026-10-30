@@ -347,5 +347,130 @@
       (setq-local pichat-chat--source-rebinding-p t)
       (should-not (pichat-chat--diagnostic-sections session)))))
 
+(ert-deftest pichat-diagnostics-customization-alias-opens-the-pichat-group ()
+  (dolist (command '(pichat-diagnostics-customize
+                     pichat-diagnostics-customize-transport))
+    (let (group)
+      (cl-letf (((symbol-function 'customize-group)
+                 (lambda (value &rest _) (setq group value))))
+        (call-interactively command))
+      (should (eq group 'pichat)))))
+
+(ert-deftest pichat-diagnostics-setup-terminals-reuse-only-matching-contexts ()
+  (pichat-test-with-temp-dir directory
+    (let* ((session (pichat-session-make :cwd directory))
+           (other (pichat-session-make :cwd directory))
+           (pichat-diagnostics-interactive-command '("sh" "-c" "cat >/dev/null"))
+           (pichat-pi-extra-env nil)
+           (process-environment (copy-sequence process-environment))
+           (buffers nil)
+           first)
+      (unwind-protect
+          (cl-letf (((symbol-function 'pop-to-buffer)
+                     (lambda (buffer &rest _) (cl-pushnew buffer buffers) buffer)))
+            ;; Real inert terminal processes: never invoke Pi or user config.
+            (setq first (pichat-diagnostics-open-interactive-pi session))
+            (should (process-live-p (get-buffer-process first)))
+            (should (eq first (pichat-diagnostics-open-interactive-pi session)))
+            (should (eq first (pichat-diagnostics-open-interactive-pi other)))
+            (let ((pichat-diagnostics-interactive-command '("sh" "-c" "cat > /dev/null")))
+              (should-not (eq first (pichat-diagnostics-open-interactive-pi session))))
+            (let ((pichat-pi-extra-env '(("PICHAT_TEST_SETUP" . "changed"))))
+              (should-not (eq first (pichat-diagnostics-open-interactive-pi session))))
+            (let ((exec-path (cons directory exec-path)))
+              (should-not (eq first (pichat-diagnostics-open-interactive-pi session))))
+            (setf (pichat-session-transport other)
+                  (pichat-transport--create :id 'different-target :kind 'local))
+            (should-not (eq first (pichat-diagnostics-open-interactive-pi other)))
+            (setf (pichat-session-emacs-cwd session) temporary-file-directory)
+            (should-not (eq first (pichat-diagnostics-open-interactive-pi session)))
+            (setf (pichat-session-emacs-cwd session) directory)
+            (should (eq first (pichat-diagnostics-open-interactive-pi session)))
+            (should (= 6 (length buffers)))
+            (dolist (buffer buffers)
+              (should (process-live-p (get-buffer-process buffer))))
+            ;; Stopped and untracked buffers are never treated as live matches.
+            (delete-process (get-buffer-process first))
+            (should-not (eq first (pichat-diagnostics-open-interactive-pi session)))
+            (should (= 7 (length buffers))))
+        (dolist (buffer buffers)
+          (when-let* ((process (get-buffer-process buffer)))
+            (delete-process process))
+          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
+(ert-deftest pichat-diagnostics-setup-uses-ssh-context-without-local-fallback ()
+  (let* ((transport (pichat-transport--create
+                     :id 'remote :kind 'ssh :label "remote"
+                     :tramp-prefix "/ssh:setup.invalid:"
+                     :pi-executable "/remote/bin/pi"
+                     :remote-path '("/remote/bin")))
+         (session (pichat-session-make :transport transport :cwd "/tmp/"
+                                       :runtime-cwd "/remote/project/"))
+         (pichat-pi-extra-env '(("PICHAT_TEST_SETUP_ENV" . "remote")))
+         captured buffers)
+    (unwind-protect
+        (cl-letf (((symbol-function 'make-term)
+                   (lambda (name program _startfile &rest args)
+                     (push (list default-directory tramp-remote-path program args
+                                 (getenv "PICHAT_TEST_SETUP_ENV")) captured)
+                     (let ((buffer (generate-new-buffer (format "*%s*" name))))
+                       (push buffer buffers)
+                       ;; Test only launch context, not SSH connectivity.
+                       (with-current-buffer buffer (term-mode))
+                       buffer)))
+                  ((symbol-function 'term-char-mode) #'ignore)
+                  ((symbol-function 'pop-to-buffer) (lambda (buffer &rest _) buffer)))
+          (pichat-diagnostics-open-interactive-pi session)
+          (should (equal (car captured)
+                         '("/ssh:setup.invalid:/remote/project/"
+                           ("/remote/bin") "/remote/bin/pi" nil "remote"))))
+      (mapc #'kill-buffer buffers))))
+
+(ert-deftest pichat-diagnostics-setup-honors-target-executable-and-explicit-wrapper-policy ()
+  (let* ((session (pichat-session-make
+                   :transport (pichat-transport--create
+                               :id 'local-target :kind 'local
+                               :pi-executable "/target/pi")))
+         (pichat-rpc-command nil)
+         (pichat-pi-executable "/global/pi")
+         (pichat-diagnostics-interactive-command nil))
+    (should (equal (pichat-chat-diagnostics-interactive-argv session) '("/target/pi")))
+    (let ((pichat-rpc-command '("wrapper" "--mode" "rpc")))
+      (should-error (pichat-diagnostics-open-interactive-pi session) :type 'user-error)
+      (let ((pichat-diagnostics-interactive-command '("wrapper" "interactive")))
+        (should (equal (pichat-chat-diagnostics-interactive-argv session)
+                       '("wrapper" "interactive")))))))
+
+(ert-deftest pichat-diagnostics-version-probe-is-not-rpc-wrapper-health ()
+  (let* ((session (pichat-session-make
+                   :transport (pichat-transport--create
+                               :id 'version-target :kind 'local :label "version-target"
+                               :pi-executable "/target/pi")))
+         (pichat-rpc-command '("wrapper" "--mode" "rpc"))
+         output sentinel command result)
+    (unwind-protect
+        (cl-letf (((symbol-function 'pichat-transport-make-process)
+                   (lambda (transport cwd &rest args)
+                     (should (eq transport (pichat-session-transport session)))
+                     (should (equal cwd (pichat-session-runtime-cwd session)))
+                     (setq output (plist-get args :buffer)
+                           sentinel (plist-get args :sentinel)
+                           command (plist-get args :command))))
+                  ((symbol-function 'pichat-rpc-send)
+                   (lambda (&rest _) (ert-fail "Version check issued RPC"))))
+          (pichat-diagnostics-probe-pi session)
+          (should (equal command '("/target/pi" "--version")))
+          (with-current-buffer output (insert "1.4.0\n"))
+          (cl-letf (((symbol-function 'process-status) (lambda (_) 'exit))
+                    ((symbol-function 'process-exit-status) (lambda (_) 0))
+                    ((symbol-function 'message)
+                     (lambda (format-string &rest args)
+                       (setq result (apply #'format format-string args)))))
+            (funcall sentinel 'fake-process "finished"))
+          (should (string-match-p "Pi executable/version on version-target" result))
+          (should (string-match-p "not RPC/auth/model health" result))
+          (should-not (buffer-live-p output)))
+      (when (buffer-live-p output) (kill-buffer output)))))
+
 (provide 'pichat-test-chat-diagnostics)
 ;;; pichat-test-chat-diagnostics.el ends here

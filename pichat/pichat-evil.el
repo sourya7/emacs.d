@@ -12,6 +12,7 @@
 (require 'pichat-chat)
 (require 'pichat-sessions)
 (require 'pichat-response-view)
+(require 'pichat-chat-diagnostics)
 (require 'pichat-session-manager)
 
 (defvar pichat-artifacts-preview-mode-map)
@@ -76,6 +77,21 @@ remain in their original mode maps."
   (evil-define-key* 'normal pichat-session-manager-preview-mode-map
     (kbd "q") #'pichat-session-manager-preview-quit
     (kbd "g r") #'pichat-session-manager-preview-refresh)
+  (evil-define-key* 'normal pichat-diagnostics-mode-map
+    (kbd "g r") #'pichat-diagnostics-refresh
+    (kbd "r") #'pichat-diagnostics-show-raw
+    (kbd "s") #'pichat-diagnostics-setup)
+  (evil-define-key* 'normal pichat-transport-diagnostics-mode-map
+    (kbd "g r") #'pichat-diagnostics-refresh
+    (kbd "r") #'undefined
+    (kbd "s") #'undefined)
+  ;; Reports may already be open when this optional layer is enabled.  Evil
+  ;; caches their active maps, so newly added auxiliary maps need a refresh.
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when (and (derived-mode-p 'pichat-diagnostics-mode)
+                 (bound-and-true-p evil-local-mode))
+        (evil-normalize-keymaps))))
   (evil-define-key* 'normal pichat-response-view-mode-map
     (kbd "g r") #'pichat-response-view-refresh
     (kbd "]r") #'pichat-response-view-next

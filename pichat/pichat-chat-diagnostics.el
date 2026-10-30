@@ -73,6 +73,25 @@ command is not safe."
 (defvar-local pichat-diagnostics--owner nil
   "Runtime whose snapshot is displayed in this inspector.")
 
+(defvar-local pichat-diagnostics--setup-context nil
+  "Launch context of this setup terminal; never inferred from its name.")
+
+(defvar pichat-diagnostics-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "g") #'pichat-diagnostics-refresh)
+    (define-key map (kbd "r") #'pichat-diagnostics-show-raw)
+    (define-key map (kbd "s") #'pichat-diagnostics-setup)
+    map)
+  "Native bindings for safe cached diagnostics.")
+
+(defvar pichat-transport-diagnostics-mode-map
+  (let ((map (make-sparse-keymap)))
+    ;; Raw inspection is entered from the safe report, not recursively.
+    (define-key map (kbd "r") #'undefined)
+    (define-key map (kbd "s") #'undefined)
+    map)
+  "Native bindings for explicit raw diagnostics.")
+
 (define-derived-mode pichat-diagnostics-mode pichat-view-mode "PiChat-Diagnostics"
   "Read-only cached diagnostics owned by one PiChat runtime.")
 
@@ -340,6 +359,9 @@ codes, or missing files in unrelated output."
    (pichat-diagnostics-interactive-command
     (copy-sequence pichat-diagnostics-interactive-command))
    ((and (boundp 'pichat-rpc-command) pichat-rpc-command) nil)
+   ((and session
+         (pichat-transport-pi-executable (pichat-session-transport session)))
+    (list (pichat-transport-pi-executable (pichat-session-transport session))))
    ((and (boundp 'pichat-pi-executable)
          (stringp pichat-pi-executable)
          (not (string-empty-p pichat-pi-executable)))
@@ -373,16 +395,55 @@ codes, or missing files in unrelated output."
                   (pichat-chat-diagnostics--agent-directory))))))
 
 ;;;###autoload
-(defun pichat-diagnostics-customize-transport ()
-  "Customize PiChat's executable, wrapper, and interactive setup commands."
+(defun pichat-diagnostics-customize ()
+  "Customize the PiChat group, including transport and setup settings."
   (interactive)
   (customize-group 'pichat))
 
 ;;;###autoload
+(defalias 'pichat-diagnostics-customize-transport #'pichat-diagnostics-customize)
+
+(defun pichat-diagnostics-setup ()
+  "Choose an explicit setup action for the safe inspector's runtime.
+Inspection stays read-only; these actions may launch a process, visit an
+editable settings file, or open Emacs customization.  Pi actions require
+the backend's diagnostics capability; customization is backend-independent."
+  (interactive)
+  (unless (and (derived-mode-p 'pichat-diagnostics-mode)
+               (not (derived-mode-p 'pichat-transport-diagnostics-mode)))
+    (user-error "Open setup from a safe PiChat diagnostics inspector"))
+  (let* ((session (pichat-chat-diagnostics--session))
+         (actions
+          (append
+           (when (pichat-backend-capable-p session 'diagnostics)
+             '(("Check Pi executable/version (process; not RPC/auth/model health)"
+                . pichat-diagnostics-probe-pi)
+               ("Open interactive Pi setup (separate terminal)"
+                . pichat-diagnostics-open-interactive-pi)
+               ("Open settings file (editable)" . pichat-diagnostics-open-settings)))
+           '(("Customize PiChat" . pichat-diagnostics-customize))))
+         (choice (completing-read
+                  (if (pichat-backend-capable-p session 'diagnostics)
+                      "Setup action: "
+                    "Setup (Pi actions unavailable for this backend): ")
+                  actions nil t))
+         (action (cdr (assoc choice actions))))
+    ;; Completion runs the command loop.  Revalidate the owner and let each
+    ;; action recheck its capability before performing any side effect.
+    (pichat-chat-diagnostics--session)
+    (unless action (user-error "No setup action selected"))
+    (if (eq action 'pichat-diagnostics-customize)
+        (funcall action)
+      (funcall action session))))
+
+;;;###autoload
 (defun pichat-diagnostics-open-interactive-pi (&optional session)
   "Launch interactive Pi in a terminal for /login, /model, and /settings.
-Use SESSION's working directory when available.  Arbitrary RPC wrappers are
-never rewritten; configure `pichat-diagnostics-interactive-command' for them."
+Use SESSION's target and working directory when available.  Reuse a live
+setup terminal only when its transport, directory, argv, environment and
+executable search context match; otherwise open a separate terminal without
+stopping an existing process.  Arbitrary RPC wrappers are never rewritten;
+configure `pichat-diagnostics-interactive-command' for them."
   (interactive)
   (let* ((session (pichat-chat-diagnostics--session session))
          (_capability
@@ -391,7 +452,10 @@ never rewritten; configure `pichat-diagnostics-interactive-command' for them."
              session 'diagnostics "Interactive Pi setup")))
          (argv (pichat-chat-diagnostics-interactive-argv session))
          (transport (and session (pichat-session-transport session))))
-    (unless argv
+    (unless (and (consp argv)
+                 (cl-every (lambda (arg)
+                             (and (stringp arg) (not (string-empty-p arg))))
+                           argv))
       (user-error
        "Set pichat-diagnostics-interactive-command for this wrapper/container setup"))
     (let* ((default-directory
@@ -409,28 +473,53 @@ never rewritten; configure `pichat-diagnostics-interactive-command' for them."
                      (pichat-transport-remote-path transport))
                 (pichat-transport-remote-path transport)
               tramp-remote-path))
-           (name "PiChat Pi Setup")
-           (buffer (get-buffer-create (format "*%s*" name))))
-      (require 'term)
-      (unless (process-live-p (get-buffer-process buffer))
-        (with-current-buffer buffer
-          (let ((inhibit-read-only t)) (erase-buffer)))
-        (let ((process-environment (pichat-pi-process-environment)))
-          (apply #'make-term name (car argv) nil (cdr argv)))
-        (with-current-buffer buffer
-          (term-mode)
-          (term-char-mode)))
+           (process-environment (pichat-pi-process-environment))
+           ;; Include effective environment and executable search context: a
+           ;; matching target/cwd/argv with different credentials or PATH is
+           ;; not the same setup launch.  Copy mutable configuration values.
+           (context (copy-tree
+                     (list :transport (or transport pichat-transport-local)
+                           :directory default-directory :argv argv
+                           :environment process-environment :exec-path exec-path
+                           :remote-path tramp-remote-path)
+                     t))
+           (buffer
+            (seq-find
+             (lambda (candidate)
+               (and (process-live-p (get-buffer-process candidate))
+                    (equal context
+                           (buffer-local-value
+                            'pichat-diagnostics--setup-context candidate))))
+             (buffer-list))))
+      (unless buffer
+        ;; A mismatched or untracked terminal is never stopped or overwritten.
+        ;; `make-term' accepts a name without the surrounding stars.
+        (let* ((base (format "PiChat Pi Setup %s"
+                             (if session (pichat-session-runtime-id session)
+                               "local")))
+               (name base)
+               (index 1))
+          (while (get-buffer (format "*%s*" name))
+            (setq index (1+ index)
+                  name (format "%s <%d>" base index)))
+          (setq buffer (apply #'make-term name (car argv) nil (cdr argv)))
+          (with-current-buffer buffer
+            (term-char-mode)
+            (setq-local pichat-diagnostics--setup-context context))))
       (pop-to-buffer buffer))))
 
 ;;;###autoload
 (defun pichat-diagnostics-probe-pi (&optional session)
-  "Run `pi --version' through SESSION's transport and report availability."
+  "Check Pi executable/version through SESSION's transport with --version.
+Starts a process, not an RPC health check: this does not validate credentials,
+model configuration, RPC startup, or `pichat-rpc-command' wrappers.  Results
+are reported in the echo area and *Messages*, not the cached inspector."
   (interactive)
   (let* ((session (pichat-chat-diagnostics--session session))
          (_capability
           (when session
             (pichat-backend-require-capability
-             session 'diagnostics "Pi availability probe")))
+             session 'diagnostics "Pi executable/version check")))
          (transport (if session (pichat-session-transport session)
                       pichat-transport-local))
          (runtime-cwd (if session (pichat-session-runtime-cwd session)
@@ -453,9 +542,9 @@ never rewritten; configure `pichat-diagnostics-interactive-command' for them."
                            (point-min) (point-max))))))
              (kill-buffer output)
              (if (zerop status)
-                 (message "Pi available on %s: %s"
+                 (message "Pi executable/version on %s (not RPC/auth/model health): %s"
                           (pichat-transport-label transport) text)
-               (message "Pi probe failed on %s (status %d): %s"
+               (message "Pi executable/version check failed on %s (status %d): %s"
                         (pichat-transport-label transport) status text)))))))))
 
 (defun pichat-chat-diagnostics--print-value (value)
@@ -465,6 +554,50 @@ never rewritten; configure `pichat-diagnostics-interactive-command' for them."
        (pp-to-string value)
      (error (format "<unprintable: %s>" (error-message-string err))))
    pichat-diagnostics-view-value-limit))
+
+(defun pichat-diagnostics-refresh ()
+  "Rebuild the current inspector from its owner's cached records.
+Safe diagnostics never fetch history, issue RPC, or launch processes.  Raw
+inspectors rebuild only their explicitly opened bounded raw snapshot."
+  (interactive)
+  (unless (derived-mode-p 'pichat-diagnostics-mode)
+    (user-error "Not a PiChat diagnostics inspector"))
+  (if (derived-mode-p 'pichat-transport-diagnostics-mode)
+      (pichat-show-transport-diagnostics)
+    (pichat-show-diagnostics)))
+
+(defun pichat-diagnostics-show-raw ()
+  "Confirm opening sensitive raw details for the safe inspector's owner."
+  (interactive)
+  (unless (and (derived-mode-p 'pichat-diagnostics-mode)
+               (not (derived-mode-p 'pichat-transport-diagnostics-mode)))
+    (user-error "Open raw details from a safe PiChat diagnostics inspector"))
+  ;; Reject forgotten owners before prompting.  Resolve again after the prompt,
+  ;; since the registry may change while Emacs waits for the user's answer.
+  (pichat-chat-diagnostics--session)
+  (when (y-or-n-p "Raw details may contain secrets, paths and prompt content. Open? ")
+    (pichat-show-transport-diagnostics)))
+
+(defun pichat-chat-diagnostics--safe-record-line (record)
+  "Return RECORD's safe summary with only available optional metadata.
+Legacy strings have no metadata.  Missing or invalid times are omitted,
+never replaced by the snapshot time.  Raw record fields are not printed."
+  (let* ((metadata (and (listp record) record))
+         (labels (delq nil
+                       (mapcar (lambda (key)
+                                 (when-let* ((value (plist-get metadata key)))
+                                   (pichat-chat-diagnostics--identity-label value)))
+                               '(:severity :category))))
+         (time (when-let* ((value (plist-get metadata :time)))
+                 (condition-case nil
+                     (format-time-string "%Y-%m-%dT%H:%M:%SZ" value t)
+                   (error nil))))
+         (prefix (string-join
+                  (delq nil (list (and labels (string-join labels "/")) time))
+                  "; ")))
+    (concat (unless (string-empty-p prefix) (format "[%s] " prefix))
+            (pichat-chat-diagnostics-safe-summary-text
+             (pichat-diagnostic-summary record)))))
 
 ;;;###autoload
 (defun pichat-show-diagnostics (&optional session)
@@ -487,8 +620,11 @@ unavailable.  Use `pichat-show-transport-diagnostics' explicitly for raw data."
       (with-current-buffer buffer
         (let ((inhibit-read-only t))
           (erase-buffer)
-          (insert "PiChat diagnostics (cached snapshot)\n\n"
-                  "Raw details: M-x pichat-show-transport-diagnostics (sensitive data).\n\n")
+          (insert "PiChat diagnostics (cached snapshot, not a live health check)\n\n"
+                  "g / Evil gr: refresh caches   r: raw details (sensitive; asks first)\n"
+                  "s: setup actions (may start processes or edit settings)   q: return\n"
+                  "Unavailable means no current cached snapshot, not necessarily a failure.\n"
+                  "None means the current cache contains no diagnostic records.\n\n")
           (pichat-chat-diagnostics--insert-identity session)
           (dolist (title '("Runtime / transport" "Canonical transcript"
                            "Live tail" "Session History"))
@@ -499,12 +635,13 @@ unavailable.  Use `pichat-show-transport-diagnostics' explicitly for raw data."
                ((null (cdr section)) (insert "  none\n"))
                (t (dolist (record (cdr section))
                     (insert "  "
-                            (pichat-chat-diagnostics-safe-summary-text
-                             (pichat-diagnostic-summary record)) "\n"))))
+                            (pichat-chat-diagnostics--safe-record-line record)
+                            "\n"))))
               (insert "\n"))))
         (unless (eq major-mode 'pichat-diagnostics-mode)
           (pichat-diagnostics-mode))
-        (setq-local pichat-diagnostics--owner session))
+        (setq-local pichat-diagnostics--owner session)
+        (goto-char (point-min)))
       (unless (eq buffer (current-buffer))
         (pichat-view-display buffer nil 'bury))
       buffer)))
@@ -531,7 +668,8 @@ paths, prompts, command arguments, provider output, and credentials."
         (let ((inhibit-read-only t))
           (erase-buffer)
           (insert "PiChat diagnostics\n\n")
-          (insert "WARNING: this explicit view may contain secrets, paths, and prompt content.\n\n")
+          (insert "WARNING: this explicit view may contain secrets, paths, and prompt content.\n"
+                  "g / Evil gr: refresh raw snapshot   q: return\n\n")
           (pichat-chat-diagnostics--insert-identity session)
           (if (eq (pichat-session-backend-id session) 'pi)
               (let ((transport (pichat-session-transport session)))
@@ -565,7 +703,8 @@ paths, prompts, command arguments, provider output, and credentials."
             (insert "  none\n")))
         (unless (eq major-mode 'pichat-transport-diagnostics-mode)
           (pichat-transport-diagnostics-mode))
-        (setq-local pichat-diagnostics--owner session))
+        (setq-local pichat-diagnostics--owner session)
+        (goto-char (point-min)))
       (unless (eq buffer (current-buffer))
         (pichat-view-display buffer nil 'bury))
       buffer)))

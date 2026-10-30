@@ -18,6 +18,8 @@
                   pichat-view-mode pichat-session-manager-mode
                   pichat-artifact-result-mode pichat-artifact-elisp-result-mode
                   pichat-artifact-runner-result-mode))
+         (open-inspectors (list (generate-new-buffer " *evil-existing-safe*")
+                                (generate-new-buffer " *evil-existing-raw*")))
          (previous-preview-hook
           (copy-sequence pichat-artifacts-preview-mode-hook))
          (previous (mapcar (lambda (mode)
@@ -26,7 +28,17 @@
     (unwind-protect
         (progn
           (evil-mode 1)
+          (cl-mapc (lambda (buffer mode)
+                     (with-current-buffer buffer
+                       (funcall mode)
+                       (evil-normal-state)))
+                   open-inspectors
+                   '(pichat-diagnostics-mode pichat-transport-diagnostics-mode))
           (pichat-evil-setup)
+          (dolist (buffer open-inspectors)
+            (with-current-buffer buffer
+              (should (eq (key-binding (kbd "g r")) #'pichat-diagnostics-refresh))
+              (should (eq (key-binding (kbd "q")) #'pichat-view-quit))))
           (with-temp-buffer
             (pichat-chat-mode)
             (should (eq evil-state 'normal))
@@ -87,6 +99,25 @@
             (pichat-session-manager-preview-mode)
             (should (eq (key-binding (kbd "q"))
                         #'pichat-session-manager-preview-quit)))
+          (dolist (mode '(pichat-diagnostics-mode pichat-transport-diagnostics-mode))
+            (with-temp-buffer
+              (funcall mode)
+              (should (eq evil-state 'normal))
+              (should (eq (key-binding (kbd "q")) #'pichat-view-quit))
+              (should (eq (key-binding (kbd "g r")) #'pichat-diagnostics-refresh))
+              (should (eq (key-binding (kbd "r"))
+                          (if (eq mode 'pichat-diagnostics-mode)
+                              #'pichat-diagnostics-show-raw #'undefined)))
+              ;; Do not take over Vim's g prefix or unrelated navigation.
+              (should (eq (key-binding (kbd "g g")) #'evil-goto-first-line))
+              (should (eq (key-binding (kbd "/")) #'evil-search-forward))
+              (should (eq (key-binding (kbd "w")) #'evil-forward-word-begin))
+              (should (eq (key-binding (kbd "s"))
+                          (if (eq mode 'pichat-diagnostics-mode)
+                              #'pichat-diagnostics-setup #'undefined)))
+              (evil-emacs-state)
+              (should (eq (key-binding (kbd "g")) #'pichat-diagnostics-refresh))
+              (should (eq (key-binding (kbd "q")) #'pichat-view-quit))))
           (with-temp-buffer
             (pichat-response-view-mode)
             (should (eq (key-binding (kbd "q")) #'pichat-view-quit))
@@ -151,6 +182,7 @@
             (should (eq (key-binding (kbd "q")) #'pichat-view-quit))))
       (dolist (entry previous)
         (evil-set-initial-state (car entry) (cdr entry)))
+      (mapc #'kill-buffer open-inspectors)
       (setq pichat-artifacts-preview-mode-hook previous-preview-hook)
       (unless was-active (evil-mode -1)))))
 

@@ -1,9 +1,9 @@
 #+TITLE: Enable safe SSH runtime reconfiguration
 #+TODO: TODO IN-PROGRESS BLOCKED | DONE
 #+PLAN_ID: enable-safe-ssh-runtime-reconfiguration
-#+PLAN_STATUS: draft
+#+PLAN_STATUS: active
 #+PLAN_CREATED: 2026-10-29T04:17:38+00:00
-#+PLAN_UPDATED: 2026-10-29T04:17:38+00:00
+#+PLAN_UPDATED: 2026-10-30T06:52:12Z
 
 * Goal
 Remove PiChat's blanket SSH reconfiguration restriction so a supported SSH runtime can replace its startup preset/Tools and reload its Pi session, while preventing a replacement from starting when old-process termination is uncertain.
@@ -30,17 +30,23 @@ Remove PiChat's blanket SSH reconfiguration restriction so a supported SSH runti
 - Keep confirmation asynchronous/bounded and scoped to the captured transport, old process and process generation. A successful request to terminate is not automatically an exit confirmation. Account for PID reuse if using remote PIDs.
 - Distinguish safe retry after confirmed shutdown from uncertain old-process survival; audit recovery as well as initial restart before enabling SSH.
 - Existing source reservations are Emacs-local; this change does not promise protection against external writers.
+- Investigation selected an initially Linux-only actual-Pi identity helper plus a pre-established asynchronous procfs observer. See [[file:termination-contract.md][termination contract]] for installed-source evidence, supported guarantees, limitations, and the recovery audit. No remote PID signaling or persistent supervisor is required in production; unsupported or uncertain capabilities remain blocked.
 
 * Tasks
-** TODO Establish the SSH termination contract
+** DONE Establish the SSH termination contract
 - Inspect the actual installed TRAMP make-process/delete-process/sentinel path, including remote PID ownership and connection failure behavior; record concrete source references and supported guarantees.
 - Reinspect current restart and recovery paths and determine the minimal transport-aware shutdown barrier, including timeout, cancellation and uncertain-outcome handling.
 - Use isolated fixtures to demonstrate normal termination and failure behavior; simulate connection loss in an owned test transport, never by disrupting shared TRAMP connections or the host network.
 - Record the chosen design and its limitations before implementation. Escalate if it requires substantially broader transport supervision.
-** TODO Implement transport-aware shutdown and enable SSH reconfiguration
+- Completed: inspected installed Emacs/TRAMP and stop/recovery paths, demonstrated remote survival after transport death and successful signal delivery, reran normal real-Pi SSH shutdown, and recorded the chosen bounded observer design in [[file:termination-contract.md][termination-contract.md]]. Reproducible isolated fixtures: [[file:tramp-contract-tests.el][tramp-contract-tests.el]].
+** DONE Implement transport-aware shutdown and enable SSH reconfiguration
 - Replace local-only gates with supported-capability validation and implement the selected shutdown confirmation path.
 - Preserve existing local guarantees, process-generation checks, operation ownership and bounded failure handling.
 - Audit replacement startup and retry/restore paths so uncertainty cannot bypass shutdown confirmation; retain captured target and path mappings throughout.
+- Implemented: pichat-process-lifetime.el validates actual-Pi Linux identities and owns token-qualified bounded observers. Reused the bundled tool-control helper's existing provenance-checked internal handshake rather than staging a second extension; SSH startup loads it even without selected extension tools. Unsupported procfs leaves identity unavailable and reconfiguration blocked.
+- Implemented: observers establish their baseline before snapshot staging/stop, bind callbacks to operation/process/generation, and confirm both gone evidence and clean probe exit. Replacement startup requires all original/failed-replacement obligations discharged; unknown-identity recovery is rejected. Cancellation retains obligations, and file housekeeping runs outside the shutdown barrier after verified exit.
+- Implemented: saved/unwritten recovery paths use captured target-native paths; leave-stopped rejects unconfirmed SSH shutdown. Local restart semantics remain unchanged. README received a minimal capability/verification correction; comprehensive support documentation and live UI acceptance remain in the final phase.
+- Focused verification passed: 880-test unit run, 54-test reconfiguration/tool real-Pi-enabled selector, real-SSH saved restart/failure+restore/unwritten restart smoke, and changed-Elisp byte compilation. The comprehensive failure matrix remains the next phase.
 ** TODO Cover restart ordering and failure/recovery behavior
 - Replace the blanket-rejection regression with behavior tests for supported SSH restart and rejection of unsupported/uncertain cases.
 - Assert no replacement before confirmed exit; test timeout, probe failure, transport loss, stale callbacks, cancellation, and retry after uncertain shutdown.
@@ -54,13 +60,24 @@ Remove PiChat's blanket SSH reconfiguration restriction so a supported SSH runti
 - Update pichat/README.md and keep pichat/GLOSSARY.md consistent, describing supported shutdown guarantees and remaining limitations rather than an unconditional SSH ban.
 
 * Checkpoint
-- Plan status: draft
-- Selected scope: none (planning only)
-- Last verified result: prior investigation passed the strengthened real-SSH normal-stop test and unit suite; no SSH reconfiguration implementation exists yet.
-- Next action: review and approve; when execution is requested, start by establishing the actual TRAMP termination contract.
-- Blockers: none for planning; shutdown design remains an explicit investigation task.
+- Plan status: active
+- Selected scope: Implement transport-aware shutdown and enable SSH reconfiguration, completed. Broader failure coverage and full end-to-end/UI acceptance phases were not advanced.
+- Last verified result: unit suite 880 tests, 872 expected, 8 skipped, 0 unexpected; focused real-Pi-enabled selector 54/54 passed; real-SSH implementation smoke 1/1 passed in 17.07 seconds covering saved restart, injected post-stop failure/restore, and unwritten restart; changed Elisp byte compilation succeeded.
+- Next action: execute Cover restart ordering and failure/recovery behavior. Add the complete supported/unsupported SSH matrix, timeout/probe-loss/stale-callback/cancellation tests, unresolved-original/failed-replacement recovery coverage, and richer identity/transcript/draft assertions. Promote useful smoke coverage into durable test suites without duplicating this execution record.
+- Blockers: none. Initial support is Linux with readable procfs and verified helper identity; unsupported or uncertain lifetimes remain blocked. Full suite, comprehensive real-SSH integration, and live UI verification are still required before the whole plan is done.
 
 * Verification
+- 2026-10-30 implementation phase: pichat/test/run-tests.sh passed 880 tests, 872 expected results, 8 skipped, 0 unexpected (2.18 seconds). Added 5 focused lifetime/observer tests; adapted the old SSH rejection regression to reject missing identity and isolated helper staging in the transport-readiness fixture so unit tests do not access SSH.
+- 2026-10-30 implementation phase: real-Pi-enabled selector pichat-.*(reconfig|extension-tools|tool-runtime) passed 54/54 in 21.74 seconds on Pi 1.4.0, including existing local saved/unwritten restart and recovery plus tool-helper integration. This was not the full suite.
+- 2026-10-30 implementation phase: [[file:implementation-smoke.el][implementation-smoke.el]] passed 1/1 in 17.07 seconds using the known isolated SSH target and executable. It checks actual-Pi identity, confirmed old exit, stable runtime/saved Pi session identity, injected reload failure followed by restore with failed-replacement confirmation, and eligible unwritten restart receiving a new Pi session ID. It is supporting focused evidence, not a replacement for the final comprehensive real-SSH suite.
+- Reproduce the smoke with PICHAT_TEST_SSH_DIRECTORY=/ssh:mojo@bigbox.lan:/tmp/ PICHAT_TEST_SSH_PI=/run/current-system/sw/bin/pi emacs -Q --batch -L pichat -L pichat/test -l .plans/enable-safe-ssh-runtime-reconfiguration/implementation-smoke.el --eval '(ert-run-tests-batch-and-exit (quote pichat-ssh-implementation-saved-restart-smoke))'.
+- Initial implementation verification found and fixed an absent-plist-key push that changed operation identity, and a transport-readiness fixture that needed to stub new helper staging. The first smoke's header-only saved file correctly failed exact transcript validation because its startup entries were not persisted; the corrected fixture persists an offline fake-provider turn before restart. Final smoke/unit runs pass; initial failures are not counted as passing evidence.
+- Changed Elisp files byte-compiled successfully with package/test-support dependencies loaded and output redirected to /tmp/pichat-ssh-bytecompile/. Existing docstring-width, Transient symbol-signature, and untouched archive-fixture warnings remain. No generated .elc files were written under pichat/. git diff --check passed. No commits made.
+- Focused file sizes after implementation: test/pichat-test-process-lifetime.el 122 lines; test/pichat-test-archive.el 475; test/pichat-test-lifecycle.el 1100; test/pichat-test.el 75; supporting implementation-smoke.el 125. Full suite and live UI checks were not run for this phase.
+- 2026-10-30 selected-phase verification: [[file:tramp-contract-tests.el][isolated contract fixtures]] passed 2/2 in 10.51 seconds on /ssh:mojo@bigbox.lan:/tmp/. They establish an independent control connection, validate PID/start time, and use bounded self-expiring HUP/TERM-immune children; no host network or user's Emacs/TRAMP connection was disrupted. Initial fixture failures and corrections are recorded in termination-contract.md, not counted as passes.
+- 2026-10-30 normal real-Pi SSH test: pichat-integration-ssh-rpc-streams-and-stops-cleanly passed 1/1 in 5.29 seconds using the known target and Pi executable below.
+- 2026-10-30 pichat/test/run-tests.sh: 875 tests, 867 expected results, 8 skipped, 0 unexpected. Full integration and live UI verification were not run in this investigation phase.
+- Test-file sizes: supporting contract fixture 103 lines; pichat/test/pichat-test-ssh.el 517 lines; pichat/test/pichat-test-lifecycle.el 1100 lines. No production or existing test files changed.
 - Prior investigation, not execution of this plan: pichat-integration-ssh-rpc-streams-and-stops-cleanly passed (1/1, approximately 5.3 seconds) using PICHAT_TEST_SSH_DIRECTORY=/ssh:mojo@bigbox.lan:/tmp/ and PICHAT_TEST_SSH_PI=/run/current-system/sw/bin/pi, Pi 1.4.0.
 - The SSH destination is this same host, but the test uses real SSH/TRAMP. It proves normal shutdown on this setup, not network-failure guarantees or complete reconfiguration.
 - Prior test change in pichat/test/pichat-test-ssh.el adds a positive live-process baseline, rejects pgrep errors, checks remote directory context, and waits for remote process disappearance. Preserve this existing worktree change.
@@ -68,4 +85,8 @@ Remove PiChat's blanket SSH reconfiguration restriction so a supported SSH runti
 - No implementation or additional tests run as part of creating this plan.
 
 * History
+- 2026-10-30T06:52:12Z: Completed only the transport-aware implementation phase with focused tests and real-SSH smoke evidence. Reused the existing internal helper, added verified lifetime observers/retained shutdown obligations, and corrected the README's now-stale blanket ban. Plan stays active; comprehensive coverage and final acceptance remain outstanding.
+- 2026-10-30T06:25:24Z: User authorized the next implementation phase. Preserving existing plan/investigation changes; production worktree initially clean.
+- 2026-10-30T06:02:48Z: Completed only the first investigation phase. Recorded concrete Emacs/TRAMP evidence, reproducible normal/failure fixtures, the selected initially Linux-only identity/observer design, and required recovery fixes. Plan remains active; implementation, full integration, and live UI acceptance remain outstanding.
+- 2026-10-30T05:50:52Z: User authorized execution; promoted to active and selected the first investigation phase. Initial worktree is clean; prior SSH test changes are already present, not an outstanding worktree edit.
 - 2026-10-29T04:17:38+00:00: Created draft after user requested a plan to remove the SSH reconfiguration restriction; captured prior evidence and separated normal-stop success from unverified failure semantics.

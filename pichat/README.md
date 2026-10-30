@@ -836,6 +836,11 @@ Chat keys:
   fetch history or issue RPC requests; unavailable snapshots are labelled.
   Each domain retains its own lifetime rather than copying snapshot warnings
   into the runtime failure log. Reinvoke the command to refresh the snapshot.
+  Safe and raw inspectors have separate buffers per runtime. Commands invoked
+  from an inspector retain that runtime, including after it stops. After it is
+  forgotten, the snapshot remains readable but owner-dependent actions are
+  rejected. `q` returns to the invoking view or buffer, so closing raw details
+  opened from safe diagnostics returns to that safe report.
 - `M-x pichat-show-transport-diagnostics` — explicitly inspect bounded raw
   stderr, failed RPC responses, the configured command, and recent RPC events;
   this view may contain secrets, paths, and prompt content

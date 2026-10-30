@@ -1,9 +1,9 @@
 #+TITLE: PiChat diagnostics improvements
 #+TODO: TODO IN-PROGRESS BLOCKED | DONE
 #+PLAN_ID: pichat-diagnostics-improvements
-#+PLAN_STATUS: draft
+#+PLAN_STATUS: active
 #+PLAN_CREATED: 2026-10-25T19:03:23+00:00
-#+PLAN_UPDATED: 2026-10-25T19:07:39Z
+#+PLAN_UPDATED: 2026-10-30T00:57:34Z
 
 * Goal
 Make safe cached diagnostics the primary troubleshooting entry point, keep sensitive raw evidence behind an explicit action, and ensure diagnostic actions target the inspected PiChat runtime.
@@ -20,15 +20,15 @@ Make safe cached diagnostics the primary troubleshooting entry point, keep sensi
 - Tests cover ownership, safety, stale-source behavior, nested view closure, bindings and compatibility. Run pichat/test/run-tests.sh; relevant RPC integration coverage uses --full per pichat/TESTING_GUIDELINES.md. Verify user bindings in a live Emacs session.
 
 * Approach and decisions
-- Imported as draft, not implemented. At import, pichat/pichat-chat-diagnostics.el still uses shared *PiChat Diagnostics* and *PiChat Transport Diagnostics* buffers and has the old pichat-diagnostics-customize-transport command; no evidence of these proposed changes being implemented.
+- At import (before implementation), pichat/pichat-chat-diagnostics.el still uses shared *PiChat Diagnostics* and *PiChat Transport Diagnostics* buffers and has the old pichat-diagnostics-customize-transport command; no evidence of these proposed changes being implemented.
 - Before implementation, read pichat/README.md, pichat/GLOSSARY.md and pichat/TESTING_GUIDELINES.md. Keep the glossary's runtime vs Pi session and Session History terminology.
 - The legacy proposal holds the detailed behavior and design options; reconcile it against current code before promoting this plan to ready. Proposed keybindings are not final until conflicts are checked.
 
 * Tasks
-** TODO Phase 1: Runtime-owned inspector views
-*** TODO Give safe and raw inspector views explicit runtime ownership and stable per-runtime buffers
-*** TODO Keep actions owner-correct across stop/forget, with safe identity headers and nested q behavior
-*** TODO Add ownership and view-lifecycle regression tests
+** DONE Phase 1: Runtime-owned inspector views
+*** DONE Give safe and raw inspector views explicit runtime ownership and stable per-runtime buffers
+*** DONE Keep actions owner-correct across stop/forget, with safe identity headers and nested q behavior
+*** DONE Add ownership and view-lifecycle regression tests
 ** TODO Phase 2: Primary safe diagnostics interface
 *** TODO Refresh all four cached sections safely; distinguish none from unavailable and stale source
 *** TODO Offer explicit warned raw view and validate proposed native/Evil bindings
@@ -42,15 +42,22 @@ Make safe cached diagnostics the primary troubleshooting entry point, keep sensi
 *** TODO Verify aliases, manager actions, full regression checks and live Emacs usage
 
 * Checkpoint
-- Plan status: draft
-- Selected scope: none (imported proposal only).
-- Last verified result: import inspection found existing shared inspector buffers and old customization name; no implementation tests run for this proposal.
-- Next action: review the imported proposal and current code; if approved, start Phase 1 only.
-- Blockers: no dependency blocker; proposed bindings and scope need review before implementation.
+- Plan status: active
+- Selected scope: Phase 1 only, complete. Stopped before Phase 2.
+- Last verified result: 25/25 focused diagnostics tests; full dependency-enabled suite 938 total, 936 passed, 2 opt-in Docker skips, 0 unexpected. Changed production module byte-compiled with warnings fatal; generated elc removed. README ownership note added; no glossary/user bindings changed.
+- Next action: await authorization for Phase 2 (primary safe diagnostics interface). Its refresh/raw shortcuts and Evil binding validation are not implemented. Later setup terminal context matching and final live Emacs checks also remain open.
+- Blockers: none for completed Phase 1; whole plan remains active because Phases 2–4 are incomplete.
 
 * Verification
+- Phase 1: added pichat/test/pichat-test-diagnostics-views.el (152 lines, six tests). Covers separate buffers and reuse across Pi session identity changes, explicit owner despite directory/global fallback, stopped and forgotten owners, setup-action capability-boundary ownership, safe identity metadata, and actual window lifecycle q from raw to safe to origin after reinvocation. Reviewed focused test-file size inventory; existing diagnostic suite remains 351 lines.
+- Focused command: emacs -Q --batch -L pichat -L pichat/test -l pichat-test-chat-diagnostics -l pichat-test-diagnostics-views -f ert-run-tests-batch-and-exit — 25/25 passed. Ephemeral log: /tmp/pichat-diagnostics-phase1-focused.log.
+- Full command: pichat/test/run-tests.sh --full --with-optional — 938 total, 936 passed, 2 opt-in Docker skips, 0 unexpected, 104.97 seconds. Ephemeral log: /tmp/pichat-diagnostics-phase1-full.log. Existing isolated offline fake-provider integration support used; no real model APIs or user Pi state.
+- Strict byte compilation of pichat-chat-diagnostics.el passed with byte-compile-error-on-warn t; generated elc removed. git diff --check passed. No live configured-Emacs or interactive terminal check performed in Phase 1; binding/usability verification remains in later phases, with no personal bindings changed here.
+- Implementation decisions: diagnostic modes derive from pichat-view-mode and keep an explicit buffer-local owner. Inspector-origin actions require the same object in the runtime registry before reading or launching anything; explicit non-inspector callers retain existing behavior. Reinvocation in place preserves its existing presentation rather than setting itself as origin. Safe identity headers use bounded path-free identifiers, state and UTC snapshot time, never cwd/argv/optional display labels. Existing setup commands resolve the owner now; setup process reuse/context behavior is deliberately unchanged until Phase 3.
 - Original proposal explicitly states no implementation changes. Import verified the existing shared buffer names and old command in source; no tests run and no work marked DONE.
 
 * History
+- 2026-10-30T00:57:34Z: Phase 1 complete after focused/full regression checks and strict compilation. Added runtime-owned safe/raw modes, per-runtime buffers, safe identity headers, owner resolution/rejection after forget, nested closure regressions and brief README guidance. Stopped before Phase 2; no commits, user bindings or glossary changes.
+- 2026-10-30T00:50:32Z: User authorized work; promoted draft to active and selected Phase 1 only. Current code confirms the imported ownership findings. Refresh bindings, warned raw shortcut and setup chooser remain later-phase work; existing M-x actions will use inspector ownership.
 - 2026-10-25T19:03:23+00:00: Created by helper for import.
 - 2026-10-25: Imported as draft from .tmp/pichat-diagnostics-improvement-plan.md. Original left unchanged; no implementation started.

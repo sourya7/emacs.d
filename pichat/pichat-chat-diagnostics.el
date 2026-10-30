@@ -68,6 +68,57 @@ command is not safe."
 (defvar pichat-pi-executable)
 (defvar pichat-rpc-command)
 
+(declare-function pichat-session-by-runtime-id "pichat" (runtime-id))
+
+(defvar-local pichat-diagnostics--owner nil
+  "Runtime whose snapshot is displayed in this inspector.")
+
+(define-derived-mode pichat-diagnostics-mode pichat-view-mode "PiChat-Diagnostics"
+  "Read-only cached diagnostics owned by one PiChat runtime.")
+
+(define-derived-mode pichat-transport-diagnostics-mode pichat-diagnostics-mode
+  "PiChat-Raw-Diagnostics"
+  "Explicit raw diagnostic snapshot owned by one PiChat runtime.")
+
+(defun pichat-chat-diagnostics--session (&optional session)
+  "Resolve SESSION, honoring inspector ownership before ordinary context.
+An inspector's owner must still be registered.  Never substitute another
+runtime for a forgotten owner; leave the existing snapshot readable."
+  (or session
+      (if (derived-mode-p 'pichat-diagnostics-mode)
+          (let ((owner pichat-diagnostics--owner))
+            (unless (and owner
+                         (fboundp 'pichat-session-by-runtime-id)
+                         (eq owner (pichat-session-by-runtime-id
+                                    (pichat-session-runtime-id owner))))
+              (user-error "Inspected PiChat runtime is no longer registered; snapshot retained"))
+            owner)
+        (pichat-session-current))))
+
+(defun pichat-chat-diagnostics--identity-label (value)
+  "Return a bounded, path-free identity label for VALUE."
+  (let ((text (pichat-chat-diagnostics--text value)))
+    (if (string-match-p "\\`[[:alnum:]_-]+\\'" text)
+        (substring-no-properties
+         (pichat-chat-diagnostics-safe-summary-text text))
+      "[custom]")))
+
+(defun pichat-chat-diagnostics--insert-identity (session)
+  "Insert a safe identity header for SESSION's current snapshot."
+  (insert
+   (format "Runtime: %s\nBackend: %s\nTarget: %s (%s)\nState: %s\nSnapshot: %s\n\n"
+           (pichat-chat-diagnostics--identity-label
+            (pichat-session-runtime-id session))
+           (pichat-chat-diagnostics--identity-label
+            (pichat-session-backend-id session))
+           (pichat-chat-diagnostics--identity-label
+            (pichat-transport-id (pichat-session-transport session)))
+           (pichat-chat-diagnostics--identity-label
+            (pichat-transport-kind (pichat-session-transport session)))
+           (pichat-chat-diagnostics--identity-label
+            (pichat-session-state session))
+           (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))))
+
 (defun pichat-chat-diagnostics--text (value)
   "Return VALUE as plain text without signaling."
   (cond
@@ -304,7 +355,7 @@ codes, or missing files in unrelated output."
 (defun pichat-diagnostics-open-settings (&optional session)
   "Visit the owning runtime's settings.json without displaying auth.json."
   (interactive)
-  (let ((session (pichat-session-current session)))
+  (let ((session (pichat-chat-diagnostics--session session)))
     (when session
       (pichat-backend-require-capability
        session 'diagnostics "Pi settings"))
@@ -333,7 +384,7 @@ codes, or missing files in unrelated output."
 Use SESSION's working directory when available.  Arbitrary RPC wrappers are
 never rewritten; configure `pichat-diagnostics-interactive-command' for them."
   (interactive)
-  (let* ((session (pichat-session-current session))
+  (let* ((session (pichat-chat-diagnostics--session session))
          (_capability
           (when session
             (pichat-backend-require-capability
@@ -375,7 +426,7 @@ never rewritten; configure `pichat-diagnostics-interactive-command' for them."
 (defun pichat-diagnostics-probe-pi (&optional session)
   "Run `pi --version' through SESSION's transport and report availability."
   (interactive)
-  (let* ((session (pichat-session-current session))
+  (let* ((session (pichat-chat-diagnostics--session session))
          (_capability
           (when session
             (pichat-backend-require-capability
@@ -421,9 +472,11 @@ never rewritten; configure `pichat-diagnostics-interactive-command' for them."
 Domain collectors keep their own lifetimes.  Missing snapshots are reported as
 unavailable.  Use `pichat-show-transport-diagnostics' explicitly for raw data."
   (interactive)
-  (let* ((session (pichat-session-current session))
-         (buffer (get-buffer-create "*PiChat Diagnostics*")))
-    (unless session (user-error "No PiChat session"))
+  (let* ((session (pichat-chat-diagnostics--session session))
+         (_owner (unless session (user-error "No PiChat session")))
+         (buffer (get-buffer-create
+                  (format "*PiChat Diagnostics %s*"
+                          (pichat-session-runtime-id session)))))
     (let ((sections
            (cons (cons "Runtime / transport"
                        (reverse (copy-sequence
@@ -435,7 +488,8 @@ unavailable.  Use `pichat-show-transport-diagnostics' explicitly for raw data."
         (let ((inhibit-read-only t))
           (erase-buffer)
           (insert "PiChat diagnostics (cached snapshot)\n\n"
-                  "Raw details: M-x pichat-show-transport-diagnostics in the owning chat.\n\n")
+                  "Raw details: M-x pichat-show-transport-diagnostics (sensitive data).\n\n")
+          (pichat-chat-diagnostics--insert-identity session)
           (dolist (title '("Runtime / transport" "Canonical transcript"
                            "Live tail" "Session History"))
             (let ((section (assoc title sections)))
@@ -448,8 +502,11 @@ unavailable.  Use `pichat-show-transport-diagnostics' explicitly for raw data."
                             (pichat-chat-diagnostics-safe-summary-text
                              (pichat-diagnostic-summary record)) "\n"))))
               (insert "\n"))))
-        (pichat-view-mode))
-      (pichat-view-display buffer nil 'bury)
+        (unless (eq major-mode 'pichat-diagnostics-mode)
+          (pichat-diagnostics-mode))
+        (setq-local pichat-diagnostics--owner session))
+      (unless (eq buffer (current-buffer))
+        (pichat-view-display buffer nil 'bury))
       buffer)))
 
 ;;;###autoload
@@ -458,11 +515,13 @@ unavailable.  Use `pichat-show-transport-diagnostics' explicitly for raw data."
 Unlike the ordinary chat status, this explicit inspection view may contain
 paths, prompts, command arguments, provider output, and credentials."
   (interactive)
-  (let ((session (pichat-session-current session)))
+  (let ((session (pichat-chat-diagnostics--session session)))
     (unless session (user-error "No PiChat session"))
     (pichat-backend-require-capability
      session 'diagnostic-view "Diagnostic inspection")
-    (let ((buffer (get-buffer-create "*PiChat Transport Diagnostics*"))
+    (let ((buffer (get-buffer-create
+                   (format "*PiChat Transport Diagnostics %s*"
+                           (pichat-session-runtime-id session))))
           (records (reverse (copy-sequence
                              (pichat-session-diagnostics session))))
           (events (reverse
@@ -473,6 +532,7 @@ paths, prompts, command arguments, provider output, and credentials."
           (erase-buffer)
           (insert "PiChat diagnostics\n\n")
           (insert "WARNING: this explicit view may contain secrets, paths, and prompt content.\n\n")
+          (pichat-chat-diagnostics--insert-identity session)
           (if (eq (pichat-session-backend-id session) 'pi)
               (let ((transport (pichat-session-transport session)))
                 (insert (format "Backend: Pi\nTarget: %s\nTransport: %s\nEmacs CWD: %s\nRuntime CWD: %s\nPi executable: %s\n"
@@ -503,8 +563,11 @@ paths, prompts, command arguments, provider output, and credentials."
               (dolist (event events)
                 (insert "\n" (pichat-chat-diagnostics--print-value event)))
             (insert "  none\n")))
-        (pichat-view-mode))
-      (pichat-view-display buffer nil 'bury)
+        (unless (eq major-mode 'pichat-transport-diagnostics-mode)
+          (pichat-transport-diagnostics-mode))
+        (setq-local pichat-diagnostics--owner session))
+      (unless (eq buffer (current-buffer))
+        (pichat-view-display buffer nil 'bury))
       buffer)))
 
 (provide 'pichat-chat-diagnostics)

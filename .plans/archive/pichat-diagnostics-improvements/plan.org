@@ -3,7 +3,7 @@
 #+PLAN_ID: pichat-diagnostics-improvements
 #+PLAN_STATUS: done
 #+PLAN_CREATED: 2026-10-25T19:03:23+00:00
-#+PLAN_UPDATED: 2026-10-30T04:26:33Z
+#+PLAN_UPDATED: 2026-10-30T04:32:10Z
 
 * Goal
 Make safe cached diagnostics the primary troubleshooting entry point, keep sensitive raw evidence behind an explicit action, and ensure diagnostic actions target the inspected PiChat runtime.
@@ -43,9 +43,9 @@ Make safe cached diagnostics the primary troubleshooting entry point, keep sensi
 
 * Checkpoint
 - Plan status: done
-- Selected scope: Phase 4 complete; all four phases and agreed acceptance checks complete. Phases 1–3 committed (cf20d188, d3bb456d); Phase 4 remains uncommitted.
+- Selected scope: all four phases and agreed acceptance checks complete, committed as cf20d188, d3bb456d and 4d8f2c68. User authorized archival and its commit.
 - Last verified result: 76/76 focused diagnostics/manager/Evil tests; full dependency-enabled suite 952 total, 950 passed, 2 opt-in Docker skips, 0 unexpected. Manager module strictly byte-compiled; generated elc removed. Live configured Emacs 31.1 checks passed for personal menus, native/Evil bindings, alias, selected stopped-row ownership and nested return; user's retained runtime registry remained unchanged (one runtime).
-- Next action: await user review and any requested commit/push or archival; leave this completed record unarchived until requested.
+- Next action: no implementation remains; retain this completed record in the archive. Push only if requested.
 - Blockers: none. Real SSH setup connectivity remains an optional unverified check; no SSH end-to-end claim. No glossary changes were needed.
 
 * Verification
@@ -78,6 +78,7 @@ Make safe cached diagnostics the primary troubleshooting entry point, keep sensi
 - Original proposal explicitly states no implementation changes. Import verified the existing shared buffer names and old command in source; no tests run and no work marked DONE.
 
 * History
+- 2026-10-30T04:32:10Z: User requested archival and commit after Phase 4 commit 4d8f2c68. Confirmed done with 11/11 tasks; reviewed record and historical proposal for sensitive material. Durable behavior and decisions are already documented in pichat/README.md; no additional documentation changes needed. Archive preserves status, history and relative legacy link.
 - 2026-10-30T04:26:33Z: Phase 4 and whole plan complete: README consolidated, personal chat/inspector menus added, glossary reviewed unchanged, manager wording corrected and row-action regression added. 76 focused tests passed; full suite 950 passed/two optional skips; strict manager compilation and live configured-Emacs checks passed. Phase 4 uncommitted; no push or archival requested.
 - 2026-10-30T04:20:57Z: User authorized Phase 4. Reconciled prior commit d3bb456d (Phases 2–3); clean working copy. Configured Emacs daemon is available with PiChat/General loaded, but its compiled diagnostic module predates current source; live checks will explicitly load changed package sources and evaluate the relevant personal binding block without restarting any runtime.
 - 2026-10-30T04:11:48Z: Phase 3 complete after 39 focused tests, full suite (949 passed, two optional skips), strict compilation and isolated live terminal setup-menu/process checks. Added capability-aware s chooser, explicit probe wording, context-matched setup terminals, local-target executable handling and customization compatibility alias. Tests extended existing files only. Stopped before Phase 4; no commits or personal/glossary changes.

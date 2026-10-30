@@ -1,0 +1,117 @@
+#+TITLE: PiChat repeatable jobs with UI approval gate
+#+TODO: TODO IN-PROGRESS BLOCKED | DONE
+#+PLAN_ID: pichat-repeatable-jobs-with-ui-approval-gate
+#+PLAN_STATUS: draft
+#+PLAN_CREATED: 2026-10-30T06:19:17+00:00
+#+PLAN_UPDATED: 2026-10-30T06:20:32+00:00
+
+* Goal
+Add repeatable, named PiChat jobs with inspectable execution state and run
+history, initially usable manually and optionally runnable periodically.
+Design the user interface first, with an explicit user-acceptance gate.
+
+* Scope
+- Included: UI design and example; reusable job definitions; asynchronous manual
+  execution; inspectable runs/results; durable definitions and run metadata;
+  optional Emacs-lifetime scheduling; tests and user documentation.
+- Excluded: execution while Emacs is closed, distributed workers, automatic
+  retries, implicit approvals, and general-purpose arbitrary Lisp job execution.
+- Implementation details below are provisional until the UI phase resolves the
+  workflows. Creating this draft does not authorize implementation.
+
+* Acceptance criteria
+- Phase 1 produces a concrete UI example covering job listing, definition
+  editing, run inspection/history, manual execution, and schedule controls.
+- The user explicitly accepts that example. Record the accepted artifact and
+  approval evidence here; silence or approval of this plan is not UI acceptance.
+- No feature implementation starts before that gate passes.
+- A named definition can be run repeatedly without mutating the preferred
+  interactive runtime; individual runs retain their own identity and state.
+- Users can inspect active/completed/failed/cancelled runs and required input,
+  access results and the owning conversation, and cancel active work.
+- Definitions and settled run metadata survive Emacs restart; interrupted runs
+  are represented honestly rather than reported as successful or blindly retried.
+- Optional scheduling invokes the same execution path as manual runs, with
+  explicit overlap, missed-run, and enable/disable behavior.
+- Required unit and isolated real-Pi integration checks pass; the approved UI
+  workflows are verified in live Emacs before whole-plan completion.
+
+* Approach and decisions
+- Consult pichat/GLOSSARY.md for runtime, Pi session, saved session file, and
+  settlement terminology; update it only if new shared concepts need definition.
+- Existing reference points: pichat-session-manager.el uses tabulated-list-mode,
+  cached row refresh, pending-input indicators, and exact-runtime actions.
+  pichat-backend.el provides lifecycle, prompt, abort, state, and transcript APIs.
+- Prefer a focused job layer over moving PiChat objects to another Emacs process.
+  Keep definitions, run records, scheduling, and runtime execution distinct.
+- Candidate UI: a separate jobs view plus run inspection/history; do not overload
+  runtime-manager rows with job-definition identity. Layout and keys are not yet agreed.
+- Candidate defaults: fresh independent runtime/Pi session per occurrence; no
+  focus stealing or automatic retry; bounded concurrency and one active run per
+  definition. Resolve skip versus coalesce during design rather than assume it.
+- Capture definition/configuration snapshots per run; distinguish submission
+  acceptance, agent settlement, synchronized results, and domain-level outcome.
+- Use native timers only to enqueue work. Generation-scoped callbacks must not
+  affect rebound sources or replacement processes. Respect target/transport and
+  startup preset boundaries; define runtime cleanup and retention explicitly.
+- Resolve storage/schema, schedule vocabulary, timezone behavior, unattended
+  interaction, retention, and recovery policy before implementing their phase.
+- Related but distinct plan: [[file:../pichat-delayed-follow-up/plan.org][PiChat delayed follow-up]].
+  Reusable job scheduling must not duplicate its conversation-message checklist.
+
+* Tasks
+** Phase 1: UI design and explicit acceptance (first execution scope)
+*** TODO Design workflows and produce a concrete UI example
+Present an example here in the conversation, optionally backed by a supporting
+mockup beside this record. Show list rows, selected-job details, definition
+editing, run history/result inspection, required-input/error states, and schedule
+controls/actions. Include realistic manual and periodic jobs and explain how
+users move between views. A text mockup is acceptable; a working feature is not
+required. If a live prototype is useful, obtain agreement on that scope first.
+*** TODO Revise the UI example until the user explicitly accepts it
+Record the accepted example's location/version and the user's explicit approval
+in this record. Leave this task incomplete while awaiting feedback. Do not start
+Phase 2 merely because a mockup was presented or the overall plan was approved.
+** Phase 2: Contracts and manual execution (after UI acceptance)
+*** TODO Finalize job/run contracts and implement durable manual execution
+Resolve state transitions, definition snapshots/storage, ownership, concurrency,
+interaction, cancellation, restart recovery, runtime cleanup, result settlement,
+and execution-versus-domain outcome. Implement through existing backend/lifecycle
+boundaries; protect against stale callbacks and ambiguous submission failures.
+Add behavior-focused tests alongside implementation.
+** Phase 3: Approved inspection UI
+*** TODO Implement the accepted job and run inspection workflows
+Build the approved definition/run views and actions, including manual rerun,
+results/history, exact owning-runtime access, failure/needs-input presentation,
+and persisted metadata. Keep browsing/refresh free of implicit execution.
+Verify against the accepted example and add appropriate UI behavior tests.
+** Phase 4: Optional periodic scheduling
+*** TODO Implement schedule controls and timer dispatch
+Resolve supported intervals/calendar syntax, timezone, missed-run behavior,
+overlap policy, startup restoration, and disabling versus cancelling active work.
+Use the manual executor; prevent duplicate timers and unbounded backlogs.
+Test timer cleanup, restart behavior, and overlapping triggers deterministically.
+** Phase 5: Verification and documentation
+*** TODO Verify the complete workflows and document the feature
+Run pichat/test/run-tests.sh and pichat/test/run-tests.sh --full using isolated
+fixtures per TESTING_GUIDELINES.md. Report focused test-file sizes as instructed.
+Perform live-Emacs checks of the accepted UI, manual run, inspection/cancellation,
+required input, and periodic enable/disable behavior. Update README and glossary
+where applicable; retain unresolved manual checks as tasks, not assumed passes.
+
+* Checkpoint
+- Plan status: draft
+- Selected scope: none (planning only); first execution scope is Phase 1 only
+- Last verified result: inspected glossary, README architecture/manager guidance,
+  testing guidelines, runtime-manager row/refresh code, and backend execution APIs
+- Next action: on an explicit execution request, produce the Phase 1 UI example
+  for user review; iterate until explicitly accepted, then stop at the phase boundary
+- Blockers: no planning blocker; all feature implementation is gated on UI acceptance
+
+* Verification
+- Feature tests and live UI checks not run (planning only).
+- Structural plan validation: plans.py check pichat-repeatable-jobs-with-ui-approval-gate passed.
+
+* History
+- 2026-10-30T06:19:17+00:00: Created draft from discussion; user requires the first
+  phase to produce a UI example that they accept before feature implementation.

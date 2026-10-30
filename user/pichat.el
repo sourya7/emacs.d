@@ -18,7 +18,8 @@
   :ensure `(:type file
             :main ,(my/emacs-main-dir "pichat/pichat.el")
             :files ("*.el"
-                    ("bridge" "bridge/pichat-bridge.ts"))
+                    ("bridge" "bridge/pichat-bridge.ts"
+                              "bridge/pichat-tool-control.ts"))
             :inherit nil)
   :commands (pichat pichat-global pichat-launch pichat-session-manager
                     pichat-sessions-browse-files pichat-sessions-switch-files

@@ -361,6 +361,11 @@ canonical chat cache while an RPC refresh is pending."
                                   (:default "Pi defaults")
                                   ('nil "none")
                                   (names (string-join names ", "))))))
+              (insert (format "Extension tools: %s\n"
+                              (if selection
+                                  (if-let* ((names (plist-get selection :extensions)))
+                                      (string-join names ", ") "none")
+                                "Pi configuration (availability not checked)")))
               (insert (format "MCP tools: %s\n"
                               (if selection
                                   (if-let* ((pairs (plist-get selection :mcp)))

@@ -333,13 +333,15 @@ have been seen."
     (should (= 0 (or (plist-get status :unexpectedCalls) 0)))))
 
 (cl-defmacro pichat-test-with-integration-session
-    ((session-var &key script no-session extensions settings tools) &rest body)
+    ((session-var &key script no-session extensions settings tools preset selection) &rest body)
   "Start real Pi RPC bound to SESSION-VAR and run BODY.
 SCRIPT is a Lisp object encoded as the fake provider script JSON.
 When NO-SESSION is nil, persistent sessions are enabled in an isolated dir.
 EXTENSIONS is a list of additional extension file paths loaded after the fake
 provider.  SETTINGS, when non-nil, is written to the isolated Pi agent dir.
-TOOLS, when non-nil, selects explicit Pi tools instead of disabling built-ins."
+TOOLS, when non-nil, selects explicit Pi tools instead of disabling built-ins.
+PRESET uses structured startup and optional raw SELECTION, rather than the
+legacy complete-command fixture.  This exercises real preset command building."
   (declare (indent 1))
   `(progn
      (pichat-test-require-pi)
@@ -369,14 +371,21 @@ TOOLS, when non-nil, selects explicit Pi tools instead of disabling built-ins."
                                    "--no-prompt-templates"
                                    "--no-themes"
                                    "--no-extensions")
-                             (if ,tools (list "--tools" ,tools)
-                               (list "--no-builtin-tools"))
+                             (unless ,preset
+                               (if ,tools (list "--tools" ,tools)
+                                 (list "--no-builtin-tools")))
                              (when ,no-session (list "--no-session"))
                              (unless ,no-session (list "--session-dir" session-dir))
                              (list "-e" pichat-test-fake-provider-extension)
                              (cl-mapcan (lambda (extension) (list "-e" extension))
                                         ,extensions)
                              (list "--model" "pichat-fake/pichat-fake")))
+                    (pichat-pi-executable pichat-test-pi-executable)
+                    (pichat-pi-default-args (if ,preset (cdr pichat-rpc-command) pichat-pi-default-args))
+                    (pichat-pi-extra-args (unless ,preset pichat-pi-extra-args))
+                    (pichat-pi-session-dir (unless ,preset pichat-pi-session-dir))
+                    (pichat-bridge-extension-file (unless ,preset pichat-bridge-extension-file))
+                    (pichat-rpc-command (unless ,preset pichat-rpc-command))
                     (,session-var nil))
                (with-temp-file script-file
                  (insert (json-serialize ,script
@@ -390,7 +399,10 @@ TOOLS, when non-nil, selects explicit Pi tools instead of disabling built-ins."
                (unwind-protect
                    (let ((default-directory project-dir))
                      (message "PiChat integration using %s" (pichat-test-pi-version))
-                     (setq ,session-var (pichat-start-session project-dir))
+                     (setq ,session-var
+                           (if ,preset
+                               (pichat-start-session project-dir nil (list :preset ,preset :tools ,selection))
+                             (pichat-start-session project-dir)))
                      (pichat-test-rpc-call ,session-var "get_state")
                      (pichat-test-rpc-call ,session-var "set_auto_retry" (list :enabled :json-false))
                      (pichat-test-rpc-call ,session-var "set_auto_compaction" (list :enabled :json-false))

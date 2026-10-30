@@ -289,19 +289,33 @@ Do not dispatch callbacks into a replacement process."
          (or (null generation) ; Older unit fixtures have no generation token.
              (eql generation (pichat-session-process-generation session))))))
 
-(defun pichat-rpc-start (session &optional validated-command)
+(defvar pichat-rpc--internal-request nil
+  "Non-nil for an owned startup-control request, not conversation input.")
+
+(declare-function pichat-tool-runtime-prepare "pichat-tool-runtime" (session names))
+(declare-function pichat-tool-runtime-begin "pichat-tool-runtime" (session &optional callback))
+(declare-function pichat-tool-runtime-dispose "pichat-tool-runtime" (session))
+
+(cl-defun pichat-rpc-start (session &optional validated-command (startup-tools nil tools-p))
   "Start the Pi RPC process for SESSION and return SESSION.
 VALIDATED-COMMAND is an optional detached argv prepared before a restart;
-ordinary launches continue to build the command from SESSION.  A local
-startup failure leaves SESSION in `error' state with a diagnostic."
+ordinary launches continue to build the command from SESSION.  STARTUP-TOOLS,
+when supplied, is the replacement's resolved Tools snapshot (not the previous
+committed configuration).  A local startup failure retains a diagnostic."
   (when (and (pichat-session-process session)
              (process-live-p (pichat-session-process session)))
     (user-error "Cannot start another Pi process in a live runtime"))
+  (when (pichat-session-rpc-startup-control session)
+    (pichat-tool-runtime-dispose session))
   (pichat-rpc--retire-process-state session)
   (let* ((argv (or validated-command (pichat-rpc-build-command session)))
          (program (car argv))
          (args (cdr argv))
          (transport (pichat-session-transport session))
+         (tool-selection (if tools-p startup-tools
+                           (or (pichat-session-tool-selection session)
+                               (when (pichat-session-preset-spec session)
+                                 (pichat-tool-selection-resolve (pichat-session-preset-spec session))))))
          (runtime-cwd (or (pichat-session-runtime-cwd session)
                           (pichat-session-cwd session)
                           default-directory))
@@ -317,6 +331,12 @@ startup failure leaves SESSION in `error' state with a diagnostic."
         (progn
           (unless (and (stringp program) (not (string-empty-p program)))
             (signal 'file-error '("Empty Pi RPC command")))
+          (when (plist-get tool-selection :extensions)
+            (require 'pichat-tool-runtime)
+            (let ((path (pichat-tool-runtime-prepare session (plist-get tool-selection :extensions))))
+              (setq argv (append argv (list "--extension" path))
+                    args (cdr argv))
+              (setf (pichat-session-rpc-command session) argv)))
           (setq buffer (generate-new-buffer " *pichat-rpc*")
                 stderr-buffer (generate-new-buffer " *pichat-rpc-stderr*"))
           (let* ((process-environment (pichat-pi-process-environment))
@@ -346,9 +366,13 @@ startup failure leaves SESSION in `error' state with a diagnostic."
                     (run-at-time pichat-rpc-remote-startup-delay nil
                                  #'pichat-rpc--remote-ready-timeout
                                  session proc)))
+            (when (pichat-session-rpc-startup-control session)
+              (pichat-tool-runtime-begin session))
             (pichat-emit session 'session-started
                          :command argv :program program :args args)))
       (error
+       (when (pichat-session-rpc-startup-control session)
+         (pichat-tool-runtime-dispose session))
        (dolist (transport-buffer (list buffer stderr-buffer))
          (when (buffer-live-p transport-buffer) (kill-buffer transport-buffer)))
        (setf (pichat-session-process session) nil
@@ -432,6 +456,8 @@ When LIMIT is non-nil, copy at most LIMIT leading characters."
                            :message (plist-get diagnostic :summary)
                            :diagnostic diagnostic))
             (when (pichat-rpc--current-process-p session process)
+              (when (pichat-session-rpc-startup-control session)
+                (pichat-tool-runtime-dispose session))
               (pichat-emit session 'session-ended
                            :reason reason :event (string-trim event)
                            :diagnostic diagnostic))))))
@@ -648,6 +674,17 @@ FAILURE-KIND is the machine-readable local failure cause."
       (remhash id (pichat-session-pending-responses session)))
     (when pending
       (pichat-rpc--cancel-pending-timer pending))
+    (if (plist-get pending :internal)
+        (if success
+            (when-let* ((callback (pichat-rpc--pending-callback pending)))
+              (funcall callback response session))
+          (pichat-rpc--dispatch-failure session response pending))
+      (pichat-rpc--dispatch-public-response session response pending success id))))
+
+(defun pichat-rpc--dispatch-public-response (session response pending success id)
+  "Publish ordinary RESPONSE and deliver PENDING for SESSION.
+SUCCESS and ID are the correlated response fields.  Internal startup requests
+must not update public state or become conversation/prompt acceptance events."
     (pichat-emit session 'response-received :response response)
     (when (pichat-rpc--dispatch-current-p session)
       (let ((command (or (plist-get response :command)
@@ -683,10 +720,17 @@ FAILURE-KIND is the machine-readable local failure cause."
             (let ((callback (pichat-rpc--pending-callback pending)))
               (when callback
                 (funcall callback response session)))
-          (pichat-rpc--dispatch-failure session response pending))))))
+          (pichat-rpc--dispatch-failure session response pending)))))
 
 (defun pichat-rpc--dispatch-event (session event)
   "Normalize and emit RPC EVENT for SESSION."
+  (unless (when-let* ((control (pichat-session-rpc-startup-control session))
+                      (handler (plist-get control :handler)))
+            (funcall handler event))
+    (pichat-rpc--dispatch-public-event session event)))
+
+(defun pichat-rpc--dispatch-public-event (session event)
+  "Normalize and publish non-control EVENT for SESSION."
   (let* ((type (plist-get event :type))
          (event-symbol
           (if (stringp type)
@@ -734,6 +778,16 @@ FAILURE-KIND is the machine-readable local failure cause."
     (when (pichat-rpc--dispatch-current-p session)
       (pichat-emit session normalized :raw event))))
 
+(defun pichat-rpc--write-line (session line)
+  "Write LINE respecting transport readiness and initial tool verification."
+  (let ((control (pichat-session-rpc-startup-control session)))
+    (cond
+     ((and control (not (plist-get control :verified)) (not pichat-rpc--internal-request))
+      (push line (plist-get control :queue)))
+     ((pichat-session-rpc-ready-p session)
+      (process-send-string (pichat-session-process session) line))
+     (t (push line (pichat-session-rpc-send-queue session))))))
+
 ;;;###autoload
 (defun pichat-rpc-send (session type payload callback &optional error-callback)
   "Send RPC command TYPE with PAYLOAD for SESSION.
@@ -741,21 +795,24 @@ CALLBACK and ERROR-CALLBACK receive (RESPONSE SESSION).  Return request id."
   (pichat-rpc--require-operation-ownership session)
   (unless (pichat-session-alive-p session)
     (error "PiChat RPC process is not alive"))
+  (when (and (pichat-session-rpc-startup-control session)
+             (not (plist-get (pichat-session-rpc-startup-control session) :verified))
+             (not pichat-rpc--internal-request)
+             (member type '("prompt" "steer" "follow_up")))
+    (user-error "PiChat is still enabling the selected extension tools"))
   (let* ((id (pichat-rpc--next-id session))
          (command (append (list :id id :type type) payload))
          (line (concat (pichat-rpc--json-encode command) "\n"))
          (pending (list :callback callback
                         :error-callback error-callback
-                        :command type)))
+                        :internal pichat-rpc--internal-request :command type)))
     (when (and pichat-rpc-request-timeout (> pichat-rpc-request-timeout 0))
       (setq pending (plist-put pending :timer
                                (run-at-time pichat-rpc-request-timeout nil
                                             #'pichat-rpc--timeout-request
                                             session id))))
     (puthash id pending (pichat-session-pending-responses session))
-    (if (pichat-session-rpc-ready-p session)
-        (process-send-string (pichat-session-process session) line)
-      (push line (pichat-session-rpc-send-queue session)))
+    (pichat-rpc--write-line session line)
     id))
 
 (defun pichat-rpc-send-notification (session payload)
@@ -764,9 +821,7 @@ CALLBACK and ERROR-CALLBACK receive (RESPONSE SESSION).  Return request id."
   (unless (pichat-session-alive-p session)
     (error "PiChat RPC process is not alive"))
   (let ((line (concat (pichat-rpc--json-encode payload) "\n")))
-    (if (pichat-session-rpc-ready-p session)
-        (process-send-string (pichat-session-process session) line)
-      (push line (pichat-session-rpc-send-queue session)))))
+    (pichat-rpc--write-line session line)))
 
 (defun pichat-rpc-extension-ui-value (session request-id value)
   "Respond to extension UI REQUEST-ID with string VALUE."

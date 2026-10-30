@@ -25,12 +25,22 @@
        (pichat-tool-bridge-approval-required-p
         (or (plist-get raw :prefill) "{}") session)))
 
+(defun pichat-bridge-transport-startup-reply (raw)
+  "Return a noninteractive startup reply for RAW, or nil.
+Only handshake and definitions are supported here; never execute a tool."
+  (cond
+   ((equal (plist-get raw :title) pichat-bridge-transport-handshake-title)
+    "{\"protocolVersion\":1,\"capabilities\":[\"tools\",\"tool-errors\",\"dynamic-tool-refresh\"]}")
+   ((equal (plist-get raw :title) pichat-bridge-transport-tools-title)
+    (pichat-tool-bridge-definitions-json))))
+
 (defun pichat-bridge-transport-handle (session raw)
   "Handle bridge sentinel RAW for SESSION.  Return non-nil if handled."
   (pichat-backend-require-capability
    session 'extension-ui "Pi extension bridge")
   (let* ((id (plist-get raw :id))
          (title (plist-get raw :title))
+         (startup-reply (pichat-bridge-transport-startup-reply raw))
          (operation (pichat-session-restart-operation session))
          (restarting (and operation
                           (memq (plist-get operation :phase)
@@ -47,13 +57,8 @@
                (not (pichat-rpc--dispatch-current-p session)))
       (user-error "Obsolete bridge process cannot rebind this runtime"))
     (cond
-     ((string= title pichat-bridge-transport-handshake-title)
-      (pichat-rpc-extension-ui-value
-       session id
-       "{\"protocolVersion\":1,\"capabilities\":[\"tools\",\"tool-errors\",\"dynamic-tool-refresh\"]}")
-      t)
-     ((string= title pichat-bridge-transport-tools-title)
-      (pichat-rpc-extension-ui-value session id (pichat-tool-bridge-definitions-json)) t)
+     (startup-reply
+      (pichat-rpc-extension-ui-value session id startup-reply) t)
      ((string= title pichat-bridge-transport-tool-call-title)
       (pichat-rpc-extension-ui-value
        session id

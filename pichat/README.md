@@ -414,7 +414,7 @@ display behavior.
 | `e` | Ephemeral | Start Pi with `--no-session`; implies independent |
 | `m` | Choose/enter model | Select a listed model or enter an unlisted ID for only this run; implies independent |
 | `p` | Preset | Choose a named tool/prompt preset; explicit selection implies independent |
-| `x` | Tools | Narrow that preset's built-ins and select direct MCP tools for a new independent runtime |
+| `x` | Tools | Choose that preset's built-ins, extension tools and direct MCP tools for a new independent runtime |
 | `s` | Conversation | Default, new independent conversation, existing chat route, or select a saved session |
 | `r` | Reconfigure this runtime | From its owning chat, enter a separate captured-runtime menu; never implied by launching |
 | `RET` | Open / launch | Execute the normalized profile summarized in the action label |
@@ -463,8 +463,10 @@ change is a no-op. Otherwise PiChat checks fresh Pi state, asks for confirmation
 stops the old local process, starts the validated replacement with the active
 run-local model, reloads the same saved Pi session, restores supported settings,
 and commits the transcript and configuration only after verifying the source,
-active branch and settings. For a persistent **unwritten** Pi session containing
-only startup model/thinking metadata (no messages, extension entries, name, or
+active branch, settings and selected extension tools. Extension tools are checked
+again after the initial saved-session reload, since Pi can replace its extension
+runtime while loading the source. For a persistent **unwritten** Pi session
+containing only startup model/thinking metadata (no messages, extension entries, name, or
 navigation history), PiChat instead confirms fresh empty entries and restarts
 into a **new Pi session ID**; the old nonexistent file cannot be reloaded. The
 runtime identity, manager row, chat, unsent draft, and owner scope remain;
@@ -485,7 +487,7 @@ path mappings.
 The built-in `manual` preset retains Pi's base prompt and selects
 `read,grep,find,ls,edit,write` without adding execution restrictions to the
 system prompt. It omits built-in `bash`; what the agent can do depends on its
-available tools, including any separately exposed extension tools. Other
+available tools, including any separately selected extension or MCP tools. Other
 built-ins: `coding` (includes bash), `review`
 (read-only built-in tools), and `standard` (Pi's defaults). The old shipped
 `discuss` preset is no longer registered; define your own if you relied on its
@@ -526,30 +528,108 @@ new runtime, or explicitly select the preset again in the reconfiguration menu
 to resolve the current instructions before confirming the restart.
 
 
-`:tools :default` (or omission) leaves Pi's built-in selection alone;
+`:tools :default` (or omission) leaves tool selection to Pi;
 `:tools nil` disables built-in tools. Explicit lists select exactly those
-built-ins. For explicit-list presets, PiChat now disables MCP unless a direct
-MCP tool is chosen in `x Tools`. The picker prechecks the preset's built-ins,
-permits deselecting them and selecting eligible MCP tools by server, and applies
-only to a new runtime; Cancel discards changes and Reset restores the preset.
+built-ins. Explicit-tool presets default to no extension tools and disable MCP
+unless a direct MCP tool is selected. `standard` and custom presets with
+inherited tools (`:default` or omission) remain Pi-controlled: they cannot use
+the Tools picker or declare an extension baseline.
+
+In `x Tools`, the preset's built-ins are prechecked and can be deselected.
+**Extension tools** have enabled/disabled checkboxes and descriptions; MCP tools
+remain grouped by server. `RET` applies the draft, `q` cancels it, `d` resets all
+choices to the captured preset, and `r` refreshes discovery. `a` explicitly
+selects all eligible tools; `n` deselects all. `[` and `]` page longer lists.
+Cancel does not change the launch/reconfiguration draft. Reset restores the
+preset's extension baseline as well as its built-ins, with no MCP tools.
+The picker configures a new independent runtime, or the captured replacement
+in **Reconfigure this runtime**; it never edits a live process in place.
+
 MCP discovery connects configured servers and reports failures. Non-direct,
 hidden, disabled, unavailable, and normalization-colliding MCP tools cannot be
-selected. `standard` and custom presets with inherited tools (`:default` or
-omission) remain Pi-controlled and cannot use the Tools picker. Customizations
-are runtime properties, not saved Pi-session properties. Presets reject
+selected through the MCP group. Customizations are runtime properties, not
+Pi session or saved-session-file properties (see `GLOSSARY.md`). Presets reject
 conflicting generic Pi tool/prompt flags before runtime creation; use `standard`
-when the generic Pi arguments should govern, and leave
+when generic Pi arguments should govern, and leave
 `pichat-append-system-prompt` nil if supplying a generic appended-prompt flag.
-Changes to definitions affect future runtimes only. If you choose to run a
-shell block through PiChat's artifact runner, request `sh`-compatible code: the
-runner uses `sh` even when a fence is labelled `bash`. Run with Embark `r`,
+Changes to definitions affect future runtimes only.
+
+### Extension tools
+
+An explicit-tool preset can precheck exact extension tool names with
+`:extensions`. For example, **after configuring a trusted extension that
+registers `project_search`**:
+
+```elisp
+(pichat-make-preset 'project-review
+  :description "Read files and use the configured project search tool."
+  :tools '("read" "grep" "find" "ls")
+  :extensions '("project_search"))
+```
+
+Existing shipped explicit presets have an empty extension baseline. Extension
+choices are opt-in; discovering tools never selects them automatically. Hidden
+tools and names that cannot safely be expressed as exact Pi tool selections are
+unavailable. Missing or stale checked names cause a clear Apply/startup failure
+rather than silently broadening the selection.
+
+Opening `x Tools` starts an asynchronous, temporary no-session Pi probe using the
+intended executable, target, working directory, environment, resource/trust
+configuration, prompts and relevant model. It omits the preset's tool allowlist
+so registered but initially disabled tools can be listed. Progress and errors
+appear in the picker. Successful results belong to that launch/reconfiguration
+draft: redraws and reopening with the same captured context reuse them; `r` or
+reopening after a relevant context change refreshes them. Leaving the picker
+cancels pending discovery. The default probe timeout is 25 seconds
+(`pichat-tool-discovery-timeout`), excluding synchronous TRAMP connection/file
+setup. Startup dialogs fail discovery rather than being approved automatically.
+
+**Discovery executes trusted extension startup code.** It does not request a
+model turn or add conversation entries, but `--no-session` is not a sandbox and
+does not prevent extension side effects. Complete command wrappers, generic
+tool/session filters, positional prompts and unsupported custom CLI arguments
+cannot be safely adapted for discovery and are rejected. Configure custom
+extension options in Pi settings instead of relying on unknown CLI flags.
+
+Checked extension names join the runtime's startup allowlist. PiChat then uses
+supported Pi APIs to enable and verify those exact tools in the **actual
+process**, after startup handlers and any initial saved-session reload, before
+accepting startup/replacement readiness. Missing tools, unsupported activation,
+helper errors or rejected activation fail startup without a model request.
+**This is an initial startup guarantee, not continuous enforcement.** Later
+extension-managed changes and ordinary Pi session switches do not trigger
+automatic reactivation. Checked does not force direct model exposure or bypass
+Pi's tool/security policy. PiChat does not run loader tools, infer dependencies,
+expand activation groups, or supply extension-specific adapters.
+
+The catalogue is a snapshot of registered tools available under Pi policy, not
+a complete package inventory: tools registered later may require refresh.
+Exact known built-in and MCP choices are separated without guessing provenance
+from name prefixes. The separate shell MCP listing cannot discover
+extension-registered MCP servers; their tools may appear in **Extension tools**
+instead. Neither listing promises universal completeness.
+
+The bundled `bridge/pichat-tool-control.ts` helper is separate from the optional
+Emacs-defined-tool bridge. PiChat explicitly loads it for probes and runtimes
+with selected extension tools; no global extension installation is needed.
+Local startup uses its package-relative path. SSH stages a private helper on
+the target rather than passing a host-only path. Forced SSH teardown cannot
+prove the remote child stopped, so runtime cleanup retains that helper and
+reports uncertain shutdown. Live SSH tool discovery/activation has not yet
+been verified; local Pi 1.4.0 is covered by isolated integration tests.
+
+### Tool-policy boundaries
+
+If you choose to run a shell block through PiChat's artifact runner, request
+`sh`-compatible code: the runner uses `sh` even when a fence is labelled `bash`. Run with Embark `r`,
 then `s` to place results in the draft; review and send it to continue. The
 subprocess timeout defaults to 120 seconds.
 
 The explicit tool allowlist limits direct and indirect tool availability in Pi,
-but selected MCP tools themselves may execute code or mutate files. Extensions
-(including an optional PiChat tool bridge) may also provide other execution
-paths; this is a workflow, **not a sandbox**. PiChat's explicit runners execute code
+but selected extension and MCP tools themselves may execute code or mutate
+files. Extensions (including an optional PiChat tool bridge) may also provide
+other execution paths; this is a workflow, **not a sandbox**. PiChat's explicit
+runners execute code
 outside Pi's tool permissions on the selected host. Presets and subprocess
 code execution work on local and structured SSH targets: SSH code runs remotely
 even when the project is mounted locally. The in-process Elisp runner is
@@ -558,6 +638,8 @@ cannot be amended safely: presets with tool or prompt overrides are rejected
 before startup. Set the default preset to `standard` for such a wrapper, and
 leave `pichat-append-system-prompt` nil, and put any desired tool/prompt flags
 in its complete command instead.
+
+### Runtime and model choices
 
 An independent runtime is a separate Pi RPC process retained in the manager but
 not marked `★` as the scope's preferred runtime. “Independent” does not mean
@@ -1163,8 +1245,10 @@ ambiguous. Target state is captured by each runtime, so local and SSH sessions
 can coexist and later customization changes do not reinterpret settled links.
 
 Remote Pi loads its own settings, credentials, extensions, skills, and session
-store. PiChat does not inject host extension paths into SSH startup. An explicit
-SSH target never falls back to local Pi. Automatic reconnect, host/guest
+store. PiChat does not inject host extension paths into SSH startup; the bundled
+tool-control helper is explicitly copied to private target storage when needed,
+not passed as an inaccessible host path. An explicit SSH target never falls
+back to local Pi. Automatic reconnect, host/guest
 session synchronization, and remote compilation reruns are not provided.
 
 Use `M-x pichat-path-validate-mappings` from a chat to inspect its mappings,

@@ -30,7 +30,7 @@ Shared terms for discussing PiChat. **Runtime**, **Pi session**, **saved session
 | **Restart snapshot** | The last synchronized canonical transcript retained as read-only while a reconfigured runtime is stopping, loading, synchronizing, or failed. For an unwritten session it may contain only startup model/thinking metadata. It is not authoritative state from a replacement process until verified commit. |
 | **Source reservation** | An Emacs-local, transport-qualified saved-file claim held during an independent launch; together with retained active restarts it prevents another PiChat-managed writer. It does not detect external Pi processes. |
 | **Preset** | A named startup configuration of tools and system-prompt additions or replacement, captured as a resolved snapshot when a runtime starts. It belongs to the runtime, not its saved Pi sessions, and cannot be applied to an already-running process. Explicit-tool presets also provide the baseline for the launch Tools picker; pass-through presets leave Pi defaults unchanged. |
-| **Tools customization** | A run-local selection that can remove built-in tools from an explicit preset and opt into eligible, directly exposed MCP tools. The selection belongs to a new independent runtime, not to its Pi session or saved session file; an unchanged preset baseline is not a customization. |
+| **Tools customization** | A run-local selection that can remove built-in tools from an explicit preset, enable or disable eligible extension tools, and opt into directly exposed MCP tools. It configures a new independent runtime or an explicitly confirmed replacement, not a live edit or a Pi session/saved-session-file property; an unchanged preset baseline is not a customization. |
 | **Default preset** | The preset configured for a new runtime when no named preset is explicitly selected. It differs from the launcher's `default` choice, which permits reuse of a preferred runtime regardless of its captured preset. |
 | **Target** | The execution destination for Pi, such as the local machine or a configured SSH host. |
 | **Transport** | The mechanism used to start and communicate with Pi at its target, such as local process execution or SSH. |
@@ -104,10 +104,14 @@ Shared terms for discussing PiChat. **Runtime**, **Pi session**, **saved session
 | Term | Meaning |
 |---|---|
 | **Built-in tool** | A tool supplied by Pi itself, such as `read`, `edit`, or `bash`. |
-| **Extension tool** | A tool registered by a Pi extension; loading an extension does not necessarily declare its tool to the model. |
+| **Extension tool** | A tool registered by a Pi extension. Loading the extension, permitting its tool, activating it, and offering it directly to the model are distinct implementation states. The Tools picker presents eligible choices as enabled/disabled checkboxes, not those states. |
 | **MCP tool** | A tool provided through a Model Context Protocol (MCP) server. |
 | **Tool declaration** | Offering a tool directly to the model, distinct from loading the extension or MCP server that provides it. |
-| **PiChat bridge** | The optional Pi extension that connects a Pi runtime to PiChat's Emacs-side tool and UI facilities. |
+| **Tool catalogue** | A target/context-qualified snapshot of registered tools visible under Pi policy, including initially disabled tools. It is not a complete package inventory or a saved Pi session property. Exact known built-in/MCP choices are separated in the picker without inferring package provenance. |
+| **Extension baseline** | An explicit-tool preset's `:extensions` list of exact names, prechecked by Tools and restored by Reset. Existing shipped explicit presets default to none; pass-through presets cannot declare it. |
+| **Initial tool enablement** | PiChat's startup/replacement check that selected extension tools are permitted by startup policy and active in the actual Pi process after startup handlers and any initial source load. It does not force direct model exposure, resolve loader dependencies, or continuously reapply choices after later activation changes or ordinary source switches. |
+| **Tool-control helper** | The bundled `bridge/pichat-tool-control.ts` extension, explicitly loaded for catalogue probes and runtimes with selected extension tools. Its internal metadata/enable exchange makes no model request or conversation entries. It is separate from the optional PiChat bridge. |
+| **PiChat bridge** | The optional Pi extension that connects a Pi runtime to PiChat's Emacs-side tool and UI facilities; it is not the tool-control helper. |
 | **Emacs-defined tool** | A PiChat tool implemented on the Emacs side and exposed to Pi through the bridge, rather than a Pi built-in tool. |
 | **Approval policy** | PiChat's allow/ask/deny policy for Emacs-defined tools. It does not govern Pi-native tools. |
 | **Extension UI request** | An extension's request for interaction with the user, routed to the owning chat. |

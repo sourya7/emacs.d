@@ -15,6 +15,7 @@
 (require 'pichat-rpc)
 (require 'pichat-presets)
 (require 'pichat-tool-selection)
+(require 'pichat-tool-runtime)
 (require 'pichat-chat)
 (require 'pichat-pi)
 
@@ -658,7 +659,15 @@ CONTINUATION receives the authoritative response data on success."
                     (:followUpMode "set_follow_up_mode")
                     (:autoCompactionEnabled "set_auto_compaction"))))
     (cond
-     ((null key) (pichat-reconfigure--synchronize operation state))
+     ((null key)
+      (pichat-tool-runtime-verify
+       (plist-get operation :session)
+       (lambda (success reason)
+         (when (pichat-reconfigure--owned-p operation 'loading)
+           (condition-case err
+               (if success (pichat-reconfigure--synchronize operation state)
+                 (pichat-reconfigure--finish operation nil reason))
+             (error (pichat-reconfigure--finish operation nil (error-message-string err))))))))
      ((null command)
       ;; set_model changes Pi's persistent preference.  It is not a run-local
       ;; restoration mechanism and must not be used for this transaction.
@@ -687,7 +696,8 @@ CONTINUATION receives the authoritative response data on success."
     (when (process-live-p old)
       (user-error "Old Pi process remains live; replacement was not started"))
     (plist-put operation :phase 'starting)
-    (pichat-rpc-start session (plist-get operation :command))
+    (pichat-rpc-start session (plist-get operation :command)
+                      (plist-get (plist-get operation :active-configuration) :tool-selection))
     (unless (pichat-session-alive-p session)
       (user-error "Replacement Pi process could not start"))
     (plist-put operation :replacement-process (pichat-session-process session))

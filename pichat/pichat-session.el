@@ -61,6 +61,7 @@
   rpc-ready-timer
   rpc-seq
   rpc-command
+  rpc-startup-control
   scope-key
   scope-label
   owner-scope-key

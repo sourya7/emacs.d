@@ -32,6 +32,22 @@ A preset's replacement system prompt remains separate."
   '("read" "grep" "find" "ls" "edit" "write" "bash")
   "Built-in Pi tools supported by PiChat presets.")
 
+(defconst pichat-presets--known-built-in-tools
+  (append pichat-presets--built-in-tools '("powershell"))
+  "Known Pi built-ins, including those not offered by PiChat presets.
+Keep catalogue partitioning and extension opt-in from bypassing the preset
+boundary.  Pi 1.4.0 lists powershell even in a non-Windows catalogue.")
+
+(defun pichat-presets-extension-names-p (names)
+  "Return non-nil for a unique list of exact custom tool NAMES.
+Built-ins cannot be opted into through the extension policy."
+  (and (proper-list-p names)
+       (cl-every (lambda (name)
+                   (and (stringp name) (<= 1 (length name) 256)
+                        (string-match-p "\\`[A-Za-z0-9_-]+\\'" name)
+                        (not (member name pichat-presets--known-built-in-tools)))) names)
+       (= (length names) (length (delete-dups (copy-sequence names))))))
+
 (defun pichat-presets--source-p (value)
   "Return non-nil if VALUE is a valid prompt source."
   (or (and (stringp value) (not (string-blank-p value)))
@@ -56,7 +72,7 @@ A preset's replacement system prompt remains separate."
         (when (memq key seen)
           (user-error "Duplicate PiChat preset key: %S" key))
         (push key seen)
-        (unless (and rest (memq key '(:description :tools :system-prompt
+        (unless (and rest (memq key '(:description :tools :extensions :system-prompt
                                      :append-system-prompt)))
           (user-error "Invalid PiChat preset key or plist: %S" key))
         (let ((value (pop rest)))
@@ -64,6 +80,9 @@ A preset's replacement system prompt remains separate."
             (:description
              (unless (or (null value) (stringp value))
                (user-error "Invalid preset description")))
+            (:extensions
+             (unless (pichat-presets-extension-names-p value)
+               (user-error "Invalid or duplicate preset extension tools")))
             (:tools
              (unless (or (null value) (eq value :default)
                          (and (consp value) (proper-list-p value)
@@ -76,14 +95,19 @@ A preset's replacement system prompt remains separate."
                            (and (consp value) (proper-list-p value)
                                 (cl-every #'pichat-presets--source-p value)))
                  (user-error "Invalid preset prompt source: %S" value))))))))
+  (when (and (plist-get spec :extensions)
+             (or (not (plist-member spec :tools))
+                 (eq (plist-get spec :tools) :default)))
+    (user-error "Extension baselines require an explicit built-in tool preset"))
   spec)
 
 (defun pichat-make-preset (name &rest keys)
   "Register PiChat preset NAME with KEYS.
-Supported keys are :description, :tools, :system-prompt and
+Supported keys are :description, :tools, :extensions, :system-prompt and
 :append-system-prompt.  Prompt sources are text, (:file ABSOLUTE-PATH),
 or an ordered list of these.  Nil tools means no built-in tools; omitted
-or :default tools leaves Pi's default selection alone."
+or :default tools leaves Pi's default selection alone.  :extensions supplies
+an explicit baseline of exact extension tool names; it defaults to none."
   (declare (indent 1))
   (pichat-presets--validate name keys)
   (let ((entry (assq name pichat-presets)))
@@ -132,6 +156,7 @@ or :default tools leaves Pi's default selection alone."
                          (cl-remove-duplicates (pichat-presets--copy tools)
                                                :test #'equal :from-end t)))
                    :default)
+          :extensions (pichat-presets--copy (plist-get spec :extensions))
           :system-prompt (pichat-presets--prompt (plist-get spec :system-prompt))
           :append-system-prompt
           (pichat-presets--prompt

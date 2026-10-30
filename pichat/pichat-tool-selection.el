@@ -19,8 +19,8 @@ Pi hash-suffixes both members of a collision."
 
 (defun pichat-tool-selection-resolve (preset &optional selection)
   "Resolve PRESET and optional explicit SELECTION into a runtime snapshot.
-SELECTION is a plist with :builtins and :mcp (SERVER . TOOL) pairs.
-An omitted SELECTION means the preset baseline, with MCP disabled.  The
+SELECTION contains :builtins, :mcp (SERVER . TOOL) pairs and :extensions
+exact names.  Omission means the preset baseline, with MCP disabled.  The
 pass-through preset returns nil and cannot accept a selection."
   (let ((baseline (plist-get preset :tools)))
     (if (eq baseline :default)
@@ -30,7 +30,11 @@ pass-through preset returns nil and cannot accept a selection."
                         (plist-get preset :name)))
           nil)
       (let ((builtins (if selection (plist-get selection :builtins) baseline))
-            (mcp (and selection (plist-get selection :mcp))))
+            (mcp (and selection (plist-get selection :mcp)))
+            (extensions (if selection (plist-get selection :extensions)
+                          (plist-get preset :extensions))))
+        (unless (pichat-presets-extension-names-p extensions)
+          (user-error "Invalid or duplicate extension tool selection"))
         (unless (and (listp builtins) (proper-list-p builtins)
                      (cl-every (lambda (name) (member name baseline)) builtins)
                      (= (length builtins)
@@ -51,9 +55,12 @@ pass-through preset returns nil and cannot accept a selection."
           (unless (= (length names)
                      (length (cl-remove-duplicates (copy-sequence names) :test #'equal)))
             (user-error "Ambiguous normalized MCP tool names"))
-          (list :builtins (copy-sequence builtins)
-                :mcp (copy-tree mcp)
-                :names names))))))
+          (when (cl-intersection names extensions :test #'equal)
+            (user-error "Tool selected as both MCP and extension"))
+          (append (list :builtins (pichat-presets--copy builtins)
+                        :mcp (pichat-presets--copy mcp) :names names)
+                  (when extensions
+                    (list :extensions (sort (pichat-presets--copy extensions) #'string<)))))))))
 
 (defun pichat-tool-selection-check-catalogue (snapshot servers)
   "Validate SNAPSHOT MCP choices against discovered SERVERS.
@@ -68,12 +75,22 @@ Fail closed on disconnected, hidden, non-direct, absent, or ambiguous tools."
                     (car pair) (cdr pair)))))
   snapshot)
 
+(defun pichat-tool-selection-check-extensions (snapshot tools)
+  "Validate SNAPSHOT's extension choices against registered TOOLS."
+  (dolist (name (plist-get snapshot :extensions))
+    (let ((tool (cl-find name tools :key (lambda (item) (plist-get item :name))
+                         :test #'equal)))
+      (unless (and tool (plist-get tool :eligible))
+        (user-error "Extension tool %s is missing or cannot be enabled" name))))
+  snapshot)
+
 (defun pichat-tool-selection-args (snapshot)
   "Return Pi startup tool arguments for resolved SNAPSHOT.
 Nil SNAPSHOT means pass-through; a preset with no tools uses --no-tools."
   (when snapshot
     (let ((names (append (plist-get snapshot :builtins)
-                         (plist-get snapshot :names))))
+                         (plist-get snapshot :names)
+                         (plist-get snapshot :extensions))))
       (append (if names
                   (list "--tools" (string-join names ","))
                 (list "--no-tools"))

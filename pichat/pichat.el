@@ -1333,6 +1333,9 @@ This is the first implementation check; it does not send an LLM prompt."
                      (nth 1 scope) (unless (eq target 'inferred) target))))
     (when (and pichat-rpc-command (eq (pichat-transport-kind transport) 'local))
       (user-error "Tools cannot customize a complete Pi command wrapper"))
+    (setq context (plist-put context :tool-discovery
+                             (or (plist-get context :tool-discovery)
+                                 (pichat-tool-discovery-draft-create))))
     (pichat-tool-picker-open
      spec (plist-get context :tool-selection) (nth 1 scope) transport
      pichat-pi-executable
@@ -1345,7 +1348,9 @@ This is the first implementation check; it does not send an LLM prompt."
                                                    (plist-get profile :scope)
                                                    target)))))
          (setq next (plist-put next :launch-args args))
-         (transient-setup 'pichat-launch nil nil :scope next))))))
+         (transient-setup 'pichat-launch nil nil :scope next)))
+     (and (stringp (plist-get profile :model)) (plist-get profile :model))
+     (plist-get context :tool-discovery))))
 
 (transient-define-suffix pichat-launch-execute (arguments context)
   "Execute a PiChat launch from Transient ARGUMENTS and CONTEXT."
@@ -1501,6 +1506,9 @@ This is the first implementation check; it does not send an LLM prompt."
          (draft (plist-get scope :draft)))
     (unless (pichat-reconfigure-origin-current-p origin)
       (user-error "Runtime changed; reopen reconfiguration"))
+    (setq scope (plist-put scope :tool-discovery
+                           (or (plist-get scope :tool-discovery)
+                               (pichat-tool-discovery-draft-create))))
     (pichat-tool-picker-open
      (plist-get draft :preset-spec) (plist-get draft :tool-selection)
      (pichat-session-emacs-cwd session) (pichat-session-transport session)
@@ -1510,7 +1518,11 @@ This is the first implementation check; it does not send an LLM prompt."
          (unless (eq selection :cancel)
            (plist-put scope :draft
                       (pichat-reconfigure-select-tools draft selection)))
-         (pichat--reconfigure-show scope))))))
+         (pichat--reconfigure-show scope)))
+     (let ((model (pichat-session-model session)))
+       (when (and (plist-get model :provider) (plist-get model :id))
+         (concat (plist-get model :provider) "/" (plist-get model :id))))
+     (plist-get scope :tool-discovery))))
 
 (transient-define-suffix pichat-reconfigure-back ()
   "Return to the untouched normal launch draft."

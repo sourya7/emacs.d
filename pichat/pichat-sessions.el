@@ -20,6 +20,7 @@
 (require 'pichat-archive)
 (require 'pichat-chat-diagnostics)
 
+(declare-function pichat-tool-runtime-verify "pichat-tool-runtime" (session callback))
 (declare-function pichat-start-session "pichat"
                   (&optional cwd scope launch-options))
 (declare-function pichat--scope-for-directory "pichat" (&optional directory force-global))
@@ -1699,7 +1700,16 @@ runtime."
                         pichat-sessions-selection-timeout
                       pichat-rpc-request-timeout)))
                (pichat-backend-get-state
-                response-session #'state-ready #'failure)))))
+                response-session
+                (lambda (state owned-session)
+                  (if (pichat-session-rpc-startup-control owned-session)
+                      (pichat-tool-runtime-verify
+                       owned-session
+                       (lambda (success reason)
+                         (if success (state-ready state owned-session)
+                           (cleanup (list :success nil :error reason)))))
+                    (state-ready state owned-session)))
+                #'failure)))))
       (if (or (eq (pichat-session-state session) 'error)
               (not (pichat-session-alive-p session)))
           (cleanup (list :success nil :pichat-failure-kind 'process

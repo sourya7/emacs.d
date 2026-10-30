@@ -29,6 +29,7 @@ export default function (pi: ExtensionAPI) {
 		handler: async (args, ctx) => {
 			if (ctx.mode !== "rpc") return;
 			let requestId: string | undefined;
+			let shutdownAfterAck = false;
 			let result: object;
 			try {
 				if (Buffer.byteLength(args, "utf8") > LIMIT) throw new Error("Request too large");
@@ -68,6 +69,9 @@ export default function (pi: ExtensionAPI) {
 				} else if (request.operation !== "catalogue") {
 					throw new Error("Unknown tool-control operation");
 				}
+				// A no-session SSH discovery probe cannot rely on stdin EOF
+				// traversing TRAMP.  Only the explicit probe request opts in.
+				shutdownAfterAck = request.operation === "catalogue" && request.shutdownAfterAck === true;
 				const activeTools = pi.getActiveTools();
 				result = {
 					ok: true,
@@ -87,7 +91,8 @@ export default function (pi: ExtensionAPI) {
 				payload = JSON.stringify({ protocolVersion: 1, requestId, ok: false, error: "Catalogue too large" });
 			}
 			// Ack closes the internal dialog. Nothing is appended to the Pi session.
-			await ctx.ui.input(TITLE, payload, { timeout: 5000 });
+			const ack = await ctx.ui.input(TITLE, payload, { timeout: 5000 });
+			if (shutdownAfterAck && ack === "ack") ctx.shutdown();
 		},
 	});
 }

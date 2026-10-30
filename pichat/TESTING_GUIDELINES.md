@@ -84,12 +84,38 @@ PICHAT_TEST_SSH_PI=/etc/profiles/per-user/dev/bin/pi \
 
 The RPC test creates and removes a unique remote directory, copies only the
 fake provider fixture, uses isolated agent/session state, streams one prompt,
-stops the remote process, and checks for an orphan. SSH runner tests also run
+stops the remote process, and checks for an orphan. The reconfiguration suite
+also copies the tool-control fixture and starts real persistent RPC runtimes.
+It checks saved/unwritten restart, actual prompt/tool declarations, independent
+procfs evidence before every replacement spawn, post-reload failure/restore,
+and catalogue discovery without changing the live runtime. Those tests use
+Linux procfs and fail rather than skip when the required capability is missing.
+SSH runner tests also run
 an explicit shell script in an isolated remote project, verify that both
 preview-limit and share-limit-only overflow files in remote `/tmp` are readable
 and included in the draft, and check timeout/temporary-script cleanup.
 They remove their own remote output files. No test reads normal remote Pi
 settings, credentials, extensions, or sessions.
+
+For live UI acceptance, start a **separate non-batch Emacs instance**, not
+`emacsclient` against an instance containing your conversations:
+
+```sh
+PICHAT_TEST_SSH_DIRECTORY=/ssh:lima-devbox:/tmp/ \
+PICHAT_TEST_SSH_PI=/etc/profiles/per-user/dev/bin/pi \
+  emacs -Q -L pichat -L pichat/test \
+  -l pichat-test-ssh-reconfigure-ui \
+  --eval '(setq use-dialog-box nil)' \
+  --eval '(ert-run-tests-batch-and-exit "^pichat-integration-ssh-reconfigure-live-ui$")'
+```
+
+This opens a live frame, drives the real launcher/reconfiguration/Tools keys,
+answers only its fixture's preset/confirmation prompts, checks a model turn
+with the selected tools, cleans up its remote state, and exits. It is deliberately
+not loaded by the batch SSH runner. Shared setup/cleanup lives in
+`pichat-test-real-ssh-support.el`; the suites contain the behavior assertions.
+No test disrupts shared SSH connections to simulate network failure; protocol
+loss, timeout and stale-delivery matrices are tested offline.
 
 ## Opt-in Mermaid Docker tests
 

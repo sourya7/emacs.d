@@ -135,14 +135,15 @@ supplied, is the captured Pi resource/model argv (without the helper or preset
 allowlist); otherwise ordinary PiChat settings apply.  ENVIRONMENT can supply
 an already captured process environment.  Only the verified internal command
 is sent through RPC prompt; no conversation prompt or model turn is requested.
-Cancellation suppresses callbacks.  EOF requests orderly shutdown; a one-second
-grace bounds teardown.  Forced SSH teardown reports uncertain remote cleanup."
+Cancellation suppresses callbacks.  SSH probes request helper-owned shutdown
+after acknowledgement; local probes use EOF.  A one-second grace bounds
+teardown.  Forced SSH teardown reports uncertain remote cleanup."
   (let ((environment (or environment (pichat-pi-process-environment)))
         (args (if args-p args (pichat-tool-discovery--args transport model)))
         (request-id (format "pichat-%s" (gensym)))
         (remainder "") (early-output "") early-error
         (bytes 0) (stderr-bytes 0)
-        process stderr-process timer shutdown-timer startup-timer helper
+        process stderr-process stderr-buffer timer shutdown-timer startup-timer helper
         phase done closing result-tools result-error payload-received prompt-handled)
     (cl-labels
         ((send (record)
@@ -156,6 +157,10 @@ grace bounds teardown.  Forced SSH teardown reports uncertain remote cleanup."
              (when (and process (process-live-p process)) (delete-process process))
              (when (and stderr-process (process-live-p stderr-process))
                (delete-process stderr-process))
+             (when (buffer-live-p stderr-buffer)
+               (when-let* ((stderr (get-buffer-process stderr-buffer)))
+                 (when (process-live-p stderr) (delete-process stderr)))
+               (kill-buffer stderr-buffer))
              (when helper
                (condition-case err (funcall (plist-get helper :cleanup))
                  (error (setq result-error (format "Helper cleanup failed: %s" (error-message-string err))))))
@@ -169,7 +174,13 @@ grace bounds teardown.  Forced SSH teardown reports uncertain remote cleanup."
              (when timer (cancel-timer timer))
              (if (and process (process-live-p process))
                  (progn
-                   (ignore-errors (process-send-eof process))
+                   (ignore-errors
+                     (if (and (not error) (eq (pichat-transport-kind transport) 'ssh))
+                         ;; Pi 1.4's asynchronous prompt handler can request
+                         ;; shutdown after its command-loop check has run.
+                         ;; A read-only command services that pending request.
+                         (send '(:id "shutdown" :type "get_state"))
+                       (process-send-eof process)))
                    (setq shutdown-timer
                          (run-at-time
                           1 nil
@@ -216,7 +227,9 @@ grace bounds teardown.  Forced SSH teardown reports uncertain remote cleanup."
                            :message (concat "/" pichat-tool-discovery--command " "
                                             (json-serialize
                                              (list :protocolVersion 1 :requestId request-id
-                                                   :operation "catalogue"))))))
+                                                   :operation "catalogue"
+                                                   :shutdownAfterAck
+                                                   (eq (pichat-transport-kind transport) 'ssh)))))))
               ((equal id "catalogue")
                (let ((data (gethash "data" record)))
                  (unless (and (eq phase 'catalogue) (eq (gethash "success" record) t)
@@ -253,6 +266,12 @@ grace bounds teardown.  Forced SSH teardown reports uncertain remote cleanup."
                     (error "Tool discovery requires user interaction; configure Pi on this target first"))))))
              ((or "agent_start" "message_start")
               (error "Unexpected model/conversation activity in tool discovery"))))
+         (stderr-filter (_proc chunk)
+           (cl-incf stderr-bytes (string-bytes chunk))
+           (when (> stderr-bytes pichat-tool-discovery--limit)
+             (if process
+                 (finish nil "Pi tool discovery stderr is too large")
+               (setq early-error "Pi tool discovery stderr is too large"))))
          (filter (_proc chunk)
            ;; TRAMP can deliver startup output while make-process is still
            ;; returning.  Defer dispatch until the owned process is available.
@@ -278,19 +297,17 @@ grace bounds teardown.  Forced SSH teardown reports uncertain remote cleanup."
           (let ((process-environment (copy-sequence environment)))
             (pichat-tool-discovery--validate-args args)
             (setq helper (pichat-tool-discovery-prepare-helper transport))
-            (setq stderr-process
-                  (make-pipe-process
-                   :name "pichat-tool-probe-stderr" :noquery t :buffer nil
-                   :filter (lambda (_proc chunk)
-                             (cl-incf stderr-bytes (string-bytes chunk))
-                             (when (> stderr-bytes pichat-tool-discovery--limit)
-                               (if process
-                                   (finish nil "Pi tool discovery stderr is too large")
-                                 (setq early-error "Pi tool discovery stderr is too large"))))))
+            ;; TRAMP's make-process handler accepts a buffer for :stderr,
+            ;; unlike local make-process which also accepts a pipe process.
+            (if (eq (pichat-transport-kind transport) 'ssh)
+                (setq stderr-buffer (generate-new-buffer " *pichat-tool-probe-stderr*"))
+              (setq stderr-process
+                    (make-pipe-process :name "pichat-tool-probe-stderr" :noquery t
+                                       :buffer nil :filter #'stderr-filter)))
             (setq process
                   (pichat-transport-make-process
                    transport runtime-cwd :name "pichat-tool-probe" :buffer nil
-                   :coding 'utf-8-unix :stderr stderr-process
+                   :coding 'utf-8-unix :stderr (or stderr-buffer stderr-process)
                    :command (append (list executable) args
                                     (list "--mode" "rpc" "--no-session" "--extension"
                                           (plist-get helper :path)))
@@ -304,6 +321,17 @@ grace bounds teardown.  Forced SSH teardown reports uncertain remote cleanup."
                                                (or result-error "Pi tool probe exited unsuccessfully")))
                                        (dispose))
                                    (finish nil "Pi tool probe exited before discovery completed"))))))
+            (when stderr-buffer
+              (setq stderr-process (get-buffer-process stderr-buffer))
+              (when stderr-process
+                (set-process-filter stderr-process #'stderr-filter)
+                (set-process-sentinel stderr-process #'ignore))
+              (with-current-buffer stderr-buffer
+                (unless (zerop (buffer-size))
+                  (cl-incf stderr-bytes (string-bytes (buffer-string)))
+                  (when (> stderr-bytes pichat-tool-discovery--limit)
+                    (setq early-error "Pi tool discovery stderr is too large"))
+                  (erase-buffer))))
             (setq phase 'state
                   timer (run-at-time pichat-tool-discovery-timeout nil
                                      (lambda () (finish nil "Pi tool discovery timed out"))))

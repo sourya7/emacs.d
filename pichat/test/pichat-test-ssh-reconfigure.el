@@ -1,0 +1,198 @@
+;;; pichat-test-ssh-reconfigure.el --- Real SSH restart behavior -*- lexical-binding: t; -*-
+
+(require 'pichat-test-real-ssh-support)
+
+(ert-deftest pichat-integration-ssh-reconfigure-preserves-saved-source-and-applies-tools ()
+  (pichat-test-real-ssh--run
+   (lambda (fixture)
+     (let* ((session (plist-get fixture :session))
+            (buffer (pichat-session-buffer session))
+            (old (pichat-session-process session))
+            (transport (pichat-session-transport session))
+            (runtime-id (pichat-session-runtime-id session))
+            (owner (copy-tree (pichat-session-owner-scope-key session)))
+            (model (pichat-session-startup-model session))
+            draft-target)
+       (pichat-test-rpc-call session "set_thinking_level" '(:level "high"))
+       (pichat-test-rpc-call session "set_steering_mode" '(:mode "one-at-a-time"))
+       (pichat-test-rpc-call session "set_follow_up_mode" '(:mode "one-at-a-time"))
+       (pichat-test-chat-send-and-wait session buffer "Persist this SSH conversation" 30)
+       (pichat-test-assert-provider-script-consumed (plist-get fixture :status))
+       (pichat-test-real-ssh--settled session)
+       (with-current-buffer buffer
+         (pichat-chat--set-input-text "unsent saved SSH draft")
+         (setq draft-target (pichat-chat-draft-capture)))
+       (let* ((before (plist-get (pichat-test-rpc-call session "get_entries") :data))
+              (id (pichat-session-id session))
+              (file (pichat-session-session-file session))
+              (configuration (pichat-reconfigure-select-preset
+                              (pichat-reconfigure-captured-configuration session) 'coding)))
+         (plist-put (plist-get configuration :preset-spec) :append-system-prompt
+                    "Phase-four SSH preset marker.\n")
+         (setq configuration
+               (pichat-reconfigure-select-tools
+                configuration '(:builtins ("read" "bash") :extensions ("probe_child") :mcp nil)))
+         (pichat-test-real-ssh--write-script
+          fixture '(:turns [(:text "new SSH tools verified"
+                                  :expectContextIncludes ["persisted SSH answer" "Phase-four SSH preset marker."]
+                                  :expectTool (:name "probe_child") :expectToolAbsent "write")]))
+         ;; Later registry/default changes must not reinterpret this runtime.
+         (let ((pichat-targets nil) (pichat-default-model "invalid/unused"))
+           (should (equal '(t nil) (pichat-test-real-ssh--restart session configuration))))
+         (should (= 2 (plist-get fixture :spawn-checks)))
+         (should (pichat-process-lifetime-confirmed-p old))
+         (should-not (pichat-test-real-ssh--alive-p fixture old))
+         (should-not (eq old (pichat-session-process session)))
+         (should (pichat-test-real-ssh--alive-p fixture (pichat-session-process session)))
+         (should (eq transport (pichat-session-transport session)))
+         (should (eq session (pichat-session-by-runtime-id runtime-id)))
+         (should (equal owner (pichat-session-owner-scope-key session)))
+         (should (equal model (pichat-session-startup-model session)))
+         (should (equal id (pichat-session-id session)))
+         (should (equal file (pichat-session-session-file session)))
+         (should (equal before (plist-get (pichat-test-rpc-call session "get_entries") :data)))
+         (should (eq 'coding (pichat-session-preset-name session)))
+         (should (equal '("probe_child")
+                        (plist-get (pichat-session-tool-selection session) :extensions)))
+         (let ((state (plist-get (pichat-test-rpc-call session "get_state") :data)))
+           (should (equal "high" (plist-get state :thinkingLevel)))
+           (should (equal "one-at-a-time" (plist-get state :steeringMode)))
+           (should (equal "one-at-a-time" (plist-get state :followUpMode)))
+           (should-not (plist-get state :autoCompactionEnabled)))
+         (should (pichat-chat-draft-current-p draft-target))
+         (with-current-buffer buffer
+           (should (equal "unsent saved SSH draft" (pichat-chat--input-text)))
+           (should (string-match-p "persisted SSH answer" (buffer-string)))
+           (should-not pichat-chat--restart-staging))
+         ;; This is a real model-context declaration check, not a command/plist
+         ;; assertion: startup and saved-source helper activation must work.
+         (pichat-test-prompt-and-wait session "Verify the replacement context" 30)
+         (pichat-test-assert-provider-script-consumed (plist-get fixture :status))
+         (should (string-match-p "new SSH tools verified"
+                                 (prin1-to-string (pichat-test-rpc-call session "get_entries")))))))))
+
+(ert-deftest pichat-integration-ssh-reconfigure-unwritten-rebinds-after-verified-exit ()
+  (pichat-test-real-ssh--run
+   (lambda (fixture)
+     (let* ((session (plist-get fixture :session))
+            (old (pichat-session-process session))
+            (runtime-id (pichat-session-runtime-id session))
+            (transport (pichat-session-transport session))
+            (owner (copy-tree (pichat-session-owner-scope-key session)))
+            (id (pichat-session-id session))
+            (file (pichat-session-session-file session)))
+       (should-not (file-exists-p (pichat-transport-runtime-file-name transport file)))
+       (with-current-buffer (pichat-session-buffer session)
+         (pichat-chat--set-input-text "unsent unwritten SSH draft"))
+       (should (equal '(t nil)
+                      (pichat-test-real-ssh--restart
+                       session (pichat-reconfigure-select-preset
+                                (pichat-reconfigure-captured-configuration session) 'coding))))
+       (should (= 2 (plist-get fixture :spawn-checks)))
+       (should (pichat-process-lifetime-confirmed-p old))
+       (should-not (pichat-test-real-ssh--alive-p fixture old))
+       (should (pichat-test-real-ssh--alive-p fixture (pichat-session-process session)))
+       (should (equal runtime-id (pichat-session-runtime-id session)))
+       (should (equal owner (pichat-session-owner-scope-key session)))
+       (should (eq transport (pichat-session-transport session)))
+       (should-not (equal id (pichat-session-id session)))
+       (should-not (equal file (pichat-session-session-file session)))
+       (should-not (file-exists-p (pichat-transport-runtime-file-name transport file)))
+       (should (eq 'coding (pichat-session-preset-name session)))
+       (with-current-buffer (pichat-session-buffer session)
+         (should (equal "unsent unwritten SSH draft" (pichat-chat--input-text)))
+         (should-not pichat-chat--restart-staging))
+       (pichat-test-prompt-and-wait session "Persist the replacement empty source" 30)
+       (pichat-test-assert-provider-script-consumed (plist-get fixture :status))
+       (should (file-exists-p (pichat-transport-runtime-file-name
+                              transport (pichat-session-session-file session))))))))
+
+(ert-deftest pichat-integration-ssh-reconfigure-failed-reload-retains-snapshot-and-restores ()
+  (pichat-test-real-ssh--run
+   (lambda (fixture)
+     (let* ((session (plist-get fixture :session))
+            (buffer (pichat-session-buffer session))
+            (old (pichat-session-process session))
+            (runtime-id (pichat-session-runtime-id session))
+            (transport (pichat-session-transport session))
+            (validate (symbol-function 'pichat-reconfigure-validate-reload)))
+       (pichat-test-chat-send-and-wait session buffer "Persist before failure" 30)
+       (pichat-test-real-ssh--settled session)
+       (with-current-buffer buffer (pichat-chat--set-input-text "failure SSH draft"))
+       (let* ((id (pichat-session-id session))
+              (file (pichat-session-session-file session))
+              (before (plist-get (pichat-test-rpc-call session "get_entries") :data))
+              (requested (pichat-reconfigure-select-preset
+                          (pichat-reconfigure-captured-configuration session) 'coding))
+              failure)
+         ;; The sole injected fault is after real Pi reload and real validation.
+         ;; Transport, identity handshake, RPC, and recovery remain unmodified.
+         (cl-letf (((symbol-function 'pichat-reconfigure-validate-reload)
+                    (lambda (&rest args)
+                      (apply validate args)
+                      (error "Injected post-reload verification failure"))))
+           (setq failure (pichat-test-real-ssh--restart session requested)))
+         (should-not (car failure))
+         (should (string-match-p "Injected post-reload" (cadr failure)))
+         (should (= 2 (plist-get fixture :spawn-checks)))
+         (should (pichat-process-lifetime-confirmed-p old))
+         (should-not (pichat-session-alive-p session))
+         (should (eq 'manual (pichat-session-preset-name session)))
+         (with-current-buffer buffer
+           (should pichat-chat--restart-staging)
+           (should (equal "failure SSH draft" (pichat-chat--input-text)))
+           (save-excursion
+             (goto-char pichat-chat--canonical-start)
+             (should (search-forward "persisted SSH answer" pichat-chat--canonical-end t))
+             (should (get-text-property (1- (point)) 'read-only))))
+         (let ((failed (pichat-session-process session)))
+           (should (pichat-process-lifetime-supported-p failed))
+           (should-not (pichat-process-lifetime-confirmed-p failed))
+           (should (equal '(t nil) (pichat-test-real-ssh--restart session nil 'restore)))
+           (should (= 3 (plist-get fixture :spawn-checks)))
+           (should (pichat-process-lifetime-confirmed-p failed))
+           (should-not (pichat-test-real-ssh--alive-p fixture failed)))
+         (should (equal runtime-id (pichat-session-runtime-id session)))
+         (should (eq transport (pichat-session-transport session)))
+         (should (equal id (pichat-session-id session)))
+         (should (equal file (pichat-session-session-file session)))
+         (should (eq 'manual (pichat-session-preset-name session)))
+         (should (equal before (plist-get (pichat-test-rpc-call session "get_entries") :data)))
+         (should-not (pichat-session-restart-operation session))
+         (with-current-buffer buffer
+           (should (equal "failure SSH draft" (pichat-chat--input-text)))
+           (should-not pichat-chat--restart-staging))
+         (pichat-test-prompt-and-wait session "The restored SSH runtime is usable" 30)
+         (pichat-test-assert-provider-script-consumed (plist-get fixture :status)))))))
+
+(ert-deftest pichat-integration-ssh-tool-discovery-preserves-live-runtime ()
+  (pichat-test-real-ssh--run
+   (lambda (fixture)
+     (let* ((session (plist-get fixture :session))
+            (original (pichat-session-process session))
+            (id (pichat-session-id session))
+            (transport (pichat-session-transport session))
+            result cancel)
+       (unwind-protect
+           (progn
+             (setq cancel
+                   (pichat-tool-discovery-start
+                    transport (pichat-session-runtime-cwd session)
+                    (pichat-transport-pi-executable transport)
+                    (lambda (tools error) (setq result (list tools error)))
+                    :model (pichat-session-startup-model session)))
+             (pichat-test-wait-until (lambda () result) 30 "real SSH tool catalogue")
+             (should-not (cadr result))
+             (let ((child (cl-find "probe_child" (car result)
+                                   :key (lambda (tool) (plist-get tool :name)) :test #'equal)))
+               (should child)
+               (should (plist-get child :eligible))
+               (should-not (plist-get child :active)))
+             (should (= 1 (plist-get fixture :spawn-checks)))
+             (should (eq original (pichat-session-process session)))
+             (should (equal id (pichat-session-id session)))
+             (should (pichat-test-real-ssh--alive-p fixture original)))
+         (when cancel (funcall cancel)))))))
+
+(provide 'pichat-test-ssh-reconfigure)
+;;; pichat-test-ssh-reconfigure.el ends here

@@ -2,6 +2,7 @@
 
 (require 'pichat-test-support)
 (require 'pichat-artifact-runner)
+(require 'pichat-test-ssh-reconfigure)
 
 (defun pichat-test-ssh--matching-process-p (pattern)
   "Check remote processes matching PATTERN in `default-directory'.

@@ -480,16 +480,11 @@ preference was chosen in that scope. Busy, ephemeral, unsynchronized, missing-
 file with conversation history, unsupported-wrapper, and historical-active-leaf
 cases are blocked before stopping Pi. An empty but named, pending, or
 extension-modified session is not treated as safely disposable. SSH restart
-requires a runtime started with the bundled control helper and verified Linux
-process identity, readable `/proc`, and an exit observer established before
-stopping Pi. Ending the SSH transport alone is never exit confirmation.
-Timeout, connection loss, failed probes, and unknown process identity block a
-replacement, including retry/restore; leave-stopped also requires confirmed
-remote exit. Other SSH platforms and older runtimes without verified identity
-remain unavailable for reconfiguration. SSH saved-session launch and restart
-use the captured target and path mappings. Focused real-SSH saved restart and
-restore checks have passed; comprehensive SSH failure coverage and live UI
-verification are still pending.
+requires verified Linux actual-Pi identity and an exit observer established
+before stopping Pi; ending the transport alone is never confirmation. SSH
+saved-session launch and restart use the captured target and path mappings.
+See “SSH reconfiguration guarantees and limits” below for shutdown evidence,
+recovery, and verification boundaries.
 
 The built-in `manual` preset retains Pi's base prompt and selects
 `read,grep,find,ls,edit,write` without adding execution restrictions to the
@@ -618,12 +613,15 @@ instead. Neither listing promises universal completeness.
 
 The bundled `bridge/pichat-tool-control.ts` helper is separate from the optional
 Emacs-defined-tool bridge. PiChat explicitly loads it for probes and runtimes
-with selected extension tools; no global extension installation is needed.
-Local startup uses its package-relative path. SSH stages a private helper on
-the target rather than passing a host-only path. Forced SSH teardown cannot
-prove the remote child stopped, so runtime cleanup retains that helper and
-reports uncertain shutdown. Live SSH tool discovery/activation has not yet
-been verified; local Pi 1.4.0 is covered by isolated integration tests.
+with selected extension tools, and for every SSH runtime so actual-Pi identity
+can be captured; no global extension installation is needed. Local startup uses
+its package-relative path. SSH stages a private helper on the target rather
+than passing a host-only path. Forced SSH teardown cannot prove the remote
+child stopped, so runtime cleanup retains that helper and reports uncertain
+shutdown. Successful SSH catalogue probes explicitly request helper-owned
+shutdown rather than relying on stdin EOF through TRAMP. Local and real-SSH
+discovery/activation are covered by isolated Pi 1.4.0 tests, including activation
+after reloading a saved Pi session.
 
 ### Tool-policy boundaries
 
@@ -1314,6 +1312,49 @@ Use `M-x pichat-path-validate-mappings` from a chat to inspect its mappings,
 `M-x pichat-diagnostics-open-settings` for the owning settings file, and
 `M-x pichat-diagnostics-probe-pi` to check executable/version availability
 through the transport, not RPC, authentication, model, or wrapper health.
+
+### SSH reconfiguration guarantees and limits
+
+Guarded reconfiguration is supported on **Linux targets with readable procfs**.
+The bundled helper must have reported the actual Pi process's PID, procfs start
+time and boot ID when that runtime started. TRAMP's shell PID is not a substitute.
+Older runtimes without this identity, other platforms and inaccessible procfs
+remain blocked; there is no force-restart bypass.
+
+Before stopping Pi, PiChat establishes an observer against the captured SSH
+target and verifies that exact process is still present. Replacement requires
+both an identity-qualified disappearance record and the observer's clean exit.
+A dead local SSH endpoint, a successful signal command or transport EOF alone
+is **not** remote-exit evidence. PiChat does not search for and signal remote
+PIDs to force this transition.
+
+`pichat-reconfigure-shutdown-timeout` (default 5 seconds) bounds observation,
+not synchronous TRAMP connection/file setup or connection prompts. Timeout,
+connection loss and probe failure retain the shutdown obligation and readable
+restart snapshot. Retry/restore must freshly verify every unconfirmed original
+or failed replacement process before starting another writer; Leave stopped
+also requires confirmed exit. A replacement must acquire its own verified
+identity before a saved source can load or an unwritten source can commit.
+Private helpers can remain on the target while shutdown is uncertain; their
+housekeeping is separate from exit confirmation. These actions never delete the
+saved session file.
+
+Runtime identity, owner scope, chat/draft, run-local model and captured target
+remain stable. Saved Pi sessions retain their source and active branch; eligible
+unwritten, conversation-free Pi sessions intentionally receive a new Pi session
+ID, as defined in `GLOSSARY.md`. This is not reconnection or resumption of an old
+remote process. Source claims are Emacs-local: there is no distributed lock or
+guarantee against unrelated external Pi writers.
+
+Isolated real-SSH tests on Pi 1.4.0, Emacs 31.1 and TRAMP 2.8.2.31.1 cover saved
+and unwritten restart, actual preset/Tools declarations, old-process absence
+before each replacement, and injected post-reload failure/restore. A separate
+live graphical Emacs check drives the launcher, preset chooser, SSH Tools
+picker and confirmed restart. The SSH target used for this verification is the
+same host reached through real SSH/TRAMP, not a cross-host/network-failure lab.
+Malformed evidence, lost probes, timeouts, cancellation and stale callbacks
+are covered deterministically offline; shared network connections are not
+interrupted by tests. See `TESTING_GUIDELINES.md` for reproduction commands.
 
 ## Docker runtime
 

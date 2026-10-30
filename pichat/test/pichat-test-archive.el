@@ -444,7 +444,11 @@
            :transport transport))
          process)
     (unwind-protect
-        (cl-letf (((symbol-function 'pichat-transport-make-process)
+        (cl-letf (((symbol-function 'pichat-tool-runtime-prepare)
+                   ;; This test isolates transport readiness, not the separate
+                   ;; tool/lifetime handshake or target-side file staging.
+                   (lambda (_session _names) "/fixture/helper.ts"))
+                  ((symbol-function 'pichat-transport-make-process)
                    (lambda (_transport _cwd &rest args)
                      (setq process
                            (make-process

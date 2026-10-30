@@ -331,7 +331,8 @@ committed configuration).  A local startup failure retains a diagnostic."
         (progn
           (unless (and (stringp program) (not (string-empty-p program)))
             (signal 'file-error '("Empty Pi RPC command")))
-          (when (plist-get tool-selection :extensions)
+          (when (or (plist-get tool-selection :extensions)
+                    (eq (pichat-transport-kind transport) 'ssh))
             (require 'pichat-tool-runtime)
             (let ((path (pichat-tool-runtime-prepare session (plist-get tool-selection :extensions))))
               (setq argv (append argv (list "--extension" path))
@@ -348,6 +349,15 @@ committed configuration).  A local startup failure retains a diagnostic."
                         :command argv
                         :filter #'pichat-rpc--process-filter
                         :sentinel #'pichat-rpc--process-sentinel)))
+            ;; Register immediately: even a replacement that fails readiness
+            ;; leaves a shutdown obligation.  Local endpoint death cannot
+            ;; silently authorize another SSH writer during recovery.
+            (when (eq (pichat-transport-kind transport) 'ssh)
+              (when-let* ((operation (pichat-session-restart-operation session)))
+                (plist-put operation :shutdown-obligations
+                           (cons proc (plist-get operation :shutdown-obligations))))
+              (when-let* ((control (pichat-session-rpc-startup-control session)))
+                (setf (plist-get control :process) proc)))
             (set-process-query-on-exit-flag proc nil)
             (set-process-coding-system proc 'utf-8-unix 'utf-8-unix)
             ;; Emacs otherwise appends the stderr pipe's own termination

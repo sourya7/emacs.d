@@ -636,7 +636,7 @@
             (pichat-session-id session) "other")
       (should-not (pichat-reconfigure-origin-current-p origin)))))
 
-(ert-deftest pichat-reconfigure-ssh-shutdown-gate-rejects-before-stop ()
+(ert-deftest pichat-reconfigure-ssh-without-identity-rejects-before-stop ()
   (pichat-test-with-unit-session (session proc)
     (let* ((remote (pichat-transport--create :id 'test-ssh :kind 'ssh
                                               :label "test"))
@@ -644,7 +644,7 @@
            (operation (list :token (make-symbol "restart") :phase 'stopping)))
       (setf (pichat-session-transport session) remote
             (pichat-session-restart-operation session) operation)
-      (should (member "Remote Pi shutdown cannot yet be confirmed; restart is unavailable on SSH"
+      (should (member "SSH restart requires verified Linux actual-Pi process identity"
                       (pichat-reconfigure-preflight-blockers origin nil)))
       (should-error
        (pichat-reconfigure-stop-and-wait session operation #'ignore)

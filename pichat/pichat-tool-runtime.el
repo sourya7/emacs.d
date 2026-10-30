@@ -1,4 +1,4 @@
-;;; pichat-tool-runtime.el --- Initial extension tool readiness -*- lexical-binding: t; -*-
+;;; pichat-tool-runtime.el --- Initial tool and SSH identity readiness -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 ;; The actual process, not a discovery snapshot, establishes tool readiness.
@@ -11,6 +11,7 @@
 (require 'pichat-tool-selection)
 (require 'pichat-tool-discovery)
 (require 'pichat-events)
+(require 'pichat-process-lifetime)
 
 (defun pichat-tool-runtime-prepare (session names)
   "Stage the helper for SESSION and capture exact selected NAMES.
@@ -31,11 +32,18 @@ when building a replacement command during preflight."
     (let ((process (plist-get control :process)))
       (if (and process
                (eq 'ssh (pichat-transport-kind (pichat-session-transport session)))
-               (not (and (eq 'exit (process-status process))
-                         (zerop (process-exit-status process)))))
-          (pichat-chat-diagnostics-record
-           session :origin 'tool-control
-           :message "Remote shutdown is uncertain; private tool-control helper retained on target")
+               (not (pichat-process-lifetime-confirmed-p process)))
+          (progn
+            (process-put process 'pichat-helper-cleanup
+                         (plist-get (plist-get control :helper) :cleanup))
+            ;; An active restart observer, not the local sentinel, decides
+            ;; whether this is uncertain.  Avoid a spurious failure record
+            ;; while its ordinary shutdown confirmation is still pending.
+            (unless (eq (plist-get (pichat-session-restart-operation session) :phase)
+                        'stopping)
+              (pichat-chat-diagnostics-record
+               session :origin 'tool-control
+               :message "Remote shutdown is uncertain; private tool-control helper retained on target")))
         (condition-case err
             (funcall (plist-get (plist-get control :helper) :cleanup))
           (error (pichat-chat-diagnostics-record
@@ -117,8 +125,15 @@ and extension activation changes do not trigger it automatically."
                       (let ((raw (plist-get record :placeholder)))
                         (unless (and (stringp raw) (<= (string-bytes raw) pichat-tool-discovery--limit))
                           (error "Invalid or oversized tool-control response"))
-                        (let ((tools (pichat-tool-discovery--catalogue
-                                      (json-parse-string raw :array-type 'array) request-id)))
+                        (let* ((data (json-parse-string raw :array-type 'array :null-object nil))
+                               (tools (pichat-tool-discovery--catalogue data request-id))
+                               (identity (pichat-process-lifetime-identity
+                                          (gethash "processIdentity" data))))
+                          (when identity
+                            (let ((previous (process-get process 'pichat-lifetime)))
+                              (when (and previous (not (equal previous identity)))
+                                (error "Actual Pi process identity changed")))
+                            (process-put process 'pichat-lifetime identity))
                           (pichat-tool-selection-check-extensions (list :extensions names) tools)
                           (dolist (name names)
                             (unless (plist-get (cl-find name tools :key (lambda (tool) (plist-get tool :name))

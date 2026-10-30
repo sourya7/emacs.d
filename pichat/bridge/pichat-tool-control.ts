@@ -1,4 +1,21 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "node:fs";
+
+// An unsupported/inaccessible procfs disables SSH restart, not ordinary RPC.
+// This is the actual RPC writer, which need not be TRAMP's remote shell PID.
+function processIdentity() {
+	if (process.platform !== "linux") return null;
+	try {
+		const stat = readFileSync("/proc/self/stat", "utf8");
+		const fields = stat.slice(stat.lastIndexOf(") ") + 2).trim().split(/\s+/);
+		const start = fields[19];
+		const boot = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+		if (!/^\d+$/.test(start ?? "") || !/^[0-9a-f-]{36}$/.test(boot)) return null;
+		return { kind: "linux-procfs-v1", pid: process.pid, start, boot };
+	} catch {
+		return null;
+	}
+}
 
 // Internal RPC transport, not a model tool or a conversation message.
 const COMMAND = "pichat-tool-control-v1";
@@ -54,6 +71,7 @@ export default function (pi: ExtensionAPI) {
 				const activeTools = pi.getActiveTools();
 				result = {
 					ok: true,
+					processIdentity: processIdentity(),
 					tools: pi.getAllTools().map((tool) => ({
 						name: tool.name,
 						description: tool.description.slice(0, 4096),

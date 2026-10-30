@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Exact-process preflight, bounded local shutdown and RPC phases, verified
+;; Exact-process preflight, bounded transport-aware shutdown and RPC phases, verified
 ;; saved-source or verified empty-source commit, and retained recovery state.  The launcher
 ;; exposes these only through its explicit reconfiguration Transient mode.
 
@@ -18,9 +18,10 @@
 (require 'pichat-tool-runtime)
 (require 'pichat-chat)
 (require 'pichat-pi)
+(require 'pichat-process-lifetime)
 
 (defcustom pichat-reconfigure-shutdown-timeout 5
-  "Maximum seconds to wait for the old local Pi process to terminate."
+  "Maximum seconds after stop to confirm the old Pi process has terminated."
   :type 'positive-integer
   :group 'pichat)
 
@@ -147,8 +148,10 @@ preset name or description is not a reason to restart the process."
             (push "A steering or follow-up message is queued" blockers))
           (nreverse blockers))))))
 
-(defun pichat-reconfigure--unwritten-file-p (file)
-  "Return non-nil when FILE is absent and Pi could create it locally."
+(defun pichat-reconfigure--unwritten-file-p (file &optional transport)
+  "Return non-nil when FILE is absent and writable through TRANSPORT."
+  (when transport
+    (setq file (pichat-transport-runtime-file-name transport file)))
   (condition-case nil
       (and (stringp file) (file-name-absolute-p file)
            (not (file-exists-p file))
@@ -157,7 +160,7 @@ preset name or description is not a reason to restart the process."
     (error nil)))
 
 (defun pichat-reconfigure--empty-unwritten-source-p (origin)
-  "Return non-nil if ORIGIN is a settled, empty, as-yet-unwritten local Pi session.
+  "Return non-nil if ORIGIN is a settled, empty, as-yet-unwritten Pi session.
 The fresh RPC entry check still has to confirm this before any process stops."
   (let* ((session (plist-get origin :session))
          (file (plist-get origin :session-file))
@@ -165,7 +168,6 @@ The fresh RPC entry check still has to confirm this before any process stops."
                      (pichat-chat-canonical-entry-cache session))))
     (and (pichat-session-p session)
          (eq (pichat-session-persistence session) 'persistent)
-         (eq (pichat-transport-kind (pichat-session-transport session)) 'local)
          (stringp file) (file-name-absolute-p file)
          (pichat-entry-cache-p cache)
          (equal (pichat-entry-cache-session-id cache)
@@ -174,7 +176,8 @@ The fresh RPC entry check still has to confirm this before any process stops."
          (pichat-pi-entry-cache-startup-metadata-only-p cache)
          (null (pichat-session-session-file-back-stack session))
          (null (pichat-session-session-file-forward-stack session))
-         (pichat-reconfigure--unwritten-file-p file))))
+         (pichat-reconfigure--unwritten-file-p
+          file (pichat-session-transport session)))))
 
 (defun pichat-reconfigure--empty-entries-p (entries)
   "Return non-nil if fresh authoritative Pi ENTRIES have no conversation."
@@ -204,12 +207,11 @@ It must be repeated immediately before a restart transaction stops Pi."
                           (plist-get (pichat-session-restart-operation session)
                                      :token))))
         (push "A runtime restart or recovery is already pending" blockers))
-      ;; Deleting an SSH transport process does not prove that its remote Pi
-      ;; child has exited.  Without that proof a replacement could create two
-      ;; writers for the same saved session file.
-      (unless (eq (pichat-transport-kind
-                   (pichat-session-transport session)) 'local)
-        (push "Remote Pi shutdown cannot yet be confirmed; restart is unavailable on SSH"
+      (unless (or (eq (pichat-transport-kind
+                       (pichat-session-transport session)) 'local)
+                  (pichat-process-lifetime-supported-p
+                   (pichat-session-process session)))
+        (push "SSH restart requires verified Linux actual-Pi process identity"
               blockers))
       (unless (eq (pichat-session-persistence session) 'persistent)
         (push "Ephemeral conversations cannot be restarted" blockers))
@@ -271,12 +273,89 @@ It must be repeated immediately before a restart transaction stops Pi."
       (push "The originating runtime is unavailable" blockers))
     (nreverse blockers)))
 
+(defun pichat-reconfigure--cancel-observers (operation)
+  "Cancel OPERATION's observers without erasing shutdown obligations."
+  (dolist (cancel (plist-get operation :observer-cancellers))
+    (funcall cancel))
+  (plist-put operation :observer-cancellers nil))
+
+(defun pichat-reconfigure--shutdown-safe-p (operation)
+  "Whether OPERATION has discharged every previous SSH writer obligation."
+  (let* ((session (plist-get operation :session))
+         (transport (and (pichat-session-p session)
+                         (pichat-session-transport session))))
+    (or (and transport (eq (pichat-transport-kind transport) 'local))
+        (and transport (eq (pichat-transport-kind transport) 'ssh)
+             (consp (plist-get operation :shutdown-obligations))
+             (cl-every #'pichat-process-lifetime-confirmed-p
+                       (plist-get operation :shutdown-obligations))))))
+
+(defun pichat-reconfigure--prepare-shutdown (operation recovery continuation)
+  "Prepare exit observers before stopping any process for OPERATION.
+RECOVERY allows already-absent lifetimes, never unknown identities.  Call
+CONTINUATION after every unresolved lifetime has a verified observer baseline."
+  (let* ((session (plist-get operation :session))
+         (transport (plist-get operation :transport))
+         (pending (cl-remove-if #'pichat-process-lifetime-confirmed-p
+                                (plist-get operation :shutdown-obligations)))
+         (remaining (length pending))
+         (shutdown-process (pichat-session-process session))
+         (shutdown-generation (pichat-session-process-generation session)))
+    (cl-labels
+        ((current ()
+           (and (pichat-reconfigure--owned-p operation)
+                (eq shutdown-process (pichat-session-process session))
+                (eql shutdown-generation (pichat-session-process-generation session))))
+         (prepared ()
+           (when (current)
+             (plist-put operation :shutdown-ready t)
+             (funcall continuation)))
+         (failed (reason)
+           (when (current)
+             (pichat-reconfigure--finish operation nil reason))))
+      (condition-case err
+          (cond
+           ((eq (pichat-transport-kind transport) 'local) (funcall continuation))
+           ((not (consp (plist-get operation :shutdown-obligations)))
+            (failed "SSH restart has no captured writer shutdown obligations"))
+           ((null pending) (prepared))
+           (t
+            ;; Validate all identities before creating even the first observer.
+            (unless (cl-every #'pichat-process-lifetime-supported-p pending)
+              (user-error "SSH writer identity is unknown; automatic recovery is unsafe"))
+            (dolist (process pending)
+              (let ((observed-process process)
+                    (identity (copy-sequence (process-get process 'pichat-lifetime))))
+                (let ((cancel
+                       (pichat-process-lifetime-watch
+                        transport (or (plist-get operation :runtime-cwd)
+                                      (pichat-session-runtime-cwd session))
+                        observed-process (+ pichat-reconfigure-preflight-timeout
+                                            pichat-reconfigure-shutdown-timeout)
+                        (not recovery)
+                        (lambda ()
+                          (when (current)
+                            (cl-decf remaining)
+                            (when (= remaining 0) (prepared))))
+                        (lambda (success reason)
+                          (when (current)
+                            (if (and success
+                                     (equal identity (process-get observed-process 'pichat-lifetime)))
+                                (pichat-process-lifetime-confirm observed-process)
+                              (failed (or reason "SSH writer identity changed during observation"))))))))
+                  ;; `push' on an absent plist key may prepend a new plist,
+                  ;; losing the operation's eq ownership.  Mutate its tail.
+                  (plist-put operation :observer-cancellers
+                             (cons cancel (plist-get operation :observer-cancellers))))))))
+        ((error quit) (failed (error-message-string err)))))))
+
 (defun pichat-reconfigure-cancel-operation (session reason)
   "Retire active restart callbacks for SESSION and retain failure REASON.
 Retain the operation's captured snapshots for explicit recovery.  Do not
 clear a previously failed operation simply because the runtime is stopped."
   (when-let* ((operation (pichat-session-restart-operation session)))
     (unless (memq (plist-get operation :phase) '(failed committed))
+      (pichat-reconfigure--cancel-observers operation)
       ;; Copy: old asynchronous callbacks retain OPERATION's former identity
       ;; and can no longer pass `eq' ownership checks even if they fire late.
       (setf (pichat-session-restart-operation session)
@@ -285,16 +364,17 @@ clear a previously failed operation simply because the runtime is stopped."
       t)))
 
 (defun pichat-reconfigure-stop-and-wait (session operation callback)
-  "Stop local SESSION and call CALLBACK once after confirmed shutdown.
+  "Stop SESSION and call CALLBACK once after confirmed shutdown.
 OPERATION must be the current restart operation in its stopping phase.  Call
 CALLBACK with (SUCCESS REASON); cancellation or a replaced process suppresses
 late callbacks.  Never start a replacement while the old process is live."
   (unless (and (eq operation (pichat-session-restart-operation session))
                (eq 'stopping (plist-get operation :phase))
-               (eq 'local (pichat-transport-kind
-                           (pichat-session-transport session)))
-               (pichat-session-alive-p session))
-    (user-error "No eligible local Pi process to stop for restart"))
+               (if (eq 'local (pichat-transport-kind
+                                (pichat-session-transport session)))
+                   (pichat-session-alive-p session)
+                 (plist-get operation :shutdown-ready)))
+    (user-error "No eligible Pi process with a prepared shutdown barrier"))
   (let ((process (pichat-session-process session))
         (generation (pichat-session-process-generation session))
         (deadline (+ (float-time) pichat-reconfigure-shutdown-timeout))
@@ -315,13 +395,17 @@ late callbacks.  Never start a replacement while the old process is live."
            (when (and (not finished) (current))
              (cond
               ((and (not (process-live-p process))
-                    (eq 'stopped (pichat-session-state session)))
+                    (if (eq 'local (pichat-transport-kind
+                                   (pichat-session-transport session)))
+                        (eq 'stopped (pichat-session-state session))
+                      (pichat-reconfigure--shutdown-safe-p operation)))
                (finish t nil))
               ((>= (float-time) deadline)
                (finish nil "Timed out confirming old Pi process shutdown; replacement was not started"))
               (t (setq timer (run-at-time 0.05 nil #'poll)))))))
       (condition-case err
           (progn
+            (plist-put operation :stop-requested t)
             (pichat-rpc-stop session)
             (poll))
         (error (finish nil (format "Could not stop old Pi process: %s"
@@ -530,6 +614,13 @@ process generation to check."
   (let ((session (plist-get operation :session))
         (callback (plist-get operation :callback)))
     (when (pichat-reconfigure--owned-p operation)
+      (pichat-reconfigure--cancel-observers operation)
+      ;; Housekeeping must not open a new TRAMP connection inside the bounded
+      ;; exit barrier.  Retained helpers are safe to remove only with proof.
+      (dolist (process (plist-get operation :shutdown-obligations))
+        (when (and (pichat-process-lifetime-confirmed-p process)
+                   (process-get process 'pichat-helper-cleanup))
+          (run-at-time 0 nil #'pichat-process-lifetime-cleanup process)))
       (cond
        ((and success (eq (plist-get operation :phase) 'preflight))
         ;; A no-op does not change the preferred designation or registry.
@@ -549,7 +640,11 @@ process generation to check."
         ;; Retain both configuration snapshots and the failure for explicit
         ;; recovery.  Copy the plist so all old callbacks lose `eq' ownership.
         (pichat-reconfigure-cancel-operation session reason)
-        (when (pichat-session-alive-p session)
+        (when (and (pichat-session-alive-p session)
+                   (or (eq (pichat-transport-kind
+                            (pichat-session-transport session)) 'local)
+                       (plist-get operation :stop-requested)
+                       (plist-get operation :replacement-process)))
           (pichat-rpc-stop session))
         (when-let* ((buffer (plist-get operation :chat)))
           (when (buffer-live-p buffer)
@@ -693,8 +788,9 @@ CONTINUATION receives the authoritative response data on success."
   "Start OPERATION's validated replacement after confirmed old-process exit."
   (let* ((session (plist-get operation :session))
          (old (plist-get (plist-get operation :origin) :process)))
-    (when (process-live-p old)
-      (user-error "Old Pi process remains live; replacement was not started"))
+    (when (or (process-live-p old)
+              (not (pichat-reconfigure--shutdown-safe-p operation)))
+      (user-error "Old Pi shutdown is unconfirmed; replacement was not started"))
     (plist-put operation :phase 'starting)
     (pichat-rpc-start session (plist-get operation :command)
                       (plist-get (plist-get operation :active-configuration) :tool-selection))
@@ -722,7 +818,7 @@ CONTINUATION receives the authoritative response data on success."
              (pichat-reconfigure--restore-settings operation state))))))))))
 
 (defun pichat-reconfigure--stop-then-start (operation &optional allow-stopped)
-  "Stop the owned local process, then start OPERATION's replacement.
+  "Stop the owned process, then start OPERATION's replacement.
 Only recovery may pass ALLOW-STOPPED for an already-confirmed stopped runtime."
   (when (pichat-reconfigure--owned-p operation 'stopping)
     (cl-labels ((start ()
@@ -731,7 +827,8 @@ Only recovery may pass ALLOW-STOPPED for an already-confirmed stopped runtime."
                         (pichat-reconfigure--start-replacement operation)
                       (error (pichat-reconfigure--finish
                               operation nil (error-message-string err)))))))
-      (if (pichat-session-alive-p (plist-get operation :session))
+      (if (or (pichat-session-alive-p (plist-get operation :session))
+              (and allow-stopped (plist-get operation :shutdown-ready)))
           (condition-case err
               (pichat-reconfigure-stop-and-wait
                (plist-get operation :session) operation
@@ -779,11 +876,22 @@ Only recovery may pass ALLOW-STOPPED for an already-confirmed stopped runtime."
         (plist-put operation :active-model
                    (concat (plist-get (plist-get state :model) :provider)
                            "/" (plist-get (plist-get state :model) :id)))
-        (with-current-buffer buffer (pichat-chat-stage-restart session))
-        (plist-put operation :preferred-ticket
-                   (pichat--suspend-default-for-restart session))
-        (plist-put operation :phase 'stopping)
-        (pichat-reconfigure--stop-then-start operation)))))
+        (cl-labels
+            ((begin ()
+               (when (pichat-reconfigure--owned-p operation 'preflight)
+                 (condition-case err
+                     (progn
+                       (when-let* ((blockers (pichat-reconfigure-preflight-blockers
+                                             origin state (plist-get result :source-kind))))
+                         (user-error "%s" (string-join blockers "; ")))
+                       (with-current-buffer buffer (pichat-chat-stage-restart session))
+                       (plist-put operation :preferred-ticket
+                                  (pichat--suspend-default-for-restart session))
+                       (plist-put operation :phase 'stopping)
+                       (pichat-reconfigure--stop-then-start operation))
+                   (error (pichat-reconfigure--finish
+                           operation nil (error-message-string err)))))))
+          (pichat-reconfigure--prepare-shutdown operation nil #'begin))))))
 
 (defun pichat-reconfigure-restart (origin requested callback)
   "Restart ORIGIN with resolved REQUESTED preset/Tools, reporting to CALLBACK.
@@ -806,6 +914,13 @@ The launcher enters this operation only after explicit confirmation."
                           :transport
                           (and (pichat-session-p session)
                                (pichat-session-transport session))
+                          :runtime-cwd
+                          (and (pichat-session-p session)
+                               (pichat-session-runtime-cwd session))
+                          :shutdown-obligations
+                          (and (pichat-session-p session)
+                               (eq (pichat-transport-kind (pichat-session-transport session)) 'ssh)
+                               (list (plist-get origin :process)))
                           :callback callback)))
     (unless (and (pichat-session-p session)
                  (not (pichat-session-restart-operation session))
@@ -839,6 +954,9 @@ Copying retires any late callbacks owned by the previous attempt."
     (plist-put operation :command command)
     (plist-put operation :replacement-generation nil)
     (plist-put operation :replacement-process nil)
+    (plist-put operation :stop-requested nil)
+    (plist-put operation :shutdown-ready nil)
+    (plist-put operation :observer-cancellers nil)
     operation))
 
 (defun pichat-reconfigure-recover (session choice callback)
@@ -861,8 +979,8 @@ second writer while the failed process remains live."
                  (eq buffer (pichat-session-buffer session))
                  (eq session (buffer-local-value 'pichat-chat-session buffer))
                  (with-current-buffer buffer pichat-chat--restart-staging)
-                 (eq 'local (pichat-transport-kind
-                             (pichat-session-transport session)))
+                 (memq (pichat-transport-kind (pichat-session-transport session))
+                       '(local ssh))
                  (equal (pichat-session-owner-scope-key session)
                         (plist-get failed :owner-scope-key))
                  (eq (pichat-session-transport session)
@@ -871,8 +989,11 @@ second writer while the failed process remains live."
                  (if (plist-get failed :empty-unwritten)
                      (and (pichat-pi-entry-cache-startup-metadata-only-p
                            (plist-get failed :retained))
-                          (pichat-reconfigure--unwritten-file-p file))
-                   (and (file-regular-p file) (file-readable-p file))))
+                          (pichat-reconfigure--unwritten-file-p
+                           file (pichat-session-transport session)))
+                   (let ((host-file (pichat-transport-runtime-file-name
+                                     (pichat-session-transport session) file)))
+                     (and (file-regular-p host-file) (file-readable-p host-file)))))
       (user-error "Failed restart no longer has a safe saved source to recover"))
     (unless (plist-get failed :empty-unwritten)
       (let* ((key (pichat--selected-file-key
@@ -887,7 +1008,8 @@ second writer while the failed process remains live."
            (operation (pichat-reconfigure--recovery-attempt
                        failed requested command callback)))
       (setf (pichat-session-restart-operation session) operation)
-      (pichat-reconfigure--stop-then-start operation t)
+      (pichat-reconfigure--prepare-shutdown
+       operation t (lambda () (pichat-reconfigure--stop-then-start operation t)))
       operation)))
 
 (defun pichat-reconfigure-leave-stopped (session)
@@ -896,8 +1018,9 @@ A live failed replacement must first be stopped and confirmed by the user;
 never silently permit an unowned writer to remain active."
   (let ((operation (pichat-session-restart-operation session)))
     (unless (and (memq (plist-get operation :phase) '(failed left-stopped))
-                 (not (pichat-session-alive-p session)))
-      (user-error "Stop the failed Pi process before leaving it stopped"))
+                 (not (pichat-session-alive-p session))
+                 (pichat-reconfigure--shutdown-safe-p operation))
+      (user-error "Confirm all old Pi processes have exited before leaving it stopped"))
     (setf (pichat-session-restart-operation session)
           (plist-put (copy-sequence operation) :phase 'left-stopped))
     (when-let* ((buffer (pichat-session-buffer session)))

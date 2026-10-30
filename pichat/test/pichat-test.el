@@ -15,6 +15,7 @@
 (require 'pichat-test-backend-contract)
 (require 'pichat-test-rpc)
 (require 'pichat-test-transport)
+(require 'pichat-test-process-lifetime)
 (require 'pichat-test-launch)
 (require 'pichat-test-presets)
 (require 'pichat-test-tool-selection)

@@ -460,7 +460,8 @@ snapshots, not the present registry defaults. `p` explicitly resolves the
 selected current definition; `x` edits Tools against the captured draft. `b`
 returns to the untouched launch draft. `RET` with no effective prompt/tool
 change is a no-op. Otherwise PiChat checks fresh Pi state, asks for confirmation,
-stops the old local process, starts the validated replacement with the active
+stops the old process (confirming remote exit for supported SSH targets),
+starts the validated replacement with the active
 run-local model, reloads the same saved Pi session, restores supported settings,
 and commits the transcript and configuration only after verifying the source,
 active branch, settings and selected extension tools. Extension tools are checked
@@ -478,11 +479,17 @@ or **Leave stopped**. Preferred-runtime designation returns only if no newer
 preference was chosen in that scope. Busy, ephemeral, unsynchronized, missing-
 file with conversation history, unsupported-wrapper, and historical-active-leaf
 cases are blocked before stopping Pi. An empty but named, pending, or
-extension-modified session is not treated as safely disposable. SSH runtime
-restart is presently blocked: ending its transport
-alone cannot prove the remote Pi child stopped, so replacing it could create
-duplicate writers. SSH saved-session launch still uses its captured target and
-path mappings.
+extension-modified session is not treated as safely disposable. SSH restart
+requires a runtime started with the bundled control helper and verified Linux
+process identity, readable `/proc`, and an exit observer established before
+stopping Pi. Ending the SSH transport alone is never exit confirmation.
+Timeout, connection loss, failed probes, and unknown process identity block a
+replacement, including retry/restore; leave-stopped also requires confirmed
+remote exit. Other SSH platforms and older runtimes without verified identity
+remain unavailable for reconfiguration. SSH saved-session launch and restart
+use the captured target and path mappings. Focused real-SSH saved restart and
+restore checks have passed; comprehensive SSH failure coverage and live UI
+verification are still pending.
 
 The built-in `manual` preset retains Pi's base prompt and selects
 `read,grep,find,ls,edit,write` without adding execution restrictions to the

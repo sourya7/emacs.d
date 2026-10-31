@@ -15,6 +15,18 @@
 (require 'pichat-chat-diagnostics)
 (require 'pichat-session-manager)
 
+(defvar pichat-jobs-mode-map)
+(defvar pichat-jobs-detail-mode-map)
+(defvar pichat-job-setup-mode-map)
+(declare-function pichat-jobs-preview "pichat-jobs" ())
+(declare-function pichat-jobs-refresh "pichat-jobs" ())
+(declare-function pichat-jobs-details "pichat-jobs" ())
+(declare-function pichat-jobs-toggle "pichat-jobs" ())
+(declare-function pichat-jobs-run "pichat-jobs" ())
+(declare-function pichat-jobs-edit "pichat-jobs" ())
+(declare-function pichat-jobs-history "pichat-jobs" ())
+(declare-function pichat-jobs-attention "pichat-jobs" ())
+(declare-function pichat-job-setup-quit "pichat-jobs" ())
 (defvar pichat-artifacts-preview-mode-map)
 (defvar pichat-artifact-result-mode-map)
 (declare-function pichat-artifact-result-share "pichat-artifact-result" ())
@@ -96,6 +108,24 @@ remain in their original mode maps."
     (kbd "g r") #'pichat-response-view-refresh
     (kbd "]r") #'pichat-response-view-next
     (kbd "[r") #'pichat-response-view-previous)
+  (with-eval-after-load 'pichat-jobs
+    (evil-set-initial-state 'pichat-jobs-mode 'normal)
+    (evil-define-key* 'normal pichat-jobs-mode-map
+      (kbd "RET") #'pichat-jobs-details
+      (kbd "TAB") #'pichat-jobs-toggle
+      (kbd "z v") #'pichat-jobs-preview
+      (kbd "g r") #'pichat-jobs-refresh
+      (kbd "g c") #'pichat-job-new
+      (kbd "g x") #'pichat-jobs-run
+      (kbd "g e") #'pichat-jobs-edit
+      (kbd "g h") #'pichat-jobs-history
+      (kbd "g a") #'pichat-jobs-attention
+      (kbd "q") #'quit-window)
+    (evil-define-key* 'normal pichat-job-setup-mode-map
+      (kbd "RET") #'push-button
+      (kbd "q") #'pichat-job-setup-quit)
+    (evil-define-key* 'normal pichat-jobs-detail-mode-map
+      (kbd "RET") #'push-button))
   (with-eval-after-load 'pichat-artifact-result
     (evil-define-key* 'normal pichat-artifact-result-mode-map
       (kbd "s") #'pichat-artifact-result-share

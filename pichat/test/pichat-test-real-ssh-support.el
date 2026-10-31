@@ -2,6 +2,22 @@
 
 (require 'pichat-test-support)
 
+(defun pichat-test-real-ssh--probe-script (pid &optional procfs)
+  "Build independent PID observation against PROCFS (default /proc).
+A failed stat read is not absence: explicitly recheck the directory after the
+read, with healthy boot/self baselines.  PROCFS permits owned offline fixtures."
+  (let ((root (shell-quote-argument (or procfs "/proc"))))
+    (format "root=%s
+cat \"$root/sys/kernel/random/boot_id\" || exit 2
+cat \"$root/self/stat\" >/dev/null || exit 2
+if s=$(cat \"$root/%d/stat\" 2>/dev/null); then
+  printf '%%s\\n' \"$s\"
+elif [ ! -d \"$root/%d\" ]; then
+  printf 'ABSENT\\n'
+else
+  exit 2
+fi" root pid pid)))
+
 (defun pichat-test-real-ssh--alive-p (fixture process)
   "Independently read procfs for FIXTURE's exact actual-Pi PROCESS.
 Probe failures are test failures, never evidence of absence.  This does not
@@ -14,8 +30,7 @@ use the production observer, its parser, or its confirmed-exit property."
       (should
        (zerop (process-file
                "sh" nil t nil "-c"
-               (format "cat /proc/sys/kernel/random/boot_id || exit 2; if [ -d /proc/%d ]; then cat /proc/%d/stat || exit 2; else printf 'ABSENT\\n'; fi"
-                       pid pid))))
+               (pichat-test-real-ssh--probe-script pid))))
       (goto-char (point-min))
       (should (equal (buffer-substring-no-properties (point) (line-end-position))
                      (plist-get identity :boot)))

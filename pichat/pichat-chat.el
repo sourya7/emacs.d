@@ -921,11 +921,26 @@ staged read-only restart snapshot is never returned."
       (buffer-local-value 'pichat-chat--pending-ui-count buffer)
     0))
 
-(defun pichat-chat-open (session &optional synchronize)
-  "Open chat buffer for SESSION.
-When SYNCHRONIZE is non-nil, start an authoritative full-entry sync after the
-buffer owns SESSION.  This is used when opening only after state has already
-arrived, so no later state-change event would otherwise trigger initial sync."
+(defun pichat-chat-pending-user-input-summary (session)
+  "Return a bounded cached attention summary for SESSION, or nil.
+Reading this never activates a dialog or selects its owning chat."
+  (when-let* ((buffer (pichat-chat-owned-buffer session)))
+    (with-current-buffer buffer
+      (when (> pichat-chat--pending-ui-count 0)
+        (let (title)
+          (when (hash-table-p pichat-chat--pending-ui-requests)
+            (maphash (lambda (_id request)
+                       (unless title (setq title (plist-get request :title))))
+                     pichat-chat--pending-ui-requests))
+          (format "%d pending request%s%s" pichat-chat--pending-ui-count
+                  (if (= pichat-chat--pending-ui-count 1) "" "s")
+                  (if (stringp title)
+                      (concat " — " (pichat-chat-diagnostics-safe-summary-text title)) "")))))))
+
+(defun pichat-chat-ensure (session &optional synchronize)
+  "Ensure an undisplayed owning chat for SESSION, returning its buffer.
+When SYNCHRONIZE is non-nil, request authoritative full-entry synchronization.
+Creating ownership never displays a window or activates pending dialog requests."
   (let ((buffer (get-buffer-create (pichat-chat-buffer-name session))))
     (with-current-buffer buffer
       (when (pichat-session-cwd session)
@@ -955,6 +970,11 @@ arrived, so no later state-change event would otherwise trigger initial sync."
              'rpc-parse
            'error)
          (format "[diagnostic] %s" (plist-get diagnostic :summary)))))
+    buffer))
+
+(defun pichat-chat-open (session &optional synchronize)
+  "Display SESSION's owning chat, optionally requesting SYNCHRONIZE first."
+  (let ((buffer (pichat-chat-ensure session synchronize)))
     (pop-to-buffer buffer)
     (with-current-buffer buffer
       (pichat-chat--maybe-start-next-ui-request session))
@@ -3365,6 +3385,9 @@ ordinary browser opens retain their existing state-ready contract."
       (setq pichat-chat--sync-in-flight nil)
       (pichat-chat--apply-sync-response response t nil))))
 
+(defvar-local pichat-chat--settlement-sequence 0
+  "Monotonic settlement boundary used to qualify canonical snapshots.")
+
 (defun pichat-chat--start-sync (full)
   "Start one FULL or incremental canonical synchronization."
   (pichat-backend-require-capability
@@ -3376,6 +3399,7 @@ ordinary browser opens retain their existing state-ready contract."
          (cursor (and (not full)
                       (pichat-entry-cache-last-seen-id base-cache)))
          (generation (cl-incf pichat-chat--sync-sequence))
+         (settlement-sequence pichat-chat--settlement-sequence)
          (source-generation pichat-chat--source-generation)
          (session-id (pichat-session-id session))
          (session-file (pichat-session-session-file session)))
@@ -3400,13 +3424,27 @@ ordinary browser opens retain their existing state-ready contract."
                      ;; transcript event lost to malformed RPC framing.  Keep
                      ;; the retained diagnostic available in the explicit
                      ;; diagnostics view, but remove its recovered chat notice.
-                     (pichat-chat--set-status 'rpc-parse nil))
+                     (pichat-chat--set-status 'rpc-parse nil)
+                     (pichat-emit session 'transcript-synchronized
+                                  :settlement-sequence settlement-sequence
+                                  :process-generation
+                                  (pichat-session-process-generation session)
+                                  :source-generation source-generation
+                                  :session-id session-id :session-file session-file
+                                  :cache pichat-chat--entry-cache))
                  (error
                   (pichat-chat--set-status
                    'synchronization
                    "[not synchronized with Pi session]")
                   (message "PiChat synchronization rejected session data: %s"
-                           (error-message-string err))))
+                           (error-message-string err))
+                  (pichat-emit session 'transcript-sync-failed
+                               :settlement-sequence settlement-sequence
+                               :process-generation
+                               (pichat-session-process-generation session)
+                               :source-generation source-generation
+                               :session-id session-id :session-file session-file
+                               :reason "Result not synchronized")))
                (pichat-chat--finish-sync generation))))
          (failure (response _response-session)
            (when (current-p)
@@ -3423,6 +3461,13 @@ ordinary browser opens retain their existing state-ready contract."
                   "[not synchronized with Pi session]")
                  (message "PiChat synchronization failed: %s"
                           (or (plist-get response :error) "unknown error"))
+                 (pichat-emit session 'transcript-sync-failed
+                              :settlement-sequence settlement-sequence
+                              :process-generation
+                              (pichat-session-process-generation session)
+                              :source-generation source-generation
+                              :session-id session-id :session-file session-file
+                              :reason "Result not synchronized")
                  (pichat-chat--finish-sync generation))))))
       (let ((request-id
              (pichat-backend-get-transcript
@@ -3930,6 +3975,7 @@ Return non-nil only when the projected status value changes."
 
 (defun pichat-chat--on-agent-settled (session event plist)
   "Finalize the live preview, prompt, stats, and canonical entries."
+  (cl-incf pichat-chat--settlement-sequence)
   (pichat-chat--on-simple-event session event plist)
   (pichat-chat--preserve-view
     (pichat-chat--insert-prompt))

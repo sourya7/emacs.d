@@ -747,6 +747,111 @@ first, otherwise chooses an existing Bufferlo location without prompting, and
 finally falls back to the current tab. The manager itself remains on demand; showing the same global
 buffer in a tab lets Bufferlo record normal local membership there.
 
+## Manual jobs
+
+Jobs are optional reusable instructions and captured execution settings. A **job
+run** is one attempt, with its own durable identity and fresh independent Pi
+runtime/Pi session; see `GLOSSARY.md`. Jobs do not require a plan. This initial
+implementation supports **manual prompt jobs only**: plan-phase execution,
+scheduling, and chaining are not enabled.
+
+- `M-x pichat-job-new` opens setup without starting a runtime. Edit multiline
+  instructions, choose the project/directory, and use **Execution settings…** for
+  the existing preset, Tools picker, run-local model picker, and target choices.
+  Choose a concrete model before saving/submitting if none is configured.
+- **Run once** submits the draft without saving a definition. **Save job…** saves
+  a reusable definition without executing it. Saving never enables automation.
+- `M-x pichat-jobs` opens one global Jobs/Runs view. Native `TAB` switches between
+  definitions and attempts, `RET` opens details, `C-o` toggles a read-only details
+  preview, `+` creates, `r` runs a selected job's current definition, `e` edits,
+  `h` shows its attempts, `a` filters attempts needing input/review, and `g`
+  redraws cached state. `q` buries the list. The overview shows active/limit and
+  attention counts plus the current history filter; returning to Jobs restores
+  the selected definition. Narrow windows retain work/state/project/target,
+  with full information available in details.
+- Definition details show instructions, readable execution settings,
+  latest-run summary and direct latest-run/history actions. Run details show
+  state, outcome, trigger, recorded timestamps, bounded agent report, saved-session
+  reference and exact-chat/diagnostic/history actions. **Instructions & settings**
+  opens the captured inputs; sensitive raw records/arguments require a separate
+  explicit **Inspect raw settings** action. Merely inspecting never launches Pi.
+  Agent prose is not independent verification of file changes or domain success.
+  **Repeat this run…** reviews historical settings and records repeat provenance;
+  it does not silently use a changed definition. A repeat retains its saved
+  definition's overlap exclusion. **Save as job…** opens setup, not execution.
+- Optional `pichat-evil-setup` gives the list Normal-state `RET`, `TAB`, `zv`
+  preview, `gr` refresh, `gc` new, `gx` run, `ge` edit, `gh` history and `ga`
+  attention. Setup and
+  details use buttons with `RET`; these do not take over Vim movement keys.
+
+Submitting does not select/display the new chat or change your current/preferred
+runtime. **Open chat** displays the exact owning runtime. If that chat is gone,
+finished runs with saved-session references offer **Open saved session
+independently…**: an explicit new runtime on the captured target using the current
+default preset, not rerunning the job. Managed duplicate writers are refused;
+uncertain execution must be resolved first. Job-owned chats allow
+inspection and existing extension UI responses, not additional prompts, source
+switching, reconfiguration or preferred designation; use Jobs to repeat/cancel.
+Required interactions show Needs input and retain the slot/resource claims until
+answered or cancelled. There is no automatic approval or waiting-input timeout.
+Killing an active owning chat is refused; closing a window or burying Jobs is
+harmless. Finished inspection runtimes are retained, not automatically stopped or
+pruned; use the runtime manager to stop/forget them when no longer needed. The
+saved Pi session and durable run record have independent lifetimes.
+
+Execution settings are captured, including resolved preset prompts, Tools,
+model, command and target/path mappings. Instruction/name edits preserve them.
+Changing execution explicitly re-resolves the preset/target after confirmation;
+cancelling a sub-picker restores the draft. Model/workspace/target edits preserve
+the selected Tools; changing preset explicitly confirms resetting them. Setup
+and detail summaries show non-default overlap policies; the ordinary modifier
+policy stays out of the way. Captured settings shows every declared policy, and
+**Execution settings… → Workspace coordination** changes it separately from tool
+permissions. Routine screens omit generic sandbox/save disclaimers. Setup warns
+when the current preset no longer matches its capture. The environment, credentials and installed
+extension code remain live: this is not a frozen or sandboxed environment.
+Complete command wrappers, ephemeral sessions and conversation-loading flags are
+not supported by jobs. Explicit targets never fall back locally.
+
+`pichat-jobs-max-concurrency` defaults to 3 and the bounded manual queue to 20
+(`pichat-jobs-queue-limit`), with one queued/active occurrence per definition.
+Advanced workspace coordination distinguishes modifiers, stable readers and
+readers accepting changing files. Default to avoiding overlapping modifications;
+readers can overlap where declared compatible. Claims use the execution target
+and canonical workspace/project root, not a blanket project-wide single-run
+rule. Different worktrees can run together. This is Emacs-local coordination,
+not enforcement against user edits, external agents or equivalent hosts reached
+through different SSH aliases. Declaring read-only never restricts tools.
+
+Prompt acknowledgment is not completion. A run finishes only after agent
+settlement, a snapshot requested after that settlement, and authoritative idle
+state verification. Synchronization failure, process loss and interrupted
+execution retain uncertain state and claims; no work is retried/replayed.
+Cancellation requests abort but does not equate its acknowledgment with stopped
+tools. Aborted/abnormally ended modifying work requires descendant/workspace
+inspection before claims can be released. **Recheck remote Pi exit** reuses the
+existing verified SSH lifetime observer where its process is retained; it cannot
+prove descendant exit. The action is offered only with a retained verified SSH
+lifetime; otherwise details explain why rechecking is unavailable and show held
+resources. **Release after manual inspection…** records an explicit human
+acknowledgement as Needs review, not verified shutdown or success. Its resolution
+time is separate from verified finish time. Older records without timeline fields
+show unavailable times rather than inferring them from the last metadata update.
+
+Metadata defaults to `pichat-jobs-file` (`pichat/jobs.json` under
+`user-emacs-directory`). This repository overrides it in `user/pichat.el` with
+`(my/emacs-local-dir "pichat/jobs.json")`, keeping runtime data in the gitignored
+`.local/pichat/` directory rather than the package sources. It is versioned
+data-only JSON, atomically replaced with 0600 permissions, and may contain
+sensitive prompts/arguments. Use one owning
+Emacs per metadata file; changed-file/foreign-lock checks fail rather than
+silently overwrite history. Opening Jobs first initializes restart reconciliation:
+queued work is cancelled, potentially dispatched work remains uncertain, and
+nothing is replayed. Subsequent browsing/refresh is cached-only. Initial storage
+has a 16 MiB limit and no automatic pruning; archive only when no work/uncertain
+claims need preservation. Control waits default to 30 seconds
+(`pichat-jobs-control-timeout`); active model work has no implicit timeout.
+
 ## Diagnostics: inspect versus setup
 
 Start with `M-x pichat-show-diagnostics`, or `D` on a runtime-manager row

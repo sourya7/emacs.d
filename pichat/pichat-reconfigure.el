@@ -119,6 +119,8 @@ preset name or description is not a reason to restart the process."
       (with-current-buffer buffer
         (let ((cache (pichat-chat-canonical-entry-cache session))
               blockers)
+          (when (pichat-session-input-guard session)
+            (push "This runtime is owned by a job; use its job actions" blockers))
           (unless (and (derived-mode-p 'pichat-chat-mode)
                        (eq pichat-chat-session session))
             (push "The chat buffer is not owned by this runtime" blockers))

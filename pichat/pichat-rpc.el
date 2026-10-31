@@ -84,8 +84,11 @@ Do not allocate a TTY for JSONL transports."
 (defvar pichat-rpc--operation-token nil
   "Dynamically bound by an owned runtime restart when sending its RPC calls.")
 
-(defun pichat-rpc--require-operation-ownership (session)
-  "Reject unowned RPC input while SESSION is restarting."
+(defun pichat-rpc--require-operation-ownership (session &optional command)
+  "Reject unowned input while SESSION is restarting or guarded.
+COMMAND lets an execution owner distinguish inspection from mutation."
+  (when-let* ((guard (pichat-session-input-guard session)))
+    (funcall guard command))
   (when-let* ((operation (pichat-session-restart-operation session)))
     (unless (and (plist-get operation :token)
                  (eq pichat-rpc--operation-token (plist-get operation :token)))
@@ -802,7 +805,7 @@ must not update public state or become conversation/prompt acceptance events."
 (defun pichat-rpc-send (session type payload callback &optional error-callback)
   "Send RPC command TYPE with PAYLOAD for SESSION.
 CALLBACK and ERROR-CALLBACK receive (RESPONSE SESSION).  Return request id."
-  (pichat-rpc--require-operation-ownership session)
+  (pichat-rpc--require-operation-ownership session type)
   (unless (pichat-session-alive-p session)
     (error "PiChat RPC process is not alive"))
   (when (and (pichat-session-rpc-startup-control session)
@@ -827,7 +830,7 @@ CALLBACK and ERROR-CALLBACK receive (RESPONSE SESSION).  Return request id."
 
 (defun pichat-rpc-send-notification (session payload)
   "Send raw notification PAYLOAD without request id to SESSION."
-  (pichat-rpc--require-operation-ownership session)
+  (pichat-rpc--require-operation-ownership session (plist-get payload :type))
   (unless (pichat-session-alive-p session)
     (error "PiChat RPC process is not alive"))
   (let ((line (concat (pichat-rpc--json-encode payload) "\n")))

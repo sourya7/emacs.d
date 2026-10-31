@@ -117,6 +117,46 @@ not loaded by the batch SSH runner. Shared setup/cleanup lives in
 No test disrupts shared SSH connections to simulate network failure; protocol
 loss, timeout and stale-delivery matrices are tested offline.
 
+## Jobs verification
+
+Metadata/admission tests live in `pichat-test-job-core.el`; execution, ownership
+and manual UI behavior share `pichat-test-jobs.el` and the fixtures in
+`pichat-test-job-support.el`. The former executor/lifecycle/UI test files have
+been combined rather than adding another suite per screen. Full mode additionally
+runs real local Pi jobs against the offline fake provider, including explicit
+saved-session reopening without another model turn.
+The SSH runner includes an isolated captured-target background job; it reuses
+the existing real-SSH fixture rather than the user's project or sessions.
+
+Run the separate graphical manual-flow smoke (never against your live Emacs):
+
+```sh
+emacs -Q -L pichat -L pichat/test \
+  -l pichat-test-jobs-live-ui \
+  --eval '(setq use-dialog-box nil)' \
+  --eval '(let ((stats (ert-run-tests-batch "^pichat-integration-jobs-live-ui-")))
+    (with-temp-file "/tmp/pichat-jobs-live-result.log"
+      (insert (with-current-buffer "*Messages*" (buffer-string))))
+    (kill-emacs (if (> (ert-stats-completed-unexpected stats) 0) 1 0)))'
+```
+
+On a Wayland setup where graphical startup is unavailable from the test process,
+use `GDK_BACKEND=x11` with a working X display. The explicit result/exit wrapper
+avoids graphical shutdown prompts that can leave `ert-run-tests-batch-and-exit`
+waiting indefinitely; `/tmp/pichat-jobs-live-result.log` retains the evidence.
+These checks cover a live frame, multiline setup, save-without-running, one-off
+and saved-job submission without focus changes, progressive settings disclosure,
+latest/history/exact-chat navigation and real narrow/wide window sizes. A separate
+inert-process graphical scenario covers cached input, blockers, cancellation
+context and uncertain claims without activating a dialog. Neither uses a real
+model provider or normal job metadata. Keep these opt-in graphical checks and
+SSH checks separate from ordinary batch tests because their execution requirements
+differ; reusable mechanics belong in support, not imports of another test suite.
+These are programmatic checks, not human visual acceptance. A graphical frame can
+still be iconified by the window manager: `display-graphic-p` and passing window
+geometry assertions do not prove the layout was visible. Review the displayed
+screens separately before closing a visible-layout acceptance task.
+
 ## Opt-in Mermaid Docker tests
 
 With local Docker running and the configured pinned image already present:

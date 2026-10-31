@@ -55,3 +55,5 @@ flycheck_*.el
 /.DS_Store
 .tmp/
 /pichat/todo.org
+# Legacy/default Jobs runtime state must not enter the package sources.
+/pichat/jobs.json

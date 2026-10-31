@@ -34,6 +34,7 @@
   process
   process-generation
   restart-operation
+  input-guard
   buffer
   stderr-buffer
   stop-requested-p

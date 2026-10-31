@@ -223,6 +223,8 @@ SCOPE, when non-nil, is a (KEY CWD LABEL) value from
   "Make retained live SESSION preferred for its immutable owner scope."
   (unless (and session (pichat-session-alive-p session))
     (user-error "Only a live PiChat session can be made the scope default"))
+  (when (pichat-session-input-guard session)
+    (user-error "A job-owned inspection runtime cannot become preferred"))
   (pichat-register-session session)
   (let ((key (pichat-session-owner-scope-key session)))
     (unless key (user-error "PiChat session has no owner scope"))
@@ -584,13 +586,12 @@ Prompted-model profiles first select a model asynchronously and return nil."
           (pichat--display-and-synchronize-session session display-function))
         session)))))
 
-;;;###autoload
-(defun pichat-start-session (&optional cwd scope launch-options)
-  "Start a PiChat RPC session rooted at CWD and return it.
-SCOPE, when non-nil, is the immutable (KEY CWD LABEL) owner scope.
-LAUNCH-OPTIONS supports `:persistence', `:preset', and an exact run-local
-`:model'.  Omitted preset means the configured default."
-  (interactive)
+(defun pichat-prepare-session (&optional cwd scope launch-options)
+  "Prepare a runtime rooted at CWD without registering or starting it.
+SCOPE is the immutable (KEY CWD LABEL) owner scope.  LAUNCH-OPTIONS supports
+`:persistence', `:preset', `:tools', `:transport' and run-local `:model'.
+The returned runtime captures resolved configuration and path context.  It does
+not become current/preferred and no RPC process or chat is created."
   (pichat--maybe-enable-default-bridge)
   (when (plist-member launch-options :execution)
     (user-error "Obsolete :execution option; select a PiChat :preset instead"))
@@ -647,9 +648,37 @@ LAUNCH-OPTIONS supports `:persistence', `:preset', and an exact run-local
     (setf (pichat-session-scope-label session)
           (format "manual:%s#%d" (pichat--directory-basename cwd)
                   pichat--manual-session-counter))
-    (pichat-register-session session scope)
-    (pichat-backend-start-session session)
-    (setq pichat-current-session session)
+    session))
+
+(defun pichat-start-prepared-session (session &optional background command)
+  "Register and start prepared SESSION, returning it.
+BACKGROUND leaves current/preferred runtime selection untouched.  Optional
+COMMAND is a captured Pi argv; no registry/default configuration is re-resolved.
+Callers may install owning handlers/chat before starting."
+  (when (pichat-session-process session)
+    (user-error "Prepared runtime has already been started"))
+  (pichat-register-session
+   session (list (pichat-session-owner-scope-key session)
+                 (pichat-session-owner-directory session)
+                 (pichat-session-owner-scope-label session)))
+  (if command
+      (progn
+        (unless (eq (pichat-session-backend-id session) 'pi)
+          (user-error "Captured commands require a Pi runtime"))
+        (pichat-rpc-start session command))
+    (pichat-backend-start-session session))
+  (unless background (setq pichat-current-session session))
+  session)
+
+;;;###autoload
+(defun pichat-start-session (&optional cwd scope launch-options)
+  "Start an independent PiChat runtime rooted at CWD and return it.
+SCOPE is an optional immutable (KEY CWD LABEL) owner scope.
+LAUNCH-OPTIONS supports `:persistence', `:preset', `:tools', `:transport'
+and run-local `:model'."
+  (interactive)
+  (let ((session (pichat-prepare-session cwd scope launch-options)))
+    (pichat-start-prepared-session session)
     (when (called-interactively-p 'interactive)
       (if (pichat-session-alive-p session)
           (message "PiChat RPC started: %S"
@@ -1655,6 +1684,9 @@ This is the first implementation check; it does not send an LLM prompt."
   (interactive)
   (transient-setup 'pichat-launch nil nil
                    :scope (or context (pichat--make-launch-context))))
+
+(autoload 'pichat-jobs "pichat-jobs" "Inspect jobs and attempts." t)
+(autoload 'pichat-job-new "pichat-jobs" "Compose a manual job without launching." t)
 
 ;;;###autoload
 (defun pichat (&optional launch-menu)

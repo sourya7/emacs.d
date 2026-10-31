@@ -21,6 +21,8 @@
                     ("bridge" "bridge/pichat-bridge.ts"
                               "bridge/pichat-tool-control.ts"))
             :inherit nil)
+  :custom
+  (pichat-jobs-file (my/emacs-local-dir "pichat/jobs.json"))
   :commands (pichat pichat-global pichat-launch pichat-session-manager
                     pichat-sessions-browse-files pichat-sessions-switch-files
                     pichat-status

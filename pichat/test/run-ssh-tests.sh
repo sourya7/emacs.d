@@ -12,4 +12,5 @@ cd "$ROOT"
 exec emacs -Q --batch -L pichat -L pichat/test \
   -l pichat/test/pichat-test-support.el \
   -l pichat/test/pichat-test-ssh.el \
+  -l pichat/test/pichat-test-jobs-ssh.el \
   -f ert-run-tests-batch-and-exit

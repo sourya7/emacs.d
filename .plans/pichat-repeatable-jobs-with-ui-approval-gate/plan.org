@@ -1,9 +1,9 @@
 #+TITLE: PiChat repeatable jobs with UI approval gate
 #+TODO: TODO IN-PROGRESS BLOCKED | DONE
 #+PLAN_ID: pichat-repeatable-jobs-with-ui-approval-gate
-#+PLAN_STATUS: draft
+#+PLAN_STATUS: blocked
 #+PLAN_CREATED: 2026-10-30T06:19:17+00:00
-#+PLAN_UPDATED: 2026-10-30T17:29:12+00:00
+#+PLAN_UPDATED: 2026-10-31T09:19:53+00:00
 
 * Goal
 Add lightweight native PiChat jobs with reusable instructions, inspectable runs,
@@ -26,8 +26,10 @@ first and obtain explicit user acceptance before feature implementation.
   recurrence, graph editors, fan-in joins, dynamic graphs, complex branching DSLs,
   automatic worktree provisioning, sandbox guarantees, durable workflow resumption,
   and exactly-once dispatch guarantees across crashes.
-- This remains a draft. Updating it does not authorize implementation. Phase 1
-  is the first execution scope; later phases do not start automatically.
+- Also deferred: stable phase IDs/Org ID insertion and automatic plan-modification
+  detection, diffing, or reauthorization based on content changes.
+- User explicitly accepted the revised UI and authorized proceeding on 2026-10-31.
+  Phase 2 is the selected execution scope; later phases do not start automatically.
 
 * Acceptance criteria
 - Phase 1 presents a concrete example for job creation, manual execution,
@@ -49,9 +51,11 @@ first and obtain explicit user acceptance before feature implementation.
 - One active occurrence per definition and a configurable global limit apply.
   Compatible work can run concurrently in one project; conflicting modifiers
   sharing a workspace or authoritative plan are serialized by default.
-- Explicitly selected plan phases have stable identity, bounded authorization,
-  eligibility checks, and stop boundaries. Completed/paused/cancelled/archived,
-  unresolved-gate, changed-scope, or uncertain-execution cases cannot silently run.
+- Explicitly selected plan phases have bounded authorization, eligibility checks,
+  and stop boundaries. Completed/paused/cancelled/archived, unresolved-gate,
+  missing/ambiguous phase, or uncertain-execution cases cannot silently run.
+  Phase selection uses plan path and heading path, not a stable ID. Runs use the
+  current saved plan contents; automatic detection of scope edits is not promised.
 - Manual, one-shot, interval, and later conditional triggers share one admission
   and execution path. One-shot scheduling supports a selected date/time with
   clear timezone display. Missed starts and repeated triggers cannot cause replay
@@ -139,20 +143,24 @@ first and obtain explicit user acceptance before feature implementation.
 ** Optional plan adapter and authorization
 - Start with one exact selected phase per job. Do not autonomously select the
   next incomplete phase or infer dependencies from numbering.
-- Prefer an Org ID on the selected phase, assigned by an explicit setup action;
-  store project/plan identity, Org ID, display heading path, and authorized scope
-  snapshot. Reject missing/ambiguous targets; never retarget by phase number alone.
+- Store project/plan path and the selected full heading path; no stable Org ID
+  requirement or setup-time ID insertion. Resolve only a unique matching phase;
+  missing/ambiguous paths require reselection, not fuzzy or number-only retargeting.
+  Rename/move tracking and detecting replacement content at the same path are
+  outside scope. Run records capture the scope read at dispatch for inspection,
+  not as a setup-versus-execution modification guard.
 - Current plans.py exposes human-readable inventory/checks, not machine-readable
   phase eligibility. Its check validates structure, not tests or approvals. Add a
   narrow machine-readable inspection contract in the plans skill when implementing
   the adapter; do not scrape list output or duplicate lifecycle semantics in PiChat.
   Changes to this shared skill must remain backward compatible and be explicitly
   recorded/tested as cross-project scope. Prose gates are not machine proof.
-- Scheduling grants timing, not scope. Explicitly authorize the phase and resolved
-  execution policy. Recheck eligibility immediately before dispatch. Material
-  instruction/target/tool changes require review; routine TODO/checkpoint updates
-  should not invalidate authorization. Compare relevant instruction structure,
-  not a blunt whole-file hash; require review when classification is uncertain.
+- Explicitly authorize the selected phase and resolved execution policy, not later
+  phases. Recheck current eligibility immediately before dispatch, using current
+  saved plan contents. Do not hash/diff the plan, classify scope edits, or require
+  reauthorization because the plan changed. Explain this limitation in scheduling
+  review: users must disable/review scheduled work when changing its intended scope.
+  Explicit edits to job execution settings remain a separate review operation.
 - Existing user approval remains authoritative. Neither agent prose nor an agent-
   editable result flag proves human acceptance. Define a trusted user-action path
   and persist its evidence in the plan; unresolved approval gates stop automation.
@@ -211,9 +219,11 @@ first and obtain explicit user acceptance before feature implementation.
   implementation and verification. Its recorded same-host real-SSH target is
   mojo@bigbox.lan (not literally localhost). Actual-Pi lifetime confirmation is
   implemented; normal stop, saved/unwritten restart, and failure/restore have
-  focused passing evidence. Comprehensive failure-matrix/full integration and
-  live UI acceptance remain outstanding in that plan. Do not duplicate its
-  shutdown implementation or test checklist here; coordinate verification and
+  focused passing evidence. At Phase 1 startup on 2026-10-31, the owning plan is
+  now done with full/optional suites, real-SSH and live graphical UI verification
+  recorded. This supersedes the earlier outstanding-verification observation.
+  Do not duplicate its shutdown implementation or test checklist here; reuse its
+  evidence within its documented limits and
   add only job-specific integration coverage. These are recorded results, not
   new SSH tests run during this planning update.
 - Related but distinct: [[file:../pichat-delayed-follow-up/plan.org][PiChat delayed follow-up]].
@@ -221,7 +231,7 @@ first and obtain explicit user acceptance before feature implementation.
 
 * Tasks
 ** Phase 1: UI design and explicit acceptance (first execution scope)
-*** TODO Produce concrete UI examples and resolve workflow choices
+*** DONE Produce concrete UI examples and propose workflow choices
 Present examples in the conversation, optionally backed by a mockup beside this
 record. Cover an ordinary recurring read-only check, an unsaved one-off prompt,
 a scheduled single plan phase, a phase stopped for acceptance, and concurrent
@@ -231,12 +241,29 @@ handoff to chat, trigger provenance, run-only versus future successor effects,
 and schedule enable/disable. Clarify one-shot missed starts, stable-read policy,
 plan eligibility, and run-again versus continue. A text mockup is sufficient;
 obtain agreement before building a live prototype.
-*** TODO Revise until the user explicitly accepts the UI example
+- Produced [[file:ui-example-v1.md][UI example v1]], covering all requested scenarios and proposed
+  defaults for interval overlap, restart/missed starts, stable reads, and input.
+- Conversational revisions supersede conflicting v1 choices; see accepted record.
+*** DONE Revise until the user explicitly accepts the UI example
 Record accepted artifact/version and explicit approval here. Presentation or
 approval of this plan is not acceptance. Stop at the phase boundary; no feature
 implementation before this gate passes.
+- Acceptance evidence, 2026-10-31: user said "so the designs look good to me.
+  we can procees" after the revised flows and deferral of stable IDs/plan-change
+  checks. Consolidated accepted direction in [[file:ui-accepted.md][accepted UI]]. Phase 1 complete.
 ** Phase 2: Minimal manual execution and inspection
-*** TODO Implement shared admission, background execution, persistence and accepted UI
+Phase 2 implementation is split into the following leaf tasks; the scope remains
+manual execution and inspection, not scheduling or plan execution.
+*** DONE Implement durable records and shared admission
+Implement versioned data-only definitions/run snapshots, atomic persistence,
+restart reconciliation without replay, bounded queue/global admission, per-job
+exclusion and compatible/conflicting resource decisions. Verify isolated behavior.
+- Delivered pichat-job-core.el: private atomic versioned JSON, detached snapshots,
+  per-definition exclusion including historical repeats, bounded/global admission,
+  resource claims, attempt tokens, explicit reconciliation and manual resolution.
+- Readers never dispatch/replay; foreign/stale writers and malformed/future data
+  fail without overwriting. Uncertain attempts retain claims across restart.
+*** BLOCKED Integrate background execution and accepted UI
 Finalize small state/result contracts, definition/run schema, inline one-off
 submission, captured configuration, resource claims, bounded concurrency,
 interaction/cancellation, lifecycle and retention. Reuse existing launch/backend
@@ -250,16 +277,77 @@ ambiguity. Integrate existing SSH lifetime confirmation and test active-job
 cancellation/tool-descendant uncertainty before releasing a modifying workspace;
 coordinate with the SSH plan rather than copying its generic failure matrix.
 No automatic retries or replay. Document as this phase is delivered.
+- Delivered pichat-job-launch.el, pichat-job-executor.el and pichat-jobs.el;
+  pichat-prepare-session/start-prepared-session and pichat-chat-ensure separate
+  configuration/start/display. Runs preserve current/preferred runtime and focus.
+- Setup supports multiline instructions, project, existing preset/Tools/model/
+  target controls, coordination and independent Save job/Run once actions. Jobs/
+  Runs, history, preview/details, current-definition run, historical repeat,
+  save-as-job, diagnostics and exact owning chat are available; optional Evil
+  bindings preserve ordinary movement. No schedules or Org adapter implemented.
+- Jobs own their prompt and Pi source. Input guards reject competing mutation,
+  extra prompts, reconfiguration and preferred designation; existing required
+  extension interactions remain in the owning chat. Active chat killing is
+  refused. Hidden input retains attention/claims without opening a minibuffer.
+- Prompt acknowledgement is not completion. Settlement-qualified authoritative
+  snapshots and an idle-state response must match attempt/process/source. Old
+  snapshots, duplicate/stale callbacks, sync failure and process loss cannot
+  establish success. Nested queue-pump completions cannot strand eligible waits.
+- Active modifying abort/failure retains uncertainty because Pi/agent settlement
+  alone does not prove descendant stop. Startup cancellation uses existing SSH
+  process-lifetime observation before teardown; unknown observation retains
+  claims. Remote exit recheck never claims descendant safety. Explicit manual
+  release records Needs review and human acknowledgement, not verified shutdown.
+- Repository configuration stores metadata at
+  (my/emacs-local-dir "pichat/jobs.json") via user/pichat.el; the standalone
+  package remains independent of repository helpers. At the user's request,
+  migrated the existing private file to .local/pichat/jobs.json and retargeted
+  the idle live executor in one Emacs operation without reopening/reconciling.
+  Original bytes/0600 mode preserved; old path removed and ignored; neither
+  runtime-data path is tracked by jj. No commit requested/performed.
+- Finished inspection runtimes are retained until users stop/forget them; no
+  automatic pruning or active-model timeout. Settings snapshots do not freeze
+  environment/credentials/extension code. Limits and lifecycle are documented
+  in README.md, GLOSSARY.md and TESTING_GUIDELINES.md.
+- Reopened UI acceptance after user review: execution checks passed, but the
+  earlier closeout did not verify all accepted screens. See [[file:ui-audit.md][manual UI audit]].
+  Current implementation is not yet complete Phase 2 delivery.
+- Reviewed repairs implemented: readable summaries/secondary sensitive raw
+  inspection; non-default overlap policy visible, default policy in secondary
+  captured settings only (per follow-up user feedback); Tools retained across model/workspace/
+  target edits and preselected on reopening; preset reset explicitly confirmed;
+  attention/concurrency overview with native sortable column headings; labelled
+  history/selection restoration; latest-run/history/blocker links; durable timeline
+  with manual resolution separate from verified finish; cached input reasons;
+  applicable cancellation/recheck/saved-session actions; narrow-window columns.
+- Saved-session recovery uses existing independent-open synchronization and source
+  reservations, captured target context and current default preset. It refuses
+  managed duplicate writers and unresolved execution; it never reruns job work.
+- At user request, combined executor/lifecycle/UI suites into pichat-test-jobs.el:
+  seven new job-related test files reduced to five. Storage stays separate;
+  graphical/SSH remain opt-in; shared mechanics are in support. No safety tests
+  removed. Added six ordinary behavior regressions and one focused real-Pi
+  recovery test, and expanded existing input checks, not the temporary audit
+  probes or whole-buffer snapshots. Shared fixture teardown restores windows
+  and cleans owned inspection views as well as runtime/process state.
+- Automated verification passes (below), including two graphical scenarios.
+  Visible human layout acceptance remains OPEN: this display reports the frame as
+  iconified even after explicit show/focus attempts, preventing screenshot export.
+  Graphical control/geometry assertions are not proof of a visible layout review.
+  Task is BLOCKED only on that visible-frame review; no further design approval
+  is required to perform it. Later phases remain out of scope.
 ** Phase 3: Optional exact-plan-phase adapter
 *** TODO Implement explicit phase targeting, eligibility and bounded authorization
-Add the narrow machine-readable plans-skill inspection contract, stable Org phase
-identity and captured scope. Preserve ordinary plan-free jobs and shared execution.
-Resolve trusted human-approval evidence and scope-change review. Reuse plans
+Add the narrow machine-readable plans-skill inspection contract, plan/heading-path
+selection and dispatch-time scope capture. No stable-ID setup or plan-modification
+checks. Preserve ordinary plan-free jobs and shared execution.
+Resolve trusted human-approval evidence. Reuse plans
 bookkeeping and Org/chat views; add workspace and same-plan exclusion. Reject
 completed/paused/cancelled/archived or unresolved cases conservatively. Test that
 agent completion while awaiting acceptance never advances the plan, as well as
-phase rename/deletion, changed instructions versus routine progress, manual plan
-completion, interrupted attempts, and isolated worktrees sharing one plan.
+missing/renamed/deleted or ambiguous heading paths, execution against current
+saved instructions without change detection, manual plan completion, interrupted
+attempts, and isolated worktrees sharing one plan.
 Do not implement autonomous next-phase selection or successor dispatch here.
 ** Phase 4: One-shot and fixed-interval scheduling
 *** TODO Implement native timer dispatch through shared admission
@@ -291,24 +379,166 @@ appropriate. Preserve outstanding manual checks and deferred phases as tasks;
 completing a release subset is not whole-plan completion.
 
 * Checkpoint
-- Plan status: draft
-- Selected scope: none (planning only); first execution scope is Phase 1 only
-- Last verified result: inspected plans skill lifecycle/helper and PiChat launch,
-  settlement and pending-input ownership; recorded native-layer and optional
-  plan-adapter design review, concurrency clarification, and research findings;
-  reread SSH plan evidence and identified active-job cancellation as the remaining
-  job-specific lifecycle question, not remote Pi exit detection from scratch
-- Next action: on explicit execution request, present Phase 1 UI examples for
-  acceptance; resolve open interaction/authorization choices and stop at that boundary
-- Blockers: no planning blocker; implementation gated on explicit UI acceptance;
-  plan adapter requires a trusted approval/eligibility contract, not prose inference
+- Plan status: blocked
+- Selected scope: Phase 2 reviewed UI repairs and focused test consolidation
+- Last verified result: after origin rebase and user-requested UI cleanup,
+  optional unit suite 952 total/950 passed/2 Docker skips; focused Jobs UI 13/13;
+  graphical automation 2/2; jobs module byte-compilation and whitespace checks
+  pass. Final precommit full+optional after rebase/cleanup: 1035 total, 1033
+  passed, only 2 Docker opt-in skips, 0 unexpected. Prior SSH 13/13 remains below.
+  Tests consolidated from seven new files to five. User reports the UI looks
+  better; remaining visible-layout signoff is not assumed from that feedback.
+- Next action: inspect the repaired setup/list/history/details/settings and
+  attention/recovery layouts in a genuinely visible fresh Emacs frame, then close
+  Phase 2 UI acceptance if satisfactory. Do not start Phase 3, scheduling or
+  conditional chaining automatically. User authorized committing the accumulated
+  Phase 2 work; runtime metadata remains excluded. No push or later phase authorized.
+- Blockers: no remaining known source/runtime blocker; current graphical frame
+  stays iconified, so screenshot/visible acceptance could not be performed here.
+  Trusted human-approval eligibility remains a prerequisite of the later adapter
 
 * Verification
-- Feature tests and live UI checks not run (planning only).
-- Revised record passed plans.py check pichat-repeatable-jobs-with-ui-approval-gate.
-- External dagrun review checks are research evidence, not PiChat verification.
+- 2026-10-31 final precommit verification after origin rebase and UI cleanup:
+  full+optional 1035 total, 1033 passed, 2 Docker opt-in skips, 0 unexpected;
+  /tmp/pichat-jobs-precommit-full.log. Runtime jobs.json excluded from tracked
+  files; git diff --check and plans.py check pass.
+- 2026-10-31 Phase 2 repair verification:
+  - Ordinary suite 949 total, 941 passed, 8 skips, 0 unexpected;
+    /tmp/pichat-jobs-phase2-unit-final.log.
+  - Full+optional 1032 total, 1030 passed, only 2 opt-in Docker skips,
+    0 unexpected; /tmp/pichat-jobs-phase2-full-final.log.
+  - Real SSH suite on mojo@bigbox.lan: 13/13 passed;
+    /tmp/pichat-jobs-phase2-ssh-final.log.
+  - Graphical programmatic controls/geometry: 2/2 passed;
+    /tmp/pichat-jobs-phase2-live-final.log. Expanded save/one-off/saved-run,
+    settings/raw/back/latest/history/exact-chat and actual window-width paths;
+    inert-process input/blocker/cancellation/uncertainty scenario.
+  - Screenshot inspection was attempted separately using x-export-frames. The
+    PGTK/X11 frame stayed iconified; visible-frame wait/export failed. No claim
+    of human visual review. Evidence: /tmp/pichat-jobs-frame-state and
+    /tmp/pichat-jobs-phase2-screens-error.log.
+  - Permanent regressions check launch command Tools preservation, exact duplicate-
+    title navigation, sensitive disclosure without dispatch/RPC, attention/context
+    across widths, local uncertainty actions and durable honest timestamps.
+    A separate focused real-Pi test opens a completed job's saved conversation
+    independently with an empty model script, verifying no new turn, no duplicate
+    writer and no run-record mutation without overloading the completion test.
+    Final ordinary job selector: 42/42;
+    /tmp/pichat-jobs-phase2-focused-final.log.
+  - Test files (lines): job-core 305; jobs 597; jobs-live-ui 134;
+    jobs-ssh 57; shared job-support 113. No expected-failure tests added.
+  - Final changed modules byte-compile into /tmp only; the only warning is the
+    pre-existing chat focus-in-hook deprecation. No repository *.elc files.
+    Parentheses checked in 64 production/job-test files; git diff --check and
+    plans.py check pass. /tmp/pichat-jobs-phase2-bytecompile.log.
+- 2026-10-31 manual UI audit supersedes the earlier Phase 2 completion claim.
+  [[file:ui-audit.md][Findings and evidence]] separate actual matches, Phase 2 gaps and deferred
+  functionality. Four temporary isolated ERT contract probes fail for reproduced
+  UI/behavior deficiencies; /tmp/pichat-jobs-ui-audit.log. No live user state,
+  provider or SSH runtime used; no graphical acceptance rerun in this audit.
+- Phase 1 text mockup and revised accepted direction are preserved beside this
+  record. Explicit user acceptance is recorded above; its former pending gate is
+  resolved. External dagrun review remains research, not PiChat verification.
+- Phase 2 final ordinary suite: pichat/test/run-tests.sh, 943 tests, 935 passed,
+  8 optional/Docker skips, 0 unexpected; /tmp/pichat-jobs-unit-complete.log.
+- Full with optional dependencies: pichat/test/run-tests.sh --full --with-optional,
+  1025 tests, 1023 passed, 2 opt-in Docker skips, 0 unexpected;
+  /tmp/pichat-jobs-full-complete.log. Includes real offline-provider Pi execution,
+  canonical result sync, older-snapshot race, acceptance versus completion,
+  modifying abort uncertainty and synchronization rejection.
+- Isolated real SSH at mojo@bigbox.lan (not literally localhost), Pi 1.4.0:
+  run-ssh-tests.sh, 13/13 passed; /tmp/pichat-jobs-ssh-verified.log. New job test
+  preserves the old interactive selection and uses captured target settings with
+  the current registry removed. After final executor queue-pump hardening, the
+  dedicated real SSH job rerun passed 1/1;
+  /tmp/pichat-jobs-ssh-job-complete.log.
+- Initial SSH runs hit the independent test probe's check/read race when a PID
+  vanished during cleanup. Fixed only that test fixture: require healthy boot/self
+  baselines and explicitly recheck absence after a failed stat read; a failed read
+  with a present PID remains an error. Deterministic offline regression covers
+  both outcomes and broken baselines. Production shutdown checks were not weakened.
+- Isolated live graphical Emacs manual-flow smoke: 1/1 passed, visible setup,
+  instruction editor, save-without-run, submit without focus change, Jobs/Runs,
+  details and exact-chat opening; /tmp/pichat-jobs-live-result.log. On this machine
+  graphical tests use GDK_BACKEND=x11 and an explicit ERT result/exit wrapper.
+  The unwrapped ert-run-tests-batch-and-exit recipe hung on graphical shutdown;
+  TESTING_GUIDELINES.md now contains the verified wrapper.
+- Unit lifecycle coverage also checks hidden required input, process-generation/
+  source rejection, remote observer baseline/unknown/confirmed exit behavior,
+  non-uncertain manual-release rejection and suppressed nested queue pumping.
+  Admission tests cover compatible readers, writers, tolerant observers, fairness,
+  independent workspaces, bounded queue/global limit, stale writers and restart.
+- Focused test sizes: job-core 282, job-executor 183, job-lifecycle 150,
+  jobs-ui 130, jobs-live-ui 65, jobs-ssh 57 lines; shared job support 69 lines.
+- Changed production Elisp byte-compiles successfully to /tmp only; new job
+  modules have no compiler warnings. Existing shared-file docstring/interactive-
+  use/focus-in-hook warnings remain; /tmp/pichat-jobs-bytecompile-complete.log.
+  check-parens and git diff --check pass; no repository *.elc generated.
+- Whole-plan verification of plan-backed work, schedules and chaining remains
+  outstanding in later phases. Phase 2 repairs are implemented and automatically
+  checked, but visible UI acceptance remains open as recorded above.
 
 * History
+- 2026-10-31T09:19:53+00:00: User requested committing the accumulated change.
+  Verified final rebased/cleaned tree with full+optional suite: 1033 passes,
+  only 2 opt-in Docker skips. Authorized Phase 2 source/tests/docs/config commit
+  excludes all Jobs runtime metadata. Committing does not mark remaining visible
+  UI acceptance complete or authorize later phases/push.
+- 2026-10-31T09:14:14+00:00: After origin fetch/rebase, user reports UI looks better
+  and requests removing weak-purpose coordination boilerplate. Default modifier
+  policy now omitted from ordinary setup/details, non-default policies remain
+  visible, all policies remain inspectable in captured settings. Removed generic
+  sandbox/save/fresh-runtime explanatory text from setup; retained the contextual
+  picker clarification, documentation and real blocker/uncertainty warnings.
+  Added one behavior regression to existing Jobs suite for quiet defaults,
+  preserved non-default editing and explicit policy inspection without dispatch.
+  Optional unit 950 passed/2 Docker skips, focused UI 13/13, graphical automation
+  2/2. No execution/admission change, runtime-data access, commit or later phase.
+- 2026-10-31T09:01:16+00:00: User requested moving jobs.json into ignored local
+  runtime storage. Configured the repository override, moved the file and
+  retargeted the idle live executor atomically after verifying zero nonterminal
+  runs and matching on-disk/store bytes. Verified live paths, preserved bytes and
+  0600 mode, jj tracking exclusion and ignore rules. No content printed or commit
+  made. Phase 2 visible-layout blocker/status otherwise unchanged.
+- 2026-10-31T08:50:39+00:00: Continued Phase 2 only. Final test-quality review split
+  saved-session recovery into its own integration scenario and consolidated
+  fixture cleanup of owned views/windows. Reran full+optional (1030 passes,
+  2 Docker skips), ordinary (941 passes, 8 skips), graphical automation (2/2)
+  and real SSH (13/13). Code fixes and automated verification are delivered;
+  visible-layout review remains the sole Phase 2 blocker, not later feature work.
+- 2026-10-31T08:42:45+00:00: User authorized the reviewed Phase 2 fixes and requested
+  fewer, good tests. Implemented repairs, consolidated execution/lifecycle/UI
+  suites without dropping safety scenarios, and added behavior-focused checks.
+  Unit/full/optional/SSH and graphical automation pass. Screenshot export revealed
+  an iconified frame, so visible acceptance remains open rather than being inferred
+  from graphical automation. Phase 2 task is BLOCKED only on visible review.
+  No commit or later
+  phase started; user's pichat/jobs.json was not read or modified by this work.
+- 2026-10-31T07:09:05+00:00: User requested review of the other UI against the
+  accepted design after finding raw definition details. Audited all manual views,
+  recorded ui-audit.md and reproduced four contract failures in isolated probes,
+  including Tools loss on successful model changes. Reopened Phase 2 UI task and
+  corrected completion/checkpoint claims; durable-record foundation remains DONE.
+  Review/bookkeeping only; no source implementation, user metadata edit or commit.
+- 2026-10-31T06:32:26+00:00: Continued authorized Phase 2. Delivered manual metadata,
+  admission, captured launch, background execution, owning-chat controls and Jobs/
+  Runs setup/inspection UI; documented behavior and verified unit/full/optional,
+  real SSH, graphical flow, compilation and structure. Fixed older-result-sync,
+  nested-pump and independent SSH-test-probe races. Closed Phase 2 only; retained
+  later phases and approval-contract work. No commit or adjacent phase started.
+- 2026-10-31T02:00:20+00:00: User accepted revised designs and requested proceeding.
+  Recorded acceptance, closed Phase 1, and selected Phase 2. Split foundation
+  from executor/UI integration for accurate incremental verification.
+- 2026-10-31T01:49:47+00:00: User deferred stable phase IDs and plan-modification
+  checking. Updated adapter scope and mockup: select by plan/heading path, use
+  current saved contents, retain eligibility/approval gates and stop boundaries.
+  UI acceptance still pending; no implementation or commit.
+- 2026-10-31T00:24:05+00:00: Produced UI example v1; concrete-example task done,
+  acceptance task blocked on user review. Proposed scheduling/resource defaults
+  await acceptance. Reconciled now-completed SSH verification from owning plan.
+  No adjacent phase, feature implementation or commit performed.
+- 2026-10-31T00:22:23+00:00: User authorized Phase 1 only. Promoted to active,
+  inspected clean worktree and current UI conventions, and began text mockup.
 - 2026-10-30T06:19:17+00:00: Created draft; user requires a UI example they accept
   before feature implementation.
 - 2026-10-30T15:04:50+00:00: Selected lightweight native orchestration, interval

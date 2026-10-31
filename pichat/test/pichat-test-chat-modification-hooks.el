@@ -130,5 +130,43 @@
               (should buffer-undo-list)))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+(ert-deftest pichat-chat-restored-prompt-keeps-draft-typed-during-streaming ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-render-markdown nil)
+          (draft "Draft typed during streaming.\nSecond line.")
+          buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (with-current-buffer buffer
+              (pichat-chat--clear-input)
+              (goto-char (point-max))
+              (insert draft)
+              ;; Output arriving above the draft must not consume it.
+              (pichat-pi-live-draft-apply
+               pichat-chat--live-draft
+               '(:type "message_update"
+                 :message (:role "assistant"
+                           :content ((:type "text" :text "Streaming reply.")))))
+              (pichat-chat--project-live-tail)
+              (pichat-chat--insert-prompt)
+              (should (pichat-chat--prompt-live-p))
+              (should (equal draft (pichat-chat--input-text)))
+              (should (equal "▌ "
+                             (buffer-substring-no-properties
+                              pichat-chat--prompt-start
+                              pichat-chat--input-start)))
+              ;; Restoring an already visible prompt must preserve the draft.
+              (pichat-chat--insert-prompt)
+              (should (equal draft (pichat-chat--input-text)))
+              (goto-char pichat-chat--input-start)
+              (should-error (delete-char -1) :type 'text-read-only)
+              (delete-char 1)
+              (insert "d")
+              (should (equal (concat "d" (substring draft 1))
+                             (pichat-chat--input-text)))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
 (provide 'pichat-test-chat-modification-hooks)
 ;;; pichat-test-chat-modification-hooks.el ends here

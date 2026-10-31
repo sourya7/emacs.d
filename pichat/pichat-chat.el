@@ -1447,7 +1447,9 @@ editable by the user."
   (pichat-chat--with-buffer-edit
     (if (pichat-chat--prompt-live-p)
         (goto-char (point-max))
-      (goto-char (point-max))
+      ;; While the prompt is absent, users can still type at input-start.
+      ;; Restore the prefix before that draft, not after it at buffer end.
+      (goto-char (or (marker-position pichat-chat--input-start) (point-max)))
       (unless (bolp) (insert "\n"))
       (unless (marker-position pichat-chat--widget-start)
         (set-marker pichat-chat--widget-start (point)))

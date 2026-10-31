@@ -100,5 +100,8 @@
   (transient-values-file (my/emacs-local-dir "transients/values.el"))
   (transient-history-file (my/emacs-local-dir "transients/history.el")))
 
+;; Keybinding modules call which-key APIs before the normal queue runs.
+(use-package which-key :ensure (:wait t) :demand t)
+
 (provide 'core/package-manager)
 ;;; package-manager.el ends here

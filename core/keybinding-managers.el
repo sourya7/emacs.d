@@ -7,6 +7,7 @@
 (use-package diminish :ensure t)
 
 (use-package which-key
+  :ensure nil ; Already activated in core/package-manager.el.
   :diminish
   :demand t
   :custom
@@ -17,8 +18,8 @@
   (which-key-max-display-columns nil)
   (which-key-min-display-lines 6)
   (which-key-idle-delay 0.8)
-  (which-key-allow-imprecise-window-fit nil)
-  (which-key-mode t))
+  :config
+  (which-key-mode 1))
 
 (use-package evil
   :functions evil-mode

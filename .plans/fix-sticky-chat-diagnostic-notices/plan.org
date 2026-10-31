@@ -1,0 +1,66 @@
+#+TITLE: Fix sticky chat diagnostic notices
+#+TODO: TODO IN-PROGRESS BLOCKED | DONE
+#+PLAN_ID: fix-sticky-chat-diagnostic-notices
+#+PLAN_STATUS: draft
+#+PLAN_CREATED: 2026-10-31T09:20:59+00:00
+#+PLAN_UPDATED: 2026-10-31T09:20:59Z
+
+* Goal
+Prevent historical RPC failures from remaining indefinitely at the bottom of a chat as though they were current conditions. Allow dismissal and operation-specific recovery while retaining diagnostic history for inspection.
+
+* Scope
+- Included: chat diagnostic notice lifetime, explicit dismissal, correlated recovery, reopen behavior, lifecycle safety, regression tests and user documentation.
+- Excluded: fixing provider stream failures, automatic retries, changing diagnostic retention limits or raw-data policy, unrelated status redesign, commits and compatibility-watermark changes.
+- Separate from [[file:../deliver-queued-follow-ups-after-manual-compaction/plan.org][manual-compaction follow-up delivery]]; neither plan requires executing the other.
+- Coordinate with [[file:../pichat-unified-diagnostics/plan.org][unified diagnostics]] without duplicating its task list or redesigning its inspector.
+
+* Acceptance criteria
+- A failed compaction displays a bounded diagnostic notice; retained diagnostic history remains available through =pichat-show-diagnostics= after the notice is dismissed or resolved.
+- A user can explicitly dismiss a chat diagnostic notice without deleting history, changing the draft/attachments or stopping the runtime.
+- A subsequent successful compaction resolves the previous compaction-failure notice for the same valid source/process context; routine polling, unrelated successful RPCs and failed/aborted compaction do not falsely resolve it.
+- Reopening a runtime's chat does not resurrect a dismissed or resolved notice. A genuinely new failure remains visible, including a repeated failure with identical message text.
+- Stale callbacks, source rebinding, runtime restart and buffer lifecycle cannot resolve a newer or unrelated notice or replay stale source-specific failures. Define and test the policy for runtime-wide versus source-specific errors.
+- Existing malformed-RPC recovery remains functional; resolving one notice must not erase an independent active error.
+- Focused behavioral tests, the unit suite and isolated real-Pi integration coverage pass; required checks and any outstanding manual acceptance are recorded.
+
+* Approach and decisions
+- Use terminology from =pichat/GLOSSARY.md=: the runtime owns retained diagnostics; its active Pi session/source may change independently.
+- Static findings: =pichat-chat--on-error= in =pichat/pichat-chat.el= projects non-parse failures under the generic =error= status key. Successful canonical projection clears several transient statuses but not =error=. =pichat-chat-open= unconditionally projects the latest retained diagnostic, causing historical failures to reappear.
+- =pichat/pichat-chat-diagnostics.el= retains bounded records with origin, command and time. =pichat/pichat-rpc.el= records failed responses and emits errors when no request error callback owns them. Inspect these ownership paths before choosing record/notice identity and lifecycle storage.
+- Separate retained diagnostic records from currently actionable notice state. Do not delete history to hide a notice, equate identical summary strings with identical failures, or infer recovery from any successful RPC.
+- Correlate recovery with operation and runtime/source/process identity. Verify event/response ordering for compaction; a success callback must not clear a newer failure. Prefer explicit record identity and narrowly scoped state over broad global clearing.
+- Choose dismissal command and discoverable UI placement consistent with existing chat controls. Define whether dismissal affects only the currently displayed notice and how concurrent notices are represented before implementation.
+- Preserve the existing =rpc-parse= notice recovery on successful authoritative synchronization, including suppression of replay on chat reopen. Audit other diagnostic origins to assign conservative resolution rules rather than guessing that all errors recover the same way.
+- Implement in focused diagnostics/input-independent lifecycle helpers where appropriate; avoid moving chat mutation into the generic retained-record collector.
+
+* Tasks
+** TODO Finalize notice ownership and recovery rules
+- Inspect current diagnostic, chat-open, source/process lifecycle and compaction RPC/event paths plus focused diagnostic tests.
+- Define record identity, active/dismissed/resolved state, generic versus operation-specific recovery, reopen behavior and concurrent-error policy.
+- Confirm installed supported Pi event/response behavior using an isolated fake-provider reproduction; record any acceptance-changing design limitation before coding.
+** TODO Implement dismissible and recoverable diagnostic notices
+- Separate active notice projection from retained history and add an explicit dismissal command with discoverable UI access.
+- Resolve correlated compaction failures on successful compaction and retain conservative rules for other failures.
+- Guard source/process changes, stale callbacks and repeated failures; prevent dismissed/resolved notice replay on reopen while preserving raw/safe inspection and malformed-RPC recovery.
+** TODO Add lifecycle and real-Pi regression coverage
+- Cover failure display, dismissal/history retention, successful-compaction recovery, unrelated successful RPCs, failed/aborted compaction and reopen without resurrection.
+- Cover identical new failures, independent errors, stale/duplicate events, source changes, restart and chat lifecycle; assert draft and attachment preservation.
+- Exercise compaction failure followed by success through real Pi with the deterministic fake provider, isolated state and bounded waits; avoid credentials, network and real model calls.
+** TODO Document behavior and verify agreed scope
+- Update =pichat/README.md= with dismissal and recovery behavior; update glossary only if shared terminology changes.
+- Run focused ERT, =pichat/test/run-tests.sh= and =pichat/test/run-tests.sh --full=; record exact Pi version, results and skips. Report focused test-file sizes per =pichat/TESTING_GUIDELINES.md=.
+- Verify dismissal/recovery presentation in an isolated live Emacs if necessary; retain any unperformed required manual check as actionable work.
+
+* Checkpoint
+- Plan status: draft
+- Selected scope: none (planning only; implementation not authorized)
+- Last verified result: static code inspection explains persistence and reopen replay; no live reproduction or tests run.
+- Next action: review and approve this separate draft; on execution, start with notice ownership and operation-specific recovery rules.
+- Blockers: none external; exact notice identity/concurrency and lifecycle policy are first-task design work.
+
+* Verification
+- Planning only; no implementation files changed and no PiChat tests run.
+- =plans.py check fix-sticky-chat-diagnostic-notices=: OK (structural validation only).
+
+* History
+- 2026-10-31T09:20:59+00:00: Created a separate draft using the plans helper at the user's request; recorded static findings, acceptance checks and proposed tasks without implementing changes.

@@ -58,6 +58,12 @@
 
 (use-package project
   :ensure nil
+  :init
+  (defun my/project-pichat ()
+    "Open PiChat launch Transient inside the current project's root."
+    (interactive)
+    (let ((default-directory (project-root (project-current t))))
+      (pichat-launch)))
   :custom
   (project-switch-commands
    '((project-find-file "find file")
@@ -66,7 +72,7 @@
      (project-find-dir "Find directory")
      (project-vc-dir "VC-Dir")
      (project-eshell "Eshell")
-     (pichat "PiChat" "P")
+     (my/project-pichat "PiChat" "P")
      (project-any-command "Other")))
   :config
   (advice-add 'project-switch-project :around #'my/project-switch-project-with-tab))

@@ -22,6 +22,31 @@
                      (pichat-path-from-runtime
                       "/home/dev/private.el" context))))))
 
+(ert-deftest pichat-transport-global-fallback-uses-remote-home ()
+  (let ((pichat-targets nil)
+        (pichat-path-mappings nil)
+        (expand (symbol-function 'expand-file-name)))
+    ;; Emulate TRAMP's remote tilde expansion without a network connection.
+    ;; A bare "~" with a remote default directory still expands locally.
+    (cl-letf (((symbol-function 'expand-file-name)
+               (lambda (name &optional directory)
+                 (if (equal name "/ssh:devbox:~/")
+                     "/ssh:devbox:/home/dev/"
+                   (funcall expand name directory))))
+              ((symbol-function 'pichat--project-root)
+               (lambda (&optional _directory) nil)))
+      (let* ((directory "/ssh:devbox:~/projects/")
+             (transport (pichat-transport-resolve directory))
+             (scope (pichat--scope-for-directory directory)))
+        (should (equal "/home/dev/"
+                       (pichat-transport-runtime-home transport)))
+        (should (string-prefix-p "global|" (car scope)))
+        (should (equal "/ssh:devbox:/home/dev/" (nth 1 scope)))
+        (should (equal "/home/dev/"
+                       (pichat-path-to-runtime
+                        (nth 1 scope)
+                        (pichat-transport-path-context transport))))))))
+
 (ert-deftest pichat-transport-project-association-uses-longest-prefix ()
   (let ((pichat-targets
          '((broad :kind ssh :tramp-prefix "/ssh:broad:")

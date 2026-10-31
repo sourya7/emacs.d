@@ -186,7 +186,8 @@ FALLBACK-MAPPINGS are used only for the implicit local transport."
   (or (pichat-transport-runtime-home-value transport)
       (if (eq (pichat-transport-kind transport) 'ssh)
           (file-local-name
-           (expand-file-name "~" (pichat-transport-tramp-prefix transport)))
+           (expand-file-name
+            (concat (pichat-transport-tramp-prefix transport) "~/")))
         (expand-file-name "~"))))
 
 (defun pichat-transport-description (transport)

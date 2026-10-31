@@ -4,6 +4,9 @@
 ;;; terminals
 ;;; Code:
 
+;; Reflect Evil cursor shapes in Xterm-compatible terminals.
+(setq xterm-update-cursor 'type)
+
 (use-package vterm
   :defer t
   :init

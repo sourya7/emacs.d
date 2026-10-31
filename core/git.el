@@ -53,6 +53,7 @@
   (add-hook 'magit-post-refresh-hook #'diff-hl-magit-post-refresh))
 
 (use-package transient
+  :demand t
   :custom
   (transient-levels-file (my/emacs-local-dir "transients/levels.el"))
   (transient-values-file (my/emacs-local-dir "transients/values.el"))

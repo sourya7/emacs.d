@@ -27,6 +27,8 @@
 (defconst pichat-job--active-states '("starting" "running" "settling" "uncertain"))
 (defconst pichat-job--results '("completed" "needs-review" "failed" "cancelled"))
 (defconst pichat-job--max-file-bytes (* 16 1024 1024))
+(defconst pichat-job-evidence-max-bytes (* 8 1024 1024)
+  "Maximum UTF-8 JSON bytes in one immutable run-evidence file.")
 
 (defun pichat-job--fail (format-string &rest arguments)
   "Signal a job error using FORMAT-STRING and ARGUMENTS."
@@ -98,6 +100,9 @@ it from the store vector rather than update the stored record."
           (push id ids))
         (pichat-job--validate-spec (plist-get record :spec))
         (when (eq kind :runs)
+          (when-let* ((digest (plist-get record :evidence)))
+            (unless (and (stringp digest) (string-match-p "\\`[a-f0-9]\\{64\\}\\'" digest))
+              (pichat-job--fail "Invalid run evidence reference")))
           (dolist (key '(:started-at :finished-at :resolved-at))
             (when (and (plist-get record key)
                        (not (pichat-job--text-p (plist-get record key))))
@@ -184,6 +189,57 @@ explicitly at executor startup, not on UI refresh."
       (when temporary (delete-file temporary))
       (when locked (unlock-file file))))
   store)
+
+(defun pichat-job--evidence-file (store digest)
+  "Return STORE's local evidence path for validated DIGEST."
+  (unless (and (stringp digest) (string-match-p "\\`[a-f0-9]\\{64\\}\\'" digest))
+    (pichat-job--fail "Invalid job evidence identity"))
+  (expand-file-name (concat digest ".json")
+                    (concat (pichat-job-store-file store) ".evidence/")))
+
+(defun pichat-job-evidence-save (store evidence)
+  "Publish immutable, bounded EVIDENCE beside STORE; return its digest.
+Publication precedes the run-record commit.  A failed metadata commit may leave
+an unreferenced private file, never a reference to uncommitted evidence."
+  (let* ((bytes (encode-coding-string (json-serialize evidence) 'utf-8-unix))
+         (digest (secure-hash 'sha256 bytes))
+         (file (pichat-job--evidence-file store digest)) temporary)
+    (when (> (length bytes) pichat-job-evidence-max-bytes)
+      (pichat-job--fail "Run evidence exceeds 8 MiB; completion not recorded"))
+    (make-directory (file-name-directory file) t)
+    (when (file-symlink-p (directory-file-name (file-name-directory file)))
+      (pichat-job--fail "Evidence directory cannot be a symbolic link"))
+    (set-file-modes (file-name-directory file) #o700)
+    (unwind-protect
+        (progn
+          (setq temporary (make-temp-file (expand-file-name ".capture-" (file-name-directory file))))
+          (set-file-modes temporary #o600)
+          (let ((coding-system-for-write 'no-conversion) (write-region-inhibit-fsync nil))
+            (write-region bytes nil temporary nil 'silent))
+          ;; A digest path is never replaced, including an existing symlink.
+          (unless (file-exists-p file) (rename-file temporary file))
+          (pichat-job-evidence-read store digest)
+          digest)
+      (when (and temporary (file-exists-p temporary)) (delete-file temporary)))))
+
+(defun pichat-job-evidence-read (store digest)
+  "Read and verify immutable DIGEST from STORE without starting a runtime."
+  (let* ((file (pichat-job--evidence-file store digest))
+         (pichat-job--max-file-bytes pichat-job-evidence-max-bytes)
+         (bytes (progn
+                  (when (file-symlink-p (directory-file-name (file-name-directory file)))
+                    (pichat-job--fail "Evidence directory cannot be a symbolic link"))
+                  (pichat-job--read-bytes file))))
+    (unless (and bytes (equal digest (secure-hash 'sha256 bytes)))
+      (pichat-job--fail "Run evidence missing or changed"))
+    (let ((data (json-parse-string (decode-coding-string bytes 'utf-8)
+                                   :object-type 'plist :array-type 'array
+                                   :null-object nil :false-object :false)))
+      (unless (and (eql (plist-get data :version) 1)
+                   (stringp (plist-get data :response))
+                   (stringp (plist-get data :transcript)))
+        (pichat-job--fail "Invalid run evidence"))
+      data)))
 
 (defun pichat-job-records (store kind)
   "Return detached records from STORE of KIND, either `jobs' or `runs'."
@@ -337,7 +393,7 @@ Uncertainty cannot be cleared by a late callback; reconciliation is separate."
          (allowed (pcase old
                     ("starting" '("running" "finished" "uncertain"))
                     ("running" '("settling" "finished" "uncertain"))
-                    ("settling" '("finished" "uncertain")))))
+                    ("settling" '("settling" "finished" "uncertain")))))
     (when (and (pichat-job--text-p attempt)
                (equal attempt (plist-get run :attempt))
                (member state allowed))
@@ -348,12 +404,14 @@ Uncertainty cannot be cleared by a late callback; reconciliation is separate."
                          (and (equal old "settling")
                               (eq (plist-get details :synchronized) t))))
           (pichat-job--fail "Finishing requires verified release/result evidence")))
-      (dolist (key '(:runtime-id :session-file :reason :summary))
+      (dolist (key '(:runtime-id :session-file :reason :summary :evidence))
         (when (plist-member details key)
           (let ((value (plist-get details key)))
             (unless (or (null value) (stringp value))
               (pichat-job--fail "Invalid executor metadata"))
-            (setf (plist-get run key) (and value (copy-sequence value))))))
+            (when (and (eq key :evidence) value)
+              (pichat-job-evidence-read store value))
+            (pichat-job--stamp run key (and value (copy-sequence value))))))
       (setf (plist-get run :state) state
             (plist-get run :result) (and (equal state "finished")
                                          (copy-sequence (plist-get details :result)))

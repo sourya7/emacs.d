@@ -123,9 +123,12 @@ Metadata/admission tests live in `pichat-test-job-core.el`; execution, ownership
 and manual UI behavior share `pichat-test-jobs.el` and the fixtures in
 `pichat-test-job-support.el`. The former executor/lifecycle/UI test files have
 been combined rather than adding another suite per screen. Full mode additionally
-runs real local Pi jobs against the offline fake provider, including explicit
-saved-session reopening without another model turn.
-The SSH runner includes an isolated captured-target background job; it reuses
+runs real local Pi jobs against the offline fake provider, including evidence
+capture/overflow, cleanup-failure injection, offline inspection and explicit
+saved-session continuation. Evidence files use the fixture's temporary metadata
+root, never normal user storage.
+The SSH runner includes an isolated captured-target background job and independent
+post-completion actual-Pi exit check; it reuses
 the existing real-SSH fixture rather than the user's project or sessions.
 
 Run the separate graphical manual-flow smoke (never against your live Emacs):
@@ -146,7 +149,8 @@ avoids graphical shutdown prompts that can leave `ert-run-tests-batch-and-exit`
 waiting indefinitely; `/tmp/pichat-jobs-live-result.log` retains the evidence.
 These checks cover a live frame, multiline setup, save-without-running, one-off
 and saved-job submission without focus changes, progressive settings disclosure,
-latest/history/exact-chat navigation and real narrow/wide window sizes. A separate
+latest/history/run-transcript navigation, report disclosure/refresh and real
+narrow/wide window sizes. A separate
 inert-process graphical scenario covers cached input, blockers, cancellation
 context and uncertain claims without activating a dialog. Neither uses a real
 model provider or normal job metadata. Keep these opt-in graphical checks and

@@ -26,6 +26,8 @@
 (declare-function pichat-jobs-edit "pichat-jobs" ())
 (declare-function pichat-jobs-history "pichat-jobs" ())
 (declare-function pichat-jobs-attention "pichat-jobs" ())
+(declare-function pichat-jobs-detail-refresh "pichat-jobs" ())
+(declare-function pichat-jobs-copy-response "pichat-jobs" ())
 (declare-function pichat-job-setup-quit "pichat-jobs" ())
 (defvar pichat-artifacts-preview-mode-map)
 (defvar pichat-artifact-result-mode-map)
@@ -125,7 +127,9 @@ remain in their original mode maps."
       (kbd "RET") #'push-button
       (kbd "q") #'pichat-job-setup-quit)
     (evil-define-key* 'normal pichat-jobs-detail-mode-map
-      (kbd "RET") #'push-button))
+      (kbd "RET") #'push-button
+      (kbd "g r") #'pichat-jobs-detail-refresh
+      (kbd "g y") #'pichat-jobs-copy-response))
   (with-eval-after-load 'pichat-artifact-result
     (evil-define-key* 'normal pichat-artifact-result-mode-map
       (kbd "s") #'pichat-artifact-result-share

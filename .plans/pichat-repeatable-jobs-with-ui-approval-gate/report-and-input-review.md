@@ -153,3 +153,41 @@ implementation. Reuse standard ctx.ui dialogs and the owning-chat queue where
 possible. Do not confuse this tool with the trusted plan-phase approval contract.
 Final adoption versus custom implementation remains a user decision after the
 compatibility/UX evaluation; the report/lifecycle work does not depend on it.
+
+### Real-Pi evaluation (2026-10-31)
+
+Checked out the pinned revision to `/tmp/pichat-ask-user-phase2` and loaded only
+its `index.ts` with `-e`, alongside PiChat's offline fake provider. No dependency
+installation, global extension/skill activation, user credentials or real model.
+An isolated temporary Emacs harness exercised five cases against Pi 1.4.0:
+
+- Choice plus optional comment: existing native completion/input worked, correct
+  answers reached the canonical tool result, focus stayed unchanged until explicit
+  chat selection. Context was present; single-select descriptions were absent.
+- Batch free-text followed by multi-select: two ordered native input dialogs.
+- Dismissal: tool result said Cancelled, but the scripted next model turn still
+  ran. It is not an execution/approval stop boundary.
+- Hidden timeout: Pi completed the tool and next model turn, but PiChat retained
+  the expired UI request. The revised executor conservatively marked execution
+  uncertain at settlement rather than releasing pending-input work as successful.
+- Hidden abort: similarly left a stale pending UI request; no completion or
+  authorization was inferred.
+
+Final harness 5/5 expected observations passed in 3.32s; log:
+`/tmp/pichat-phase2-ask-evaluation.log`. Harness:
+`/tmp/pichat-ask-user-phase2-evaluation.el`. These are compatibility observations,
+including demonstrated deficiencies, not five passing product acceptance cases.
+An initial invalid fixture used string options; the current declared schema
+requires option objects despite source coercion accepting strings. Fixed only
+the fixture. A separate isolated JSON/print-mode run confirmed missing UI returns
+an “Ask requires interactive mode” tool result, then permits the scripted next
+turn (`/tmp/pichat-phase2-ask-no-ui.log`); it is not an answer/approval boundary.
+
+**Decision recommendation:** do not enable this revision unmodified for jobs.
+Prefer upstream plus small RPC presentation/policy changes over maintaining a
+custom TUI fork. First reconcile expired/aborted dialog ownership in PiChat,
+retain descriptions and enforce explicit handling of necessary-answer cancellation
+before dependent work. A custom ask tool alone would not fix the generic stale
+RPC queue issue. If the user wants stricter native structured choice semantics,
+a small PiChat-owned model-only tool remains an alternative. Do not globally
+adopt either yet; show the actual native question flow for approval first.

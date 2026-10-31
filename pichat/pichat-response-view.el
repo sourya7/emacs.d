@@ -298,6 +298,16 @@ fallback instead of losing the canonical response text."
             (buffer-substring (point-min) (point-max))))
       (error (pichat-response-view--fallback-string markdown error-data)))))
 
+(defun pichat-response-view-render-markdown (markdown width)
+  "Return safely rendered MARKDOWN for WIDTH, or labelled exact-source fallback.
+Independent of chats, runtimes and response navigation.  No remote resources
+are fetched; links retain the response view's explicit safe-scheme actions."
+  (pichat-response-view--rendered-string markdown width))
+
+(defun pichat-response-view-install-faces ()
+  "Install shared theme-aware Markdown faces in the current read-only view."
+  (pichat-response-view--install-face-remaps))
+
 (defun pichat-response-view--install-face-remaps ()
   "Install theme-aware SHR face remaps in the current response view."
   (dolist (face '(shr-h1 shr-h2 shr-h3 shr-h4 shr-h5 shr-h6))
@@ -311,7 +321,7 @@ When PRESERVE-POINT is non-nil, keep the approximate reading position."
   (let* ((markdown
           (copy-sequence
            (pichat-chat-navigation-response-markdown response)))
-         (rendered (pichat-response-view--rendered-string markdown width))
+         (rendered (pichat-response-view-render-markdown markdown width))
          (fraction (and preserve-point
                         (/ (float (- (point) (point-min)))
                            (max 1 (- (point-max) (point-min))))))
@@ -445,7 +455,7 @@ Leave the current snapshot untouched on a boundary or failure."
   "Read-only rendered view of one settled canonical assistant response."
   (setq-local truncate-lines nil)
   (visual-line-mode 1)
-  (pichat-response-view--install-face-remaps))
+  (pichat-response-view-install-faces))
 
 (defun pichat-response-view-open
     (response origin refresh-function return-function &optional source-name

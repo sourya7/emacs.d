@@ -130,6 +130,14 @@
             (should (eq (key-binding (kbd "n")) #'evil-search-next))
             (should (eq (key-binding (kbd "N")) #'evil-search-previous)))
           (with-temp-buffer
+            (require 'pichat-jobs)
+            (pichat-jobs-detail-mode)
+            (should (eq (key-binding (kbd "g r")) #'pichat-jobs-detail-refresh))
+            (should (eq (key-binding (kbd "g y")) #'pichat-jobs-copy-response))
+            (should (eq (key-binding (kbd "w")) #'evil-forward-word-begin))
+            (should (eq (key-binding (kbd "n")) #'evil-search-next))
+            (should (eq (key-binding (kbd "q")) #'pichat-view-quit)))
+          (with-temp-buffer
             (pichat-artifact-elisp-result-mode)
             (should (eq evil-state 'normal))
             (should (eq (key-binding (kbd "s")) #'pichat-artifact-result-share))

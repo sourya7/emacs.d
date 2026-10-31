@@ -301,5 +301,22 @@
             (should (equal (plist-get record :resolved-at) now))
             (should-not (plist-get record :finished-at))))))))
 
+(ert-deftest pichat-job-evidence-is-private-content-addressed-and-tamper-evident ()
+  (pichat-test-with-temp-dir directory
+    (let* ((store (pichat-job-store-open (expand-file-name "jobs.json" directory)))
+           (evidence '(:version 1 :response "# Exact é response" :transcript "Run transcript"))
+           (digest (pichat-job-evidence-save store evidence))
+           (file (pichat-job--evidence-file store digest)))
+      (should (equal evidence (pichat-job-evidence-read store digest)))
+      (should (equal digest (pichat-job-evidence-save store evidence)))
+      (should (= (logand (file-modes file) #o777) #o600))
+      (should (= (logand (file-modes (file-name-directory file)) #o777) #o700))
+      (should-error (pichat-job-evidence-read store "../../escape") :type 'pichat-job-error)
+      (let ((pichat-job-evidence-max-bytes 8))
+        (should-error (pichat-job-evidence-save store evidence) :type 'pichat-job-error))
+      (with-temp-file file (insert "Changed evidence"))
+      (should-error (pichat-job-evidence-read store digest) :type 'pichat-job-error)
+      (should-error (pichat-job-evidence-save store evidence) :type 'pichat-job-error))))
+
 (provide 'pichat-test-job-core)
 ;;; pichat-test-job-core.el ends here

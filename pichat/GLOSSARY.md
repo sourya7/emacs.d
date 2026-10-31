@@ -23,7 +23,7 @@ Shared terms for discussing PiChat. **Runtime**, **Pi session**, **saved session
 | **Chat buffer** | The Emacs conversation UI attached to a runtime. Its transcript follows that runtime's active source; closing the buffer and stopping the runtime are distinct operations. |
 | **Runtime manager** | PiChat's global view of retained runtimes, including live, stopped, and failed ones. It is not a browser of saved session files. |
 | **Job** | A reusable instruction and captured execution settings. Ordinary jobs do not require a managed plan. |
-| **Job run** | One attempt to execute job instructions, with durable identity and outcome distinct from its runtime and Pi session. A one-off job run need not have a saved job definition. |
+| **Job run** | One attempt to execute job instructions, with durable identity, outcome and captured run-end evidence distinct from its runtime and Pi session. A one-off job run need not have a saved job definition; later conversation continuation does not change its report. |
 | **Jobs view** | The definitions and job-run history view, distinct from the runtime manager, Session History, and saved-session browser. |
 
 ## Launch and ownership
@@ -86,7 +86,8 @@ Shared terms for discussing PiChat. **Runtime**, **Pi session**, **saved session
 | **Source generation** | A PiChat generation marker used to invalidate stale events, callbacks, or caches after source rebinding. It is not a Pi session ID. A verified same-source runtime restart does not create a navigation entry. |
 | **Process generation** | A distinct runtime-process lifetime marker; events and transport buffers from a stopped process cannot act on its replacement, even when it hosts the same Pi session. |
 | **Repaint** | Refreshing the chat display from PiChat's synchronized transcript model, rather than treating visible buffer text as the source of truth. |
-| **Rendered response view** | A read-only rendering of one settled assistant response's prose. The chat itself retains the response's exact Markdown source. |
+| **Rendered response view** | A read-only rendering of one settled assistant response's prose. The chat itself retains the response's exact Markdown source. Job reports reuse its renderer without requiring a live chat. |
+| **Run transcript** | Read-only captured conversation evidence through one job run's settled boundary. Viewing it starts no runtime and does not follow later edits to the saved session file. |
 
 ## Messages and tool display
 

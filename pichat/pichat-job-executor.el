@@ -27,7 +27,7 @@ Running work and user interaction have no implicit timeout."
   store contexts pumping)
 (cl-defstruct (pichat-job-execution (:constructor pichat-job-execution--create))
   executor id token session process generation source handlers timer watch
-  submitted accepted started settled settlement cancelling retired failure)
+  submitted accepted started settled settlement cancelling cleanup retired failure)
 (defvar pichat-job-executor--input-owner nil
   "Dynamic execution ownership; never supplied by stored instructions.")
 (defvar pichat-job-executor-changed-hook nil
@@ -77,7 +77,7 @@ Do not call while another executor owns STORE.  No queued work is replayed."
   (setf (pichat-job-execution-timer execution) nil))
 
 (defun pichat-job-executor--retire (execution)
-  "Retire EXECUTION's callbacks, preserving its inspection-only runtime."
+  "Retire EXECUTION's callbacks, preserving its readable transcript."
   (pichat-job-executor--clear-timer execution)
   (when-let* ((cancel (pichat-job-execution-watch execution))) (funcall cancel))
   (setf (pichat-job-execution-watch execution) nil
@@ -120,26 +120,32 @@ Do not call while another executor owns STORE.  No queued work is replayed."
         (pichat-job-executor--uncertain execution reason)
       (pichat-job-executor--stop-before-prompt execution "failed" reason))))
 
-(defun pichat-job-executor--stop-before-prompt (execution result reason)
-  "Stop EXECUTION before model submission and finish only on exit evidence.
-RESULT and REASON describe startup failure or cancellation.  SSH reuses the
-existing verified-lifetime observer, never the local endpoint's sentinel."
+(defun pichat-job-executor--stop-before-prompt (execution result reason &optional captured)
+  "Stop EXECUTION's exact owned lifetime and finish only on exit evidence.
+RESULT and REASON describe startup failure, cancellation or captured completion.
+CAPTURED is already durable synchronized evidence for a settled run.
+SSH reuses the verified-lifetime observer, never the local endpoint's sentinel."
   (let* ((session (pichat-job-execution-session execution))
          (process (pichat-session-process session)))
     ;; Suppress sentinel/control failure handling while the stop barrier owns it.
-    (setf (pichat-job-execution-cancelling execution) t)
+    (setf (pichat-job-execution-cancelling execution) t
+          (pichat-job-execution-cleanup execution) (and captured t))
     (pichat-job-executor--clear-timer execution)
     (cl-labels
         ((finish ()
+           (when (buffer-live-p (pichat-session-buffer session))
+             (with-current-buffer (pichat-session-buffer session)
+               (setq buffer-read-only t)))
            (pichat-job-executor--advance
-            execution "finished" (list :result result :safe-to-release t :reason reason))
+            execution "finished" (append (list :result result :safe-to-release t :reason reason)
+                                         captured))
            (pichat-job-executor-pump (pichat-job-execution-executor execution))))
       (if (eq (pichat-transport-kind (pichat-session-transport session)) 'ssh)
           (if (not (pichat-process-lifetime-supported-p process))
               (progn
                 (ignore-errors (pichat-backend-stop-session session))
                 (pichat-job-executor--uncertain execution
-                                                "SSH startup stopped without verified Pi identity"))
+                                                "SSH stop lacks verified Pi identity"))
             (condition-case err
                 (setf (pichat-job-execution-watch execution)
                       (pichat-process-lifetime-watch
@@ -237,33 +243,36 @@ existing verified-lifetime observer, never the local endpoint's sentinel."
                  (pichat-job-executor--failed execution "Job submission failed or was ambiguous")))))))))))
 
 (defun pichat-job-executor--cache-result (cache)
-  "Extract bounded outcome/summary from authoritative fresh-session CACHE.
-No structured domain success or plan completion is inferred from prose."
-  (let (assistant)
-    (maphash (lambda (_id entry)
-               (let ((message (plist-get entry :message)))
-                 (when (equal (plist-get message :role) "assistant")
-                   (push message assistant))))
-             (pichat-entry-cache-entries-by-id cache))
-    (unless assistant (error "Settled job has no authoritative assistant result"))
-    (let* ((bad (seq-find (lambda (message)
-                           (member (plist-get message :stopReason) '("error" "aborted"))) assistant))
-           (transcript (pichat-pi-build-canonical-transcript cache))
-           (prose (cl-loop for node in (pichat-transcript-nodes transcript)
-                           when (and (eq (pichat-transcript-node-kind node) 'message)
-                                     (eq (pichat-transcript-node-role node) 'assistant))
-                           append (cl-loop for content in (pichat-transcript-node-content node)
-                                           when (eq (pichat-transcript-content-kind content) 'prose)
-                                           collect (pichat-transcript-content-text content)))))
+  "Extract final response and run-bounded transcript from authoritative CACHE.
+Use active-branch order, not hash order or accumulated commentary.  An empty
+last response stays empty.  No domain success is inferred from prose."
+  (let* ((entries (pichat-pi-entry-cache-active-branch cache))
+         (assistant (cl-loop for entry in entries
+                             for message = (plist-get entry :message)
+                             when (equal (plist-get message :role) "assistant")
+                             collect message))
+         (bad (seq-find (lambda (message)
+                          (member (plist-get message :stopReason) '("error" "aborted")))
+                        (reverse assistant)))
+         (transcript (pichat-pi-build-canonical-transcript cache))
+         (response (pichat-chat-navigation-select-response transcript nil nil)))
+    (unless response (error "Settled job has no authoritative assistant result"))
+    (let ((markdown (pichat-chat-navigation-response-markdown response)))
       (list :result (if bad "failed" "completed")
             :reason (when bad
                       (pichat-chat-diagnostics-safe-summary-text
                        (or (plist-get bad :errorMessage) "Agent stopped abnormally")))
-            :summary (truncate-string-to-width (string-join prose "\n\n") 2000 nil nil "…")))))
+            :summary (truncate-string-to-width markdown 2000 nil nil "…")
+            :capture (list :version 1 :response markdown
+                           :response-entry (pichat-chat-navigation-response-node-key response)
+                           :leaf (pichat-entry-cache-leaf-id cache)
+                           :captured-at (pichat-job--now)
+                           :transcript (pichat-chat-navigation-transcript-markdown transcript))))))
 
 (defun pichat-job-executor--synchronized (execution payload)
   "Validate settled synchronized PAYLOAD and fresh idle state for EXECUTION."
   (when (and (pichat-job-execution-settled execution)
+             (not (pichat-job-execution-cleanup execution))
              (eql (plist-get payload :settlement-sequence)
                   (pichat-job-execution-settlement execution))
              (pichat-job-executor--source-p execution)
@@ -275,24 +284,40 @@ No structured domain success or plan completion is inferred from prose."
       (pichat-job-executor--call
        execution "get_state" nil
        (lambda (_response)
+        ;; Several qualified sync notifications can race their idle-state replies.
+        ;; The first completion owns cleanup; later replies must not start a
+        ;; second stop observer or turn the stopping runtime into a sync failure.
+        (unless (pichat-job-execution-cleanup execution)
          (unless (and (pichat-job-executor--source-p execution)
                       (eq (pichat-session-state (pichat-job-execution-session execution)) 'idle))
            (error "Settled job source/state changed before completion"))
-         (let* ((run (pichat-job-executor--run execution))
+         (when (> (pichat-chat-pending-user-input-count
+                   (pichat-job-execution-session execution)) 0)
+           (error "Settled job still has pending user input"))
+         (let* ((store (pichat-job-executor-store (pichat-job-execution-executor execution)))
+                (capture (append (plist-get outcome :capture)
+                                 (list :source (vconcat (pichat-job-execution-source execution)))))
+                (digest (pichat-job-evidence-save store capture))
+                (run (pichat-job-executor--run execution))
+                (captured (list :summary (plist-get outcome :summary)
+                                :evidence digest :synchronized t))
                 (modifying (seq-some
                             (lambda (claim) (equal (plist-get claim :access) "write"))
                             (plist-get (plist-get run :spec) :resources))))
+           ;; Persist evidence before stopping.  A crash/failed stop leaves
+           ;; settling/uncertain with the report intact and claims still held.
+           (pichat-job-advance store (pichat-job-execution-id execution)
+                               (pichat-job-execution-token execution) "settling" captured)
            (if (and modifying (or (pichat-job-execution-cancelling execution)
                                  (equal (plist-get outcome :result) "failed")))
                (pichat-job-executor--uncertain
                 execution "Agent stopped abnormally; modifying tool descendants need inspection")
-             (pichat-job-executor--advance
-              execution "finished"
-              (append (if (pichat-job-execution-cancelling execution)
-                          '(:result "cancelled" :reason "Agent abort settled and synchronized")
-                        outcome)
-                      '(:synchronized t :safe-to-release t)))
-             (pichat-job-executor-pump (pichat-job-execution-executor execution)))))))))
+             (pichat-job-executor--stop-before-prompt
+              execution (if (pichat-job-execution-cancelling execution) "cancelled"
+                          (plist-get outcome :result))
+              (if (pichat-job-execution-cancelling execution)
+                  "Agent abort settled and synchronized" (plist-get outcome :reason))
+              captured)))))))))
 
 (defun pichat-job-executor--event (execution event payload)
   "Handle an owned runtime EVENT/PAYLOAD for EXECUTION."
@@ -410,6 +435,9 @@ Return the new run ID without selecting its runtime or displaying a chat."
       (pichat-job-cancel-queued (pichat-job-executor-store executor) id)
       (pichat-job-executor--changed executor)
       (pichat-job-executor-pump executor))
+     ((and execution (pichat-job-execution-cleanup execution)
+           (pichat-job-executor--owned-p execution))
+      (user-error "Completion captured; runtime cleanup is in progress"))
      ((and execution (pichat-job-executor--owned-p execution))
       (if (not (pichat-job-execution-submitted execution))
           (pichat-job-executor--stop-before-prompt execution "cancelled" "Cancelled before prompt")

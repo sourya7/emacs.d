@@ -43,6 +43,14 @@
                  (should (eq pichat-current-session previous))
                  (should (eq (current-buffer) current-buffer))
                  (should-not (get-buffer-window (pichat-session-buffer session) t))
+                 (should-not (pichat-session-alive-p session))
+                 (should (pichat-process-lifetime-confirmed-p (pichat-session-process session)))
+                 (should-not (pichat-test-real-ssh--alive-p fixture (pichat-session-process session)))
+                 (should (buffer-local-value 'buffer-read-only (pichat-session-buffer session)))
+                 (should (equal (plist-get
+                                 (pichat-job-evidence-read store
+                                  (plist-get (pichat-job-record store 'runs id) :evidence)) :response)
+                                "persisted SSH answer"))
                  (should (pichat-process-lifetime-supported-p (pichat-session-process session)))
                  (should (eq 'ssh (pichat-transport-kind (pichat-session-transport session))))
                  (should (equal (file-local-name (plist-get fixture :project))

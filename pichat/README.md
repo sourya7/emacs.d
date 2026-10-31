@@ -770,13 +770,14 @@ scheduling, and chaining are not enabled.
   the selected definition. Narrow windows retain work/state/project/target,
   with full information available in details.
 - Definition details show instructions, readable execution settings,
-  latest-run summary and direct latest-run/history actions. Run details show
-  state, outcome, trigger, recorded timestamps, bounded agent report, saved-session
-  reference and exact-chat/diagnostic/history actions. **Instructions & settings**
+  latest-run summary and direct latest-run/history actions. Run details put the
+  task and rendered **Response** first, with compact execution status/context.
+  Long tasks and **Execution details** expand explicitly; exact IDs, paths,
+  timestamps, provenance and settings remain secondary. **Instructions & settings**
   opens the captured inputs; sensitive raw records/arguments require a separate
   explicit **Inspect raw settings** action. Merely inspecting never launches Pi.
-  Agent prose is not independent verification of file changes or domain success.
-  **Repeat this run…** reviews historical settings and records repeat provenance;
+  Execution completion is distinct from task quality or domain success.
+  **Repeat…** reviews historical settings and records repeat provenance;
   it does not silently use a changed definition. A repeat retains its saved
   definition's overlap exclusion. **Save as job…** opens setup, not execution.
 - Optional `pichat-evil-setup` gives the list Normal-state `RET`, `TAB`, `zv`
@@ -784,20 +785,39 @@ scheduling, and chaining are not enabled.
   attention. Setup and
   details use buttons with `RET`; these do not take over Vim movement keys.
 
+Run reports reuse the rendered response view's sanitized Markdown/SHR rendering,
+link policy and exact-source fallback, without requiring the originating runtime.
+The final active-branch assistant message's exact prose is captured, not all
+intermediate commentary; an empty final message explicitly has no prose. **View
+response source**, **Copy response Markdown** (native `w`, Evil `g y`) and explicit
+refresh (native `g`, Evil `g r`) remain available. Refresh and resize retain
+response reading position and disclosures. Older summary-only records are labelled
+**Response preview**; missing or changed evidence is reported rather than replaced
+with the latest response from a potentially continued conversation.
+
 Submitting does not select/display the new chat or change your current/preferred
-runtime. **Open chat** displays the exact owning runtime. If that chat is gone,
-finished runs with saved-session references offer **Open saved session
-independently…**: an explicit new runtime on the captured target using the current
-default preset, not rerunning the job. Managed duplicate writers are refused;
-uncertain execution must be resolved first. Job-owned chats allow
+runtime. **View chat** displays the exact owning chat while work needs attention.
+**View transcript** reads immutable run-end Markdown evidence without starting Pi,
+including after Emacs restart; it is not Session History or saved-session browsing.
+Finished runs with saved-session references offer **Continue in chat…**: an explicit
+new ordinary runtime on the captured target using the current default preset,
+not rerunning the job. New prompts extend the same saved Pi session file, not a
+clone, but cannot alter the historical run report or captured transcript.
+Managed duplicate writers are refused; uncertain execution must be resolved first.
+Job-owned chats allow
 inspection and existing extension UI responses, not additional prompts, source
 switching, reconfiguration or preferred designation; use Jobs to repeat/cancel.
 Required interactions show Needs input and retain the slot/resource claims until
 answered or cancelled. There is no automatic approval or waiting-input timeout.
 Killing an active owning chat is refused; closing a window or burying Jobs is
-harmless. Finished inspection runtimes are retained, not automatically stopped or
-pruned; use the runtime manager to stop/forget them when no longer needed. The
-saved Pi session and durable run record have independent lifetimes.
+harmless. After synchronized evidence is durably captured, the owning runtime is
+stopped through the existing backend shutdown barrier before completion releases
+claims. SSH additionally requires verified actual-Pi exit; transport EOF alone
+is insufficient. Cleanup failure retains uncertainty, claims and captured evidence.
+An existing chat remains read-only; stopped manager entries are retained until
+explicitly forgotten. Runtime, saved Pi session and durable run evidence have
+independent lifetimes. Pending input, cancellation and uncertain execution do not
+automatically discard their runtime tracking.
 
 Execution settings are captured, including resolved preset prompts, Tools,
 model, command and target/path mappings. Instruction/name edits preserve them.
@@ -847,9 +867,17 @@ sensitive prompts/arguments. Use one owning
 Emacs per metadata file; changed-file/foreign-lock checks fail rather than
 silently overwrite history. Opening Jobs first initializes restart reconciliation:
 queued work is cancelled, potentially dispatched work remains uncertain, and
-nothing is replayed. Subsequent browsing/refresh is cached-only. Initial storage
-has a 16 MiB limit and no automatic pruning; archive only when no work/uncertain
-claims need preservation. Control waits default to 30 seconds
+nothing is replayed. Subsequent browsing/refresh never contacts Pi. Metadata
+has a 16 MiB limit. New run evidence is stored in content-addressed JSON beside
+that file, in `<pichat-jobs-file>.evidence/` (0700 directory, 0600 files), with an
+8 MiB UTF-8 JSON limit per run. Evidence includes the exact response, response
+entry/source identity, run-end leaf and complete run-bounded transcript, including
+tool output/thinking; it can be sensitive. Overflow or publication failure retains
+uncertainty/claims instead of silently truncating a report or declaring completion.
+Evidence is published before the metadata reference; interrupted commits may leave
+unreferenced files. Back up/move evidence with metadata. There is no automatic
+pruning of records, evidence, or saved Pi sessions; archive only when no
+work/uncertain claims need preservation. Control waits default to 30 seconds
 (`pichat-jobs-control-timeout`); active model work has no implicit timeout.
 
 ## Diagnostics: inspect versus setup

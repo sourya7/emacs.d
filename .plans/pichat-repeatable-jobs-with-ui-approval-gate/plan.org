@@ -3,7 +3,7 @@
 #+PLAN_ID: pichat-repeatable-jobs-with-ui-approval-gate
 #+PLAN_STATUS: blocked
 #+PLAN_CREATED: 2026-10-30T06:19:17+00:00
-#+PLAN_UPDATED: 2026-10-31T21:15:28+00:00
+#+PLAN_UPDATED: 2026-10-31T22:41:30+00:00
 
 * Goal
 Add lightweight native PiChat jobs with reusable instructions, inspectable runs,
@@ -34,7 +34,9 @@ first and obtain explicit user acceptance before feature implementation.
   transcript inspection, explicit conversational continuation and finished-runtime
   cleanup belong to Phase 2. Evaluate an optional ask-user extension separately;
   adoption/custom implementation is not yet selected. This request authorizes
-  plan revision/research only, not implementation.
+  plan revision/research only, not implementation. Subsequently the user explicitly
+  requested running Phase 2; revised implementation and isolated evaluation are
+  now authorized, but extension adoption remains a separate decision.
 
 * Acceptance criteria
 - Phase 1 presents a concrete example for job creation, manual execution,
@@ -368,7 +370,7 @@ No automatic retries or replay. Document as this phase is delivered.
   At that checkpoint the task was blocked only on visible review. The subsequent
   report/lifecycle revision below adds unimplemented Phase 2 scope; final visible
   acceptance must review the revised screens, not close this phase on old evidence.
-*** TODO Implement result-first reports with shared Markdown rendering
+*** DONE Implement result-first reports with shared Markdown rendering
 Follow report-and-input-review.md. Separate bounded previews from a complete,
 identified final settled response and immutable run-end transcript boundary.
 Choose bounded versioned storage/sidecars and explicit overflow/failure handling;
@@ -380,7 +382,19 @@ Response, grouped actions and collapsed execution details. No agent-reported
 boilerplate; actionable failure/input/uncertainty stays prominent. Preserve exact
 Markdown copy, native/Evil navigation, safe links, fallback, narrow widths and
 refresh reading/expansion state. Test hostile Markdown and long/truncated results.
-*** TODO Implement transcript inspection, continuation and finished-runtime cleanup
+- Delivered complete final active-branch response selection, identified run-end
+  transcript snapshots and private content-addressed evidence beside metadata.
+  Version-1 records remain compatible; legacy summaries are explicitly previews.
+  Capture is capped at 8 MiB UTF-8 JSON; overflow/publication failure retains
+  uncertainty and claims instead of truncating the report or claiming completion.
+- Shared response-view public rendering/face API supplies sanitized Markdown/SHR,
+  safe links and exact-source fallback. Reports have task/response-first layout,
+  collapsible task/metadata, native source/copy/refresh actions and Evil gr/gy.
+  Refresh/resize preserves response reading position and disclosure state.
+- Hostile HTML, fallback, source copying, long results, offline reloaded evidence,
+  preview compatibility and nonexecuting inspection have passing behavior tests.
+  Visible human acceptance remains a separate BLOCKED task below.
+*** BLOCKED Implement transcript inspection, continuation and finished-runtime cleanup
 View transcript must work without starting Pi, after restart and after subsequent
 conversation edits, using the captured run boundary. Preserve diagnostic evidence.
 Continue in chat… explicitly extends the saved session in an ordinary runtime,
@@ -395,7 +409,28 @@ Test no focus theft, late callbacks, cleanup failure, visible/closed buffers,
 missing saved files, duplicate writers, stale identities, repeat versus continue,
 and reports/transcript boundaries unaffected by later prompts. Use isolated real
 Pi plus job-specific SSH lifecycle checks; do not replace existing guards casually.
-*** TODO Evaluate pinned ask-user extension and choose integration scope
+- Implemented View transcript from immutable local run-end evidence, requiring no
+  runtime or mutable saved-file read. Continue in chat… reviews the current default
+  preset/captured target and reuses independent-open reservations/ownership checks;
+  normal follow-ups extend the saved conversation but leave old evidence unchanged.
+- Captured evidence is committed while settling, before the shared backend stop
+  barrier. Successful exit precedes finished/claim release. SSH reuses the exact
+  actual-Pi observer; unknown stop retains claims/evidence. Existing descendant
+  uncertainty for abnormal modifiers is unchanged. This reuses backend stop
+  semantics, not a new guarantee of extension finalization or descendant shutdown.
+- Existing chat buffers become read-only; hidden chats and manager rows are retained
+  stopped, not pruned. Pending input is checked before cleanup, and input/uncertain
+  attempts retain their tracking. Duplicate idle replies cannot start two cleanup
+  observers; cancellation is unavailable once captured-completion cleanup owns it.
+- Local real-Pi checks pass for visible/hidden chats, no focus theft, continuation,
+  changed conversation versus immutable evidence, cleanup failure and overflow.
+  Offline SSH observer tests cover baseline ordering, duplicate completion replies,
+  unknown exit and claim retention. Required real-SSH completion check is updated.
+- BLOCKED: real-SSH suite cannot connect to the previously used mojo@bigbox.lan
+  target: host-key trust prompts fail in batch. No host key accepted or checking
+  weakened. Rerun the isolated job-specific SSH check after trusted access is
+  established; current remote shutdown changes are not claimed real-SSH verified.
+*** DONE Evaluate pinned ask-user extension and choose integration scope
 Evaluate pi-ask-user df1df70acf1f7521d24f9518a702064930340df2 using isolated real-Pi
 fixtures, extension-only loading and existing RPC dialog handling. No global
 installation or bundled mandatory-gating skill activation. Verify single-choice
@@ -407,7 +442,21 @@ tool based on observed gaps. Present native input UI and necessary-only guidance
 for acceptance; adoption/custom implementation requires a subsequent explicit
 choice/scope. This optional decision does not block report/lifecycle work and must
 not become a parallel plan-phase approval system or duplicate ask_user declaration.
-*** TODO Verify revised Phase 2 and obtain visible UI acceptance
+- Pinned source loaded extension-only beside the offline provider in isolated real
+  Pi 1.4.0. Five expected compatibility observations pass: choice/context/comment,
+  batch free-text/multiselect, cancellation continuation, hidden timeout and abort.
+  Separate print-mode execution confirms missing UI is not an answer/stop boundary.
+- Recommendation: do not adopt the reviewed revision unmodified. Existing Emacs
+  dialogs work, but select descriptions disappear, cancelled questions can be
+  followed by more model work, and hidden timeout/abort leaves stale PiChat input.
+  Revised executor conservatively retains uncertainty rather than auto-approving.
+- Prefer targeted upstream RPC/policy improvements plus generic PiChat request
+  reconciliation over a custom TUI fork. A small owned tool is an alternative
+  only if stricter native structured choices are wanted. Evaluation is complete;
+  adoption/custom implementation and its visible input UI require a user decision,
+  not implied approval from this task's DONE status. No dependency/global skill
+  installation or package adoption occurred. Details in report-and-input-review.md.
+*** BLOCKED Verify revised Phase 2 and obtain visible UI acceptance
 Run focused report/lifecycle/input tests and full optional suite; investigate the
 previous Consult failure before claiming a fresh clean run. Review completed,
 queued, input, failed and uncertain screens, collapsed/expanded details, offline
@@ -416,6 +465,19 @@ and glossary to distinguish durable job evidence from continued Pi conversation.
 Human acceptance, not graphical automation alone, closes the existing BLOCKED
 integration/UI task. Optional ask-user evaluation may be explicitly deferred;
 record that scope decision, never mark unimplemented adoption as delivered.
+- README/glossary/testing guidance updated. Final focused job selector passes 58/58;
+  dependency-enabled unit suite passes 956 with 2 Docker skips. Latest full optional
+  suite passes 1042 with 2 Docker skips. Byte-compilation of changed production
+  files to /tmp succeeds without warnings; no repository .elc files generated.
+- BLOCKED: no DISPLAY/WAYLAND_DISPLAY or X socket in this process, so no revised
+  graphical test or human visible review is claimed. Updated graphical fixture is
+  ready for a separate visible Emacs, not the user's running conversations.
+- Real-SSH verification is blocked on host trust as above. An intermediate full
+  run also reproduced the existing Consult/archive failure. Source-only diagnostic
+  investigation identified stderr sentinel text contaminating the JSON error
+  record; no unrelated Consult implementation was changed. Latest green rerun is
+  not evidence that this intermittent defect is fixed; preserve it for separate
+  repair authorization before declaring verification reliably clean.
 ** Phase 3: Optional exact-plan-phase adapter
 *** TODO Implement explicit phase targeting, eligibility and bounded authorization
 Add the narrow machine-readable plans-skill inspection contract, plan/heading-path
@@ -463,30 +525,33 @@ completing a release subset is not whole-plan completion.
 
 * Checkpoint
 - Plan status: blocked
-- Selected scope: revise Phase 2 report/lifecycle UI and evaluate ask-user design
-  from source; planning/research only, no feature implementation
-- Last verified result: delivered work is committed as cfebb35 (Add native manual
-  PiChat jobs and inspectable run history); implementation unchanged since then,
-  clean worktree at review start. Fresh full+optional run: 1035 total, 1032 passed,
-  1 Consult/archive failure, 2 Docker opt-in skips. All 49 job-related tests pass,
-  including six real-Pi integration cases. The failed Consult test passes on an
-  isolated rerun; cause is not established and the full run is not green.
-  Prior graphical 2/2 and SSH 13/13 are historical, not rerun in this review.
-  Remaining visible-layout signoff is not assumed from prior user feedback.
-- Next action: obtain explicit implementation scope for the revised Phase 2 tasks;
-  implement report capture/rendering before transcript/continuation/cleanup, then
-  verify revised UI visibly. Separately authorize the pinned ask-user experiment
-  before choosing adoption versus custom implementation. Do not start Phase 3,
-  scheduling or chaining automatically. No new commit/push authorized.
-- Blockers: overall Phase 2 UI acceptance remains open; new report/lifecycle work
-  is planned, not delivered. Earlier graphical visibility and Consult-suite failure
-  evidence remain unresolved (not rerun here). Ask-user adoption/custom choice is
-  pending but not a blocker for report/lifecycle implementation. Trusted human-
-  approval eligibility remains a prerequisite of the later plan adapter.
-- Latest research: reviewed pi-ask-user main at df1df70acf1f7521d24f9518a702064930340df2
-  (package 0.17.1) and Pi 1.4.0 RPC/extension contracts. Standard-dialog fallback
-  exists; no installation, package test run or compatibility claim. Proposed
-  pinned evaluation before custom tool; details in report-and-input-review.md.
+- Selected scope: revised Phase 2 only; implementation and isolated ask-user
+  evaluation delivered, pending verification gates. User authorized committing
+  this checkpoint; no extension adoption, later phase or push.
+- Last verified result: 58/58 focused job tests; unit+optional 956 passed/2 Docker
+  skips; latest full+optional 1042 passed/2 Docker skips. Earlier same-session full
+  run reproduced an intermittent Consult failure; its stderr-JSON contamination
+  is now diagnosed, not repaired. Changed production files compile warning-free
+  into /tmp. Phase 2 revisions are recorded in jj change kvqvyusr; original
+  implementation cfebb35 and parent planning commit cbc0d08a remain historical.
+- Next action: establish explicitly trusted SSH access and rerun job-specific real
+  SSH cleanup coverage; review revised reports/transcript/continuation in a fresh
+  genuinely visible Emacs and obtain human acceptance. Request separate authority
+  for the unrelated Consult repair. Do not advance phases or install ask-user.
+- Blockers: SSH unknown-host trust prompt; no graphical display/human layout review;
+  intermittent Consult classification defect remains unfixed despite a green latest
+  full run. Optional ask-user adoption/custom choice is not a report/lifecycle
+  blocker and remains unapproved. Later adapter approval-contract work is out of scope.
+- Latest research: pinned pi-ask-user df1df70acf1f7521d24f9518a702064930340df2
+  (0.17.1) loads with Pi 1.4.0 and standard dialogs, but cancellation/timeout/stale
+  request findings preclude recommending unmodified job adoption. Five real-RPC
+  observations plus a print-mode probe recorded in report-and-input-review.md.
+  No global installation, upstream package-suite claim, live user-state mutation
+  or push. Committing the current work is now explicitly authorized.
+- Refinement finding: rendered reports require markdown-mode's external
+  markdown-command. User's current converter command is unavailable, so exact
+  Markdown fallback is expected. Pandoc via mise was suggested; no installation
+  or Emacs configuration change performed.
 
 * Earlier consistency review (2026-10-31; before report/lifecycle revision)
 - Source, commit cfebb35, accepted UI, pre-repair audit and current tests agree:
@@ -513,6 +578,42 @@ completing a release subset is not whole-plan completion.
   stable phase IDs or plan-change reauthorization has slipped into current scope.
 
 * Verification
+- 2026-10-31 revised Phase 2 execution (Pi 1.4.0):
+  - Focused jobs: 58/58, including nine real-Pi cases;
+    /tmp/pichat-phase2-revision-focused-final.log.
+  - Unit+optional: 958 total, 956 passed, 2 Docker skips, 0 unexpected;
+    /tmp/pichat-phase2-revision-unit.log. This preceded final duplicate-idle-reply
+    hardening, which is covered by the subsequent focused and full runs.
+  - Latest full+optional on final source: 1044 total, 1042 passed, 2 Docker skips,
+    0 unexpected; /tmp/pichat-phase2-revision-full-latest.log (122.66s).
+  - Intermediate full+optional: 1044 total, 1041 passed, 1 existing Consult failure,
+    2 Docker skips; /tmp/pichat-phase2-revision-full-verified.log. Earlier 1043-test
+    full run also passed; no test was disabled to obtain a green latest result.
+  - Consult investigation, no source fix: observed valid INVALID_QUERY JSON
+    followed by “Process pichat-archive-consult stderr finished” entering the
+    classifier. The appended default stderr-sentinel text invalidates whole-JSON
+    parsing and misclassifies a caller error as process failure, invalidating its
+    capability. Deterministic plain-versus-contaminated decode probe reproduces
+    this distinction: /tmp/pichat-phase2-consult-root-cause.log. A repeated isolated
+    instrumented run reproduced contamination at iteration 7, but its verbose
+    diagnostic output timed out; do not claim 40 complete iterations:
+    /tmp/pichat-phase2-consult-investigation.log.
+  - Real SSH: attempted run-ssh-tests.sh with previously documented target
+    /ssh:mojo@bigbox.lan:/tmp/ and /run/current-system/sw/bin/pi. All 13 cases fail
+    during host-key trust/connection setup, not as usable feature verification;
+    /tmp/pichat-phase2-revision-ssh.log. No bypass/key acceptance performed.
+  - No graphical display variables or X socket are available; graphical fixture
+    updated, parentheses checked and load-tested, but not display-executed. A
+    final structural check caught/corrected an extra close parenthesis in that
+    opt-in fixture. Visible human acceptance is not claimed.
+  - Pinned ask-user: five real-RPC expected compatibility observations pass;
+    /tmp/pichat-phase2-ask-evaluation.log. Print mode separately exercised missing
+    UI; /tmp/pichat-phase2-ask-no-ui.log. Failures/limitations are documented, not
+    called product acceptance. No global packages/skills installed.
+  - Changed production files compile warning-free to /tmp only;
+    /tmp/pichat-phase2-bytecompile-final.log. Parentheses and git diff --check pass.
+    Focused test lines: job-core 322, jobs 834, live-ui 142, SSH 65, support 113.
+    No runtime jobs metadata or repository .elc files modified/generated.
 - 2026-10-31 status review: pichat/test/run-tests.sh --full --with-optional:
   1035 total, 1032 passed, 1 unexpected, 2 Docker opt-in skips;
   /tmp/pichat-jobs-status-review-full.log. All 49 job-related tests pass.
@@ -603,6 +704,25 @@ completing a release subset is not whole-plan completion.
   checked, but visible UI acceptance remains open as recorded above.
 
 * History
+- 2026-10-31T22:41:30+00:00: User authorized committing the accumulated Phase 2
+  work before further refinement. Recorded code/tests/docs/plan in jj change
+  kvqvyusr, retaining blocked verification/acceptance tasks. Noted the missing
+  Markdown converter as a refinement finding; no dependency/config installation,
+  extension adoption, later-phase execution or push authorized/performed.
+- 2026-10-31T22:13:37+00:00: Executed revised Phase 2 only. Delivered final-response
+  evidence, shared renderer/result-first reports, offline transcript, explicit
+  continuation, stopped read-only chats and conservative completion cleanup.
+  Verified focused/unit/full optional suites and compilation; evaluated pinned
+  ask-user without adoption. Latest full run passes, but an intermediate run
+  reproduced an unrelated Consult defect whose stderr-JSON cause was diagnosed
+  without a source fix. Blocked closeout on SSH trust and visible UI acceptance;
+  keep unrelated Consult repair separately authorized. No later phase, user
+  runtime-data access, commit or push. User's “continue” preserves this scope;
+  it is not SSH trust acceptance or extension-adoption authorization.
+- 2026-10-31T21:24:51+00:00: User requested running Phase 2. Clean worktree at
+  startup; selected revised Phase 2 only, activated response/report task, and
+  authorized isolated ask-user evaluation without global adoption. Human visible
+  acceptance remains required; no adjacent phase or commit/push authorized.
 - 2026-10-31T21:15:28+00:00: User requested plan revision after result-first UI,
   status/input and retained-runtime discussion, plus pi-ask-user evaluation.
   Added concrete report/continuation design and Phase 2 tasks for exact response

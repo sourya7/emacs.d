@@ -3,7 +3,7 @@
 #+PLAN_ID: pichat-repeatable-jobs-with-ui-approval-gate
 #+PLAN_STATUS: blocked
 #+PLAN_CREATED: 2026-10-30T06:19:17+00:00
-#+PLAN_UPDATED: 2026-10-31T09:19:53+00:00
+#+PLAN_UPDATED: 2026-10-31T17:25:51+00:00
 
 * Goal
 Add lightweight native PiChat jobs with reusable instructions, inspectable runs,
@@ -124,8 +124,9 @@ first and obtain explicit user acceptance before feature implementation.
 
 ** Concurrency and resource ownership
 - One active occurrence per definition; small configurable global run limit.
-  Resolve skipped versus coalesced interval occurrences explicitly, with bounded
-  queues and visible reasons. Do not infer resource safety from job identity.
+  Accepted interval policy: skip busy ticks with a visible reason, without
+  accumulating a backlog or coalesced catch-up attempt. Manual queues remain
+  bounded. Do not infer resource safety from job identity.
 - Serialize managed conflicting modifications to the same execution workspace.
   Different projects and isolated worktrees can run in parallel unless another
   mutable resource is shared, including the authoritative plan file.
@@ -351,8 +352,11 @@ attempts, and isolated worktrees sharing one plan.
 Do not implement autonomous next-phase selection or successor dispatch here.
 ** Phase 4: One-shot and fixed-interval scheduling
 *** TODO Implement native timer dispatch through shared admission
-Resolve date/time/timezone display, interval semantics, overlap/coalescing, timer
-restoration, missed starts, and disable-versus-cancel behavior. No cron/calendar
+Resolve date/time/timezone display, interval timing, accepted skip-busy overlap
+behavior (not coalesced catch-up), timer restoration, missed starts, and
+disable-versus-cancel behavior. Extend the currently manual-only trigger schema
+and submission boundary compatibly; preserve existing version-1 records and
+capture trigger/occurrence provenance before dispatch. No cron/calendar
 recurrence, automatic catch-up or implicit retry of failed plan work. Test timer
 cleanup, restart, overlapping triggers, stale definitions, due-time eligibility,
 completed plan phases and bounded queues. Verify accepted schedule UI live.
@@ -380,24 +384,61 @@ completing a release subset is not whole-plan completion.
 
 * Checkpoint
 - Plan status: blocked
-- Selected scope: Phase 2 reviewed UI repairs and focused test consolidation
-- Last verified result: after origin rebase and user-requested UI cleanup,
-  optional unit suite 952 total/950 passed/2 Docker skips; focused Jobs UI 13/13;
-  graphical automation 2/2; jobs module byte-compilation and whitespace checks
-  pass. Final precommit full+optional after rebase/cleanup: 1035 total, 1033
-  passed, only 2 Docker opt-in skips, 0 unexpected. Prior SSH 13/13 remains below.
-  Tests consolidated from seven new files to five. User reports the UI looks
-  better; remaining visible-layout signoff is not assumed from that feedback.
+- Selected scope: status/code/design consistency review of delivered Phase 2
+  and remaining roadmap; bookkeeping only, no feature implementation
+- Last verified result: delivered work is committed as cfebb35 (Add native manual
+  PiChat jobs and inspectable run history); implementation unchanged since then,
+  clean worktree at review start. Fresh full+optional run: 1035 total, 1032 passed,
+  1 Consult/archive failure, 2 Docker opt-in skips. All 49 job-related tests pass,
+  including six real-Pi integration cases. The failed Consult test passes on an
+  isolated rerun; cause is not established and the full run is not green.
+  Prior graphical 2/2 and SSH 13/13 are historical, not rerun in this review.
+  Remaining visible-layout signoff is not assumed from prior user feedback.
 - Next action: inspect the repaired setup/list/history/details/settings and
   attention/recovery layouts in a genuinely visible fresh Emacs frame, then close
-  Phase 2 UI acceptance if satisfactory. Do not start Phase 3, scheduling or
-  conditional chaining automatically. User authorized committing the accumulated
-  Phase 2 work; runtime metadata remains excluded. No push or later phase authorized.
-- Blockers: no remaining known source/runtime blocker; current graphical frame
-  stays iconified, so screenshot/visible acceptance could not be performed here.
-  Trusted human-approval eligibility remains a prerequisite of the later adapter
+  Phase 2 UI acceptance if satisfactory. Recheck the Consult/archive failure before
+  claiming a fresh clean full suite; do not silently repair it under this review.
+  Do not start Phase 3, scheduling or chaining automatically. Phase 2 commit is
+  complete; runtime metadata remains excluded. No new commit/push authorized.
+- Blockers: Phase 2 visible review remains unverified; the earlier graphical frame
+  stayed iconified (not newly probed here). Fresh full-suite verification also has
+  an unresolved Consult/archive failure, outside the Jobs modules. Trusted human-
+  approval eligibility remains a design prerequisite of the later adapter.
+
+* Consistency review (2026-10-31)
+- Source, commit cfebb35, accepted UI, pre-repair audit and current tests agree:
+  manual plan-free jobs, immutable run captures, conservative admission/recovery,
+  independent background runtimes and progressive inspection UI are delivered.
+  The audit is explicitly historical; its repaired defects are not open tasks.
+- Phase 2 remains BLOCKED for visible UI review; Phase 1 design approval is not
+  reopened and neither automated geometry checks nor source review close it.
+- Phase 3 is still future work: core validation/execution currently knows manual
+  prompt runs only. Add adapter/spec evolution and same-plan claims through the
+  existing seams, not a parallel executor. Specify/test the machine-readable
+  plans-skill contract and trusted user-action evidence before implementation;
+  structural checks and agent-edited prose cannot establish human acceptance.
+- Phase 4 must preserve accepted skip-busy ticks, missed-once intervention and
+  no replay/retry. Earlier skipped-versus-coalesced wording was stale and is
+  reconciled above. Current manual enqueue is not yet a generic trigger API.
+- Phase 5 remains separately authorized and unstarted. Its TODO correctly keeps
+  this roadmap unfinished. If delivering only the base scope, explicitly agree
+  and record a scope amendment before whole-plan closure; do not implement
+  chaining merely to clear the checklist, or mark it delivered when deferred.
+- Phase 6 remains appropriate after authorized features; incremental verification
+  is already present. Saved-session retention, uncertainty and SSH limitations
+  remain consistent with README.md and GLOSSARY.md. No general workflow engine,
+  stable phase IDs or plan-change reauthorization has slipped into current scope.
 
 * Verification
+- 2026-10-31 status review: pichat/test/run-tests.sh --full --with-optional:
+  1035 total, 1032 passed, 1 unexpected, 2 Docker opt-in skips;
+  /tmp/pichat-jobs-status-review-full.log. All 49 job-related tests pass.
+  Unexpected: pichat-consult-archive-process-classifies-caller-and-availability-failures
+  invalidated the INVALID_QUERY case unexpectedly. Isolated rerun passes 1/1;
+  /tmp/pichat-jobs-status-review-consult.log. No root cause or clean full rerun
+  claimed. No SSH/graphical tests, live-user-state inspection or source edits.
+  Current test lines: job-core 305, jobs 620, jobs-live-ui 133, jobs-ssh 57,
+  shared job-support 113. Structural check passed before reconciliation.
 - 2026-10-31 final precommit verification after origin rebase and UI cleanup:
   full+optional 1035 total, 1033 passed, 2 Docker opt-in skips, 0 unexpected;
   /tmp/pichat-jobs-precommit-full.log. Runtime jobs.json excluded from tracked
@@ -479,6 +520,13 @@ completing a release subset is not whole-plan completion.
   checked, but visible UI acceptance remains open as recorded above.
 
 * History
+- 2026-10-31T17:25:51+00:00: User requested status and consistency review. Verified
+  committed Phase 2 source/tests/docs against accepted UI and historical audit;
+  no later feature implemented. Reconciled completed commit and stale interval
+  overlap wording. Recorded fresh Jobs passes and a full-suite Consult failure
+  that passes alone without claiming resolution. Preserved visible-review blocker,
+  future adapter approval-contract decisions and separately authorized chaining.
+  Only this plan record changed; no source/runtime metadata changes or commit.
 - 2026-10-31T09:19:53+00:00: User requested committing the accumulated change.
   Verified final rebased/cleaned tree with full+optional suite: 1033 passes,
   only 2 opt-in Docker skips. Authorized Phase 2 source/tests/docs/config commit

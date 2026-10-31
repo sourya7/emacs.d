@@ -91,5 +91,14 @@
 
 (use-package load-relative :ensure (:wait t) :demand t)
 
+;; PiChat's generated autoloads evaluate Transient forms during activation.
+(use-package transient
+  :ensure (:wait t)
+  :demand t
+  :custom
+  (transient-levels-file (my/emacs-local-dir "transients/levels.el"))
+  (transient-values-file (my/emacs-local-dir "transients/values.el"))
+  (transient-history-file (my/emacs-local-dir "transients/history.el")))
+
 (provide 'core/package-manager)
 ;;; package-manager.el ends here

@@ -52,12 +52,5 @@
   (diff-hl-flydiff-mode 1)
   (add-hook 'magit-post-refresh-hook #'diff-hl-magit-post-refresh))
 
-(use-package transient
-  :demand t
-  :custom
-  (transient-levels-file (my/emacs-local-dir "transients/levels.el"))
-  (transient-values-file (my/emacs-local-dir "transients/values.el"))
-  (transient-history-file (my/emacs-local-dir "transients/history.el")))
-
 (provide 'core/git)
 ;;; git.el ends here

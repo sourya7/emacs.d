@@ -29,8 +29,9 @@ choices in ui-example-v1.md. It is supporting design evidence, not a task list.
 - One Jobs view: Jobs rows separate Schedule from Latest run; Runs shows attempts,
   including unsaved one-offs. Browsing/refresh never dispatches execution.
 - Run details show execution state, outcome, trigger, scope/target, bounded result
-  and exact-chat/settings/diagnostic/history actions. Agent statements about file
-  changes are labelled as reported, not independent filesystem verification.
+  and exact-chat/settings/diagnostic/history actions. Follow-up user decision:
+  omit generic agent-reported/not-independently-verified disclaimers; keep execution
+  outcome distinct from domain completion and show actionable warnings only.
 - Repeat this run reviews captured historical settings; Run job uses the current
   definition. Explicit edits/refreshes don't change existing run snapshots.
   Captured preset/model/tool choices do not freeze remote extension code or the
@@ -60,5 +61,11 @@ choices in ui-example-v1.md. It is supporting design evidence, not a task list.
 - Chaining is separately authorized later, with visible successors and Run this
   job only. No disabled graph controls in the initial interface.
 
-The acceptance closes Phase 1. The same message authorizes proceeding with
+Follow-up planning revision: `report-and-input-review.md` records result-first
+reports, reuse of existing Markdown rendering, View transcript / Continue in chat…,
+and safe cleanup instead of indefinite finished-runtime retention. The user asked
+to revise the plan on that basis; new implementation and visible acceptance are
+not claimed. Optional ask-user adoption versus custom tooling remains undecided.
+
+The original acceptance closes Phase 1. The same message authorizes proceeding with
 Phase 2 only; later phases still require their own execution scope.

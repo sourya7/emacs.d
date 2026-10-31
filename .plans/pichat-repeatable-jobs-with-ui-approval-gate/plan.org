@@ -3,7 +3,7 @@
 #+PLAN_ID: pichat-repeatable-jobs-with-ui-approval-gate
 #+PLAN_STATUS: blocked
 #+PLAN_CREATED: 2026-10-30T06:19:17+00:00
-#+PLAN_UPDATED: 2026-10-31T17:25:51+00:00
+#+PLAN_UPDATED: 2026-10-31T21:15:28+00:00
 
 * Goal
 Add lightweight native PiChat jobs with reusable instructions, inspectable runs,
@@ -29,7 +29,12 @@ first and obtain explicit user acceptance before feature implementation.
 - Also deferred: stable phase IDs/Org ID insertion and automatic plan-modification
   detection, diffing, or reauthorization based on content changes.
 - User explicitly accepted the revised UI and authorized proceeding on 2026-10-31.
-  Phase 2 is the selected execution scope; later phases do not start automatically.
+  Phase 2 was the selected execution scope; later phases do not start automatically.
+- Follow-up planning revision: result-first reports, full-response capture, offline
+  transcript inspection, explicit conversational continuation and finished-runtime
+  cleanup belong to Phase 2. Evaluate an optional ask-user extension separately;
+  adoption/custom implementation is not yet selected. This request authorizes
+  plan revision/research only, not implementation.
 
 * Acceptance criteria
 - Phase 1 presents a concrete example for job creation, manual execution,
@@ -190,6 +195,30 @@ first and obtain explicit user acceptance before feature implementation.
   (e.g. Phase 2 then Phase 3, stop before Phase 4); it does not change the plans
   skill's default one-scope stopping rule. Do not infer a successor from adjacency.
 
+** Report, lifecycle and input revision (2026-10-31)
+- [[file:report-and-input-review.md][Report and input review]] records the revised concrete UI, source findings and
+  pinned upstream evaluation. It supersedes generic agent-reported disclaimers
+  and indefinite finished-runtime retention in earlier UI direction. Existing
+  delivered behavior below is historical/current code, not the new target.
+- Response-first run details reuse the sanitized response-view Markdown renderer;
+  no new renderer or prose-based status detector. Keep source copy/fallback,
+  meaningful warning states, exact-target context and secondary sensitive settings.
+- Persist a complete identified settled response separately from list previews,
+  with bounded storage/overflow and backwards compatibility. Preserve a run-end
+  transcript boundary so later continuation cannot rewrite job evidence.
+- After safe completion/capture, stop the owned runtime; retain readable visible
+  transcripts and durable evidence. Pending input/cancelling/uncertain cases retain
+  tracking and claims as required. Cleanup must not weaken SSH/descendant safety.
+- View transcript is nonexecuting; Continue in chat… explicitly opens ordinary
+  conversation using the captured target and current default preset, extending
+  the saved Pi session without mutating the run. Repeat… is a new job attempt.
+  Reuse source reservations, check shutdown, and never silently evict another writer.
+- Explicit input requests are interaction, not proof of task/phase authorization.
+  Ask only for missing necessary information or consequential unresolved choices;
+  do not ask merely because several reasonable implementation choices exist.
+  Do not infer waiting from prose or silence, invent answers, auto-approve on
+  timeout/cancel, or treat a generic ask tool as the plan's trusted approval gate.
+
 ** UX and reuse
 - One Jobs view with definition details and run history, not a separate plan
   execution dashboard. Reuse tabulated-list-mode/runtime-manager presentation
@@ -306,7 +335,8 @@ No automatic retries or replay. Document as this phase is delivered.
   the idle live executor in one Emacs operation without reopening/reconciling.
   Original bytes/0600 mode preserved; old path removed and ignored; neither
   runtime-data path is tracked by jj. No commit requested/performed.
-- Finished inspection runtimes are retained until users stop/forget them; no
+- Current implementation (superseded target; see new tasks below): finished
+  inspection runtimes are retained until users stop/forget them; no
   automatic pruning or active-model timeout. Settings snapshots do not freeze
   environment/credentials/extension code. Limits and lifecycle are documented
   in README.md, GLOSSARY.md and TESTING_GUIDELINES.md.
@@ -335,8 +365,57 @@ No automatic retries or replay. Document as this phase is delivered.
   Visible human layout acceptance remains OPEN: this display reports the frame as
   iconified even after explicit show/focus attempts, preventing screenshot export.
   Graphical control/geometry assertions are not proof of a visible layout review.
-  Task is BLOCKED only on that visible-frame review; no further design approval
-  is required to perform it. Later phases remain out of scope.
+  At that checkpoint the task was blocked only on visible review. The subsequent
+  report/lifecycle revision below adds unimplemented Phase 2 scope; final visible
+  acceptance must review the revised screens, not close this phase on old evidence.
+*** TODO Implement result-first reports with shared Markdown rendering
+Follow report-and-input-review.md. Separate bounded previews from a complete,
+identified final settled response and immutable run-end transcript boundary.
+Choose bounded versioned storage/sidecars and explicit overflow/failure handling;
+legacy truncated records remain labelled previews. Handle tool-only/no-prose and
+failed/partial endings without substituting intermediate text as a final answer.
+Expose the response renderer's reusable API rather than copying sanitation/links
+or inheriting chat-bound response navigation. Add compact task/status/context,
+Response, grouped actions and collapsed execution details. No agent-reported
+boilerplate; actionable failure/input/uncertainty stays prominent. Preserve exact
+Markdown copy, native/Evil navigation, safe links, fallback, narrow widths and
+refresh reading/expansion state. Test hostile Markdown and long/truncated results.
+*** TODO Implement transcript inspection, continuation and finished-runtime cleanup
+View transcript must work without starting Pi, after restart and after subsequent
+conversation edits, using the captured run boundary. Preserve diagnostic evidence.
+Continue in chat… explicitly extends the saved session in an ordinary runtime,
+using current default preset and captured target; never rerun work, modify the old
+report or implicitly stop another writer. Review preset/remote target concisely.
+After durable synchronized completion, orderly-stop the owned runtime and preserve
+an already visible chat as a read-only transcript. Resolve hidden-buffer cleanup
+and retained-manager policy without deleting conversation evidence. Define cleanup
+failure state and source/resource release ordering before coding; maintain remote
+exit/descendant uncertainty and never auto-stop a run awaiting explicit input.
+Test no focus theft, late callbacks, cleanup failure, visible/closed buffers,
+missing saved files, duplicate writers, stale identities, repeat versus continue,
+and reports/transcript boundaries unaffected by later prompts. Use isolated real
+Pi plus job-specific SSH lifecycle checks; do not replace existing guards casually.
+*** TODO Evaluate pinned ask-user extension and choose integration scope
+Evaluate pi-ask-user df1df70acf1f7521d24f9518a702064930340df2 using isolated real-Pi
+fixtures, extension-only loading and existing RPC dialog handling. No global
+installation or bundled mandatory-gating skill activation. Verify single-choice
+context/descriptions, free text, sequential calls, missing UI, hidden focus-gated
+requests, answer correlation, timeout/abort/cancel and stale-queue cleanup. Check
+whether dependent work can proceed after cancellation; never count it as approval.
+Recommend pinned upstream, an upstream patch or a minimal PiChat-owned model-only
+tool based on observed gaps. Present native input UI and necessary-only guidance
+for acceptance; adoption/custom implementation requires a subsequent explicit
+choice/scope. This optional decision does not block report/lifecycle work and must
+not become a parallel plan-phase approval system or duplicate ask_user declaration.
+*** TODO Verify revised Phase 2 and obtain visible UI acceptance
+Run focused report/lifecycle/input tests and full optional suite; investigate the
+previous Consult failure before claiming a fresh clean run. Review completed,
+queued, input, failed and uncertain screens, collapsed/expanded details, offline
+transcript and continuation in a genuinely visible isolated Emacs. Update README
+and glossary to distinguish durable job evidence from continued Pi conversation.
+Human acceptance, not graphical automation alone, closes the existing BLOCKED
+integration/UI task. Optional ask-user evaluation may be explicitly deferred;
+record that scope decision, never mark unimplemented adoption as delivered.
 ** Phase 3: Optional exact-plan-phase adapter
 *** TODO Implement explicit phase targeting, eligibility and bounded authorization
 Add the narrow machine-readable plans-skill inspection contract, plan/heading-path
@@ -384,8 +463,8 @@ completing a release subset is not whole-plan completion.
 
 * Checkpoint
 - Plan status: blocked
-- Selected scope: status/code/design consistency review of delivered Phase 2
-  and remaining roadmap; bookkeeping only, no feature implementation
+- Selected scope: revise Phase 2 report/lifecycle UI and evaluate ask-user design
+  from source; planning/research only, no feature implementation
 - Last verified result: delivered work is committed as cfebb35 (Add native manual
   PiChat jobs and inspectable run history); implementation unchanged since then,
   clean worktree at review start. Fresh full+optional run: 1035 total, 1032 passed,
@@ -394,18 +473,22 @@ completing a release subset is not whole-plan completion.
   isolated rerun; cause is not established and the full run is not green.
   Prior graphical 2/2 and SSH 13/13 are historical, not rerun in this review.
   Remaining visible-layout signoff is not assumed from prior user feedback.
-- Next action: inspect the repaired setup/list/history/details/settings and
-  attention/recovery layouts in a genuinely visible fresh Emacs frame, then close
-  Phase 2 UI acceptance if satisfactory. Recheck the Consult/archive failure before
-  claiming a fresh clean full suite; do not silently repair it under this review.
-  Do not start Phase 3, scheduling or chaining automatically. Phase 2 commit is
-  complete; runtime metadata remains excluded. No new commit/push authorized.
-- Blockers: Phase 2 visible review remains unverified; the earlier graphical frame
-  stayed iconified (not newly probed here). Fresh full-suite verification also has
-  an unresolved Consult/archive failure, outside the Jobs modules. Trusted human-
-  approval eligibility remains a design prerequisite of the later adapter.
+- Next action: obtain explicit implementation scope for the revised Phase 2 tasks;
+  implement report capture/rendering before transcript/continuation/cleanup, then
+  verify revised UI visibly. Separately authorize the pinned ask-user experiment
+  before choosing adoption versus custom implementation. Do not start Phase 3,
+  scheduling or chaining automatically. No new commit/push authorized.
+- Blockers: overall Phase 2 UI acceptance remains open; new report/lifecycle work
+  is planned, not delivered. Earlier graphical visibility and Consult-suite failure
+  evidence remain unresolved (not rerun here). Ask-user adoption/custom choice is
+  pending but not a blocker for report/lifecycle implementation. Trusted human-
+  approval eligibility remains a prerequisite of the later plan adapter.
+- Latest research: reviewed pi-ask-user main at df1df70acf1f7521d24f9518a702064930340df2
+  (package 0.17.1) and Pi 1.4.0 RPC/extension contracts. Standard-dialog fallback
+  exists; no installation, package test run or compatibility claim. Proposed
+  pinned evaluation before custom tool; details in report-and-input-review.md.
 
-* Consistency review (2026-10-31)
+* Earlier consistency review (2026-10-31; before report/lifecycle revision)
 - Source, commit cfebb35, accepted UI, pre-repair audit and current tests agree:
   manual plan-free jobs, immutable run captures, conservative admission/recovery,
   independent background runtimes and progressive inspection UI are delivered.
@@ -520,6 +603,14 @@ completing a release subset is not whole-plan completion.
   checked, but visible UI acceptance remains open as recorded above.
 
 * History
+- 2026-10-31T21:15:28+00:00: User requested plan revision after result-first UI,
+  status/input and retained-runtime discussion, plus pi-ask-user evaluation.
+  Added concrete report/continuation design and Phase 2 tasks for exact response
+  capture, shared Markdown rendering, offline bounded transcript, safe automatic
+  runtime cleanup and explicit continuation. Removed generic disclaimer from target
+  design, retained actionable uncertainty. Recorded pinned upstream source review
+  and optional adoption/custom decision gate. No implementation, dependency install,
+  live-state mutation, test execution or commit; earlier verification is historical.
 - 2026-10-31T17:25:51+00:00: User requested status and consistency review. Verified
   committed Phase 2 source/tests/docs against accepted UI and historical audit;
   no later feature implemented. Reconciled completed commit and stale interval

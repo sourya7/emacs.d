@@ -3,7 +3,7 @@
 #+PLAN_ID: pichat-persistent-context-header
 #+PLAN_STATUS: draft
 #+PLAN_CREATED: 2026-11-01T07:34:01+00:00
-#+PLAN_UPDATED: 2026-11-01T07:34:01+00:00
+#+PLAN_UPDATED: 2026-11-01T07:36:24+00:00
 
 * Goal
 Keep context usage visible while reading or composing in PiChat, including
@@ -12,10 +12,13 @@ when the transcript is scrolled and the chat is displayed in a narrow split.
 * Scope
 - Included: a persistent chat header containing the runtime working directory
   and context usage; width-aware prioritization; removal of duplicate visible
-  context/title information; focused tests and user documentation.
+  context/title information; a small custom-info segment API; focused tests
+  and user documentation.
 - Excluded: changing context accounting or RPC refresh boundaries, redesigning
   Jobs, changing runtime/Pi session identity, adding new controls, or unrelated
-  mode-line cleanup. No implementation or commits during planning.
+  mode-line cleanup. Fetching subscription/plan quotas and provider-specific
+  integrations are excluded; this change supplies their presentation seam only.
+  No implementation or additional commits without explicit request.
 
 * Acceptance criteria
 - The header remains visible while scrolling, with the working directory on
@@ -31,6 +34,12 @@ when the transcript is scrolled and the chat is displayed in a narrow split.
   usage remains distinctly labelled and is never called context occupancy.
 - Working-directory and usage changes update without transcript edits for
   ordinary header-only refreshes. Source rebinding cannot leave old usage visible.
+- Users can add optional custom information, such as subscription/plan usage
+  remaining, without modifying the built-in header renderer. Custom segments
+  can be configured globally or buffer-locally and omitted when unavailable.
+- Custom information yields to context occupancy on narrow windows; custom
+  ordering/priority and compact text are supported. Broken custom callbacks
+  fail closed for their segment, never breaking chat/header redisplay.
 - No duplicate visible scrolling title or mode-line context segment; remaining
   model/thinking controls, runtime state and queue/UI indicators still work.
 - Transcript region markers, prompt editing/undo, scrolling, and export retain
@@ -52,12 +61,28 @@ when the transcript is scrolled and the chat is displayed in a narrow split.
   branch already explicitly distinguishes request totals from occupancy.
 - Use cached runtime state only during redisplay; no RPC/file operations in
   header evaluation. Ensure redisplay and width calculations target each window.
+- Build the header from a small ordered collection of segments, not a hardcoded
+  path/context concatenation. Provide a documented defcustom for custom segment
+  functions, evaluated with explicit runtime and window context against cached
+  data. A segment returns nil or a bounded presentation record with stable ID,
+  full/compact text and display priority; preserve faces and tooltip properties.
+  Keep built-in context protected from optional segments even at high priority.
+- Separate data acquisition from rendering. Custom callbacks must not perform
+  network/RPC/file access during redisplay; integrations refresh their own cache
+  asynchronously and request redisplay through a documented refresh entry point.
+  Define source/runtime/global cache ownership explicitly so account quotas can
+  outlive a source switch while source-scoped values cannot leak across it.
+- Document the minimal extension contract and a cached mock quota example;
+  no general widget framework or quota backend is required. Subscription/plan
+  allowance labels must stay distinct from model context-window occupancy.
 - Jobs uses fixed header-line facilities (table headings and cached-inspection
   navigation); borrow the native mechanism, not its job-specific contents.
 - Follow pichat/GLOSSARY.md: the path is the runtime working directory; the
   chat follows the runtime's active source. Keep README terminology consistent.
 - Proposed wide layout:
   : PiChat — ~/.emacs.d/                    Context 84k/272k · 31%
+- Proposed wide layout with optional cached custom information:
+  : PiChat — ~/.emacs.d/       Plan left 62%       Context 84k/272k · 31%
 - Proposed narrow layout:
   : PiChat — …/emacs.d/       Context 84k/272k
 - Proposed very narrow layout:
@@ -69,28 +94,37 @@ Audit header/marker/export consumers and redisplay triggers; implement per-windo
 layout, unknown/unavailable states, percentage fallback and semantic usage labels.
 Retire the scrolling title's visible role and remove mode-line context duplication
 without changing the remaining controls or transcript boundaries.
+** TODO Provide the custom-information extension seam
+Implement the small segment contract, configurable custom callbacks, priority
+and compact fallback, error isolation, and cached-data redisplay entry point.
+Include a mock cached plan-allowance example, not a live provider integration.
 ** TODO Add focused regression coverage
 Extend existing chat-controls/core/lifecycle tests rather than creating competing
 suites. Cover narrow/wide and two-window rendering, literal percent display,
 long/special-character paths, absent/unknown/accumulated usage, warning faces,
 source changes and preservation of remaining controls and prompt behavior.
+Cover custom full/compact/omitted segments, priority-based dropping, callback
+errors, per-buffer configuration, explicit runtime/window context, cache refresh
+and source-scoped invalidation. Verify custom quota text cannot hide context.
 ** TODO Verify layout and update documentation
 Run focused tests and pichat/test/run-tests.sh. In a separate live Emacs instance,
 inspect wide/narrow splits, scrolling, prompt editing, usage updates and inactive
 windows; use isolated fixtures, not real conversations. Update pichat/README.md
-for the fixed header and revised mode line. Record actual results and failures.
+for the fixed header, revised mode line and custom segment/cache contract.
+Record actual results and failures.
 
 * Checkpoint
 - Plan status: draft
 - Selected scope: none (planning only)
 - Last verified result: inspected current chat header/mode-line formatting,
   context formatter, relevant tests and Jobs header-line usage; no code changed.
-- Next action: review and approve the proposed persistent-header design, then explicitly request execution.
+- Next action: review and approve the extensible persistent-header design, then explicitly request execution.
 - Blockers: none; option 2 remains a proposed design until approved.
 
 * Verification
 - Implementation tests and live UI checks not run (planning only).
-- Plan structural validation pending.
+- Initial draft structural validation passed; rerun after this revision.
 
 * History
 - 2026-11-01T07:34:01+00:00: Created draft from the modeline review; proposed option 2 with context-priority width handling. No implementation authorized.
+- 2026-11-01T07:36:24+00:00: Added custom cached-information segments at user request, including plan-usage examples, priority/compact fallback and callback isolation. Quota acquisition remains out of scope.

@@ -1,9 +1,9 @@
 #+TITLE: PiChat repeatable jobs with UI approval gate
 #+TODO: TODO IN-PROGRESS BLOCKED | DONE
 #+PLAN_ID: pichat-repeatable-jobs-with-ui-approval-gate
-#+PLAN_STATUS: blocked
+#+PLAN_STATUS: ready
 #+PLAN_CREATED: 2026-10-30T06:19:17+00:00
-#+PLAN_UPDATED: 2026-11-01T07:08:43+00:00
+#+PLAN_UPDATED: 2026-11-01T18:13:06+00:00
 
 * Goal
 Add lightweight native PiChat jobs with reusable instructions, inspectable runs,
@@ -295,7 +295,7 @@ exclusion and compatible/conflicting resource decisions. Verify isolated behavio
   resource claims, attempt tokens, explicit reconciliation and manual resolution.
 - Readers never dispatch/replay; foreign/stale writers and malformed/future data
   fail without overwriting. Uncertain attempts retain claims across restart.
-*** BLOCKED Integrate background execution and accepted UI
+*** DONE Integrate background execution and accepted UI
 Finalize small state/result contracts, definition/run schema, inline one-off
 submission, captured configuration, resource claims, bounded concurrency,
 interaction/cancellation, lifecycle and retention. Reuse existing launch/backend
@@ -394,7 +394,7 @@ refresh reading/expansion state. Test hostile Markdown and long/truncated result
 - Hostile HTML, fallback, source copying, long results, offline reloaded evidence,
   preview compatibility and nonexecuting inspection have passing behavior tests.
   Visible human acceptance remains a separate BLOCKED task below.
-*** BLOCKED Implement transcript inspection, continuation and finished-runtime cleanup
+*** DONE Implement transcript inspection, continuation and finished-runtime cleanup
 View transcript must work without starting Pi, after restart and after subsequent
 conversation edits, using the captured run boundary. Preserve diagnostic evidence.
 Continue in chat… explicitly extends the saved session in an ordinary runtime,
@@ -426,10 +426,11 @@ Pi plus job-specific SSH lifecycle checks; do not replace existing guards casual
   changed conversation versus immutable evidence, cleanup failure and overflow.
   Offline SSH observer tests cover baseline ordering, duplicate completion replies,
   unknown exit and claim retention. Required real-SSH completion check is updated.
-- BLOCKED: real-SSH suite cannot connect to the previously used mojo@bigbox.lan
-  target: host-key trust prompts fail in batch. No host key accepted or checking
-  weakened. Rerun the isolated job-specific SSH check after trusted access is
-  established; current remote shutdown changes are not claimed real-SSH verified.
+- Earlier real-SSH verification was blocked on host trust. Resolved on
+  2026-11-01: strict batch SSH succeeds in the current environment without trust
+  changes; all 13 isolated SSH tests pass, including job completion cleanup,
+  durable response capture and independent actual-Pi exit confirmation. This does
+  not establish descendant safety for abnormal modifying runs.
 *** DONE Evaluate pinned ask-user extension and choose integration scope
 Evaluate pi-ask-user df1df70acf1f7521d24f9518a702064930340df2 using isolated real-Pi
 fixtures, extension-only loading and existing RPC dialog handling. No global
@@ -674,7 +675,7 @@ and timezone remain available in queue-time help; sorting uses stored instants.
   /tmp/pichat-compact-run-time-unit.log, /tmp/pichat-compact-run-time-compile.log.
   Test sizes: jobs 1353, live-ui 163 lines. No RPC/full/graphical/SSH rerun claimed
   for this table-only refinement. Work is uncommitted; acceptance gates unchanged.
-*** BLOCKED Verify revised Phase 2 and obtain visible UI acceptance
+*** DONE Verify revised Phase 2 and obtain visible UI acceptance
 Run focused report/lifecycle/input tests and full optional suite; investigate the
 previous Consult failure before claiming a fresh clean run. Review completed,
 queued, input, failed and uncertain screens, collapsed/expanded details, offline
@@ -694,11 +695,13 @@ record that scope decision, never mark unimplemented adoption as delivered.
   tests. No claim is made that every error-state scenario was visually exercised.
   Agent-side revised graphical automation remains unrun because this process has
   no display; fixture-load checks are not graphical execution.
-- Real-SSH verification is blocked on host trust as above. The previously diagnosed
-  Consult/archive failure was separately authorized and repaired in the preceding
-  task; it is no longer an outstanding verification blocker. Required job-specific
-  real-SSH shutdown/claim-release verification remains outstanding, so Phase 2
-  is not yet formally closed despite implementation/local checks/UI acceptance.
+- Fresh isolated real-SSH verification on 2026-11-01 passes 13/13 with no skips
+  or unexpected results, including the required job-specific completion/exit
+  barrier. The earlier host-trust blocker no longer reproduces; no trust changes
+  were made. Consult/archive repair and prior local full-suite evidence remain
+  scoped as recorded. With explicit human UI acceptance above, Phase 2 is now
+  complete. Agent-side graphical automation remains unrun at this checkpoint;
+  no every-state visual review or new full local-suite run is claimed.
 ** Phase 3: Optional exact-plan-phase adapter
 *** TODO Implement explicit phase targeting, eligibility and bounded authorization
 Add the narrow machine-readable plans-skill inspection contract, plan/heading-path
@@ -745,7 +748,7 @@ appropriate. Preserve outstanding manual checks and deferred phases as tasks;
 completing a release subset is not whole-plan completion.
 
 * Checkpoint
-- Plan status: blocked
+- Plan status: ready
 - Selected scope: revised Phase 2 only; implementation and isolated ask-user
   evaluation delivered, pending verification gates. The checkpoint was committed
   as 4217245e. Current authorized refinement: read-only instruction styling,
@@ -770,27 +773,28 @@ completing a release subset is not whole-plan completion.
   refinement retains queue time instead of project/target, implemented and
   unit-verified and committed as 7625e62f (checkpoint pwwytykz). User's follow-up
   removes (local) from both Queued column headers, committed as ccfc17bb
-  (checkpoint untnnzsy). User has now accepted the revised UI; Phase 2 closeout
-  remains blocked on required job-specific trusted-SSH verification.
-  No later phase/adoption/push.
-- Last verified result: Queued header simplification has 26/26 focused Jobs/Evil
-  checks and warning-free Jobs compilation; no new full/graphical/SSH run claimed.
+  (checkpoint untnnzsy). User accepted the revised UI. The subsequently requested
+  Phase 2 SSH verification now passes 13/13, closing the remaining Phase 2 gate.
+  Phase 2 is complete; no later phase/adoption/commit/push in this invocation.
+- Last verified result: fresh isolated real-SSH suite passes 13/13 on Pi 1.4.0
+  at mojo@bigbox.lan, including background-job completion cleanup and independent
+  actual-Pi exit; /tmp/pichat-jobs-ssh-verification-20261101.log. No trust change.
+  Earlier evidence: Queued header simplification has 26/26 focused Jobs/Evil
+  checks and warning-free Jobs compilation; that display-only verification did
+  not include a full/graphical/SSH rerun.
   Prior compact Runs refinement has 26/26 focused Jobs/Evil checks
   and unit+optional 969 total, 967 passed, 2 Docker skips, zero unexpected. Local
   queue display and DST-safe sorting pass at both widths. Jobs compiles warning-
   free to /tmp; parentheses/diff and graphical-fixture load pass. Latest full suite
   before this table-only change: 1055 total, 1053 passed, 2 Docker skips, all 68
-  job-related cases including nine real-Pi cases passed. No new full RPC,
-  agent-side graphical execution or trusted-SSH run claimed. User separately
-  accepted the revised UI on 2026-11-01. Current code checkpoint is ccfc17bb.
-- Next action: user will run SSH tests on a different host and supply results
-  for job-specific cleanup/actual-Pi-exit verification before Phase 2 closeout.
-  Human UI acceptance is granted. User authorized committing acceptance checkpoint
-  pwlopytn and pushing accumulated changes. Agent-side graphical automation is
-  unrun, not a substitute for or denial of user acceptance. No further
-  implementation, phase advancement, ask-user adoption or host-trust changes.
-- Blockers: awaiting user-run real-SSH verification from another host; this
-  agent's SSH access remains blocked on unknown-host trust.
+  job-related cases including nine real-Pi cases passed. This SSH-only invocation
+  does not rerun full local RPC or agent-side graphical checks. User separately
+  accepted the revised UI on 2026-11-01. This invocation started from clean
+  c597caa2; only this plan record changed, not production or test code.
+- Next action: await explicit selection/authorization of the next scope; Phase 3
+  exact-plan-phase adapter is the next incomplete phase. Do not advance automatically.
+  Whole-plan completion remains outstanding across Phases 3–6.
+- Blockers: none for completed Phase 2. Trusted SSH succeeds and required tests pass.
   Consult classification is repaired and no longer blocks automated verification.
   Optional ask-user adoption/custom choice is not a report/lifecycle blocker and
   remains unapproved. Later adapter approval-contract work is out of scope.
@@ -801,7 +805,8 @@ completing a release subset is not whole-plan completion.
   No global installation, upstream package-suite claim, live user-state mutation
   or push during evaluation. Checkpoints through ccfc17bb are committed;
   acceptance checkpoint pwlopytn and accumulated changes are now authorized for
-  commit/push. Required SSH verification remains pending the user's separate run.
+  commit/push historically. Required SSH verification is now complete as recorded
+  above; this invocation makes no commit or push.
 - Refinement finding: rendered reports require markdown-mode's external
   markdown-command. User's current converter command is unavailable, so exact
   Markdown fallback is expected. Pandoc via mise was suggested; no installation
@@ -832,6 +837,23 @@ completing a release subset is not whole-plan completion.
   stable phase IDs or plan-change reauthorization has slipped into current scope.
 
 * Verification
+- 2026-11-01T18:13:06+00:00 Phase 2 SSH closeout:
+  - Strict BatchMode/StrictHostKeyChecking access to mojo@bigbox.lan succeeds;
+    remote /run/current-system/sw/bin/pi reports 1.4.0. No host-trust change.
+  - PICHAT_TEST_SSH_DIRECTORY=/ssh:mojo@bigbox.lan:/tmp/ and
+    PICHAT_TEST_SSH_PI=/run/current-system/sw/bin/pi with
+    pichat/test/run-ssh-tests.sh: 13/13 passed, zero skips/unexpected (46.45s).
+    Log: /tmp/pichat-jobs-ssh-verification-20261101.log.
+  - Job test verifies captured-target execution despite registry removal, no
+    current-runtime/focus change, synchronized response/evidence, read-only stopped
+    chat, production confirmed exit and independent procfs actual-Pi absence.
+    Existing SSH suite additionally covers restart/recovery, RPC, discovery and
+    runner cleanup. No abnormal-modifier descendant-safety guarantee is inferred.
+  - Fixtures isolate remote agent/project/session state and clean owned files;
+    no real provider or ordinary user Pi state used. Source/test code unchanged.
+    Focused sizes: jobs-ssh 65 lines, real-ssh-support 166 lines.
+  - Prior human acceptance and local-suite evidence close Phase 2 with this result;
+    no new full local or graphical run, later-phase implementation, commit or push.
 - 2026-11-01 Phase 2 keyboard interaction audit/fixes:
   - Validated negative control before production edits: three regressions fail for
     attention staying enabled, disclosure TAB jumping instead of toggling, and
@@ -1090,6 +1112,16 @@ completing a release subset is not whole-plan completion.
   checked, but visible UI acceptance remains open as recorded above.
 
 * History
+- 2026-11-01T18:13:06+00:00: Requested isolated SSH verification passes 13/13
+  against mojo@bigbox.lan on Pi 1.4.0, including job completion/actual-Pi exit.
+  No trust changes; previous blocker resolved in this environment. Reconciled
+  three Phase 2 tasks to DONE using fresh SSH evidence plus recorded implementation,
+  local checks and explicit human UI acceptance. Plan ready for future selected
+  scope, not done: Phases 3–6 remain unstarted. No implementation, commit or push.
+- 2026-11-01T18:11:27+00:00: User requested SSH verification. Clean worktree at
+  c597caa2; strict BatchMode/StrictHostKeyChecking SSH to mojo@bigbox.lan succeeds
+  and reports Linux plus /run/current-system/sw/bin/pi. Activated only Phase 2
+  verification, without host-trust changes, implementation or later-phase work.
 - 2026-11-01T07:08:43+00:00: User authorized committing and pushing accumulated
   changes, including UI acceptance checkpoint pwlopytn, and will run SSH tests on
   another host. Keep Phase 2 blocked pending those results; no SSH run, trust

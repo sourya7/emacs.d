@@ -54,6 +54,8 @@ flycheck_*.el
 /.cache/
 /.DS_Store
 .tmp/
+# Private plan records are stored separately; resolve them through the plans skill.
+/.plans/
 /pichat/todo.org
 # Legacy/default Jobs runtime state must not enter the package sources.
 /pichat/jobs.json

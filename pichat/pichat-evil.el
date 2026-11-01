@@ -116,6 +116,7 @@ remain in their original mode maps."
     (evil-define-key* 'normal pichat-jobs-mode-map
       (kbd "RET") #'pichat-jobs-details
       (kbd "TAB") #'pichat-jobs-toggle
+      (kbd "<tab>") #'pichat-jobs-toggle
       (kbd "z v") #'pichat-jobs-preview
       (kbd "g r") #'pichat-jobs-refresh
       (kbd "g c") #'pichat-job-new
@@ -126,11 +127,19 @@ remain in their original mode maps."
       (kbd "q") #'quit-window)
     (evil-define-key* 'normal pichat-job-setup-mode-map
       (kbd "RET") #'push-button
+      (kbd "TAB") #'forward-button
+      (kbd "<tab>") #'forward-button
+      (kbd "<backtab>") #'backward-button
+      (kbd "S-TAB") #'backward-button
+      (kbd "S-<tab>") #'backward-button
       (kbd "q") #'pichat-job-setup-quit)
     (evil-define-key* 'normal pichat-jobs-detail-mode-map
       (kbd "RET") #'push-button
       (kbd "TAB") #'pichat-jobs-detail-tab
       (kbd "<tab>") #'pichat-jobs-detail-tab
+      (kbd "<backtab>") #'backward-button
+      (kbd "S-TAB") #'backward-button
+      (kbd "S-<tab>") #'backward-button
       (kbd "g r") #'pichat-jobs-detail-refresh
       (kbd "g y") #'pichat-jobs-copy-response))
   (with-eval-after-load 'pichat-artifact-result

@@ -46,9 +46,22 @@ are not frozen.  Use only one owning Emacs per file."
   (pichat-job-executor-store (or pichat-jobs--owner
                                (user-error "No owning job store"))))
 
-(defun pichat-jobs--button (label function)
-  "Insert explicit action LABEL invoking FUNCTION."
+(defvar pichat-jobs--disclosure-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map button-map)
+    (define-key map (kbd "TAB") #'pichat-jobs-detail-tab)
+    (define-key map (kbd "<tab>") #'pichat-jobs-detail-tab)
+    (define-key map (kbd "<backtab>") #'backward-button)
+    (define-key map (kbd "S-TAB") #'backward-button)
+    (define-key map (kbd "S-<tab>") #'backward-button)
+    map)
+  "Button map for local folding, never execution actions.")
+
+(defun pichat-jobs--button (label function &optional disclosure)
+  "Insert LABEL invoking FUNCTION; DISCLOSURE marks a local fold control."
   (insert-text-button label 'follow-link t
+                      'pichat-job-disclosure disclosure
+                      'keymap (if disclosure pichat-jobs--disclosure-map button-map)
                       'action (lambda (_button) (funcall function)))
   (insert "   "))
 
@@ -173,8 +186,9 @@ every definition row."
                             (list (pichat-jobs--display (pichat-jobs--context (plist-get run :spec)))))))))
     (tabulated-list-init-header)
     (setq mode-line-process
-          (format "%d/%d active · %d attention (a) [%s%s]"
+          (format "%d/%d active · %d attention (%s) [%s%s]"
                   active pichat-jobs-max-concurrency attention
+                  (if (pichat-view-evil-normal-p) "g a" "a")
                   (if (eq pichat-jobs--kind 'jobs) "Jobs" "Runs")
                   (cond (pichat-jobs--attention-only ": Needs attention")
                         (pichat-jobs--filter
@@ -199,11 +213,12 @@ every definition row."
   (when (eq pichat-jobs--kind 'jobs) (pichat-jobs--select pichat-jobs--selection)))
 
 (defun pichat-jobs-attention ()
-  "Show attempts needing input or review, without contacting Pi."
+  "Toggle attempts needing input or review, without contacting Pi."
   (interactive)
   (when (eq pichat-jobs--kind 'jobs)
     (setq pichat-jobs--selection (tabulated-list-get-id)))
-  (setq pichat-jobs--kind 'runs pichat-jobs--filter nil pichat-jobs--attention-only t)
+  (setq pichat-jobs--kind 'runs pichat-jobs--filter nil
+        pichat-jobs--attention-only (not pichat-jobs--attention-only))
   (pichat-jobs-refresh))
 
 (defun pichat-jobs-history ()
@@ -238,6 +253,7 @@ every definition row."
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map tabulated-list-mode-map)
     (define-key map (kbd "TAB") #'pichat-jobs-toggle)
+    (define-key map (kbd "<tab>") #'pichat-jobs-toggle)
     (define-key map (kbd "C-o") #'pichat-jobs-preview)
     (define-key map (kbd "+") #'pichat-job-new)
     (define-key map (kbd "RET") #'pichat-jobs-details)
@@ -444,8 +460,7 @@ narrowest displaying window, including its actual wrapping and prefix width."
          (window (or (car (sort (get-buffer-window-list (current-buffer) nil t)
                                 (lambda (a b) (< (window-body-width a)
                                                  (window-body-width b)))))
-                     (selected-window)))
-         (map (make-sparse-keymap)))
+                     (selected-window))))
     (insert instructions)
     (add-text-properties start (point)
                          (list 'line-prefix prefix 'wrap-prefix prefix
@@ -468,11 +483,9 @@ narrowest displaying window, including its actual wrapping and prefix width."
                    (save-excursion (goto-char start) (vertical-motion 5 window)
                                    (< (point) (point-max))))
             (delete-region (- (point) 2) (1- (point)))))
-        (set-keymap-parent map button-map)
-        (define-key map (kbd "TAB") #'push-button)
-        (define-key map (kbd "<tab>") #'push-button)
         (make-text-button
-         start (point) 'face 'pichat-input-block-face 'keymap map 'follow-link t
+         start (point) 'face 'pichat-input-block-face
+         'keymap pichat-jobs--disclosure-map 'pichat-job-disclosure t 'follow-link t
          'help-echo "TAB, RET or click to expand/collapse instructions"
          'action (lambda (button)
                    (goto-char (button-start button))
@@ -489,11 +502,11 @@ narrowest displaying window, including its actual wrapping and prefix width."
     (insert "\n\n")))
 
 (defun pichat-jobs-detail-tab ()
-  "Toggle folded instructions at point; otherwise move to the next button."
+  "Toggle only the disclosure at point; otherwise navigate without activating."
   (interactive)
-  (if (and (eq (get-text-property (point) 'pichat-job-section) 'task)
-           (button-at (point)))
-      (push-button)
+  (if-let* ((button (button-at (point)))
+            (_ (button-get button 'pichat-job-disclosure)))
+      (button-activate button)
     (forward-button 1 t)))
 
 (defun pichat-jobs--disclosure (key label)
@@ -504,7 +517,8 @@ narrowest displaying window, including its actual wrapping and prefix width."
      (setq pichat-jobs--expanded
            (if (member key pichat-jobs--expanded) (remove key pichat-jobs--expanded)
              (cons key pichat-jobs--expanded)))
-     (pichat-jobs--render-detail))))
+     (pichat-jobs--render-detail))
+   t))
 
 (defun pichat-jobs-copy-response ()
   "Copy the inspected run's exact response Markdown, never its rendered text."
@@ -774,6 +788,9 @@ narrowest displaying window, including its actual wrapping and prefix width."
     (define-key map (kbd "RET") #'push-button)
     (define-key map (kbd "TAB") #'pichat-jobs-detail-tab)
     (define-key map (kbd "<tab>") #'pichat-jobs-detail-tab)
+    (define-key map (kbd "<backtab>") #'backward-button)
+    (define-key map (kbd "S-TAB") #'backward-button)
+    (define-key map (kbd "S-<tab>") #'backward-button)
     (define-key map (kbd "g") #'pichat-jobs-detail-refresh)
     (define-key map (kbd "w") #'pichat-jobs-copy-response)
     map))
@@ -886,6 +903,11 @@ narrowest displaying window, including its actual wrapping and prefix width."
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map pichat-view-mode-map)
     (define-key map (kbd "RET") #'push-button)
+    (define-key map (kbd "TAB") #'forward-button)
+    (define-key map (kbd "<tab>") #'forward-button)
+    (define-key map (kbd "<backtab>") #'backward-button)
+    (define-key map (kbd "S-TAB") #'backward-button)
+    (define-key map (kbd "S-<tab>") #'backward-button)
     (define-key map (kbd "C-c C-c") #'pichat-job-run-once)
     (define-key map (kbd "C-c C-s") #'pichat-job-save-draft)
     (define-key map (kbd "C-c C-e") #'pichat-job-edit-instructions)

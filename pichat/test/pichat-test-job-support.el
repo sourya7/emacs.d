@@ -101,6 +101,15 @@ until BODY submits work.  Fixture teardown retires handlers before stopping."
              (kill-buffer buffer)))))))
 
 
+(defun pichat-test-job-goto-button (label)
+  "Put point at the start of the visible button containing LABEL."
+  (goto-char (point-min))
+  (should (search-forward label nil t))
+  (let ((button (button-at (1- (point)))))
+    (should button)
+    (goto-char (button-start button))
+    button))
+
 (defun pichat-test-job-press (label)
   "Activate the visible job button LABEL, failing if absent."
   (goto-char (point-min))

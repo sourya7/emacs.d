@@ -3,7 +3,7 @@
 #+PLAN_ID: pichat-repeatable-jobs-with-ui-approval-gate
 #+PLAN_STATUS: blocked
 #+PLAN_CREATED: 2026-10-30T06:19:17+00:00
-#+PLAN_UPDATED: 2026-11-01T05:40:32+00:00
+#+PLAN_UPDATED: 2026-11-01T06:30:11+00:00
 
 * Goal
 Add lightweight native PiChat jobs with reusable instructions, inspectable runs,
@@ -607,6 +607,55 @@ execution/schema changes or new commit authorized.
   suite was not rerun for this text-only refinement; prior full evidence remains
   scoped to the preceding checkpoint. Current change is in checkpoint zmwstrkn,
   authorized for commit.
+*** DONE Fix disclosure keys and audit Phase 2 interaction surfaces
+User requested correcting TAB behavior and reviewing every interface introduced
+by this plan for similar keyboard/navigation mistakes. Scope remains Phase 2:
+TAB toggles only the disclosure at point (instructions/Job details/Execution
+details); otherwise it navigates without activating actions. Add consistent
+backward and terminal/GUI/native/Evil handling. Audit setup/instruction editing,
+lists/history/attention, reports/links, raw/source/conversation previews, reused
+settings/Tools, input/chat/cleanup and safety prompts. Fix reproduced interaction
+issues, including attention not toggling off, setup off-button navigation gaps,
+Evil shortcut hints and report-link RET precedence; retain explicit execution,
+source/ownership safety and offline inspection. Use effective-key regressions,
+not only map membership. No later phase, trust change or commit authorized.
+- Fixed all three fold controls with an explicit disclosure button marker/shared
+  keymap: TAB toggles only the control at point; ordinary actions/whitespace use
+  button navigation. Backward/terminal/GUI keys work in native and Evil maps.
+  Repeated toggles retain focus and do not change another disclosure's state.
+- Audit findings also fixed: attention now toggles off; Jobs/Runs GUI TAB alias;
+  setup navigation works outside buttons instead of trying to indent read-only
+  text; attention hints show native a or Evil g a. Rendered URLs are real buttons
+  using the existing safe-scheme action, restoring Evil RET and non-opening TAB.
+- Interaction audit inventory (source review plus effective-key/behavior tests):
+  - Jobs/Runs/history/attention: shared list map, exact selection/filter routing,
+    both toggle directions, GUI/native/Evil events and hints verified.
+  - Job/run details and list previews: shared point-local folding; all regular
+    action buttons/adjacent whitespace navigate without activation; cached state
+    and explicit execution/source ownership are unchanged.
+  - New/Edit/Repeat/Save-as setup share one mode; forward/backward navigation and
+    unchanged drafts/records verified. Plain multiline editor keeps normal text
+    RET/TAB and explicit apply/cancel, not report folding or submission.
+  - Execution choices reuse completing-read and the existing Tools Transient;
+    no job folding maps enter them. Existing cancel/restore tests and explicit
+    discovery/apply boundaries retained; no new keyboard dispatch bug found.
+  - Raw/source/run-conversation previews use record/plain snapshot rendering,
+    not another job fold/action layer; existing read-only/offline/one-step return
+    tests pass. No new runtime, fork/switch or sensitive-data activation added.
+  - Report links use shared response rendering; safe/unsafe RET and non-opening
+    navigation verified in native and actual Evil Normal bindings. Sanitization,
+    source copying, face behavior and no-remote-fetch regressions remain green.
+  - Owning-input/continuation/stopped-chat/manager flows reuse existing maps and
+    RPC ownership guards; no plan-added TAB dispatcher there. Existing local
+    real-Pi flow/guard checks pass. Diagnostics and cancellation/recheck/manual-
+    release dialogs remain explicit non-disclosure actions using existing prompts.
+- Negative control: three focused regressions fail on unchanged production code
+  for attention, disclosure TAB and setup navigation. Fixed focused set 39/39;
+  full+optional 1053 passes/2 Docker skips, all 68 job-related cases passing.
+  Three production modules compile warning-free to /tmp. README, graphical
+  fixture and reusable button-position test mechanics updated; two new ERT cases,
+  no new test files. This is a source/effective-key interaction audit, not visual
+  signoff: graphical/trusted-SSH/human gates stay open. Work is uncommitted.
 *** BLOCKED Verify revised Phase 2 and obtain visible UI acceptance
 Run focused report/lifecycle/input tests and full optional suite; investigate the
 previous Consult failure before claiming a fresh clean run. Review completed,
@@ -617,10 +666,10 @@ Human acceptance, not graphical automation alone, closes the existing BLOCKED
 integration/UI task. Optional ask-user evaluation may be explicitly deferred;
 record that scope decision, never mark unimplemented adoption as delivered.
 - README/glossary/testing guidance updated. Latest combined full+optional run:
-  1053 total, 1051 passed, 2 Docker opt-in skips, no unexpected results; all 66
+  1055 total, 1053 passed, 2 Docker opt-in skips, no unexpected results; all 68
   job-related tests pass. The Consult failure has a source fix and deterministic
-  regressions/negative control, not just a lucky green rerun. Latest changed Jobs
-  module compiles warning-free into /tmp; earlier Consult docstring-width warning
+  regressions/negative control, not just a lucky green rerun. Latest changed Jobs,
+  Evil and response-view modules compile warning-free to /tmp; earlier Consult warning
   remains documented below. No repository .elc files generated.
 - BLOCKED: no DISPLAY/WAYLAND_DISPLAY or X socket in this process, so no revised
   graphical test or human visible review is claimed. Updated graphical fixture is
@@ -694,22 +743,25 @@ completing a release subset is not whole-plan completion.
   inspection opens directly from details, retaining ordinary navigation and useful
   metadata controls. These accumulated refinements were committed as 80014758
   (checkpoint change xplrowky). The latest raw-label/record-only-output refinement
-  is implemented and unit-verified in checkpoint zmwstrkn, now authorized for commit.
-  No adoption, later phase or push.
-- Last verified result: latest raw-label/record-only-output refinement has
-  unit+optional 967 total, 965 passed, 2 Docker opt-in skips, 0 unexpected. Exact
-  record-only bodies and direct return paths are covered. Jobs compiles warning-
-  free to /tmp; changed Lisp parentheses/diff and graphical-fixture load pass.
-  Last full+optional before this text-only change: 1053 total, 1051 passed, 2 Docker
-  skips; all 66 job-related cases including nine real-Pi checks passed. No new full
-  RPC, graphical, human acceptance or real-SSH run claimed. Baseline is 80014758;
-  latest formatting changes are recorded in authorized checkpoint zmwstrkn.
-- Next action: review revised job/run screens and plain raw-inspection return
-  paths in a genuinely visible isolated Emacs and obtain user acceptance; establish
-  explicitly trusted SSH access for job-specific cleanup coverage. A complete
-  cross-surface visual consistency audit is still outstanding, not inferred from
-  shared code/tests. Do not advance phases, adopt ask-user or change host trust.
-  User authorized this checkpoint commit; no additional implementation requested.
+  was committed as 2580e029 (checkpoint zmwstrkn). Current authorized scope is
+  the Phase 2 disclosure-key fix and cross-surface keyboard interaction audit,
+  implemented and automatically verified in checkpoint change xoxpxwnn, now
+  explicitly authorized for commit. No later phase/adoption/push.
+- Last verified result: keyboard audit/fixes have 39/39 focused Jobs/Evil/response
+  checks and full+optional 1055 total, 1053 passed, 2 Docker opt-in skips, no
+  unexpected results. All 68 job-related cases pass, including nine real-Pi cases.
+  Three native regressions fail against original production behavior and pass
+  after fixes. Jobs/Evil/response-view compile warning-free into /tmp; changed
+  Lisp parentheses/diff and graphical-fixture load pass. No graphical execution,
+  human acceptance or trusted-SSH rerun claimed. Baseline is 2580e029; latest
+  keyboard fixes/audit are in authorized checkpoint change xoxpxwnn.
+- Next action: review revised job/run screens and keyboard/return paths in a
+  genuinely visible isolated Emacs and obtain user acceptance; establish explicitly
+  trusted SSH access for job-specific cleanup coverage. Source/effective-key
+  interaction audit is complete; visual consistency/human acceptance is not
+  inferred from it. Restart/reinitialize keymaps before live review. Do not advance
+  phases, adopt ask-user or change host trust. User authorized committing the
+  keyboard fixes/audit checkpoint xoxpxwnn; no push authorized.
 - Blockers: SSH unknown-host trust prompt; no graphical display/human layout review.
   Consult classification is repaired and no longer blocks automated verification.
   Optional ask-user adoption/custom choice is not a report/lifecycle blocker and
@@ -719,8 +771,8 @@ completing a release subset is not whole-plan completion.
   request findings preclude recommending unmodified job adoption. Five real-RPC
   observations plus a print-mode probe recorded in report-and-input-review.md.
   No global installation, upstream package-suite claim, live user-state mutation
-  or push. Authorized checkpoints through 80014758 are committed; the newer plain
-  raw-inspection formatting refinement is in authorized checkpoint zmwstrkn.
+  or push. Authorized checkpoints through 2580e029 are committed; the newer
+  keyboard fixes/interaction audit are in authorized checkpoint xoxpxwnn.
 - Refinement finding: rendered reports require markdown-mode's external
   markdown-command. User's current converter command is unavailable, so exact
   Markdown fallback is expected. Pandoc via mise was suggested; no installation
@@ -751,6 +803,27 @@ completing a release subset is not whole-plan completion.
   stable phase IDs or plan-change reauthorization has slipped into current scope.
 
 * Verification
+- 2026-11-01 Phase 2 keyboard interaction audit/fixes:
+  - Validated negative control before production edits: three regressions fail for
+    attention staying enabled, disclosure TAB jumping instead of toggling, and
+    off-button setup TAB trying to edit a read-only buffer;
+    /tmp/pichat-keyboard-review-negative-control.log. Fixture-only copying was
+    corrected before this recorded negative control; failures represent behavior.
+  - Focused Jobs/Evil/response-view: 39/39 passed;
+    /tmp/pichat-keyboard-review-focused.log. Effective native/Evil/terminal/GUI
+    keys cover same-control toggling, unrelated fold-state preservation, forward/
+    backward action/whitespace navigation without any activation, setup/editor
+    separation, attention toggling/hints, safe/unsafe URL RET and immutable records.
+  - Full+optional: 1055 total, 1053 passed, 2 Docker opt-in skips, no unexpected;
+    /tmp/pichat-keyboard-review-full.log (124.48s). All 68 job-related cases pass,
+    including nine local real-Pi cases. Two new ERT cases, existing Evil/attention/
+    graphical scenarios expanded; no new test files or weaker safety assertions.
+  - Jobs, Evil and response-view compile warning-free into /tmp;
+    /tmp/pichat-keyboard-review-bytecompile.log. Changed Lisp parentheses,
+    git diff --check and graphical-fixture load pass. Test lines: Jobs 1340, Evil
+    256, live-ui 163, shared job-support 122. No repository .elc, user runtime data,
+    global config, host trust or real providers touched. DISPLAY/WAYLAND_DISPLAY
+    unset: no graphical execution/human acceptance or real-SSH rerun claimed.
 - 2026-11-01 plain raw labels / record-only output:
   - Unit+optional: 967 total, 965 passed, 2 Docker opt-in skips, 0 unexpected;
     /tmp/pichat-plain-raw-inspection-unit.log (11.19s). Existing job/run assertions
@@ -988,6 +1061,23 @@ completing a release subset is not whole-plan completion.
   checked, but visible UI acceptance remains open as recorded above.
 
 * History
+- 2026-11-01T06:30:11+00:00: User authorized committing the verified keyboard
+  fixes/interaction audit as checkpoint change xoxpxwnn. Verification unchanged;
+  visible/human/trusted-SSH gates remain blocked. No push or later phase authorized.
+- 2026-11-01T06:15:46+00:00: Delivered authorized disclosure TAB fixes and Phase 2
+  keyboard interaction audit. Local folding and safe forward/backward navigation
+  now agree across native/Evil/terminal/GUI input; also fixed attention toggling,
+  hints, setup navigation and rendered-link button/RET handling. Reviewed all
+  plan-added/reused interaction paths; recorded findings/evidence under the task.
+  Focused 39/39 and full+optional 1053 passes/2 Docker skips; three modules compile
+  warning-free, structural/fixture-load checks pass. Reblocked only on visible/
+  human/trusted-SSH gates. No commit, later-phase work or host trust changes.
+- 2026-11-01T05:55:58+00:00: User authorized disclosure TAB fixes and a review of
+  all plan-added interfaces for similar interaction mistakes. Activated Phase 2
+  keyboard-only audit/fixes from clean 2580e029, retaining prior visible/SSH gates.
+  Source review also found attention permanently enabled, missing setup navigation,
+  native-only mode-line hints in Evil, and report-link button/RET precedence gaps.
+  No later-phase work, new commit, runtime-data inspection or host trust change.
 - 2026-11-01T05:40:32+00:00: User authorized committing plain raw-inspection labels
   and record-only output in checkpoint change zmwstrkn. Retain unit verification,
   explicitly scoped prior full-suite evidence and outstanding visible/audit/SSH

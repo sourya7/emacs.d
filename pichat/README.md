@@ -764,7 +764,7 @@ scheduling, and chaining are not enabled.
 - `M-x pichat-jobs` opens one global Jobs/Runs view. Native `TAB` switches between
   definitions and attempts, `RET` opens details, `C-o` toggles a read-only details
   preview, `+` creates, `r` runs a selected job's current definition, `e` edits,
-  `h` shows its attempts, `a` filters attempts needing input/review, and `g`
+  `h` shows its attempts, `a` toggles the input/review attention filter on/off, and `g`
   redraws cached state. `q` buries the list. The overview shows active/limit and
   attention counts plus the current history filter; returning to Jobs restores
   the selected definition. Narrow windows retain work/state/project/target,
@@ -780,7 +780,13 @@ scheduling, and chaining are not enabled.
   input-bar styling and fold after five visual lines at the narrowest displayed
   width. Click the block or press `RET`/`TAB` within it to expand/collapse; a folded
   block ends in `…`, and an expanded block offers **Show less**. Short instructions
-  need no folding control. Refresh/resize preserves the explicit choice.
+  need no folding control. In details, `TAB` toggles only the disclosure at point
+  (instructions, **Job details** or **Execution details**); elsewhere it moves to
+  the next button without activating it. `S-TAB` moves backward without toggling.
+  Ordinary action buttons require `RET` or a click. Setup uses `TAB`/`S-TAB` only
+  for button navigation, including from outside buttons. Terminal and graphical
+  TAB events and optional Evil Normal state follow these same rules. Refresh/
+  resize preserves explicit folding choices.
   Conversation, repeat/save and job navigation actions stay visible.
   **Execution details** expands separately, with response source/copy controls,
   retained-runtime **Diagnostics**, compact model/preset/Tools and whole-second
@@ -808,9 +814,13 @@ scheduling, and chaining are not enabled.
   preview, `gr` refresh, `gc` new, `gx` run, `ge` edit, `gh` history and `ga`
   attention. Setup and
   details use buttons with `RET`; these do not take over Vim movement keys.
+  The attention counter's shortcut hint shows `g a` in Evil Normal state and `a`
+  in native Emacs state.
 
 Run reports reuse the rendered response view's sanitized Markdown/SHR rendering,
 link policy and exact-source fallback, without requiring the originating runtime.
+Rendered links are navigable buttons; explicit `RET`/click uses the same checked
+URL action in native Emacs and Evil, while TAB navigation never opens a link.
 The final active-branch assistant message's exact prose is captured, not all
 intermediate commentary; an empty final message explicitly has no prose. **View
 response source**, **Copy response Markdown** (native `w`, Evil `g y`) and explicit

@@ -11,6 +11,7 @@
 (require 'cl-lib)
 (require 'dom)
 (require 'browse-url)
+(require 'button)
 (require 'face-remap)
 (require 'shr)
 (require 'subr-x)
@@ -223,6 +224,10 @@
 
 (defvar pichat-response-view-link-map
   (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map button-map)
+    (define-key map (kbd "<tab>") #'forward-button)
+    (define-key map (kbd "S-TAB") #'backward-button)
+    (define-key map (kbd "S-<tab>") #'backward-button)
     (define-key map (kbd "RET") #'pichat-response-view-open-link-at-point)
     (define-key map (kbd "w") #'pichat-response-view-link-word-or-copy)
     (define-key map (kbd "?") #'pichat-response-view-link-search-or-describe)
@@ -240,11 +245,17 @@
       (add-text-properties
        start (point)
        `(pichat-response-view-url ,url
-         keymap ,pichat-response-view-link-map
          help-echo ,(if (pichat-response-view--safe-url-p url)
                         "RET: open; w/?: Vim motions (Evil) or copy/describe (Emacs)"
                       "Opening disabled; w/?: Vim motions (Evil) or copy/describe (Emacs)")
          mouse-face highlight))
+      ;; Use real buttons so generic navigation and Evil's RET binding retain
+      ;; the same explicit, scheme-checked action as the link's native map.
+      (make-text-button
+       start (point) 'keymap pichat-response-view-link-map
+       'action (lambda (button)
+                 (goto-char (button-start button))
+                 (pichat-response-view-open-link-at-point)))
       (unless (pichat-response-view--safe-url-p url)
         (remove-text-properties start (point) '(shr-url nil follow-link nil))
         (add-face-text-property

@@ -18,6 +18,7 @@ Personal GNU Emacs configuration. `init.el` loads `core/package.el`, then `user/
 - Build repository paths with `my/emacs-local-dir`, `my/emacs-shared-dir`, or `my/emacs-main-dir`; do not hardcode them.
 - Read dependency source from `.local/elpaca/sources/<package>/` instead of guessing APIs.
 - Use jj (jujutsu) for commits
+- Before committing, review the diff and commit message for secrets and private identifiers (usernames, hostnames, personal paths); use generic placeholders unless explicitly required and approved.
 
 ## In-repo packages
 

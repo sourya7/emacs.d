@@ -681,14 +681,29 @@ Pi. Open, stop, forget, and naming use the owning backend. A runtime is the
 Emacs-side process/session object; the persisted Pi source loaded into it may
 change after new-session, switch, fork, or clone operations. Manager rows use an
 immutable Emacs runtime identity, so such source changes do not replace or
-misidentify a row. The compact table shows an unlabeled `★` for the preferred
-runtime in an owner scope, followed by the current Pi source ID, runtime status,
-source storage (`file` or `none`), friendly owner project (or `global`), target, model, and explicit session name. A warning-faced `!` appended to Status, such as
-`running!`, means that the runtime is waiting for user input; it disappears when
-the final queued request is answered or cancelled. Unnamed sessions show `—`
-rather than repeating their ID. Full runtime identity, source
-path, scope, working directory, and recent branch context remain available in
-the `C-o` preview.
+misidentify a row. The responsive table starts with an unlabeled `★` gutter for the preferred
+runtime and **Name**, then progressively admits Status, Project, Preset, Target,
+Model, Pi source ID, Backend and Store as space permits. Name receives spare
+width up to 40 display cells. Very small windows show only Name (and the gutter
+when it fits). The narrowest visible manager window across frames determines
+the shared layout; resizing and preview splits update it without querying Pi.
+Full cell values are available as help text. Project sorting is the default;
+a chosen sort and its direction remain effective even while the column is hidden.
+A warning-faced `!` appended to Status, such as `running!`, means that the
+runtime is waiting for user input; it disappears when the final queued request
+is answered or cancelled. Full runtime identity, source path, scope, working
+directory, and recent branch context remain available in the `C-o` preview.
+
+Unnamed rows receive a stable two-word runtime alias, such as `calm fox`.
+Aliases survive manager closure and source rebinding for this Emacs uptime;
+they are display-only, never stored as Pi session names or used as action IDs.
+An explicit Pi session name takes precedence; a subsequently unnamed source
+restores that runtime's alias. Generated aliases are unique among themselves,
+not against user-supplied names; truncation can also make labels look alike.
+After all 1,024 pairs are reserved, new unnamed runtimes fall back to their Pi
+source ID or runtime ID. Naming through `e` waits for setter success and
+an authoritative state refresh. Pi 1.4.0 rejects blank names rather than clearing
+them. External name changes appear on normal state synchronization, not polling.
 
 Ordinary `pichat` still reuses one preferred live runtime per scope.
 Independent profiles from `pichat-launch`, manager-created runtimes, and

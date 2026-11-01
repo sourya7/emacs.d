@@ -1765,6 +1765,44 @@
                                         (pichat-chat--mode-line-status))))
           (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+  (ert-deftest pichat-integration-manager-naming-readback-and-empty-name-rejection ()
+    (pichat-test-with-integration-session
+        (session :script '(:turns []))
+      (pichat-register-session session)
+      (let ((alias (pichat-session-manager--row-session-name session)))
+        (with-temp-buffer
+          (pichat-session-manager-mode)
+          (pichat-session-manager-refresh)
+          (goto-char (point-min))
+          (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Manager name")))
+            (pichat-session-manager-name))
+          (pichat-test-wait-until
+           (lambda () (equal "Manager name" (pichat-session-name session)))
+           nil "manager naming authoritative readback")
+          (should (equal "Manager name" (pichat-session-manager--row-session-name session)))
+          ;; Supported Pi rejects blank names; no invented clear-name operation.
+          (dolist (name '("" "  "))
+            (let (failure)
+              (pichat-rpc-send
+               session "set_session_name" (list :name name)
+               (lambda (&rest _) (ert-fail "Pi accepted a blank session name"))
+               (lambda (response _s) (setq failure response)))
+              (pichat-test-wait-until (lambda () failure) nil "empty-name rejection")
+              (should (string-match-p "cannot be empty" (plist-get failure :error)))))
+          (let ((readbacks 0))
+            (cl-letf (((symbol-function 'read-string) (lambda (&rest _) ""))
+                      ((symbol-function 'pichat-backend-get-state)
+                       (lambda (&rest _) (cl-incf readbacks))))
+              (pichat-session-manager-name)
+              (pichat-test-wait-until
+               (lambda () (= 0 (hash-table-count (pichat-session-pending-responses session))))
+               nil "manager rejected naming response")
+              (should (= 0 readbacks))))
+          (pichat-test-rpc-call session "get_state")
+          (should (equal "Manager name" (pichat-session-name session)))
+          (should (equal alias
+                         (pichat-session-manager--alias (pichat-session-runtime-id session))))))))
+
   (ert-deftest pichat-integration-model-selection-session-name-and-stats-round-trip ()
     (pichat-test-with-integration-session
         (session :script '(:turns []))

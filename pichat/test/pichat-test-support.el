@@ -120,6 +120,8 @@
     (setq pichat--session-order nil))
   (when (boundp 'pichat-session--runtime-counter)
     (setq pichat-session--runtime-counter 0))
+  (setq pichat-session-manager--aliases (make-hash-table :test #'equal)
+        pichat-session-manager--reserved-aliases (make-hash-table :test #'equal))
   (when (boundp 'pichat--global-handlers)
     (setq pichat--global-handlers (make-hash-table :test #'eq)))
   (when (boundp 'pichat-tools-registry)

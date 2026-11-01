@@ -26,7 +26,6 @@
                   (&optional cwd scope launch-options))
 (declare-function pichat-launch "pichat" (&optional context))
 (declare-function pichat--open-launch-profile "pichat" (profile &optional directory))
-(declare-function pichat-note-session-updated "pichat" (session))
 (declare-function pichat-stop-session "pichat" (&optional session))
 (declare-function pichat-forget-session "pichat" (session))
 (declare-function pichat-set-default-session "pichat" (session))
@@ -113,20 +112,18 @@ or Bufferlo dependency."
   (if (and (stringp id) (> (length id) 8)) (substring id 0 8) (or id "—")))
 
 (defun pichat-session-manager--model-name (session)
-  "Return compact cached model name for SESSION."
+  "Return full cached model name for SESSION."
   (let ((model (pichat-session-model session)))
-    (pichat-session-manager--shorten
-     (if (listp model)
-         (let ((provider (plist-get model :provider))
-               (id (or (plist-get model :id)
-                       (plist-get model :modelId)
-                       (plist-get model :name))))
-           (cond
-            ((and provider id) (format "%s/%s" provider id))
-            (id id)
-            (t "—")))
-       (or model "—"))
-     28)))
+    (if (listp model)
+        (let ((provider (plist-get model :provider))
+              (id (or (plist-get model :id)
+                      (plist-get model :modelId)
+                      (plist-get model :name))))
+          (cond
+           ((and provider id) (format "%s/%s" provider id))
+           (id id)
+           (t "—")))
+      (or model "—"))))
 
 (defun pichat-session-manager--owner-label (session)
   "Return immutable owner-scope label for SESSION."
@@ -146,18 +143,16 @@ or Bufferlo dependency."
      32)))
 
 (defun pichat-session-manager--project-label (session)
-  "Return a compact user-facing owner project for SESSION."
+  "Return the full user-facing owner project for SESSION."
   (let ((directory (pichat-session-owner-directory session))
         (key (pichat-session-owner-scope-key session)))
-    (pichat-session-manager--shorten
-     (cond
-      ((or (equal key "global")
-           (and (stringp key) (string-prefix-p "global|" key)))
-       "global")
-      ((and (stringp directory) (not (string-blank-p directory)))
-       (file-name-nondirectory (directory-file-name directory)))
-      (t (pichat-session-manager--owner-label session)))
-     18)))
+    (cond
+     ((or (equal key "global")
+          (and (stringp key) (string-prefix-p "global|" key)))
+      "global")
+     ((and (stringp directory) (not (string-blank-p directory)))
+      (file-name-nondirectory (directory-file-name directory)))
+     (t (pichat-session-manager--owner-label session)))))
 
 (defun pichat-session-manager--preferred-marker (session)
   "Return an unobtrusive preferred-runtime marker for SESSION."
@@ -166,12 +161,119 @@ or Bufferlo dependency."
                   'help-echo "Preferred runtime for this project")
     ""))
 
+(defconst pichat-session-manager--adjectives
+  ["bright" "calm" "clear" "cool" "eager" "fair" "fast" "fine"
+   "fresh" "glad" "gold" "grand" "green" "happy" "keen" "kind"
+   "light" "lively" "lucky" "merry" "neat" "nimble" "quiet" "quick"
+   "ready" "silver" "soft" "sunny" "swift" "warm" "wise" "young"])
+
+(defconst pichat-session-manager--nouns
+  ["badger" "bear" "birch" "brook" "cedar" "cloud" "coral" "crane"
+   "deer" "dove" "elm" "fern" "finch" "fox" "grove" "hare"
+   "heron" "hill" "lake" "lark" "leaf" "lynx" "maple" "moss"
+   "otter" "owl" "pine" "reed" "robin" "seal" "star" "wren"])
+
+(defvar pichat-session-manager--aliases (make-hash-table :test #'equal)
+  "Runtime aliases retained for this Emacs uptime, not persisted names.")
+(defvar pichat-session-manager--reserved-aliases (make-hash-table :test #'equal)
+  "Generated labels reserved until Emacs exits, including forgotten runtimes.")
+
+(defun pichat-session-manager--alias (runtime-id)
+  "Return RUNTIME-ID's stable alias, or nil when no pair is available."
+  (when runtime-id
+    (let ((missing (make-symbol "missing")))
+      (let ((existing (gethash runtime-id pichat-session-manager--aliases missing)))
+        (if (not (eq existing missing)) existing
+          (let* ((nouns (length pichat-session-manager--nouns))
+                 (total (* nouns (length pichat-session-manager--adjectives)))
+                 (start (random total))
+                 alias)
+            (cl-loop for offset below total
+                     for index = (mod (+ start offset) total)
+                     for candidate = (concat
+                                      (aref pichat-session-manager--adjectives
+                                            (/ index nouns)) " "
+                                      (aref pichat-session-manager--nouns
+                                            (% index nouns)))
+                     unless (gethash candidate pichat-session-manager--reserved-aliases)
+                     do (setq alias candidate) and return nil)
+            (when alias
+              (puthash alias t pichat-session-manager--reserved-aliases))
+            ;; Cache exhaustion too: refresh must not repeatedly scan the pool.
+            (puthash runtime-id alias pichat-session-manager--aliases)
+            alias))))))
+
 (defun pichat-session-manager--row-session-name (session)
-  "Return SESSION's explicit name for the compact manager row."
+  "Return SESSION's authoritative name or manager-local runtime label."
   (let ((name (pichat-session-name session)))
-    (pichat-session-manager--shorten
-     (if (and (stringp name) (not (string-blank-p name))) name "—")
-     40)))
+    (if (and (stringp name) (not (string-blank-p name))) name
+      (or (pichat-session-manager--alias (pichat-session-runtime-id session))
+          (pichat-session-id session) (pichat-session-runtime-id session) "—"))))
+
+(defconst pichat-session-manager--columns
+  '(("Name" 16) ("Status" 11) ("Project" 14) ("Preset" 10)
+    ("Target" 12) ("Model" 24) ("ID" 9) ("Backend" 7) ("Store" 6))
+  "Column priority and minimum widths, independent of row content.")
+
+(defvar-local pichat-session-manager--logical-sort '("Project")
+  "Chosen sort column and direction, including when hidden.")
+(defvar-local pichat-session-manager--window-handler nil
+  "Global window-state handler owned by this manager buffer.")
+
+(defun pichat-session-manager--display-width ()
+  "Return the narrowest displayed manager body width across all frames."
+  (let ((windows (cl-remove-if-not
+                  (lambda (window) (eq t (frame-visible-p (window-frame window))))
+                  (get-buffer-window-list (current-buffer) nil t))))
+    (if windows (apply #'min (mapcar #'window-body-width windows))
+      (window-body-width))))
+
+(defun pichat-session-manager--layout (width)
+  "Return deterministic columns fitting WIDTH display cells."
+  (let* ((width (max 1 width))
+         (gutter (if (>= width 6) 2 0))
+         (remaining (- width gutter))
+         (name-width (min 16 remaining))
+         (columns (list (list "Name" name-width)))
+         (rest (cdr pichat-session-manager--columns)))
+    (cl-decf remaining name-width)
+    (while (and rest (>= remaining (1+ (cadar rest))))
+      (push (copy-sequence (car rest)) columns)
+      (cl-decf remaining (1+ (cadar rest)))
+      (setq rest (cdr rest)))
+    (setq columns (nreverse columns))
+    (cl-incf (cadar columns) (min remaining (- 40 name-width)))
+    (when (> gutter 0) (push '("" 1) columns))
+    (vconcat
+     (mapcar
+      (lambda (column)
+        (let ((name (car column)))
+          (list name (cadr column)
+                (unless (equal name "")
+                  (lambda (a b)
+                    (string< (pichat-session-manager--sort-value a name)
+                             (pichat-session-manager--sort-value b name)))))))
+      columns))))
+
+(defun pichat-session-manager--field (session column)
+  "Return SESSION's full cached value for COLUMN without display truncation."
+  (pcase column
+    ("" (pichat-session-manager--preferred-marker session))
+    ("Name" (pichat-session-manager--row-session-name session))
+    ("Status" (pichat-session-manager--status-label session))
+    ("Project" (pichat-session-manager--project-label session))
+    ("Preset" (if (pichat-session-preset-name session)
+                  (symbol-name (pichat-session-preset-name session)) "legacy"))
+    ("Target" (pichat-session-manager--target-label session))
+    ("Model" (pichat-session-manager--model-name session))
+    ("ID" (or (pichat-session-id session) "—"))
+    ("Backend" (symbol-name (pichat-session-backend-id session)))
+    ("Store" (pichat-session-manager--persistence-label session))))
+
+(defun pichat-session-manager--sort-value (entry column)
+  "Return ENTRY's full value for COLUMN, even if that column is hidden."
+  (or (cdr (assoc column (get-text-property 0 'pichat-manager-fields
+                                          (aref (cadr entry) 0)))) ""))
 
 (defun pichat-session-manager--persistence-label (session)
   "Return compact persistence label for SESSION from launch metadata."
@@ -194,26 +296,42 @@ or Bufferlo dependency."
       state)))
 
 (defun pichat-session-manager--target-label (session)
-  "Return compact target label for SESSION."
-  (pichat-session-manager--shorten
-   (pichat-transport-label (pichat-session-transport session)) 16))
+  "Return full target label for SESSION."
+  (pichat-transport-label (pichat-session-transport session)))
 
 (defun pichat-session-manager--entry (session)
-  "Return one tabulated-list row for SESSION from cached state."
-  (list
-   (pichat-session-runtime-id session)
-   (vector
-    (pichat-session-manager--preferred-marker session)
-    (pichat-session-manager--short-id (pichat-session-id session))
-    (pichat-session-manager--status-label session)
-    (symbol-name (pichat-session-backend-id session))
-    (pichat-session-manager--persistence-label session)
-    (pichat-session-manager--project-label session)
-    (pichat-session-manager--target-label session)
-    (if (pichat-session-preset-name session)
-        (symbol-name (pichat-session-preset-name session)) "legacy")
-    (pichat-session-manager--model-name session)
-    (pichat-session-manager--row-session-name session))))
+  "Return one responsive tabulated-list row for SESSION from cached state."
+  (let* ((format (if (derived-mode-p 'pichat-session-manager-mode)
+                     tabulated-list-format
+                   (pichat-session-manager--layout 240)))
+         (fields (mapcar (lambda (column)
+                           (cons (car column)
+                                 (pichat-session-manager--field session (car column))))
+                         (cons '("") pichat-session-manager--columns)))
+         (cells
+          (vconcat
+           (mapcar
+            (lambda (column)
+              (let* ((name (car column))
+                     (full (cdr (assoc name fields)))
+                     (display (if (equal name "ID")
+                                  (pichat-session-manager--short-id full) full))
+                     (width (cadr column))
+                     (cell (if (and (equal name "Status") (string-suffix-p "!" display))
+                               (concat (pichat-session-manager--shorten
+                                        (substring display 0 -1) (1- width))
+                                       (substring display -1))
+                             (pichat-session-manager--shorten display width))))
+                (propertize cell 'help-echo
+                            (if (and (equal name "") (> (length full) 0))
+                                (get-text-property 0 'help-echo full)
+                              full))))
+            format))))
+    ;; Put full sort fields on a nonempty first cell (the marker may be empty).
+    (when (equal (aref cells 0) "") (aset cells 0 (copy-sequence " ")))
+    (put-text-property 0 (length (aref cells 0)) 'pichat-manager-fields fields
+                       (aref cells 0))
+    (list (pichat-session-runtime-id session) cells)))
 
 (defun pichat-session-manager--entries ()
   "Return manager rows for every retained runtime session."
@@ -223,8 +341,39 @@ or Bufferlo dependency."
   "Refresh manager rows exclusively from cached runtime state."
   (interactive)
   (when (derived-mode-p 'pichat-session-manager-mode)
+    (when tabulated-list-sort-key
+      (setq pichat-session-manager--logical-sort
+            (copy-tree tabulated-list-sort-key)))
+    (setq tabulated-list-format
+          (pichat-session-manager--layout (pichat-session-manager--display-width)))
+    (setq tabulated-list-sort-key
+          (when (assoc (car pichat-session-manager--logical-sort)
+                       (append tabulated-list-format nil))
+            (copy-tree pichat-session-manager--logical-sort)))
     (setq tabulated-list-entries (pichat-session-manager--entries))
+    (when pichat-session-manager--logical-sort
+      (let ((column (car pichat-session-manager--logical-sort))
+            (flip (cdr pichat-session-manager--logical-sort)))
+        (setq tabulated-list-entries
+              (cl-stable-sort tabulated-list-entries
+                              (lambda (a b)
+                                (string<
+                                 (pichat-session-manager--sort-value (if flip b a) column)
+                                 (pichat-session-manager--sort-value (if flip a b) column)))))))
+    (tabulated-list-init-header)
     (tabulated-list-print t)))
+
+(defun pichat-session-manager--window-change (buffer)
+  "Schedule a layout refresh for BUFFER only if its layout changed."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      ;; Closures in column sort predicates cannot be compared with `equal'.
+      (unless (equal (mapcar (lambda (c) (list (car c) (cadr c)))
+                            (append tabulated-list-format nil))
+                     (mapcar (lambda (c) (list (car c) (cadr c)))
+                             (append (pichat-session-manager--layout
+                                      (pichat-session-manager--display-width)) nil)))
+        (pichat-session-manager--schedule-refresh)))))
 
 (defun pichat-session-manager--run-refresh (buffer)
   "Refresh live manager BUFFER after a coalescing delay."
@@ -662,6 +811,9 @@ Press g to refresh the preview or q to return to the manager."
   (dolist (pair pichat-session-manager--event-handlers)
     (pichat-off (car pair) (cdr pair)))
   (setq pichat-session-manager--event-handlers nil)
+  (when pichat-session-manager--window-handler
+    (remove-hook 'window-state-change-functions pichat-session-manager--window-handler)
+    (setq pichat-session-manager--window-handler nil))
   (when pichat-session-manager--registry-handler
     (remove-hook 'pichat-session-registry-changed-hook
                  pichat-session-manager--registry-handler)
@@ -766,11 +918,18 @@ of the persistent project list."
 (defun pichat-session-manager-name ()
   "Name the selected session through its backend."
   (interactive)
-  (let ((session (pichat-session-manager--session-at-point)))
+  (let* ((session (pichat-session-manager--session-at-point))
+         (source (pichat-session-manager--preview-source-token session))
+         (name (read-string "Session name: " (pichat-session-name session))))
+    (unless (equal source (pichat-session-manager--preview-source-token session))
+      (user-error "Selected runtime changed source while naming"))
     (pichat-backend-name-session
-     session (read-string "Session name: " (pichat-session-name session)))
-    (pichat-note-session-updated session)
-    (pichat-session-manager-refresh)))
+     session name
+     (lambda (_response s)
+       (when (equal source (pichat-session-manager--preview-source-token s))
+         ;; State application emits the normal manager refresh event.  This
+         ;; callback owns no UI buffer and remains safe after manager death.
+         (pichat-backend-get-state s (lambda (&rest _ignored) nil)))))))
 
 (defun pichat-session-manager-browse-saved ()
   "Load a selected saved source in a new independent runtime.
@@ -883,18 +1042,16 @@ C-o) stays usable in this buffer."
                     pichat-global-directory
                   "~"))))
   (setq-local tabulated-list-format
-              [("" 1 nil)
-               ("ID" 9 t)
-               ("Status" 11 t)
-               ("Backend" 8 t)
-               ("Store" 6 t)
-               ("Project" 18 t)
-               ("Target" 16 t)
-               ("Preset" 12 t)
-               ("Model" 28 t)
-               ("Session" 40 t)])
-  (setq-local tabulated-list-padding 2)
-  (setq-local tabulated-list-sort-key (cons "Project" nil))
+              (pichat-session-manager--layout (pichat-session-manager--display-width)))
+  (setq-local tabulated-list-padding 0)
+  (setq-local tabulated-list-sort-key
+              (when (assoc "Project" (append tabulated-list-format nil))
+                (cons "Project" nil)))
+  (let ((buffer (current-buffer)))
+    (setq pichat-session-manager--window-handler
+          (lambda (_frame) (pichat-session-manager--window-change buffer)))
+    ;; Global: a buffer-local hook misses deletion of its narrowest window.
+    (add-hook 'window-state-change-functions pichat-session-manager--window-handler))
   (setq-local pichat-session-manager--preview-cache
               (make-hash-table :test #'equal))
   (setq-local revert-buffer-function

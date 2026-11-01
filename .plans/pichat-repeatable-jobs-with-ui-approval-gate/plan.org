@@ -3,7 +3,7 @@
 #+PLAN_ID: pichat-repeatable-jobs-with-ui-approval-gate
 #+PLAN_STATUS: blocked
 #+PLAN_CREATED: 2026-10-30T06:19:17+00:00
-#+PLAN_UPDATED: 2026-11-01T06:56:14+00:00
+#+PLAN_UPDATED: 2026-11-01T07:08:43+00:00
 
 * Goal
 Add lightweight native PiChat jobs with reusable instructions, inspectable runs,
@@ -689,13 +689,16 @@ record that scope decision, never mark unimplemented adoption as delivered.
   regressions/negative control, not just a lucky green rerun. Latest changed Jobs,
   Evil and response-view modules compile warning-free to /tmp; earlier Consult warning
   remains documented below. No repository .elc files generated.
-- BLOCKED: no DISPLAY/WAYLAND_DISPLAY or X socket in this process, so no revised
-  graphical test or human visible review is claimed. Updated graphical fixture is
-  ready for a separate visible Emacs, not the user's running conversations.
+- User accepted the current revised UI on 2026-11-01: "the UI looks good to me."
+  This closes the human UI-acceptance gate; it is user approval, not inferred from
+  tests. No claim is made that every error-state scenario was visually exercised.
+  Agent-side revised graphical automation remains unrun because this process has
+  no display; fixture-load checks are not graphical execution.
 - Real-SSH verification is blocked on host trust as above. The previously diagnosed
   Consult/archive failure was separately authorized and repaired in the preceding
-  task; it is no longer an outstanding verification blocker. Graphical/SSH runs
-  remain deferred; passing automated checks do not close visible acceptance.
+  task; it is no longer an outstanding verification blocker. Required job-specific
+  real-SSH shutdown/claim-release verification remains outstanding, so Phase 2
+  is not yet formally closed despite implementation/local checks/UI acceptance.
 ** Phase 3: Optional exact-plan-phase adapter
 *** TODO Implement explicit phase targeting, eligibility and bounded authorization
 Add the narrow machine-readable plans-skill inspection contract, plan/heading-path
@@ -766,8 +769,9 @@ completing a release subset is not whole-plan completion.
   committed as 3d11c090 (checkpoint xoxpxwnn). The newly authorized compact Runs
   refinement retains queue time instead of project/target, implemented and
   unit-verified and committed as 7625e62f (checkpoint pwwytykz). User's follow-up
-  removes (local) from both Queued column headers, verified in checkpoint
-  untnnzsy and now authorized for commit.
+  removes (local) from both Queued column headers, committed as ccfc17bb
+  (checkpoint untnnzsy). User has now accepted the revised UI; Phase 2 closeout
+  remains blocked on required job-specific trusted-SSH verification.
   No later phase/adoption/push.
 - Last verified result: Queued header simplification has 26/26 focused Jobs/Evil
   checks and warning-free Jobs compilation; no new full/graphical/SSH run claimed.
@@ -777,16 +781,16 @@ completing a release subset is not whole-plan completion.
   free to /tmp; parentheses/diff and graphical-fixture load pass. Latest full suite
   before this table-only change: 1055 total, 1053 passed, 2 Docker skips, all 68
   job-related cases including nine real-Pi cases passed. No new full RPC,
-  graphical execution, human acceptance or trusted-SSH run claimed. Baseline is
-  7625e62f; latest Queued header simplification is in authorized checkpoint untnnzsy.
-- Next action: review revised job/run screens and keyboard/return paths in a
-  genuinely visible isolated Emacs and obtain user acceptance; establish explicitly
-  trusted SSH access for job-specific cleanup coverage. Source/effective-key
-  interaction audit is complete; visual consistency/human acceptance is not
-  inferred from it. Restart/reinitialize keymaps before live review. Do not advance
-  phases, adopt ask-user or change host trust. User authorized committing header
-  simplification checkpoint untnnzsy; no push authorized.
-- Blockers: SSH unknown-host trust prompt; no graphical display/human layout review.
+  agent-side graphical execution or trusted-SSH run claimed. User separately
+  accepted the revised UI on 2026-11-01. Current code checkpoint is ccfc17bb.
+- Next action: user will run SSH tests on a different host and supply results
+  for job-specific cleanup/actual-Pi-exit verification before Phase 2 closeout.
+  Human UI acceptance is granted. User authorized committing acceptance checkpoint
+  pwlopytn and pushing accumulated changes. Agent-side graphical automation is
+  unrun, not a substitute for or denial of user acceptance. No further
+  implementation, phase advancement, ask-user adoption or host-trust changes.
+- Blockers: awaiting user-run real-SSH verification from another host; this
+  agent's SSH access remains blocked on unknown-host trust.
   Consult classification is repaired and no longer blocks automated verification.
   Optional ask-user adoption/custom choice is not a report/lifecycle blocker and
   remains unapproved. Later adapter approval-contract work is out of scope.
@@ -795,8 +799,9 @@ completing a release subset is not whole-plan completion.
   request findings preclude recommending unmodified job adoption. Five real-RPC
   observations plus a print-mode probe recorded in report-and-input-review.md.
   No global installation, upstream package-suite claim, live user-state mutation
-  or push. Authorized checkpoints through 7625e62f are committed; the newer
-  Queued header simplification is in authorized checkpoint untnnzsy.
+  or push during evaluation. Checkpoints through ccfc17bb are committed;
+  acceptance checkpoint pwlopytn and accumulated changes are now authorized for
+  commit/push. Required SSH verification remains pending the user's separate run.
 - Refinement finding: rendered reports require markdown-mode's external
   markdown-command. User's current converter command is unavailable, so exact
   Markdown fallback is expected. Pandoc via mise was suggested; no installation
@@ -1085,6 +1090,16 @@ completing a release subset is not whole-plan completion.
   checked, but visible UI acceptance remains open as recorded above.
 
 * History
+- 2026-11-01T07:08:43+00:00: User authorized committing and pushing accumulated
+  changes, including UI acceptance checkpoint pwlopytn, and will run SSH tests on
+  another host. Keep Phase 2 blocked pending those results; no SSH run, trust
+  change, additional implementation or later-phase advancement claimed.
+- 2026-11-01T07:06:58+00:00: User explicitly accepted the revised UI ("the UI
+  looks good to me") and asked whether Phase 2 is complete. Recorded human
+  acceptance without claiming agent graphical execution or every-state visual
+  coverage. Implementation/local automated verification are delivered, but Phase 2
+  remains blocked on required job-specific real-SSH shutdown verification after
+  trusted access is established. No test rerun, trust change, commit or Phase 3.
 - 2026-11-01T06:56:14+00:00: User authorized committing Queued header
   simplification checkpoint untnnzsy. Verification unchanged; visible/human/SSH
   gates remain blocked. No push or later-phase work authorized.

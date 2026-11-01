@@ -3,7 +3,7 @@
 #+PLAN_ID: enable-safe-ssh-runtime-reconfiguration
 #+PLAN_STATUS: done
 #+PLAN_CREATED: 2026-10-29T04:17:38+00:00
-#+PLAN_UPDATED: 2026-10-30T23:56:08Z
+#+PLAN_UPDATED: 2026-11-01T17:32:16Z
 
 * Goal
 Remove PiChat's blanket SSH reconfiguration restriction so a supported SSH runtime can replace its startup preset/Tools and reload its Pi session, while preventing a replacement from starting when old-process termination is uncertain.
@@ -72,7 +72,7 @@ Remove PiChat's blanket SSH reconfiguration restriction so a supported SSH runti
 - Plan status: done
 - Selected scope: phase 4, Verify end-to-end SSH reconfiguration and document support, completed. All four phases and the agreed acceptance checks are complete.
 - Last verified result: unit 906 tests (898 passed, 8 skipped, 0 unexpected, 5.12 seconds); full 983 (975 passed, 8 skipped, 0 unexpected, 108.34 seconds); full with optional dependencies 983 (981 passed, 2 opt-in Docker skips, 109.27 seconds); real SSH 12/12 (40.61 seconds); separate live graphical UI 1/1 (10.57 seconds), Pi 1.4.0. Changed Elisp compiled without warnings.
-- Next action: review the completed changes; commit or archive only on explicit request. No further implementation or required acceptance check remains in this plan.
+- Next action: none; archived at the user's explicit request. No further implementation or required acceptance check remains in this plan.
 - Blockers: none. Linux/readable-procfs support and fail-closed uncertainty remain intentional limitations. Real SSH verification uses the known same-host target; cross-host network-failure experiments, distributed locks, arbitrary wrappers, reconnect/resume and external-writer protection remain outside scope. Upstream compatibility-review backfill remains separate from this completed plan.
 
 * Verification
@@ -106,6 +106,7 @@ Remove PiChat's blanket SSH reconfiguration restriction so a supported SSH runti
 - No implementation or additional tests run as part of creating this plan.
 
 * History
+- 2026-11-01T17:32:16Z: User requested archival of the completed SSH plan. Reviewed completion evidence and all supporting files; no credentials or secrets found. Durable support guarantees and limitations are already documented in the README and testing guidelines, so no documentation extraction is needed. Retained done status and archived the whole directory with supporting evidence and relative links intact; no tests rerun or commits made.
 - 2026-10-30T23:56:08Z: Completed phase 4 and the whole plan after durable real-SSH tests, separate graphical UI acceptance, unit/full/dependency-enabled suites, warning-free compilation, support documentation and glossary consistency review. Fixed actual SSH catalogue stderr/shutdown defects exposed by the UI. Marked done, not archived; no commits made.
 - 2026-10-30T23:27:08Z: User confirmed execution of the final remaining phase. Clean worktree; selected phase 4 only, with isolated real-SSH and live UI verification. No commits or destructive shared-connection/network experiments authorized.
 - 2026-10-30T18:01:35Z: Completed only phase 3 with 26 added offline/process tests, 906-test unit verification, 86/86 focused real-Pi-enabled verification, and successful byte compilation. Fixed leave-stopped symbol collision, captured-target shutdown bypass, and missing replacement-identity gate exposed by regressions. Plan stays active; phase 4 remains TODO. No commits made.

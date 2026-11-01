@@ -1,0 +1,155 @@
+#+TITLE: Improve PiChat Session List Usability
+#+TODO: TODO IN-PROGRESS BLOCKED | DONE
+#+PLAN_ID: improve-pichat-session-list-usability
+#+PLAN_STATUS: draft
+#+PLAN_CREATED: 2026-11-01T17:23:10+00:00
+#+PLAN_UPDATED: 2026-11-01T17:23:21+00:00
+
+* Goal
+Make *PiChat Sessions* readable on narrow terminals and make unnamed rows
+recognizable without changing canonical identity, persistence, or preview behavior.
+
+* Scope
+- Included: manager-local fallback labels, responsive columns, resize handling,
+  sort/selection preservation, authoritative naming read-back, tests and user docs.
+- Excluded: preview rendering or lifecycle changes; saved-session browsing;
+  session storage/backend API changes; chat naming changes; new dependencies,
+  polling, external dictionaries, configurable vocabulary or general table framework.
+- Primary implementation: pichat/pichat-session-manager.el.
+- Tests: pichat/test/pichat-test-session-manager.el; focused RPC naming coverage
+  where needed. Documentation: pichat/README.md and only necessary glossary wording.
+
+* Acceptance criteria
+- Name is the first named column; preferred-runtime marker remains a small gutter.
+  Columns progressively appear as window body width permits; rows remain single-line
+  and fit ordinary narrow widths without unnecessary horizontal scrolling.
+- Name receives spare width up to a useful bound. Status retains its pending-input
+  marker. Very small windows degrade to Name alone. Final visible cells are bounded.
+- Resizing, splitting, initial display, preview opening/closing, and removal of a
+  narrow display window update the table using the narrowest visible manager width
+  across frames, without redraw loops or new RPC requests.
+- Nonblank authoritative name wins over a stable two-word fallback; nil/blank names
+  restore the same fallback after a temporary explicit name. Pi ID, then runtime ID,
+  remain last-resort display fallbacks. Alias allocation never changes stored names.
+- Generated aliases are unique among generated aliases for the current Emacs uptime,
+  including after manager kill/reopen. Exhaustion terminates with an ID fallback.
+- Rows/actions retain immutable runtime IDs. Selection, navigation, management keys,
+  default Project sorting, chosen sort direction and hidden-field ordering survive
+  refresh/layout changes. Preview behavior remains unchanged.
+- Manager naming waits for setter success and authoritative state read-back rather
+  than optimistically changing the cached name. Existing failure/source guards apply.
+- Focused and full unit suites pass; changed package file byte-compiles with proper
+  dependencies. Isolated RPC naming verification and real narrow/wide UI acceptance
+  are recorded; unavailable checks remain explicit outstanding work.
+
+* Approach and decisions
+** Existing architecture and constraints
+- Per pichat/GLOSSARY.md, manager rows identify runtimes, not saved session files
+  or Pi sessions. Source rebinding changes the loaded Pi session, not row identity.
+- Current fixed columns: preferred marker, ID, Status, Backend, Store, Project,
+  Target, Preset, Model, Session. Row construction/refresh reads cached runtime data.
+- Existing event/registry handlers coalesce refresh through a 30 ms timer;
+  tabulated-list-print with remember-pos retains the selected runtime row.
+- Successful get_state applies sessionName and emits session-state-changed.
+  The chat naming command already reads state after setter success; manager naming
+  currently redraws immediately without read-back. Correct only the manager command.
+- Keep row-specific labels separate from --session-label, which serves preview
+  and stop confirmation. No preview/cache/request refactoring.
+- Native Tabulated List ignores the final column width; truncate that cell explicitly.
+  A sort key naming a hidden column errors and must be handled deliberately.
+
+** Recommended design, pending explicit choices below
+- Column priority: Name, Status, Preset, Project, Target, Model, ID, Backend, Store.
+  Target precedes ID for host identification; retain existing Model at wider widths.
+- Use one small column specification and deterministic width-budget helper, including
+  gutter and padding. Reserve useful Name width before admitting another column;
+  allocate spare space mostly to Name, capped around 40 display cells. Avoid sizing
+  based on current row content, which causes layout jitter.
+- Indicative widths, not fixed breakpoints: 40 Name/Status; 60 adds Preset/Project;
+  80 adds Target; 100 adds Model; wider admits ID/Backend/Store as budgets allow.
+- Use the narrowest displayed window body width across frames. Hook window changes,
+  including deletion of the narrowest window, and reuse existing refresh coalescing.
+  Compare layout signatures to avoid redundant resize-only redraws; clean hooks/timers.
+- Preserve a logical sort choice independently of visible columns. Use a small
+  manager-local helper to sort cached full field values for hidden columns while
+  avoiding an invalid native sort key. Keep native visible-header sorting usable.
+- Prefer aliases keyed by immutable runtime ID: stable before Pi ID is known and
+  through source rebinding/reconfiguration. Explicit names still follow the current
+  Pi session. Never make aliases canonical identifiers or naming prompt defaults.
+
+** Minimal word generation
+- Two hard-coded constant ASCII vectors, approximately 32 short familiar words each,
+  inside the manager module: 1,024 adjective/noun combinations. No vocabulary framework.
+- One module-global runtime-ID-to-alias hash and one reserved-alias hash; retain both
+  through manager buffer destruction and reserve aliases until Emacs exits.
+- Choose a random starting pair index, then scan cyclically for an unused pair.
+  Stop after one pass; return the ID fallback if exhausted. No retry/scan hybrid,
+  prebuilt shuffled pool, network, LLM, dictionary files, configuration UI or polling.
+- Guarantee uniqueness among generated aliases only. Do not scan changing explicit
+  names: user names may duplicate each other or an alias. Truncation may also make
+  labels look alike; runtime IDs remain action authority.
+- Resolve precedence on each row rebuild. Retain an allocated alias while an explicit
+  name is shown; returning to blank requires no special rename lifecycle hooks.
+
+** Decisions to confirm before implementation
+- Runtime alias versus Pi-session/source alias: recommend runtime alias. An unnamed
+  A -> B source switch retains the alias; following conversations instead would need
+  source qualification and startup-ID transition rules. Do not silently choose.
+- Approve Target and retained Model ahead of ID, rather than the original priority.
+- Approve uniqueness among generated aliases only; no explicit-name collision checks.
+- Approve retaining sort ordering when its column is hidden.
+- Verify supported Pi empty-name behavior during implementation. Render blank cache
+  values as unnamed, but do not invent a backend clearing mechanism. External changes
+  appear on existing state synchronization, not through new polling.
+
+* Tasks
+** TODO Confirm UX choices and focused integration seams
+Confirm the four explicit design choices above. Recheck current worktree, naming
+callbacks/source guards and window-hook behavior; choose the smallest sorting seam.
+Do not broaden scope into backend or preview redesign.
+
+** TODO Add minimal fallback labels and manager naming read-back
+Implement the two constant word vectors, uptime-local maps and bounded allocation.
+Update only the row naming path. Correct manager setter/read-back sequencing.
+Test precedence, alias restoration, collisions/exhaustion, missing IDs, source rebinding,
+manager kill/reopen, failure handling and absence of persistence/network side effects.
+
+** TODO Add responsive columns with stable sorting and selection
+Implement width budgets and matching formats/row vectors, bounded final cells and
+full-value help text. Preserve preferred marker, pending-input status, default/chosen
+sort and runtime selection. Add coalesced window-change redraws and cleanup.
+Test admission boundaries, Unicode/long values, tiny windows, hidden sorts, multiple
+windows/frames, narrowest-window removal, preview split effects and redraw idempotence.
+
+** TODO Verify regressions and update user documentation
+Run focused manager tests then pichat/test/run-tests.sh; byte-compile the changed
+package file with dependency build directories and do not retain generated .elc files.
+Use isolated real-Pi naming tests for setter/read-back and empty-name compatibility;
+run --full if integration coverage changes. Exercise terminal/mobile-size widths,
+wide windows, preview toggling, resize and native/Evil navigation in an isolated UI.
+Report focused test-file size (current manager suite: 846 lines); avoid fixed-position
+whole-vector snapshots and split geometry tests only if needed. Update README manager
+columns/naming semantics, using glossary terminology; record all outstanding checks.
+
+* Checkpoint
+- Plan status: draft
+- Selected scope: none (planning only)
+- Last verified result: prior review ran 24 manager-prefixed ERT tests, all passed;
+  source seams rechecked when creating this draft. No implementation changes.
+- Next action: review this draft and confirm alias identity, column priority,
+  generated-only collision policy and hidden-sort behavior before execution.
+- Blockers: implementation approval and explicit UX choices remain outstanding.
+
+* Verification
+- Review baseline: emacs -Q --batch -L pichat -L pichat/test
+  -l pichat/test/pichat-test-session-manager.el with ERT selector
+  anchored to pichat-session-manager-: 24 passed, 0 unexpected.
+- Review probes on installed Emacs 31.1 confirmed final-column width is ignored
+  and an invalid/hidden sort-column name raises an error.
+- No implementation tests or UI acceptance performed for proposed behavior.
+- Plan structural validation: run plans.py check before reporting draft creation.
+
+* History
+- 2026-11-01T17:23:10+00:00: Created as draft from the review and naming simplification.
+- 2026-11-01T17:23:21+00:00: Recorded focused scope, minimal 32-by-32 word allocation,
+  remaining design choices, phased tasks and baseline evidence; implementation not authorized.

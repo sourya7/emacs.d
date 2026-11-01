@@ -778,11 +778,17 @@ scheduling, and chaining are not enabled.
   block ends in `…`, and an expanded block offers **Show less**. Short instructions
   need no folding control. Refresh/resize preserves the explicit choice.
   Conversation, repeat/save and job navigation actions stay visible.
-  **Execution details** expands separately; response source/copy controls,
-  **Instructions & settings**, retained-runtime **Diagnostics**, exact IDs, paths,
-  timestamps and provenance remain secondary. The response-copy shortcut remains
-  available even when execution details are collapsed. **Instructions & settings** opens the
-  captured inputs; sensitive raw records/arguments require a separate explicit
+  **Execution details** expands separately, with response source/copy controls,
+  **Instructions & settings**, retained-runtime **Diagnostics**, compact model/
+  preset/Tools and whole-second local times using Emacs's timezone, with timezone
+  labels reflecting each date's daylight-saving rules. The Runs queue column and
+  latest-run summaries also use local time; chronological sorting is unchanged.
+  It omits repeated workspace/target
+  and the default overlap policy; non-default policies remain visible. Copy-ID/path
+  buttons remain available there. The response-copy shortcut remains available
+  even when execution details are collapsed. **Instructions & settings** retains
+  full identifiers, saved-session path, exact stored UTC timestamps, repeat provenance and
+  all captured policies/inputs; sensitive raw records/arguments require a separate explicit
   **Inspect raw settings** action. Merely inspecting never launches Pi.
   Execution completion is distinct from task quality or domain success.
   **Repeat…** reviews historical settings and records repeat provenance;

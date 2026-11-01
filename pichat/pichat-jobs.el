@@ -105,6 +105,18 @@ every definition row."
       (forward-line 1))
     (when (eobp) (goto-char (point-min)))))
 
+(defun pichat-jobs--local-time (timestamp &optional format)
+  "Format UTC TIMESTAMP in Emacs's local timezone using optional FORMAT."
+  (condition-case nil
+      (format-time-string (or format "%Y-%m-%d %H:%M:%S %Z") (date-to-time timestamp))
+    (error timestamp)))
+
+(defun pichat-jobs--queued-less-p (a b)
+  "Compare run rows A and B by stored instants, not local clock strings."
+  (time-less-p
+   (date-to-time (get-text-property 0 'pichat-job-queued-at (aref (cadr a) 1)))
+   (date-to-time (get-text-property 0 'pichat-job-queued-at (aref (cadr b) 1)))))
+
 (defun pichat-jobs-refresh ()
   "Redraw Jobs/Runs using cached records; never dispatch or contact Pi."
   (interactive)
@@ -125,7 +137,7 @@ every definition row."
             (if narrow
                 (vector (list "Work" title-width t) '("State / result" 20 nil)
                         '("Project / target" 0 t))
-              [("Work" 24 t) ("Queued UTC" 20 t) ("State" 20 nil)
+              [("Work" 24 t) ("Queued (local)" 20 pichat-jobs--queued-less-p) ("State" 20 nil)
                ("Result" 14 nil) ("Trigger" 8 nil) ("Project / target" 0 t)])))
     ;; A sort column can disappear when changing tabs or narrowing the view.
     (unless (assoc (car tabulated-list-sort-key) (append tabulated-list-format nil))
@@ -151,7 +163,11 @@ every definition row."
                             (list (concat (pichat-jobs--display (plist-get (plist-get run :spec) :title))
                                           (unless (plist-get run :job-id) " [unsaved]")))
                             (if narrow (list (pichat-jobs--status pichat-jobs--owner run))
-                              (list (substring (plist-get run :created-at) 0 19)
+                              (list (propertize
+                                     (pichat-jobs--local-time (plist-get run :created-at)
+                                                              "%Y-%m-%d %H:%M:%S")
+                                     'pichat-job-queued-at (plist-get run :created-at)
+                                     'help-echo (pichat-jobs--local-time (plist-get run :created-at)))
                                     (pichat-jobs--state pichat-jobs--owner run)
                                     (pichat-jobs--result run) "Manual"))
                             (list (pichat-jobs--display (pichat-jobs--context (plist-get run :spec)))))))))
@@ -328,19 +344,42 @@ every definition row."
               (if (seq-empty-p extensions) "" (format " · %d extension tools" (length extensions)))
               (if (seq-empty-p mcp) "" (format " · %d MCP tools" (length mcp)))))))
 
-(defun pichat-jobs--insert-settings (spec &optional all-policies)
+(defun pichat-jobs--insert-settings (spec &optional all-policies compact)
   "Insert a readable execution summary of captured SPEC.
-Omit the default overlap policy unless ALL-POLICIES is non-nil."
-  (let ((config (plist-get spec :configuration)))
-    (insert (format "Project/workspace: %s\nTarget: %s\nModel: %s\nPreset: %s (captured)\nTools: %s\n"
-                    (plist-get spec :directory)
-                    (plist-get (plist-get config :transport) :label)
-                    (plist-get config :model) (plist-get (plist-get config :preset) :name)
-                    (pichat-jobs--tools-summary config)))
+Omit the default overlap policy unless ALL-POLICIES is non-nil.
+COMPACT omits repeated workspace/target and combines preset and Tools."
+  (let* ((config (plist-get spec :configuration))
+         (preset (plist-get config :preset))
+         (tools (pichat-jobs--tools-summary config)))
+    (unless compact
+      (insert (format "Project/workspace: %s\nTarget: %s\n"
+                      (plist-get spec :directory)
+                      (plist-get (plist-get config :transport) :label))))
+    (insert (format "Model: %s\n" (plist-get config :model)))
+    (insert (if compact
+                (format "Preset: %s · Tools: %s\n" (plist-get preset :name)
+                        (if (eq (plist-get preset :inherited) t) "Pi defaults" tools))
+              (format "Preset: %s (captured)\nTools: %s\n" (plist-get preset :name) tools)))
     (seq-doseq (resource (plist-get spec :resources))
       (when (or all-policies (not (equal (plist-get resource :access) "write")))
         (insert (format "Overlap policy: %s\n"
                         (pichat-jobs--access-label (plist-get resource :access))))))))
+
+(defun pichat-jobs--insert-run-times (record &optional exact)
+  "Insert RECORD's local timeline; show exact stored UTC timestamps when EXACT."
+  (insert (if exact "Times (UTC, exact):\n" "Times (local):\n"))
+  (dolist (field `((:created-at . "Queued")
+                   (:started-at . ,(if exact "Started (dispatch)" "Started"))
+                   (:finished-at . "Finished") (:resolved-at . "Manually resolved")))
+    (when (or (not (eq (car field) :resolved-at)) (plist-get record :resolved-at))
+      (let* ((value (plist-get record (car field)))
+             (display (if value
+                          (if exact value (pichat-jobs--local-time value))
+                        (if (and (eq (car field) :finished-at)
+                                 (or (equal (plist-get record :state) "uncertain")
+                                     (plist-get record :resolved-at)))
+                            "Not established" "Not recorded"))))
+        (insert (format "  %-9s %s\n" (concat (cdr field) ":") display))))))
 
 (defun pichat-jobs--show-detail (owner kind id &optional section)
   "Display exact OWNER/KIND/ID's cached SECTION, never executing work."
@@ -571,9 +610,9 @@ narrowest displaying window, including its actual wrapping and prefix width."
                           (t (pichat-jobs--state owner record)))
                     (if-let* ((finish (plist-get record :finished-at))
                               (start (plist-get record :started-at)))
-                        (format " · %.0fs · %s UTC"
+                        (format " · %.0fs · %s"
                                 (float-time (time-subtract (date-to-time finish) (date-to-time start)))
-                                (substring finish 0 19))
+                                (pichat-jobs--local-time finish))
                       "")
                     (plist-get spec :directory)
                     (plist-get (plist-get (plist-get spec :configuration) :transport) :label)))
@@ -651,24 +690,15 @@ narrowest displaying window, including its actual wrapping and prefix width."
                           (lambda () (pichat-jobs--show-detail owner 'runs id 'settings)))
       (when session
         (pichat-jobs--button "Diagnostics" (lambda () (pichat-jobs--diagnostics owner id))))
-      (insert (format "\nRun ID: %s\nSaved session: %s\nRuntime ID: %s\n"
-                      id (or (plist-get record :session-file) "Unavailable")
-                      (or (plist-get record :runtime-id) "Unavailable")))
-      (dolist (field '((:created-at . "Queued") (:started-at . "Started (dispatch)")
-                       (:finished-at . "Finished") (:resolved-at . "Manually resolved")))
-        (when (or (not (eq (car field) :resolved-at)) (plist-get record :resolved-at))
-          (insert (format "%s (UTC): %s\n" (cdr field)
-                          (or (plist-get record (car field))
-                              (if (and (eq (car field) :finished-at)
-                                       (or (equal state "uncertain") (plist-get record :resolved-at)))
-                                  "Not established" "Not recorded"))))))
+      (insert "\n")
+      (pichat-jobs--insert-settings spec nil t)
+      (insert "\n")
+      (pichat-jobs--insert-run-times record)
+      (insert "\n")
       (pichat-jobs--button "Copy run ID" (lambda () (kill-new id)))
       (when-let* ((file (plist-get record :session-file)))
         (pichat-jobs--button "Copy saved-session path" (lambda () (kill-new file))))
-      (insert "\n")
-      (pichat-jobs--insert-settings spec t)
-      (when-let* ((origin (plist-get (plist-get record :trigger) :repeat-of)))
-        (insert (format "Repeated from: %s\n" origin))))))
+      (insert "\n"))))
 
 (defun pichat-jobs--render-detail ()
   "Render exact cached details with progressive disclosure of captured inputs."
@@ -692,6 +722,13 @@ narrowest displaying window, including its actual wrapping and prefix width."
               (pp-to-string record)))
      ((eq pichat-jobs--section 'settings)
       (pichat-jobs--insert-settings spec t)
+      (when (eq kind 'runs)
+        (insert (format "\nRun ID: %s\nSaved session: %s\nRuntime ID: %s\n"
+                        id (or (plist-get record :session-file) "Unavailable")
+                        (or (plist-get record :runtime-id) "Unavailable")))
+        (pichat-jobs--insert-run-times record t)
+        (when-let* ((origin (plist-get (plist-get record :trigger) :repeat-of)))
+          (insert (format "Repeated from: %s\n" origin))))
       (insert (format "\nInstructions\n%s\n\n" (plist-get spec :instructions)))
       (pichat-jobs--button "Inspect raw settings (sensitive)…"
                           (lambda () (pichat-jobs--show-detail owner kind id 'raw))))
@@ -704,7 +741,8 @@ narrowest displaying window, including its actual wrapping and prefix width."
             (insert "\n\n")
             (if-let* ((latest (pichat-jobs--latest (pichat-jobs--store) id)))
                 (let ((run-id (plist-get latest :id)))
-                  (insert (format "Latest run: %s · %s\n" (pichat-jobs--status owner latest) (plist-get latest :created-at)))
+                  (insert (format "Latest run: %s · %s\n" (pichat-jobs--status owner latest)
+                                  (pichat-jobs--local-time (plist-get latest :created-at))))
                   (when (plist-get latest :summary)
                     (insert (format "Response preview: %s\n"
                                     (pichat-jobs--display (plist-get latest :summary)))))

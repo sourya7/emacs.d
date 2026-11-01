@@ -3,7 +3,7 @@
 #+PLAN_ID: pichat-repeatable-jobs-with-ui-approval-gate
 #+PLAN_STATUS: blocked
 #+PLAN_CREATED: 2026-10-30T06:19:17+00:00
-#+PLAN_UPDATED: 2026-11-01T06:30:11+00:00
+#+PLAN_UPDATED: 2026-11-01T06:52:57+00:00
 
 * Goal
 Add lightweight native PiChat jobs with reusable instructions, inspectable runs,
@@ -656,6 +656,20 @@ not only map membership. No later phase, trust change or commit authorized.
   fixture and reusable button-position test mechanics updated; two new ERT cases,
   no new test files. This is a source/effective-key interaction audit, not visual
   signoff: graphical/trusted-SSH/human gates stay open. Work is uncommitted.
+*** DONE Keep queue time instead of project/target in compact Runs
+User authorized compact Runs columns Work / Queued (local) / State / result.
+Local date/time to the minute replaces project/target only in narrow run tables;
+wide tables, Jobs definitions and run details retain their context. Full timestamp
+and timezone remain available in queue-time help; sorting uses stored instants.
+- Existing attention/layout test checks compact/wide columns and row values;
+  DST rollback test now verifies ascending/descending chronology at both widths.
+  Graphical fixture and README updated. No new test cases/files.
+- Focused Jobs/Evil 26/26; unit+optional 969 total, 967 passed, 2 Docker skips,
+  zero unexpected. Jobs compiles warning-free into /tmp; parentheses/diff and
+  graphical-fixture load pass. Logs: /tmp/pichat-compact-run-time-focused.log,
+  /tmp/pichat-compact-run-time-unit.log, /tmp/pichat-compact-run-time-compile.log.
+  Test sizes: jobs 1353, live-ui 163 lines. No RPC/full/graphical/SSH rerun claimed
+  for this table-only refinement. Work is uncommitted; acceptance gates unchanged.
 *** BLOCKED Verify revised Phase 2 and obtain visible UI acceptance
 Run focused report/lifecycle/input tests and full optional suite; investigate the
 previous Consult failure before claiming a fresh clean run. Review completed,
@@ -745,23 +759,25 @@ completing a release subset is not whole-plan completion.
   (checkpoint change xplrowky). The latest raw-label/record-only-output refinement
   was committed as 2580e029 (checkpoint zmwstrkn). Current authorized scope is
   the Phase 2 disclosure-key fix and cross-surface keyboard interaction audit,
-  implemented and automatically verified in checkpoint change xoxpxwnn, now
-  explicitly authorized for commit. No later phase/adoption/push.
-- Last verified result: keyboard audit/fixes have 39/39 focused Jobs/Evil/response
-  checks and full+optional 1055 total, 1053 passed, 2 Docker opt-in skips, no
-  unexpected results. All 68 job-related cases pass, including nine real-Pi cases.
-  Three native regressions fail against original production behavior and pass
-  after fixes. Jobs/Evil/response-view compile warning-free into /tmp; changed
-  Lisp parentheses/diff and graphical-fixture load pass. No graphical execution,
-  human acceptance or trusted-SSH rerun claimed. Baseline is 2580e029; latest
-  keyboard fixes/audit are in authorized checkpoint change xoxpxwnn.
+  committed as 3d11c090 (checkpoint xoxpxwnn). The newly authorized compact Runs
+  refinement retains queue time instead of project/target, implemented and
+  unit-verified in checkpoint pwwytykz, now authorized for commit.
+  No later phase/adoption/push.
+- Last verified result: compact Runs refinement has 26/26 focused Jobs/Evil checks
+  and unit+optional 969 total, 967 passed, 2 Docker skips, zero unexpected. Local
+  queue display and DST-safe sorting pass at both widths. Jobs compiles warning-
+  free to /tmp; parentheses/diff and graphical-fixture load pass. Latest full suite
+  before this table-only change: 1055 total, 1053 passed, 2 Docker skips, all 68
+  job-related cases including nine real-Pi cases passed. No new full RPC,
+  graphical execution, human acceptance or trusted-SSH run claimed. Baseline is
+  3d11c090; latest compact Runs changes are in authorized checkpoint pwwytykz.
 - Next action: review revised job/run screens and keyboard/return paths in a
   genuinely visible isolated Emacs and obtain user acceptance; establish explicitly
   trusted SSH access for job-specific cleanup coverage. Source/effective-key
   interaction audit is complete; visual consistency/human acceptance is not
   inferred from it. Restart/reinitialize keymaps before live review. Do not advance
-  phases, adopt ask-user or change host trust. User authorized committing the
-  keyboard fixes/audit checkpoint xoxpxwnn; no push authorized.
+  phases, adopt ask-user or change host trust. User authorized committing compact
+  Runs checkpoint pwwytykz; no push authorized.
 - Blockers: SSH unknown-host trust prompt; no graphical display/human layout review.
   Consult classification is repaired and no longer blocks automated verification.
   Optional ask-user adoption/custom choice is not a report/lifecycle blocker and
@@ -771,8 +787,8 @@ completing a release subset is not whole-plan completion.
   request findings preclude recommending unmodified job adoption. Five real-RPC
   observations plus a print-mode probe recorded in report-and-input-review.md.
   No global installation, upstream package-suite claim, live user-state mutation
-  or push. Authorized checkpoints through 2580e029 are committed; the newer
-  keyboard fixes/interaction audit are in authorized checkpoint xoxpxwnn.
+  or push. Authorized checkpoints through 3d11c090 are committed; the newer
+  compact Runs table refinement is in authorized checkpoint pwwytykz.
 - Refinement finding: rendered reports require markdown-mode's external
   markdown-command. User's current converter command is unavailable, so exact
   Markdown fallback is expected. Pandoc via mise was suggested; no installation
@@ -1061,6 +1077,15 @@ completing a release subset is not whole-plan completion.
   checked, but visible UI acceptance remains open as recorded above.
 
 * History
+- 2026-11-01T06:52:57+00:00: User authorized committing compact Runs queue-time
+  refinement as checkpoint pwwytykz. Verification unchanged; visible/human/SSH
+  gates remain blocked. No push or later-phase work authorized.
+- 2026-11-01T06:41:03+00:00: Delivered user-authorized compact Runs change: show
+  local queue date/time instead of project/target; retain wide/detail context.
+  Existing layout and DST-sort tests expanded, README/graphical fixture updated.
+  Focused 26/26, unit+optional 967 passes/2 Docker skips; warning-free Jobs compile,
+  structural/diff and fixture-load checks pass. No new full RPC/visible/SSH run,
+  commit or later-phase work. Human acceptance/trusted-SSH gates remain blocked.
 - 2026-11-01T06:30:11+00:00: User authorized committing the verified keyboard
   fixes/interaction audit as checkpoint change xoxpxwnn. Verification unchanged;
   visible/human/trusted-SSH gates remain blocked. No push or later phase authorized.

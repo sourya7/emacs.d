@@ -148,8 +148,9 @@ every definition row."
               (vector (list "Job" title-width t)
                       '("Latest run" 20 nil) '("Project / target" 0 t))
             (if narrow
-                (vector (list "Work" title-width t) '("State / result" 20 nil)
-                        '("Project / target" 0 t))
+                (vector (list "Work" title-width t)
+                        '("Queued (local)" 16 pichat-jobs--queued-less-p)
+                        '("State / result" 0 nil))
               [("Work" 24 t) ("Queued (local)" 20 pichat-jobs--queued-less-p) ("State" 20 nil)
                ("Result" 14 nil) ("Trigger" 8 nil) ("Project / target" 0 t)])))
     ;; A sort column can disappear when changing tabs or narrowing the view.
@@ -174,16 +175,18 @@ every definition row."
                      (list (plist-get run :id)
                            (vconcat
                             (list (concat (pichat-jobs--display (plist-get (plist-get run :spec) :title))
-                                          (unless (plist-get run :job-id) " [unsaved]")))
+                                          (unless (plist-get run :job-id) " [unsaved]"))
+                                  (propertize
+                                   (pichat-jobs--local-time
+                                    (plist-get run :created-at)
+                                    (if narrow "%Y-%m-%d %H:%M" "%Y-%m-%d %H:%M:%S"))
+                                   'pichat-job-queued-at (plist-get run :created-at)
+                                   'help-echo (pichat-jobs--local-time (plist-get run :created-at))))
                             (if narrow (list (pichat-jobs--status pichat-jobs--owner run))
-                              (list (propertize
-                                     (pichat-jobs--local-time (plist-get run :created-at)
-                                                              "%Y-%m-%d %H:%M:%S")
-                                     'pichat-job-queued-at (plist-get run :created-at)
-                                     'help-echo (pichat-jobs--local-time (plist-get run :created-at)))
-                                    (pichat-jobs--state pichat-jobs--owner run)
+                              (list (pichat-jobs--state pichat-jobs--owner run)
                                     (pichat-jobs--result run) "Manual"))
-                            (list (pichat-jobs--display (pichat-jobs--context (plist-get run :spec)))))))))
+                            (unless narrow
+                              (list (pichat-jobs--display (pichat-jobs--context (plist-get run :spec))))))))))
     (tabulated-list-init-header)
     (setq mode-line-process
           (format "%d/%d active · %d attention (%s) [%s%s]"

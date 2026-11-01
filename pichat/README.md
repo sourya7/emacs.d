@@ -767,8 +767,9 @@ scheduling, and chaining are not enabled.
   `h` shows its attempts, `a` toggles the input/review attention filter on/off, and `g`
   redraws cached state. `q` buries the list. The overview shows active/limit and
   attention counts plus the current history filter; returning to Jobs restores
-  the selected definition. Narrow windows retain work/state/project/target,
-  with full information available in details.
+  the selected definition. Compact Runs tables show Work, Queued (local date/time
+  to the minute), and State / result; Project / target stays in wide tables and
+  run details. Compact Jobs tables retain their project/target context.
 - Definition details retain the job title and workspace/target, put instructions
   first, and keep **Run job**, **Edit…**, **Job history** and latest-run navigation
   visible. **Job details** separately expands compact model/preset/Tools and

@@ -145,6 +145,37 @@
     (should (eq 'availability (plist-get missing :class)))
     (should (eq 'process (plist-get garbled :class)))))
 
+(ert-deftest pichat-archive-helper-classifies-errors-after-stderr-closes-first ()
+  (let ((node (executable-find "node"))
+        (start (symbol-function 'pichat-transport-make-process))
+        stderr-process helper failure)
+    (should node)
+    (cl-letf (((symbol-function 'pichat-transport-make-process)
+               (lambda (transport cwd &rest args)
+                 (setq helper (apply start transport cwd args)
+                       stderr-process (get-buffer-process (plist-get args :stderr)))
+                 helper)))
+      (unwind-protect
+          (progn
+            (pichat-archive-run
+             (list node "-e"
+                   (concat "process.stdin.once('data',()=>process.exit(2));"
+                           "process.stderr.write(JSON.stringify({code:'INVALID_QUERY',message:'fixture'})+'\\n',"
+                           "()=>require('node:fs').closeSync(2));"))
+             (lambda (_) (ert-fail "Accepted a failed archive helper"))
+             (lambda (error) (setq failure error)) 2)
+            (pichat-test-wait-until
+             (lambda () (and stderr-process (not (process-live-p stderr-process))))
+             2 "archive helper stderr EOF")
+            (should (process-live-p helper))
+            (process-send-string helper "exit\n")
+            (pichat-test-wait-until (lambda () failure) 2 "archive helper classified failure")
+            (should (eq (plist-get failure :class) 'caller))
+            (should (equal (plist-get failure :code) "INVALID_QUERY"))
+            (should (equal (plist-get failure :message) "fixture"))
+            (should (= (plist-get failure :exit-status) 2)))
+        (when (process-live-p helper) (delete-process helper))))))
+
 (ert-deftest pichat-archive-normalizes-search-and-recent-candidates ()
   (let* ((recent (pichat-archive-normalize-recent
                   (pichat-test-archive--metadata)))

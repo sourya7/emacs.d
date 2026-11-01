@@ -777,10 +777,13 @@ scheduling, and chaining are not enabled.
   width. Click the block or press `RET`/`TAB` within it to expand/collapse; a folded
   block ends in `…`, and an expanded block offers **Show less**. Short instructions
   need no folding control. Refresh/resize preserves the explicit choice.
-  **Execution details** expands separately; exact IDs, paths, timestamps,
-  provenance and settings remain secondary. **Instructions & settings**
-  opens the captured inputs; sensitive raw records/arguments require a separate
-  explicit **Inspect raw settings** action. Merely inspecting never launches Pi.
+  Conversation, repeat/save and job navigation actions stay visible.
+  **Execution details** expands separately; response source/copy controls,
+  **Instructions & settings**, retained-runtime **Diagnostics**, exact IDs, paths,
+  timestamps and provenance remain secondary. The response-copy shortcut remains
+  available even when execution details are collapsed. **Instructions & settings** opens the
+  captured inputs; sensitive raw records/arguments require a separate explicit
+  **Inspect raw settings** action. Merely inspecting never launches Pi.
   Execution completion is distinct from task quality or domain success.
   **Repeat…** reviews historical settings and records repeat provenance;
   it does not silently use a changed definition. A repeat retains its saved

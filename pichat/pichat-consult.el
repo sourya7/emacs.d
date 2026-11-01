@@ -235,6 +235,10 @@ invalidates an unavailable capability without opening a different picker."
                                 exit-status minibuffer-buffer))))
                            (when (buffer-live-p stderr-buffer)
                              (kill-buffer stderr-buffer)))))))
+                   ;; Keep helper JSON separate from Emacs's pipe-exit notice,
+                   ;; as in the RPC transport's diagnostic stderr capture.
+                   (when-let* ((stderr-process (get-buffer-process stderr-buffer)))
+                     (set-process-sentinel stderr-process #'ignore))
                    (set-process-query-on-exit-flag process nil)
                    (set-process-coding-system process 'utf-8-unix
                                               'utf-8-unix)

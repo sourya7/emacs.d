@@ -393,36 +393,56 @@
         (should (equal "/runtime/project" captured-cwd))))))
 
 (ert-deftest pichat-consult-archive-process-classifies-caller-and-availability-failures ()
-  (let ((node (executable-find "node")))
+  (let ((node (executable-find "node"))
+        (start (symbol-function 'pichat-transport-make-process)))
     (should node)
     (dolist (spec '((2 "INVALID_QUERY" nil)
-                    (3 "DATABASE_NOT_FOUND" t)))
+                    (2 "INVALID_ARGUMENT" nil)
+                    (3 "DATABASE_NOT_FOUND" t)
+                    (1 nil t)))
       (let* ((exit-status (nth 0 spec))
              (code (nth 1 spec))
              (should-invalidate (nth 2 spec))
              (capability '(:session fake))
-             events invalidated)
+             events invalidated helper stderr-process)
         (cl-letf (((symbol-function 'pichat-archive-invalidate)
-                   (lambda (_capability) (setq invalidated t))))
+                   (lambda (_capability) (setq invalidated t)))
+                  ((symbol-function 'pichat-transport-make-process)
+                   (lambda (transport cwd &rest args)
+                     (setq helper (apply start transport cwd args)
+                           stderr-process (get-buffer-process (plist-get args :stderr)))
+                     helper)))
           (let* ((builder
                   (lambda (_input)
                     (list node "-e"
                           (format
-                           "console.error(JSON.stringify({code:%S,message:'fixture'}));process.exit(%d)"
-                           code exit-status))))
+                           (concat "process.stdin.once('data',()=>process.exit(%d));"
+                                   "process.stderr.write(%S+'\\n',()=>require('node:fs').closeSync(2));")
+                           exit-status
+                           (if code (json-encode (list :code code :message "fixture")) "not-json")))))
                  (stage (funcall (pichat-consult--async-archive-process
                                   builder capability)
                                  (lambda (action) (push action events)))))
-            (with-temp-buffer (funcall stage 'setup))
-            (funcall stage "query")
-            (pichat-test-wait-until
-             (lambda ()
-               (cl-find-if
-                (lambda (event)
-                  (and (vectorp event) (eq (aref event 1) 'failed)))
-                events))
-             2 "archive Consult process failure")
-            (should (eq should-invalidate (and invalidated t)))))))))
+            (unwind-protect
+                (progn
+                  (with-temp-buffer (funcall stage 'setup))
+                  (funcall stage "query")
+                  ;; Force the stderr pipe to finish before the main process.
+                  ;; A stdin handshake, not a sleep, makes this ordering stable.
+                  (pichat-test-wait-until
+                   (lambda () (and stderr-process (not (process-live-p stderr-process))))
+                   2 "archive stderr EOF before helper exit")
+                  (should (process-live-p helper))
+                  (process-send-string helper "exit\n")
+                  (pichat-test-wait-until
+                   (lambda ()
+                     (cl-find-if
+                      (lambda (event)
+                        (and (vectorp event) (eq (aref event 1) 'failed)))
+                      events))
+                   2 "archive Consult process failure")
+                  (should (eq should-invalidate (and invalidated t))))
+              (funcall stage 'destroy))))))))
 
 (ert-deftest pichat-consult-selects-most-specific-current-archive-project ()
   (let* ((default-directory "/project/subdir/deeper/")

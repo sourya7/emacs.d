@@ -3,7 +3,7 @@
 #+PLAN_ID: pichat-repeatable-jobs-with-ui-approval-gate
 #+PLAN_STATUS: blocked
 #+PLAN_CREATED: 2026-10-30T06:19:17+00:00
-#+PLAN_UPDATED: 2026-11-01T00:38:36+00:00
+#+PLAN_UPDATED: 2026-11-01T02:47:47+00:00
 
 * Goal
 Add lightweight native PiChat jobs with reusable instructions, inspectable runs,
@@ -484,6 +484,33 @@ active-versus-finished cleanup. No action regrouping, later phase or commit.
   fixed evidence after continuation, version/boundary rejection, legacy fallback,
   preview return navigation and pending-versus-finished cleanup. Human-visible
   acceptance remains in the following BLOCKED task; no new layout signoff claimed.
+*** DONE Finish action grouping and isolate archive stderr
+User authorized committing the delivered refinements, then remaining Phase 2
+work, explicitly including action grouping. Commit dfcd9c34 (jj change zxllpszn)
+records the prior instruction/heading/preview/cleanup work; its worktree was clean.
+- Keep response source/copy controls under Execution details, separate from
+  conversation and re-execution actions (user's subsequent refinement). Preserve
+  the copy shortcut while collapsed. Keep ordinary navigation, attention/cancellation
+  and manual safety release reachable; settings/diagnostics are also secondary.
+  Reuse existing buttons, disclosure and reading-position mechanisms.
+- Repair the diagnosed Consult/archive error classification at stderr capture,
+  following the existing RPC stderr-pipe handling. Do not weaken JSON decoding or
+  classify malformed helper output as an authorized caller error.
+- Update focused behavioral checks and the graphical fixture as needed. Per user,
+  defer verification until both implementations are ready. SSH trust and human
+  visible acceptance remain separate gates; no later-phase or ask-user work.
+- Implemented source/copy controls inside Execution details, separate conversation
+  and repeat/save/navigation rows, and secondary settings/retained-runtime diagnostics. Removed the redundant Actions heading. Job history/definition,
+  cancellation and uncertainty/manual-release actions remain reachable without
+  expanding execution details. Native/Evil bindings and ownership are unchanged.
+- Both Consult search and ordinary archive helper capture suppress the stderr
+  pipe's default exit notice, as the RPC layer already does. JSON validation stays
+  strict; invalid queries retain capability, unavailable/malformed output does not.
+- Deterministic EOF-before-exit tests use a stdin handshake, not sleeps. Disabling
+  only the suppression makes both regressions fail; fixed code passes 20 complete
+  repetitions (40 test executions). Combined full+optional passes 1049/2 skips;
+  all 64 job-related cases pass. README and the graphical fixture are updated.
+  Human-visible/SSH verification remains in the following task; no new UI signoff.
 *** BLOCKED Verify revised Phase 2 and obtain visible UI acceptance
 Run focused report/lifecycle/input tests and full optional suite; investigate the
 previous Consult failure before claiming a fresh clean run. Review completed,
@@ -493,21 +520,19 @@ and glossary to distinguish durable job evidence from continued Pi conversation.
 Human acceptance, not graphical automation alone, closes the existing BLOCKED
 integration/UI task. Optional ask-user evaluation may be explicitly deferred;
 record that scope decision, never mark unimplemented adoption as delivered.
-- README/glossary/testing guidance updated. Initial revised Phase 2 delivery had
-  58/58 focused job passes, unit+optional 956 passes/2 Docker skips and a full
-  optional run of 1042 passes/2 skips. Subsequent preview/cleanup refinement has
-  63/63 job passes but the latest full run reproduces the unrelated Consult
-  failure; see Verification below. Compilation to /tmp remains warning-free;
-  no repository .elc files generated.
+- README/glossary/testing guidance updated. Latest combined full+optional run:
+  1051 total, 1049 passed, 2 Docker opt-in skips, no unexpected results; all 64
+  job-related tests pass. The Consult failure now has a source fix and deterministic
+  regressions/negative control, not just a lucky green rerun. Three changed modules
+  compile to /tmp; Consult has one unchanged docstring-width warning. No repository
+  .elc files generated. Earlier results remain in Verification below.
 - BLOCKED: no DISPLAY/WAYLAND_DISPLAY or X socket in this process, so no revised
   graphical test or human visible review is claimed. Updated graphical fixture is
   ready for a separate visible Emacs, not the user's running conversations.
-- Real-SSH verification is blocked on host trust as above. An intermediate full
-  run also reproduced the existing Consult/archive failure. Source-only diagnostic
-  investigation identified stderr sentinel text contaminating the JSON error
-  record; no unrelated Consult implementation was changed. Latest green rerun is
-  not evidence that this intermittent defect is fixed; preserve it for separate
-  repair authorization before declaring verification reliably clean.
+- Real-SSH verification is blocked on host trust as above. The previously diagnosed
+  Consult/archive failure was separately authorized and repaired in the preceding
+  task; it is no longer an outstanding verification blocker. Graphical/SSH runs
+  remain deferred; passing automated checks do not close visible acceptance.
 ** Phase 3: Optional exact-plan-phase adapter
 *** TODO Implement explicit phase targeting, eligibility and bounded authorization
 Add the narrow machine-readable plans-skill inspection contract, plan/heading-path
@@ -560,32 +585,38 @@ completing a release subset is not whole-plan completion.
   as 4217245e. Current authorized refinement: read-only instruction styling,
   five-visual-line folding, TAB toggle and removal of the ordinary Response
   heading, shared run-bounded Preview conversation and truthful cleanup display
-  are implemented. No action regrouping, commit, adoption, later phase or push.
-- Last verified result: all 63 job-related tests pass, including nine real-Pi
-  cases. Latest full+optional: 1049 total, 1046 passed, 1 existing Consult failure,
-  2 Docker opt-in skips. Earlier instruction refinement unit+optional passed
-  958/2 skips. Four changed production files compile warning-free into /tmp;
-  graphical fixture loads and changed Lisp parentheses/diff checks pass.
-  Consult's stderr-JSON contamination remains diagnosed, not repaired; this full
-  run is not green. Baseline Phase 2 revisions are recorded in jj change kvqvyusr
-  (4217245e); current refinements remain uncommitted.
-- Next action: review the new conversation preview and cleanup status in a fresh
-  genuinely visible Emacs; retain the user's positive feedback on the earlier
-  instruction/answer layout without assuming acceptance of these new refinements.
-  Establish explicitly trusted SSH access and rerun job-specific real SSH cleanup
-  coverage. Request separate authority
-  for the unrelated Consult repair. Do not advance phases or install ask-user.
-- Blockers: SSH unknown-host trust prompt; no graphical display/human layout review;
-  intermittent Consult classification defect remains unfixed and recurred in the
-  latest full run. Optional ask-user adoption/custom choice is not a report/lifecycle
-  blocker and remains unapproved. Later adapter approval-contract work is out of scope.
+  are committed as dfcd9c34 (jj change zxllpszn). Current scope adds explicitly
+  authorized action grouping and the diagnosed Consult/archive stderr repair,
+  now implemented and automatically verified together, with the latest display
+  refinement verified separately. User authorized committing checkpoint change
+  yqspwmzx; no adoption, later phase or push.
+- Last verified result: latest response-button relocation has 22/22 focused
+  Jobs/Evil passes, warning-free Jobs compilation to /tmp and parentheses/diff
+  checks. Full suite not rerun for that display-only refinement. Immediately
+  before it: combined full+optional 1051 total, 1049 passed, 2 Docker
+  opt-in skips, 0 unexpected; all 64 job-related tests pass, including nine real-Pi
+  cases. Both deterministic stderr regressions also pass 20 full repetitions;
+  disabling suppression reproduces both failures. Three changed modules compile
+  into /tmp with one unchanged Consult docstring-width warning. Changed Lisp
+  parentheses/diff and graphical-fixture load checks pass. No graphical execution,
+  human visual acceptance or real-SSH rerun claimed. Committed baseline is
+  4217245e plus dfcd9c34; grouping/Consult work is in checkpoint change yqspwmzx.
+- Next action: review grouped actions, captured conversation preview and cleanup
+  status in a genuinely visible isolated Emacs when the user is ready; establish
+  explicitly trusted SSH access for job-specific cleanup coverage. Do not infer
+  layout acceptance from automation, advance phases, install ask-user or change
+  host trust. Checkpoint commit is authorized; no further implementation requested.
+- Blockers: SSH unknown-host trust prompt; no graphical display/human layout review.
+  Consult classification is repaired and no longer blocks automated verification.
+  Optional ask-user adoption/custom choice is not a report/lifecycle blocker and
+  remains unapproved. Later adapter approval-contract work is out of scope.
 - Latest research: pinned pi-ask-user df1df70acf1f7521d24f9518a702064930340df2
   (0.17.1) loads with Pi 1.4.0 and standard dialogs, but cancellation/timeout/stale
   request findings preclude recommending unmodified job adoption. Five real-RPC
   observations plus a print-mode probe recorded in report-and-input-review.md.
   No global installation, upstream package-suite claim, live user-state mutation
-  or push. Previous checkpoint commit authorization was exercised; the current
-  UI/preview refinements remain uncommitted.
+  or push. Both authorized checkpoint commits were exercised; the prior
+  UI/preview refinements are committed. New grouping/Consult changes are separate.
 - Refinement finding: rendered reports require markdown-mode's external
   markdown-command. User's current converter command is unavailable, so exact
   Markdown fallback is expected. Pandoc via mise was suggested; no installation
@@ -616,6 +647,33 @@ completing a release subset is not whole-plan completion.
   stable phase IDs or plan-change reauthorization has slipped into current scope.
 
 * Verification
+- 2026-11-01 response source/copy controls moved inside Execution details:
+  - Focused Jobs/Evil selector: 22/22 passed, 0 unexpected;
+    /tmp/pichat-secondary-response-actions.log. Regression checks both controls
+    hidden while collapsed, revealed only inside details, exact source/copy,
+    native copy shortcut while collapsed and preserved disclosure/return behavior.
+  - Jobs compiles warning-free to /tmp;
+    /tmp/pichat-secondary-response-actions-bytecompile.log. Changed Lisp parentheses
+    and git diff --check pass. No full RPC/SSH/graphical rerun for this relocation;
+    prior full verification below does not include the latest display-only change.
+- 2026-11-01 action grouping and Consult/archive stderr repair:
+  - Both implementations completed before verification, per user sequencing.
+    Full+optional: 1051 total, 1049 passed, 2 Docker opt-in skips, 0 unexpected;
+    /tmp/pichat-action-grouping-consult-full.log (123.15s). All 64 job-related checks
+    pass, including nine real-Pi cases and new source/action/disclosure routing.
+  - EOF-before-exit regressions use real Node pipe closure plus a stdin handshake.
+    Both pass 20 complete repetitions (40 test executions);
+    /tmp/pichat-consult-stderr-repeat.log. A separate negative control disables
+    only ignore-sentinel installation without editing source: both regressions
+    fail as expected; /tmp/pichat-consult-stderr-negative-control.log. Caller,
+    unavailable and malformed-output classification remain covered.
+  - Three changed production modules compile to /tmp only; one unchanged warning
+    for pichat-consult-load-session's existing long docstring;
+    /tmp/pichat-action-grouping-consult-bytecompile.log. Changed Lisp parentheses,
+    git diff --check and graphical-fixture load check pass. No repository .elc.
+  - Test file lines: archive 506, Consult 1365, Jobs 1047, live-ui 146. No new test
+    file. DISPLAY/WAYLAND_DISPLAY remain unset; graphical and trusted real-SSH
+    checks deferred, not inferred from the automated suite or load check.
 - 2026-11-01 conversation-preview/cleanup refinement:
   - Full+optional: 1049 total, 1046 passed, 1 unexpected existing Consult/archive
     classification failure, 2 Docker opt-in skips;
@@ -757,6 +815,33 @@ completing a release subset is not whole-plan completion.
   checked, but visible UI acceptance remains open as recorded above.
 
 * History
+- 2026-11-01T02:47:47+00:00: User authorized committing all accumulated action
+  grouping, secondary response controls and Consult/archive stderr fixes in
+  checkpoint change yqspwmzx. Verification evidence remains scoped as recorded:
+  prior combined full suite and latest focused display tests. Visible UI/SSH
+  gates remain blocked; no new implementation, trust change or push authorized.
+- 2026-11-01T02:16:48+00:00: User approved simplifying the primary action rows.
+  Moved Copy response Markdown and View response source inside Execution details,
+  leaving conversation/re-run controls prominent and copy shortcuts unchanged.
+  Updated README and disclosure/shortcut regression; 22/22 focused Jobs/Evil
+  checks pass and Jobs compiles warning-free into /tmp. Preserved blocked visible
+  UI/SSH gates and uncommitted status; no new commit or adjacent work.
+- 2026-11-01T01:58:56+00:00: Finished explicitly authorized action grouping and
+  Consult/archive stderr isolation. Source/copy controls sit by the answer;
+  settings/diagnostics are secondary; ordinary navigation and safety actions stay
+  visible. Both archive execution paths suppress the same pipe notice already
+  handled by RPC, without loosening JSON parsing. Implemented both before testing.
+  Combined full suite passes 1049 with 2 Docker skips; both deterministic stderr
+  tests pass 20 repetitions and fail under a suppression-disabled negative control.
+  Returned to blocked only for trusted SSH and human-visible review, with no new
+  layout acceptance claim. Prior refinements are committed as dfcd9c34; these new
+  changes remain uncommitted. No later phase, extension adoption or push.
+- 2026-11-01T01:50:51+00:00: User authorized commit of changes so far, then
+  remaining tasks, explicitly adding action grouping and asking to verify after
+  implementation. Committed prior refinements as dfcd9c34 (jj change zxllpszn),
+  then confirmed a clean worktree. Activated only Phase 2 action grouping and
+  the previously diagnosed Consult/archive stderr fix. External SSH trust and
+  visible acceptance gates remain; no later phase, adoption or push authorized.
 - 2026-11-01T00:38:36+00:00: Delivered only the authorized Preview conversation
   and cleanup-display refinements. Version-2 evidence captures structured branch
   entries; existing shared preview renderer reads the immutable run boundary,

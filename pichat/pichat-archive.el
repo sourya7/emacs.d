@@ -326,6 +326,9 @@ CALLBACK receives stdout and ERROR-CALLBACK receives a structured error."
                    :name (format "pichat-archive-%d" sequence)
                    :buffer stdout :stderr stderr :command command
                    :sentinel #'sentinel))
+            ;; Stderr is protocol data, not a place for Emacs's pipe-exit notice.
+            (when-let* ((stderr-process (get-buffer-process stderr)))
+              (set-process-sentinel stderr-process #'ignore))
             (set-process-query-on-exit-flag process nil)
             (set-process-coding-system process 'utf-8-unix 'utf-8-unix)
             (push process pichat-archive--processes)

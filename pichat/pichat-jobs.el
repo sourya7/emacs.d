@@ -691,7 +691,7 @@ narrowest displaying window, including its actual wrapping and prefix width."
       (when-let* ((file (plist-get record :session-file)))
         (pichat-jobs--button "Copy saved-session path" (lambda () (kill-new file))))
       (insert "\n")
-      (pichat-jobs--button "Inspect raw settings (sensitive)…"
+      (pichat-jobs--button "Inspect raw settings…"
                           (lambda () (pichat-jobs--show-detail owner 'runs id 'raw)))
       (insert "\n"))))
 
@@ -719,7 +719,7 @@ narrowest displaying window, including its actual wrapping and prefix width."
       (insert "\n")
       (pichat-jobs--insert-settings spec)
       (insert "\n")
-      (pichat-jobs--button "Inspect raw settings (sensitive)…"
+      (pichat-jobs--button "Inspect raw settings…"
                           (lambda () (pichat-jobs--show-detail owner 'jobs id 'raw))))))
 
 (defun pichat-jobs--render-detail ()
@@ -736,14 +736,11 @@ narrowest displaying window, including its actual wrapping and prefix width."
                                   (pichat-jobs--reading-position (window-point window))))
                           (get-buffer-window-list (current-buffer) nil t))))
     (erase-buffer)
-    (unless (and (eq kind 'runs) (null pichat-jobs--section))
-      (insert (propertize (plist-get spec :title) 'face 'bold) "\n")
-      (when (eq pichat-jobs--section 'raw) (insert id "\n"))
-      (unless (and (eq kind 'jobs) (null pichat-jobs--section)) (insert "\n")))
+    (when (and (eq kind 'jobs) (null pichat-jobs--section))
+      (insert (propertize (plist-get spec :title) 'face 'bold) "\n"))
     (cond
      ((eq pichat-jobs--section 'raw)
-      (insert "Raw captured record — may contain sensitive prompts/arguments. Review before sharing.\n\n"
-              (pp-to-string record)))
+      (insert (pp-to-string record)))
      (t
       (if (eq kind 'jobs)
           (pichat-jobs--render-job owner record)

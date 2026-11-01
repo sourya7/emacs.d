@@ -3,7 +3,7 @@
 #+PLAN_ID: pichat-repeatable-jobs-with-ui-approval-gate
 #+PLAN_STATUS: blocked
 #+PLAN_CREATED: 2026-10-30T06:19:17+00:00
-#+PLAN_UPDATED: 2026-11-01T05:33:16+00:00
+#+PLAN_UPDATED: 2026-11-01T05:40:32+00:00
 
 * Goal
 Add lightweight native PiChat jobs with reusable instructions, inspectable runs,
@@ -592,6 +592,21 @@ state and exact record routing. No execution/schema, later-phase or commit scope
   free to /tmp; changed Lisp parentheses/diff and graphical-fixture load pass.
   README updated. Current UI work is in checkpoint change xplrowky, authorized
   for commit; visible/SSH gates stay open.
+*** DONE Simplify raw inspection labels and output
+User requested Inspect raw settings… without the sensitive suffix and raw output
+containing only the complete record: omit the repeated title, separate ID line and
+warning paragraph. Keep record contents unchanged, explicit inspection and parent
+return/disclosure behavior. Apply to jobs and runs; update assertions/docs. No
+execution/schema changes or new commit authorized.
+- Both details buttons now say Inspect raw settings…; raw job/run bodies contain
+  only the unchanged pretty-printed record. Removed duplicate title/ID headings
+  and warning paragraph. Updated existing regressions to compare entire raw bodies
+  against the complete records, and updated README/graphical fixture labels.
+- Unit+optional 965 passed/2 Docker skips, no unexpected results. Jobs compiles
+  warning-free to /tmp; parentheses/diff and graphical-fixture load pass. Full RPC
+  suite was not rerun for this text-only refinement; prior full evidence remains
+  scoped to the preceding checkpoint. Current change is in checkpoint zmwstrkn,
+  authorized for commit.
 *** BLOCKED Verify revised Phase 2 and obtain visible UI acceptance
 Run focused report/lifecycle/input tests and full optional suite; investigate the
 previous Consult failure before claiming a fresh clean run. Review completed,
@@ -677,23 +692,24 @@ completing a release subset is not whole-plan completion.
   routine ID rows/copy buttons, implemented and automatically verified. The
   approved follow-up removal of Instructions & settings is also verified: raw
   inspection opens directly from details, retaining ordinary navigation and useful
-  metadata controls. User authorized committing these accumulated refinements in
-  checkpoint change xplrowky. No adoption, later phase or push.
-- Last verified result: latest direct-raw-inspection refinement has 24/24 focused
-  Jobs/Evil passes and full+optional 1053 total, 1051 passed, 2 Docker opt-in skips,
-  0 unexpected; all 66 job-related tests pass, including nine real-Pi cases. This
-  covers earlier job-definition/ID/compact/local-time/button refinements too. Jobs
-  compiles warning-free into /tmp; changed Lisp parentheses/diff and graphical-
-  fixture load checks pass. No graphical execution, human visual acceptance or
-  real-SSH rerun claimed. Baseline is through 1b26e2cc; latest job-definition/ID
-  and direct-raw presentation changes are recorded in checkpoint change xplrowky.
-  Earlier Consult evidence is below.
-- Next action: review revised job/run screens and direct raw-inspection return
+  metadata controls. These accumulated refinements were committed as 80014758
+  (checkpoint change xplrowky). The latest raw-label/record-only-output refinement
+  is implemented and unit-verified in checkpoint zmwstrkn, now authorized for commit.
+  No adoption, later phase or push.
+- Last verified result: latest raw-label/record-only-output refinement has
+  unit+optional 967 total, 965 passed, 2 Docker opt-in skips, 0 unexpected. Exact
+  record-only bodies and direct return paths are covered. Jobs compiles warning-
+  free to /tmp; changed Lisp parentheses/diff and graphical-fixture load pass.
+  Last full+optional before this text-only change: 1053 total, 1051 passed, 2 Docker
+  skips; all 66 job-related cases including nine real-Pi checks passed. No new full
+  RPC, graphical, human acceptance or real-SSH run claimed. Baseline is 80014758;
+  latest formatting changes are recorded in authorized checkpoint zmwstrkn.
+- Next action: review revised job/run screens and plain raw-inspection return
   paths in a genuinely visible isolated Emacs and obtain user acceptance; establish
   explicitly trusted SSH access for job-specific cleanup coverage. A complete
   cross-surface visual consistency audit is still outstanding, not inferred from
   shared code/tests. Do not advance phases, adopt ask-user or change host trust.
-  This checkpoint commit is authorized; no additional implementation requested.
+  User authorized this checkpoint commit; no additional implementation requested.
 - Blockers: SSH unknown-host trust prompt; no graphical display/human layout review.
   Consult classification is repaired and no longer blocks automated verification.
   Optional ask-user adoption/custom choice is not a report/lifecycle blocker and
@@ -703,9 +719,8 @@ completing a release subset is not whole-plan completion.
   request findings preclude recommending unmodified job adoption. Five real-RPC
   observations plus a print-mode probe recorded in report-and-input-review.md.
   No global installation, upstream package-suite claim, live user-state mutation
-  or push. Authorized checkpoints through 1b26e2cc are committed; the newer
-  job-definition/ID and direct-raw refinements are in authorized checkpoint change
-  xplrowky.
+  or push. Authorized checkpoints through 80014758 are committed; the newer plain
+  raw-inspection formatting refinement is in authorized checkpoint zmwstrkn.
 - Refinement finding: rendered reports require markdown-mode's external
   markdown-command. User's current converter command is unavailable, so exact
   Markdown fallback is expected. Pandoc via mise was suggested; no installation
@@ -736,6 +751,17 @@ completing a release subset is not whole-plan completion.
   stable phase IDs or plan-change reauthorization has slipped into current scope.
 
 * Verification
+- 2026-11-01 plain raw labels / record-only output:
+  - Unit+optional: 967 total, 965 passed, 2 Docker opt-in skips, 0 unexpected;
+    /tmp/pichat-plain-raw-inspection-unit.log (11.19s). Existing job/run assertions
+    now verify the complete raw body equals the pretty-printed stored record,
+    without headings/warning prose, and preserve explicit disclosure/return behavior.
+  - Jobs compiles warning-free into /tmp;
+    /tmp/pichat-plain-raw-inspection-bytecompile.log. Changed Lisp parentheses,
+    git diff --check and graphical-fixture load pass. Jobs tests 1225 lines,
+    live-ui 159; no new cases/files. No repository .elc, live state, execution,
+    timezone or trust changes. Full RPC/graphical/SSH not rerun for this text-only
+    refinement; no visible acceptance or cross-UI audit claimed.
 - 2026-11-01 direct raw inspection / removal of intermediate settings screen:
   - Focused Jobs/Evil 24/24; /tmp/pichat-direct-raw-inspection-focused.log. Existing
     tests now exercise direct job/run raw disclosure and one-step return with
@@ -962,6 +988,20 @@ completing a release subset is not whole-plan completion.
   checked, but visible UI acceptance remains open as recorded above.
 
 * History
+- 2026-11-01T05:40:32+00:00: User authorized committing plain raw-inspection labels
+  and record-only output in checkpoint change zmwstrkn. Retain unit verification,
+  explicitly scoped prior full-suite evidence and outstanding visible/audit/SSH
+  gates. No additional implementation, later phase, trust change or push authorized.
+- 2026-11-01T05:38:24+00:00: Delivered requested Inspect raw settings… labels
+  and record-only raw bodies. Removed duplicate title/ID heading and warning prose;
+  complete captured records and explicit inspection/return behavior unchanged.
+  Unit+optional 965 passes/2 Docker skips and warning-free Jobs compilation;
+  structural and graphical-fixture load checks pass. Full RPC not rerun for this
+  text-only change. Reblocked on existing visible/audit/SSH gates; no commit.
+- 2026-11-01T05:35:05+00:00: User requested plain Inspect raw settings… labels
+  and record-only raw output, removing duplicate title/ID and warning prose.
+  Activated this display-only refinement from clean checkpoint 80014758; preserve
+  exact records and existing explicit inspection/return flow. No commit authorized.
 - 2026-11-01T05:33:16+00:00: User authorized committing accumulated job-definition
   alignment, routine ID-control cleanup and direct raw-inspection refinements in
   checkpoint change xplrowky. Retained latest full-suite evidence and outstanding

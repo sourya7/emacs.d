@@ -772,7 +772,7 @@ scheduling, and chaining are not enabled.
 - Definition details retain the job title and workspace/target, put instructions
   first, and keep **Run job**, **Edit…**, **Job history** and latest-run navigation
   visible. **Job details** separately expands compact model/preset/Tools and
-  explicit **Inspect raw settings (sensitive)…**. Unsupported schedule placeholders and duplicate
+  explicit **Inspect raw settings…**. Unsupported schedule placeholders and duplicate
   latest-response previews are omitted; open the exact run to read its response.
   Run details put the instruction block and rendered answer first, with compact
   execution status/context and no duplicate task title or Response heading.
@@ -791,14 +791,15 @@ scheduling, and chaining are not enabled.
   and the default overlap policy; non-default policies remain visible. Saved-session
   path copying remains available there. The response-copy shortcut remains available
   even when execution details are collapsed. Repeated runs offer **View original
-  run** directly in execution details. **Inspect raw settings (sensitive)…** opens
+  run** directly in execution details. **Inspect raw settings…** opens
   the complete record directly from either details section; there is no intermediate
   settings screen. Full instructions remain in the expandable primary block.
   Raw records preserve the saved-session path, exact UTC timestamps, internal IDs,
   all policies and complete captured configuration/inputs. IDs have no routine rows
   or dedicated copy buttons; navigation still uses exact identities, including for
-  duplicate job titles. Raw inspection is explicit and warns about sensitive data;
-  normal navigation never requires it. Merely inspecting never launches Pi.
+  duplicate job titles. Raw inspection shows only the complete record, without a
+  repeated title, separate ID heading or warning paragraph. It is explicit; normal
+  navigation never requires it. Merely inspecting never launches Pi.
   Execution completion is distinct from task quality or domain success.
   **Repeat…** reviews historical settings and records repeat provenance;
   it does not silently use a changed definition. A repeat retains its saved

@@ -769,27 +769,36 @@ scheduling, and chaining are not enabled.
   attention counts plus the current history filter; returning to Jobs restores
   the selected definition. Narrow windows retain work/state/project/target,
   with full information available in details.
-- Definition details show instructions, readable execution settings,
-  latest-run summary and direct latest-run/history actions. Run details put the
-  instruction block and rendered answer first, with compact execution
-  status/context and no duplicate task title or Response heading. Instructions use the chat's read-only
+- Definition details retain the job title and workspace/target, put instructions
+  first, and keep **Run job**, **Edit…**, **Job history** and latest-run navigation
+  visible. **Job details** separately expands compact model/preset/Tools and
+  explicit **Inspect raw settings (sensitive)…**. Unsupported schedule placeholders and duplicate
+  latest-response previews are omitted; open the exact run to read its response.
+  Run details put the instruction block and rendered answer first, with compact
+  execution status/context and no duplicate task title or Response heading.
+  Both definition and run instructions use the chat's read-only
   input-bar styling and fold after five visual lines at the narrowest displayed
   width. Click the block or press `RET`/`TAB` within it to expand/collapse; a folded
   block ends in `…`, and an expanded block offers **Show less**. Short instructions
   need no folding control. Refresh/resize preserves the explicit choice.
   Conversation, repeat/save and job navigation actions stay visible.
   **Execution details** expands separately, with response source/copy controls,
-  **Instructions & settings**, retained-runtime **Diagnostics**, compact model/
-  preset/Tools and whole-second local times using Emacs's timezone, with timezone
+  retained-runtime **Diagnostics**, compact model/preset/Tools and whole-second
+  local times using Emacs's timezone, with timezone
   labels reflecting each date's daylight-saving rules. The Runs queue column and
   latest-run summaries also use local time; chronological sorting is unchanged.
   It omits repeated workspace/target
-  and the default overlap policy; non-default policies remain visible. Copy-ID/path
-  buttons remain available there. The response-copy shortcut remains available
-  even when execution details are collapsed. **Instructions & settings** retains
-  full identifiers, saved-session path, exact stored UTC timestamps, repeat provenance and
-  all captured policies/inputs; sensitive raw records/arguments require a separate explicit
-  **Inspect raw settings** action. Merely inspecting never launches Pi.
+  and the default overlap policy; non-default policies remain visible. Saved-session
+  path copying remains available there. The response-copy shortcut remains available
+  even when execution details are collapsed. Repeated runs offer **View original
+  run** directly in execution details. **Inspect raw settings (sensitive)…** opens
+  the complete record directly from either details section; there is no intermediate
+  settings screen. Full instructions remain in the expandable primary block.
+  Raw records preserve the saved-session path, exact UTC timestamps, internal IDs,
+  all policies and complete captured configuration/inputs. IDs have no routine rows
+  or dedicated copy buttons; navigation still uses exact identities, including for
+  duplicate job titles. Raw inspection is explicit and warns about sensitive data;
+  normal navigation never requires it. Merely inspecting never launches Pi.
   Execution completion is distinct from task quality or domain success.
   **Repeat…** reviews historical settings and records repeat provenance;
   it does not silently use a changed definition. A repeat retains its saved
@@ -845,7 +854,7 @@ Changing execution explicitly re-resolves the preset/target after confirmation;
 cancelling a sub-picker restores the draft. Model/workspace/target edits preserve
 the selected Tools; changing preset explicitly confirms resetting them. Setup
 and detail summaries show non-default overlap policies; the ordinary modifier
-policy stays out of the way. Captured settings shows every declared policy, and
+policy stays out of the way. Explicit raw inspection retains every declared policy, and
 **Execution settings… → Workspace coordination** changes it separately from tool
 permissions. Routine screens omit generic sandbox/save disclaimers. Setup warns
 when the current preset no longer matches its capture. The environment, credentials and installed

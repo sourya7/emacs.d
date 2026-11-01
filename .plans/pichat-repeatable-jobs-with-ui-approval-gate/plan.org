@@ -3,7 +3,7 @@
 #+PLAN_ID: pichat-repeatable-jobs-with-ui-approval-gate
 #+PLAN_STATUS: blocked
 #+PLAN_CREATED: 2026-10-30T06:19:17+00:00
-#+PLAN_UPDATED: 2026-11-01T04:31:50+00:00
+#+PLAN_UPDATED: 2026-11-01T05:33:16+00:00
 
 * Goal
 Add lightweight native PiChat jobs with reusable instructions, inspectable runs,
@@ -530,12 +530,68 @@ existing disclosure/settings and offline inspection; no execution/lifecycle chan
 - Local-time follow-up also converts the report header, Runs queue column and
   latest-run summaries. Queue sorting uses stored instants, not displayed local
   strings, so daylight-saving clock rollback does not reverse chronology. Local
-  display uses Emacs's timezone; shell/system timezone currently reports UTC,
-  which may also be the user's Emacs default. No timezone configuration changed.
+  display uses Emacs's timezone; shell/system timezone reported UTC at that
+  checkpoint. No timezone configuration changed by this implementation.
 - Focused Jobs/Evil 24/24 and full+optional 1051 passes/2 Docker skips, no unexpected;
   all 66 job-related checks pass. Jobs compiles warning-free into /tmp. Visible
-  acceptance/SSH remain separate gates; checkpoint change rxnwqomx is authorized
+  acceptance/SSH remain separate gates; checkpoint change rxnwqomx was committed
+  as 1b26e2cc. The subsequent refinement below supersedes its routine ID controls.
+*** DONE Align job definition inspection and remove routine ID controls
+User approved matching the job definition view to the compact run report: retain
+its reusable-job title, show workspace/target once, reuse five-visual-line styled
+instruction folding and place Run job/Edit/Job history and latest-run navigation
+above collapsed Job details. Hide the unsupported Schedule: Off placeholder and
+duplicate latest-response preview. Reuse compact captured model/preset/Tools and
+secondary Instructions & settings, retaining all policies/full instructions.
+Remove routine job/run/runtime ID rows and dedicated ID copy controls; preserve
+exact identifiers in explicit sensitive raw inspection and exact-record action
+routing. Keep the saved-session path/copy action useful and repeat provenance
+inspectable without printing an opaque ID. No execution/schema, later-phase,
+ask-user, timezone configuration, commit or push changes authorized.
+- Implemented shared styled/folded instructions with the definition title and
+  workspace/target retained. Primary Run/Edit/History and latest-run links stay
+  visible; Job details separately reveals compact captured settings. Removed
+  unsupported schedule placeholders from definition details and the Jobs table,
+  plus the duplicate response preview. Full instructions/policies remain inspectable.
+- Removed routine ID rows, the run-ID copy action, redundant blocker ID and history
+  filter ID text. Exact navigation still uses original internal IDs. Full raw
+  records/headers retain diagnostic identifiers without data mutation. Saved-session
+  path copying remains; repeat provenance now offers View original run instead
+  of an opaque ID. No new execution path, record schema or renderer introduced.
+- Expanded existing behavioral checks (no new test cases/files): both job/run
+  five-visual-line folding and resize/choice preservation, exact duplicate-title
+  Run/Edit/latest/history actions, compact/default/non-default metadata, sensitive
+  raw disclosure, original-run return navigation and unchanged stored records.
+  README and graphical fixture updated. Focused 24/24 and full+optional 1051
+  passes/2 Docker skips, all 66 job-related checks passing. Jobs compiles warning-
+  free to /tmp; structural/fixture-load checks pass. Graphical/SSH gates remain
+  open; this refinement is recorded in checkpoint change xplrowky, authorized
   for commit.
+*** DONE Remove duplicate Instructions & settings view
+User approved removing the intermediate structured inspection screen for jobs
+and runs. Put explicit Inspect raw settings (sensitive)… directly under Job details
+and Execution details. Keep full instructions in the expandable primary block,
+compact captured settings and local timelines in their existing disclosures,
+saved-session path copying, response controls, diagnostics and repeat-origin
+navigation. Move View original run into Execution details. Exact UTC timestamps,
+IDs, policies and complete configuration remain unchanged in explicit raw records.
+Remove unused structured-summary/exact-timeline branches rather than keeping a
+parallel view or compatibility shim. Preserve offline inspection, return/disclosure
+state and exact record routing. No execution/schema, later-phase or commit scope.
+- Removed the intermediate screen and its unused full-summary/exact-timeline
+  helper options. Explicit sensitive raw inspection now opens directly from either
+  details disclosure and returns directly to that same parent with its expansion
+  state intact. Primary instruction folding still supplies the full instruction text.
+- Repeat-origin navigation moved into Execution details, alongside retained path
+  copying, source/copy controls, diagnostics and local timeline. Ordinary navigation
+  never requires raw inspection. Raw warning/complete records and exact UTC/ID/
+  policy/configuration data are unchanged; no new runtime or metadata writer.
+- Adapted existing normal/legacy/UTC-DST/provenance/sensitive-disclosure tests and
+  graphical fixture, with no new ERT cases/files. Focused 24/24 and full+optional
+  1051 passes/2 Docker skips; all 66 job-related checks pass. Jobs compiles warning-
+  free to /tmp; changed Lisp parentheses/diff and graphical-fixture load pass.
+  README updated. Current UI work is in checkpoint change xplrowky, authorized
+  for commit; visible/SSH gates stay open.
 *** BLOCKED Verify revised Phase 2 and obtain visible UI acceptance
 Run focused report/lifecycle/input tests and full optional suite; investigate the
 previous Consult failure before claiming a fresh clean run. Review completed,
@@ -616,22 +672,28 @@ completing a release subset is not whole-plan completion.
   refinement verified separately. User authorized committing checkpoint change
   yqspwmzx, committed as a1ea813b. Current authorized scope reduces secondary
   execution metadata only, now implemented and automatically verified. This latest
-  refinement is in checkpoint change rxnwqomx, now authorized for commit;
-  no adoption, later phase or push.
-- Last verified result: latest compact/local-time refinement has 24/24 focused
+  refinement was committed as 1b26e2cc (checkpoint change rxnwqomx). Current scope
+  is the explicitly approved job-definition layout alignment and removal of
+  routine ID rows/copy buttons, implemented and automatically verified. The
+  approved follow-up removal of Instructions & settings is also verified: raw
+  inspection opens directly from details, retaining ordinary navigation and useful
+  metadata controls. User authorized committing these accumulated refinements in
+  checkpoint change xplrowky. No adoption, later phase or push.
+- Last verified result: latest direct-raw-inspection refinement has 24/24 focused
   Jobs/Evil passes and full+optional 1053 total, 1051 passed, 2 Docker opt-in skips,
   0 unexpected; all 66 job-related tests pass, including nine real-Pi cases. This
-  full run also covers compact metadata and the previous response-button relocation. Jobs compiles
-  warning-free into /tmp; changed Lisp parentheses/diff and graphical-fixture load
-  checks pass. No graphical execution, human visual acceptance or real-SSH rerun
-  claimed. Baseline is through a1ea813b; compact/local-time changes are recorded
-  in checkpoint change rxnwqomx. Earlier Consult evidence is recorded below.
-- Next action: review compact/local-time execution details, grouped actions, captured
-  conversation preview and cleanup status in a genuinely visible isolated Emacs
-  when the user is ready; establish explicitly trusted SSH access for job-specific
-  cleanup coverage. Do not infer layout acceptance from automation, advance phases,
-  install ask-user or change host trust. User authorized this checkpoint commit;
-  no further implementation requested.
+  covers earlier job-definition/ID/compact/local-time/button refinements too. Jobs
+  compiles warning-free into /tmp; changed Lisp parentheses/diff and graphical-
+  fixture load checks pass. No graphical execution, human visual acceptance or
+  real-SSH rerun claimed. Baseline is through 1b26e2cc; latest job-definition/ID
+  and direct-raw presentation changes are recorded in checkpoint change xplrowky.
+  Earlier Consult evidence is below.
+- Next action: review revised job/run screens and direct raw-inspection return
+  paths in a genuinely visible isolated Emacs and obtain user acceptance; establish
+  explicitly trusted SSH access for job-specific cleanup coverage. A complete
+  cross-surface visual consistency audit is still outstanding, not inferred from
+  shared code/tests. Do not advance phases, adopt ask-user or change host trust.
+  This checkpoint commit is authorized; no additional implementation requested.
 - Blockers: SSH unknown-host trust prompt; no graphical display/human layout review.
   Consult classification is repaired and no longer blocks automated verification.
   Optional ask-user adoption/custom choice is not a report/lifecycle blocker and
@@ -641,8 +703,9 @@ completing a release subset is not whole-plan completion.
   request findings preclude recommending unmodified job adoption. Five real-RPC
   observations plus a print-mode probe recorded in report-and-input-review.md.
   No global installation, upstream package-suite claim, live user-state mutation
-  or push. Authorized checkpoints through a1ea813b are committed; compact/local-time
-  refinement is recorded in the newly authorized checkpoint change rxnwqomx.
+  or push. Authorized checkpoints through 1b26e2cc are committed; the newer
+  job-definition/ID and direct-raw refinements are in authorized checkpoint change
+  xplrowky.
 - Refinement finding: rendered reports require markdown-mode's external
   markdown-command. User's current converter command is unavailable, so exact
   Markdown fallback is expected. Pandoc via mise was suggested; no installation
@@ -673,6 +736,38 @@ completing a release subset is not whole-plan completion.
   stable phase IDs or plan-change reauthorization has slipped into current scope.
 
 * Verification
+- 2026-11-01 direct raw inspection / removal of intermediate settings screen:
+  - Focused Jobs/Evil 24/24; /tmp/pichat-direct-raw-inspection-focused.log. Existing
+    tests now exercise direct job/run raw disclosure and one-step return with
+    expansion preserved, non-default compact/default raw policies, exact original
+    UTC timestamps/IDs/configuration, unchanged records, legacy absent session path,
+    repeat-origin navigation directly from execution details, and no RPC/startup.
+  - Full+optional: 1053 total, 1051 passed, 2 Docker opt-in skips, 0 unexpected;
+    /tmp/pichat-direct-raw-inspection-full.log (125.32s). All 66 job-related checks
+    pass, including nine real-Pi cases; no new ERT cases/files.
+  - Jobs compiles warning-free into /tmp;
+    /tmp/pichat-direct-raw-inspection-bytecompile.log. Changed Lisp parentheses,
+    git diff --check and graphical-fixture load pass. Jobs tests 1225 lines, live-ui
+    159. No repository .elc, live-user metadata/state, timezone configuration or
+    host trust changed. DISPLAY/WAYLAND_DISPLAY unset: no graphical execution,
+    visible acceptance, cross-UI visual audit or real-SSH rerun claimed.
+- 2026-11-01 job-definition/ID presentation refinement:
+  - Focused Jobs/Evil 24/24; /tmp/pichat-job-definition-refinement-focused.log.
+    Existing tests expanded for job/run instruction folding and narrow/wide choice
+    preservation, compact definition disclosure/return, duplicate-title Run/Edit/
+    latest/history routing, omitted duplicate response/schedule/IDs, exact sensitive
+    raw metadata, unchanged records and repeat-origin navigation/return. Initial
+    focused run caught one obsolete legacy runtime-ID display expectation; updated
+    it to verify ID omission and truthful saved-session unavailability.
+  - Full+optional: 1053 total, 1051 passed, 2 Docker opt-in skips, 0 unexpected;
+    /tmp/pichat-job-definition-refinement-full.log (124.59s). All 66 job-related
+    tests pass, including nine real-Pi cases. No new ERT test cases/files.
+  - Jobs compiles warning-free to /tmp;
+    /tmp/pichat-job-definition-refinement-bytecompile.log. Changed Lisp parentheses,
+    git diff --check and graphical-fixture load pass. Jobs test 1225 lines, live-ui
+    159. No repository .elc, live user metadata/state, timezone configuration or
+    host trust changed. DISPLAY/WAYLAND_DISPLAY unset: no graphical execution,
+    human layout acceptance or real-SSH rerun claimed.
 - 2026-11-01 local-time follow-up:
   - Focused Jobs/Evil 24/24; /tmp/pichat-local-job-times-focused.log. New fixed-rule
     timezone regression covers previous-day rollover, both sides of DST rollback,
@@ -867,6 +962,40 @@ completing a release subset is not whole-plan completion.
   checked, but visible UI acceptance remains open as recorded above.
 
 * History
+- 2026-11-01T05:33:16+00:00: User authorized committing accumulated job-definition
+  alignment, routine ID-control cleanup and direct raw-inspection refinements in
+  checkpoint change xplrowky. Retained latest full-suite evidence and outstanding
+  visible acceptance/cross-surface audit/trusted-SSH gates. No new implementation,
+  later-phase work, timezone or trust changes, or push authorized.
+- 2026-11-01T05:29:37+00:00: Removed approved duplicate Instructions & settings
+  screen and unused helper options. Job/Execution details link directly to explicit
+  sensitive raw inspection; repeat-origin navigation now lives in Execution details.
+  Primary full-instruction expansion, source/path copying, diagnostics, local times
+  and complete immutable metadata remain intact. Focused 24/24, full+optional 1051
+  passes/2 skips, warning-free Jobs compilation and structural/fixture-load checks
+  pass. No new cases/files, commit or later-phase work. Reblocked for visible/SSH
+  gates; the broader cross-surface visual consistency audit is not yet performed.
+- 2026-11-01T05:21:16+00:00: User approved removal of Instructions & settings for
+  both jobs and runs: direct explicit raw inspection in details, expanded primary
+  instructions, and retained response/path/diagnostics controls. Move repeat-origin
+  navigation into Execution details; exact UTC/internal/configuration metadata
+  remains in raw records. Activated only this Phase 2 display refinement; earlier
+  job-definition changes remain uncommitted and visible/SSH gates stay open.
+- 2026-11-01T05:09:18+00:00: Delivered approved job-definition layout alignment
+  and routine ID-control cleanup. Shared folded instructions, collapsed Job details,
+  compact captured settings and exact latest/history/Run/Edit actions replace the
+  older definition layout. Removed unsupported schedule/duplicate response noise;
+  IDs remain in raw inspection, saved-session path copying and navigable repeat
+  provenance remain available. Focused 24/24 and full+optional 1051 passes/2 skips,
+  all 66 job checks pass; warning-free Jobs compilation and structural/fixture-load
+  checks pass. Reblocked on visible acceptance/trusted SSH, not implementation.
+  Current display refinement is uncommitted; no new commit or later-phase work.
+- 2026-11-01T04:57:05+00:00: User approved the job-definition layout proposal and
+  follow-up removal of routine ID rows/copy controls. Activated only that Phase 2
+  inspection refinement from clean committed baseline 1b26e2cc. Preserve internal
+  identities/raw records and exact navigation, saved-session path utilities,
+  captured settings, offline inspection and all execution/lifecycle behavior.
+  Human-visible/trusted-SSH gates stay open; no new commit or later phase authorized.
 - 2026-11-01T04:31:50+00:00: User authorized committing the compact execution
   metadata and local-time display changes in checkpoint change rxnwqomx. Retained
   recorded full-suite verification and blocked human-visible/trusted-SSH gates.

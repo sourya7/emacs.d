@@ -318,5 +318,19 @@
       (should-error (pichat-job-evidence-read store digest) :type 'pichat-job-error)
       (should-error (pichat-job-evidence-save store evidence) :type 'pichat-job-error))))
 
+(ert-deftest pichat-job-evidence-validates-structured-conversation-boundary ()
+  (pichat-test-with-temp-dir directory
+    (let* ((store (pichat-job-store-open (expand-file-name "jobs.json" directory)))
+           (evidence '(:version 2 :response "Answer" :leaf "final"
+                       :entries [(:id "final" :type "message"
+                                  :message (:role "assistant" :content []))]))
+           (digest (pichat-job-evidence-save store evidence)))
+      (should (equal evidence (pichat-job-evidence-read store digest)))
+      (dolist (invalid '((:version 2 :response "Answer" :leaf "final" :entries [])
+                         (:version 2 :response "Answer" :leaf "other" :entries [(:id "final")])
+                         (:version 2 :response "Answer" :leaf "final" :entries ["not an entry"])
+                         (:version 3 :response "Answer" :transcript "Unsupported")))
+        (should-error (pichat-job-evidence-save store invalid) :type 'pichat-job-error)))))
+
 (provide 'pichat-test-job-core)
 ;;; pichat-test-job-core.el ends here

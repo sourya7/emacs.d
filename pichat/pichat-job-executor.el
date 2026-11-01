@@ -242,6 +242,21 @@ SSH reuses the verified-lifetime observer, never the local endpoint's sentinel."
                (unless (pichat-job-execution-cancelling execution)
                  (pichat-job-executor--failed execution "Job submission failed or was ambiguous")))))))))))
 
+(defun pichat-job-executor--evidence-value (value)
+  "Convert RPC plist/list VALUE to explicit JSON arrays for evidence.
+Unlike json-encode's alist heuristic, a list of content plists is an array,
+not an object.  Keep RPC false values distinct from null."
+  (cond
+   ((consp value)
+    (if (and (keywordp (car value))
+             (not (memq (car value) '(:json-false :false))))
+        (cl-loop for (key item) on value by #'cddr
+                 append (list key (pichat-job-executor--evidence-value item)))
+      (vconcat (mapcar #'pichat-job-executor--evidence-value value))))
+   ((vectorp value) (vconcat (mapcar #'pichat-job-executor--evidence-value value)))
+   ((eq value :json-false) :false)
+   (t value)))
+
 (defun pichat-job-executor--cache-result (cache)
   "Extract final response and run-bounded transcript from authoritative CACHE.
 Use active-branch order, not hash order or accumulated commentary.  An empty
@@ -263,11 +278,15 @@ last response stays empty.  No domain success is inferred from prose."
                       (pichat-chat-diagnostics-safe-summary-text
                        (or (plist-get bad :errorMessage) "Agent stopped abnormally")))
             :summary (truncate-string-to-width markdown 2000 nil nil "…")
-            :capture (list :version 1 :response markdown
+            :capture (list :version 2 :response markdown
                            :response-entry (pichat-chat-navigation-response-node-key response)
                            :leaf (pichat-entry-cache-leaf-id cache)
                            :captured-at (pichat-job--now)
-                           :transcript (pichat-chat-navigation-transcript-markdown transcript))))))
+                           ;; RPC uses plist/list JSON.  Evidence uses vectors for
+                           ;; arrays so json-serialize cannot mistake content or
+                           ;; tool arguments for object property lists.
+                           :entries (pichat-job-executor--evidence-value
+                                     (vconcat entries)))))))
 
 (defun pichat-job-executor--synchronized (execution payload)
   "Validate settled synchronized PAYLOAD and fresh idle state for EXECUTION."

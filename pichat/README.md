@@ -771,9 +771,14 @@ scheduling, and chaining are not enabled.
   with full information available in details.
 - Definition details show instructions, readable execution settings,
   latest-run summary and direct latest-run/history actions. Run details put the
-  task and rendered **Response** first, with compact execution status/context.
-  Long tasks and **Execution details** expand explicitly; exact IDs, paths,
-  timestamps, provenance and settings remain secondary. **Instructions & settings**
+  instruction block and rendered answer first, with compact execution
+  status/context and no duplicate task title or Response heading. Instructions use the chat's read-only
+  input-bar styling and fold after five visual lines at the narrowest displayed
+  width. Click the block or press `RET`/`TAB` within it to expand/collapse; a folded
+  block ends in `…`, and an expanded block offers **Show less**. Short instructions
+  need no folding control. Refresh/resize preserves the explicit choice.
+  **Execution details** expands separately; exact IDs, paths, timestamps,
+  provenance and settings remain secondary. **Instructions & settings**
   opens the captured inputs; sensitive raw records/arguments require a separate
   explicit **Inspect raw settings** action. Merely inspecting never launches Pi.
   Execution completion is distinct from task quality or domain success.
@@ -797,8 +802,12 @@ with the latest response from a potentially continued conversation.
 
 Submitting does not select/display the new chat or change your current/preferred
 runtime. **View chat** displays the exact owning chat while work needs attention.
-**View transcript** reads immutable run-end Markdown evidence without starting Pi,
-including after Emacs restart; it is not Session History or saved-session browsing.
+**Preview conversation** displays immutable run-end entries through the same
+read-only renderer as Session History and runtime-manager previews, without
+starting Pi or reading the current saved session file, including after Emacs
+restart. It has no fork/switch actions and is not Session History or saved-session
+browsing. Older Markdown-only captures remain readable with a labelled fallback;
+PiChat never reconstructs historical evidence from a subsequently continued file.
 Finished runs with saved-session references offer **Continue in chat…**: an explicit
 new ordinary runtime on the captured target using the current default preset,
 not rerunning the job. New prompts extend the same saved Pi session file, not a
@@ -812,8 +821,10 @@ answered or cancelled. There is no automatic approval or waiting-input timeout.
 Killing an active owning chat is refused; closing a window or burying Jobs is
 harmless. After synchronized evidence is durably captured, the owning runtime is
 stopped through the existing backend shutdown barrier before completion releases
-claims. SSH additionally requires verified actual-Pi exit; transport EOF alone
-is insufficient. Cleanup failure retains uncertainty, claims and captured evidence.
+claims. During that stop barrier the report status says **Answer captured ·
+Stopping runtime**; finished reports show no pending-cleanup message.
+SSH additionally requires verified actual-Pi exit; transport EOF alone is
+insufficient. Cleanup failure retains uncertainty, claims and captured evidence.
 An existing chat remains read-only; stopped manager entries are retained until
 explicitly forgotten. Runtime, saved Pi session and durable run evidence have
 independent lifetimes. Pending input, cancellation and uncertain execution do not
@@ -870,9 +881,10 @@ queued work is cancelled, potentially dispatched work remains uncertain, and
 nothing is replayed. Subsequent browsing/refresh never contacts Pi. Metadata
 has a 16 MiB limit. New run evidence is stored in content-addressed JSON beside
 that file, in `<pichat-jobs-file>.evidence/` (0700 directory, 0600 files), with an
-8 MiB UTF-8 JSON limit per run. Evidence includes the exact response, response
-entry/source identity, run-end leaf and complete run-bounded transcript, including
-tool output/thinking; it can be sensitive. Overflow or publication failure retains
+8 MiB UTF-8 JSON limit per run. Version-2 evidence includes the exact response,
+response entry/source identity, run-end leaf and structured active-branch entries,
+including tool output/thinking; it can be sensitive. Version-1 Markdown-only
+captures remain readable without migration. Overflow or publication failure retains
 uncertainty/claims instead of silently truncating a report or declaring completion.
 Evidence is published before the metadata reference; interrupted commits may leave
 unreferenced files. Back up/move evidence with metadata. There is no automatic

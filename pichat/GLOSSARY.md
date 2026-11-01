@@ -87,7 +87,7 @@ Shared terms for discussing PiChat. **Runtime**, **Pi session**, **saved session
 | **Process generation** | A distinct runtime-process lifetime marker; events and transport buffers from a stopped process cannot act on its replacement, even when it hosts the same Pi session. |
 | **Repaint** | Refreshing the chat display from PiChat's synchronized transcript model, rather than treating visible buffer text as the source of truth. |
 | **Rendered response view** | A read-only rendering of one settled assistant response's prose. The chat itself retains the response's exact Markdown source. Job reports reuse its renderer without requiring a live chat. |
-| **Run transcript** | Read-only captured conversation evidence through one job run's settled boundary. Viewing it starts no runtime and does not follow later edits to the saved session file. |
+| **Run transcript** | Captured conversation evidence through one job run's settled boundary. **Preview conversation** displays it read-only without starting a runtime or following later edits to the saved session file. |
 
 ## Messages and tool display
 

@@ -3,7 +3,7 @@
 #+PLAN_ID: pichat-repeatable-jobs-with-ui-approval-gate
 #+PLAN_STATUS: blocked
 #+PLAN_CREATED: 2026-10-30T06:19:17+00:00
-#+PLAN_UPDATED: 2026-10-31T22:41:30+00:00
+#+PLAN_UPDATED: 2026-11-01T00:38:36+00:00
 
 * Goal
 Add lightweight native PiChat jobs with reusable instructions, inspectable runs,
@@ -456,6 +456,34 @@ not become a parallel plan-phase approval system or duplicate ask_user declarati
   adoption/custom implementation and its visible input UI require a user decision,
   not implied approval from this task's DONE status. No dependency/global skill
   installation or package adoption occurred. Details in report-and-input-review.md.
+*** DONE Reuse run-bounded conversation preview and correct cleanup display
+User authorized these two refinements only. Capture structured active-branch
+entries through the settled leaf in versioned immutable evidence. Reuse the
+existing Session History/runtime-manager preview renderer without runtime,
+saved-file reads or source-mutating actions. Older Markdown-only evidence remains
+readable with an explicit fallback, never reconstructed from a continued file.
+Hide completed-run cleanup residue; show real shutdown progress in the status
+area and preserve failure/uncertainty states. Test offline/restart/continuation
+isolation, tools and branch selection, legacy fallback, capture validation and
+active-versus-finished cleanup. No action regrouping, later phase or commit.
+- Implemented version-2 evidence with structured settled active-branch entries and
+  explicit run-end leaf, within the existing private 8 MiB content-addressed store.
+  RPC content/argument arrays and false values are adapted to JSON storage without
+  the alist heuristic that would misencode a list of content plists as an object.
+  Version-1 captures remain immutable/readable with a labelled Markdown fallback.
+- Preview conversation uses shared snapshot normalization and
+  pichat-sessions-insert-preview-path, not a new transcript renderer. The common
+  read-only view lifecycle returns to the report; no runtime, saved-file read,
+  fork/switch controls or current-source dependence. Continuation cannot extend
+  its captured boundary. Old summary-only runs still lack conversation evidence.
+- Active cleanup appears in the compact status as Answer captured · Stopping
+  runtime. The action-area residue is removed. Finished/uncertain states take
+  precedence without clearing the internal guard used for callback ownership.
+- All 63 job-related tests pass, including nine real-Pi cases. New checks cover
+  shared rendering/tool correlation, false/array persistence, offline reload,
+  fixed evidence after continuation, version/boundary rejection, legacy fallback,
+  preview return navigation and pending-versus-finished cleanup. Human-visible
+  acceptance remains in the following BLOCKED task; no new layout signoff claimed.
 *** BLOCKED Verify revised Phase 2 and obtain visible UI acceptance
 Run focused report/lifecycle/input tests and full optional suite; investigate the
 previous Consult failure before claiming a fresh clean run. Review completed,
@@ -465,10 +493,12 @@ and glossary to distinguish durable job evidence from continued Pi conversation.
 Human acceptance, not graphical automation alone, closes the existing BLOCKED
 integration/UI task. Optional ask-user evaluation may be explicitly deferred;
 record that scope decision, never mark unimplemented adoption as delivered.
-- README/glossary/testing guidance updated. Final focused job selector passes 58/58;
-  dependency-enabled unit suite passes 956 with 2 Docker skips. Latest full optional
-  suite passes 1042 with 2 Docker skips. Byte-compilation of changed production
-  files to /tmp succeeds without warnings; no repository .elc files generated.
+- README/glossary/testing guidance updated. Initial revised Phase 2 delivery had
+  58/58 focused job passes, unit+optional 956 passes/2 Docker skips and a full
+  optional run of 1042 passes/2 skips. Subsequent preview/cleanup refinement has
+  63/63 job passes but the latest full run reproduces the unrelated Consult
+  failure; see Verification below. Compilation to /tmp remains warning-free;
+  no repository .elc files generated.
 - BLOCKED: no DISPLAY/WAYLAND_DISPLAY or X socket in this process, so no revised
   graphical test or human visible review is claimed. Updated graphical fixture is
   ready for a separate visible Emacs, not the user's running conversations.
@@ -526,28 +556,36 @@ completing a release subset is not whole-plan completion.
 * Checkpoint
 - Plan status: blocked
 - Selected scope: revised Phase 2 only; implementation and isolated ask-user
-  evaluation delivered, pending verification gates. User authorized committing
-  this checkpoint; no extension adoption, later phase or push.
-- Last verified result: 58/58 focused job tests; unit+optional 956 passed/2 Docker
-  skips; latest full+optional 1042 passed/2 Docker skips. Earlier same-session full
-  run reproduced an intermittent Consult failure; its stderr-JSON contamination
-  is now diagnosed, not repaired. Changed production files compile warning-free
-  into /tmp. Phase 2 revisions are recorded in jj change kvqvyusr; original
-  implementation cfebb35 and parent planning commit cbc0d08a remain historical.
-- Next action: establish explicitly trusted SSH access and rerun job-specific real
-  SSH cleanup coverage; review revised reports/transcript/continuation in a fresh
-  genuinely visible Emacs and obtain human acceptance. Request separate authority
+  evaluation delivered, pending verification gates. The checkpoint was committed
+  as 4217245e. Current authorized refinement: read-only instruction styling,
+  five-visual-line folding, TAB toggle and removal of the ordinary Response
+  heading, shared run-bounded Preview conversation and truthful cleanup display
+  are implemented. No action regrouping, commit, adoption, later phase or push.
+- Last verified result: all 63 job-related tests pass, including nine real-Pi
+  cases. Latest full+optional: 1049 total, 1046 passed, 1 existing Consult failure,
+  2 Docker opt-in skips. Earlier instruction refinement unit+optional passed
+  958/2 skips. Four changed production files compile warning-free into /tmp;
+  graphical fixture loads and changed Lisp parentheses/diff checks pass.
+  Consult's stderr-JSON contamination remains diagnosed, not repaired; this full
+  run is not green. Baseline Phase 2 revisions are recorded in jj change kvqvyusr
+  (4217245e); current refinements remain uncommitted.
+- Next action: review the new conversation preview and cleanup status in a fresh
+  genuinely visible Emacs; retain the user's positive feedback on the earlier
+  instruction/answer layout without assuming acceptance of these new refinements.
+  Establish explicitly trusted SSH access and rerun job-specific real SSH cleanup
+  coverage. Request separate authority
   for the unrelated Consult repair. Do not advance phases or install ask-user.
 - Blockers: SSH unknown-host trust prompt; no graphical display/human layout review;
-  intermittent Consult classification defect remains unfixed despite a green latest
-  full run. Optional ask-user adoption/custom choice is not a report/lifecycle
+  intermittent Consult classification defect remains unfixed and recurred in the
+  latest full run. Optional ask-user adoption/custom choice is not a report/lifecycle
   blocker and remains unapproved. Later adapter approval-contract work is out of scope.
 - Latest research: pinned pi-ask-user df1df70acf1f7521d24f9518a702064930340df2
   (0.17.1) loads with Pi 1.4.0 and standard dialogs, but cancellation/timeout/stale
   request findings preclude recommending unmodified job adoption. Five real-RPC
   observations plus a print-mode probe recorded in report-and-input-review.md.
   No global installation, upstream package-suite claim, live user-state mutation
-  or push. Committing the current work is now explicitly authorized.
+  or push. Previous checkpoint commit authorization was exercised; the current
+  UI/preview refinements remain uncommitted.
 - Refinement finding: rendered reports require markdown-mode's external
   markdown-command. User's current converter command is unavailable, so exact
   Markdown fallback is expected. Pandoc via mise was suggested; no installation
@@ -578,6 +616,21 @@ completing a release subset is not whole-plan completion.
   stable phase IDs or plan-change reauthorization has slipped into current scope.
 
 * Verification
+- 2026-11-01 conversation-preview/cleanup refinement:
+  - Full+optional: 1049 total, 1046 passed, 1 unexpected existing Consult/archive
+    classification failure, 2 Docker opt-in skips;
+    /tmp/pichat-preview-refinement-full.log (124.04s). Same INVALID_QUERY capability-
+    invalidation assertion as the previously diagnosed stderr-sentinel issue;
+    Consult source untouched, no clean-suite or repair claim.
+  - All 63 job-related checks pass in that full run, including nine real-Pi cases.
+    Focused Emacs-only job selector also passes 54/54;
+    /tmp/pichat-preview-refinement-focused.log.
+  - Four changed production files compile warning-free to /tmp only;
+    /tmp/pichat-preview-refinement-bytecompile.log. All changed Lisp parentheses,
+    graphical-fixture load check and git diff --check pass. Graphical execution,
+    human visual acceptance and real SSH were not rerun; their gates remain open.
+  - Focused test lines: job-core 336, jobs 996, live-ui 142, Evil 207. No runtime
+    metadata, package installation or repository .elc files changed/generated.
 - 2026-10-31 revised Phase 2 execution (Pi 1.4.0):
   - Focused jobs: 58/58, including nine real-Pi cases;
     /tmp/pichat-phase2-revision-focused-final.log.
@@ -704,6 +757,40 @@ completing a release subset is not whole-plan completion.
   checked, but visible UI acceptance remains open as recorded above.
 
 * History
+- 2026-11-01T00:38:36+00:00: Delivered only the authorized Preview conversation
+  and cleanup-display refinements. Version-2 evidence captures structured branch
+  entries; existing shared preview renderer reads the immutable run boundary,
+  including offline/after continuation. Version-1 Markdown remains an explicit
+  fallback; no migration from a mutable saved session. Real cleanup status moves
+  to the report header and finished reports no longer show stale cleanup text.
+  All 63 job tests pass; full suite has one known unrelated Consult failure and
+  two Docker skips. Four files compile warning-free; structural checks pass.
+  Restored blocked status for visible review/SSH trust and unrepaired Consult
+  verification gates. No action regrouping, new commit, extension adoption or
+  adjacent phase executed.
+- 2026-11-01T00:24:29+00:00: User authorized shared Preview conversation and the
+  stale-cleanup-message fix. Activated only this Phase 2 refinement task; existing
+  UI/SSH/Consult gates remain open. No action regrouping or commit authorized.
+- 2026-11-01T00:15:41+00:00: At user request removed the ordinary Response label;
+  answer content follows the instruction block directly. Retained legacy-preview
+  and unavailable-response warnings. Updated README and a regression assertion;
+  focused rendered-report/legacy-preview tests pass 2/2,
+  /tmp/pichat-response-label-tests.log. No commit or other refinement included.
+- 2026-11-01T00:06:04+00:00: Implemented the user's five-visual-line instruction
+  folding refinement. Removed duplicate run title/Task label, reused chat input
+  prefix styling, and made the instruction block clickable/RET/TAB-toggleable
+  with trailing ellipsis or Show less. Actual window wrapping determines folding;
+  refresh/resize retains the choice and evidence/instructions remain immutable.
+  Native and Evil tests cover effective TAB dispatch; 19/19 focused checks and
+  958 unit+optional passes/2 Docker skips, warning-free /tmp compilation.
+  Test files: jobs 914 lines, Evil 207. Logs:
+  /tmp/pichat-instruction-fold-focused.log,
+  /tmp/pichat-instruction-fold-suite.log,
+  /tmp/pichat-instruction-fold-bytecompile.log.
+  Full RPC/SSH/graphical suites not rerun for this display-only change; human
+  acceptance and earlier verification blockers remain open. Other proposed UI
+  refinements (response heading, shared conversation preview, action grouping,
+  stale cleanup line) are not included. No new commit or dependency change.
 - 2026-10-31T22:41:30+00:00: User authorized committing the accumulated Phase 2
   work before further refinement. Recorded code/tests/docs/plan in jj change
   kvqvyusr, retaining blocked verification/acceptance tasks. Noted the missing

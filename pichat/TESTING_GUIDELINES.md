@@ -124,7 +124,7 @@ and manual UI behavior share `pichat-test-jobs.el` and the fixtures in
 `pichat-test-job-support.el`. The former executor/lifecycle/UI test files have
 been combined rather than adding another suite per screen. Full mode additionally
 runs real local Pi jobs against the offline fake provider, including evidence
-capture/overflow, cleanup-failure injection, offline inspection and explicit
+capture/overflow, cleanup-failure injection, offline conversation preview and explicit
 saved-session continuation. Evidence files use the fixture's temporary metadata
 root, never normal user storage.
 The SSH runner includes an isolated captured-target background job and independent
@@ -149,7 +149,7 @@ avoids graphical shutdown prompts that can leave `ert-run-tests-batch-and-exit`
 waiting indefinitely; `/tmp/pichat-jobs-live-result.log` retains the evidence.
 These checks cover a live frame, multiline setup, save-without-running, one-off
 and saved-job submission without focus changes, progressive settings disclosure,
-latest/history/run-transcript navigation, report disclosure/refresh and real
+latest/history/captured-conversation-preview navigation, report disclosure/refresh and real
 narrow/wide window sizes. A separate
 inert-process graphical scenario covers cached input, blockers, cancellation
 context and uncertain claims without activating a dialog. Neither uses a real

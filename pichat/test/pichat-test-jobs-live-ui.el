@@ -54,7 +54,7 @@
               (should (string-match-p "Runtime ID:" (buffer-string)))
               (pichat-jobs-detail-refresh)
               (should (member 'execution pichat-jobs--expanded))
-              (pichat-test-job-press "View transcript")
+              (pichat-test-job-press "Preview conversation")
               (should buffer-read-only)
               (should (string-match-p "LIVE_JOB_RESULT" (buffer-string)))
               (should-not (pichat-session-alive-p (pichat-job-execution-session execution)))

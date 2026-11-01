@@ -110,7 +110,7 @@
                3 "graphical Jobs window to resize")
               (pichat-jobs-refresh)
               (should (string-match-p "local" (buffer-string)))
-              (should (string-match-p "Queued (local)" (format-mode-line header-line-format)))
+              (should (string-match-p "Queued" (format-mode-line header-line-format)))
               (should (eq (not (null (assoc "Project / target" (append tabulated-list-format nil))))
                           (>= width 110))))
             (call-interactively (key-binding (kbd "TAB")))

@@ -149,9 +149,9 @@ every definition row."
                       '("Latest run" 20 nil) '("Project / target" 0 t))
             (if narrow
                 (vector (list "Work" title-width t)
-                        '("Queued (local)" 16 pichat-jobs--queued-less-p)
+                        '("Queued" 16 pichat-jobs--queued-less-p)
                         '("State / result" 0 nil))
-              [("Work" 24 t) ("Queued (local)" 20 pichat-jobs--queued-less-p) ("State" 20 nil)
+              [("Work" 24 t) ("Queued" 20 pichat-jobs--queued-less-p) ("State" 20 nil)
                ("Result" 14 nil) ("Trigger" 8 nil) ("Project / target" 0 t)])))
     ;; A sort column can disappear when changing tabs or narrowing the view.
     (unless (assoc (car tabulated-list-sort-key) (append tabulated-list-format nil))

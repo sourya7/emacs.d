@@ -2297,6 +2297,19 @@
                   (should (pichat-chat--compose-source-valid-p
                            (buffer-local-value
                             'pichat-chat-compose-target-token compose))))
+                ;; Opening from another device/frame must use runtime ownership,
+                ;; not create a new chat from the replacement Pi session's name.
+                (let ((handlers (copy-sequence
+                                 (gethash 'rpc-event
+                                          (pichat-session-event-handlers session)))))
+                  (pichat-session-manager-display-chat-current-tab session)
+                  (should (eq buffer (pichat-session-buffer session)))
+                  (should (equal handlers
+                                 (gethash 'rpc-event
+                                          (pichat-session-event-handlers session)))))
+                (with-current-buffer buffer
+                  (should (equal "draft for new Pi session"
+                                 (pichat-chat--input-text))))
                 (pichat-test-chat-send-and-wait
                  session buffer "new Pi session gets first turn")
                 (pichat-test-wait-until

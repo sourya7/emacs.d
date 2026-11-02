@@ -471,7 +471,7 @@ it forks into new sessions and does not perform same-file tree navigation.
 RET sends the prompt, S-RET inserts a newline, C-c C-k aborts a run, and
 C-c C-y recovers a failed submission.  C-c C-l provides navigation between
 user messages, activity groups, and tool blocks."
-  (setq-local truncate-lines nil)
+  (setq-local truncate-lines nil truncate-partial-width-windows nil)
   (visual-line-mode 1)
   (pichat-chat-user-ui-reset)
   (add-hook 'kill-buffer-hook #'pichat-chat-user-ui-reset nil t)
@@ -945,7 +945,10 @@ Reading this never activates a dialog or selects its owning chat."
   "Ensure an undisplayed owning chat for SESSION, returning its buffer.
 When SYNCHRONIZE is non-nil, request authoritative full-entry synchronization.
 Creating ownership never displays a window or activates pending dialog requests."
-  (let ((buffer (get-buffer-create (pichat-chat-buffer-name session))))
+  ;; Display names follow the Pi source and can lag behind a restart or
+  ;; collide with another runtime.  Runtime ownership is the authority.
+  (let ((buffer (or (pichat-chat-owned-buffer session)
+                    (generate-new-buffer (pichat-chat-buffer-name session)))))
     (with-current-buffer buffer
       (when (pichat-session-cwd session)
         (setq default-directory
@@ -1043,6 +1046,9 @@ length change even though the internal edit itself must not become undoable."
     (erase-buffer)
     (insert (pichat-chat--header-title session) "\n")
     (insert "\n")
+    ;; Native protection rejects edits before modification hooks run.  An
+    ;; error from the fallback guard would make Emacs remove that hook.
+    (pichat-chat--protect-region (point-min) (point))
     (dolist (marker (list pichat-chat--extension-status-start
                           pichat-chat--extension-status-end
                           pichat-chat--canonical-start
@@ -2210,6 +2216,7 @@ Signal a user error when thinking control is disabled or unavailable."
          table)))
     (list :text (buffer-substring (point-min) (point-max))
           :point (point)
+          :user-disclosures (pichat-chat-user-ui-snapshot)
           :modified (buffer-modified-p)
           :undo-list (copy-tree buffer-undo-list)
           :pending-undo-list
@@ -2304,9 +2311,7 @@ Signal a user error when thinking control is disabled or unavailable."
   (setq buffer-undo-list (plist-get snapshot :undo-list))
   (when (boundp 'pending-undo-list)
     (setq pending-undo-list (plist-get snapshot :pending-undo-list)))
-  ;; Optional presentation overlays are intentionally outside projection
-  ;; rollback ownership.  Exact source and fontification properties are part
-  ;; of the text snapshot; a later presentation refresh may derive overlays.
+  (pichat-chat-user-ui-restore (plist-get snapshot :user-disclosures))
   (set-buffer-modified-p (plist-get snapshot :modified)))
 
 (defun pichat-chat--hash-state-snapshot (table)
@@ -2374,6 +2379,7 @@ Signal a user error when thinking control is disabled or unavailable."
 No chat-buffer text is copied; the active Emacs change group owns text undo."
   (list
    :modified (buffer-modified-p)
+   :user-disclosures (pichat-chat-user-ui-snapshot)
    :markers
    (mapcar (lambda (marker) (cons marker (marker-position marker)))
            (list pichat-chat--live-start pichat-chat--live-end
@@ -2519,7 +2525,7 @@ No chat-buffer text is copied; the active Emacs change group owns text undo."
                  (pichat-chat--inhibit-edit-guard t))
              (cancel-change-group change-group)))
          (pichat-chat--restore-focused-live-snapshot snapshot)
-         (pichat-chat--refresh-user-disclosures)
+         (pichat-chat-user-ui-restore (plist-get snapshot :user-disclosures))
          (signal (car err) (cdr err)))))))
 
 (defmacro pichat-chat--with-projection-rollback (&rest body)
@@ -2534,9 +2540,8 @@ single rollback owner."
        (condition-case err
            (prog1 (progn ,@body)
              (pichat-chat--refresh-user-disclosures))
-         (error
+         ((error quit)
           (pichat-chat--restore-projection-snapshot snapshot)
-          (pichat-chat--refresh-user-disclosures)
           (signal (car err) (cdr err)))))))
 
 (defmacro pichat-chat--with-live-projection-rollback (candidate &rest body)
@@ -3544,6 +3549,7 @@ ordinary browser opens retain their existing state-ready contract."
                          (when (buffer-live-p buffer)
                            (with-current-buffer buffer
                              (when (and (eq session pichat-chat-session)
+                                        (eq buffer (pichat-session-buffer session))
                                         (or (not pichat-chat--restart-staging)
                                             (memq event
                                                   '(session-rebinding

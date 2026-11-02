@@ -26,6 +26,27 @@
   (mapc #'delete-overlay pichat-chat-user-ui--overlays)
   (setq pichat-chat-user-ui--overlays nil))
 
+(defun pichat-chat-user-ui-snapshot ()
+  "Capture owned disclosure state without copying transcript text."
+  (list :source pichat-chat-user-ui--source
+        :choices pichat-chat-user-ui--choices
+        :width pichat-chat-user-ui--width
+        :overlays (mapcar (lambda (overlay)
+                            (list overlay (overlay-start overlay)
+                                  (overlay-end overlay)))
+                          pichat-chat-user-ui--overlays)))
+
+(defun pichat-chat-user-ui-restore (snapshot)
+  "Restore disclosure SNAPSHOT without measuring or rendering again."
+  (pichat-chat-user-ui-clear)
+  (setq pichat-chat-user-ui--source (plist-get snapshot :source)
+        pichat-chat-user-ui--choices (plist-get snapshot :choices)
+        pichat-chat-user-ui--width (plist-get snapshot :width))
+  (dolist (record (plist-get snapshot :overlays))
+    (move-overlay (car record) (cadr record) (caddr record) (current-buffer)))
+  (setq pichat-chat-user-ui--overlays
+        (mapcar #'car (plist-get snapshot :overlays))))
+
 (defun pichat-chat-user-ui-reset ()
   "Discard this buffer's source-scoped choices and presentation."
   (pichat-chat-user-ui-clear)
@@ -74,7 +95,7 @@ Image data is not text and is not placed on the kill ring."
         ;; A collapsed hidden suffix must not strand point in invisible text.
         (when (and (not expanded) (> (point) cut)) (goto-char cut))))))
 
-(defun pichat-chat-user-ui-refresh (start end source)
+(defun pichat-chat-user-ui--refresh (start end source)
   "Derive overlays on submitted prose in START..END for exact SOURCE.
 Choices use the user-message ordinal, complete normalized content, and part
 index.  Thus live-to-canonical reconciliation requires the same ordinal and
@@ -112,11 +133,22 @@ must reset SOURCE even when returning to the same Pi session."
                       (overlay-put overlay 'keymap pichat-chat-user-ui-map)
                       (overlay-put overlay 'mouse-face 'highlight)
                       (overlay-put overlay 'help-echo "RET/TAB/click: fold message; w: copy full text")
-                      (pichat-chat-user-ui--present overlay expanded)
                       (push overlay pichat-chat-user-ui--overlays)
-                      (push suffix pichat-chat-user-ui--overlays)))
+                      (push suffix pichat-chat-user-ui--overlays)
+                      (pichat-chat-user-ui--present overlay expanded)))
                   (setq part-position part-end)))))
           (setq position node-end))))))
+
+(defun pichat-chat-user-ui-refresh (start end source)
+  "Atomically refresh submitted-message disclosures in START..END for SOURCE.
+A measurement or presentation failure restores the previous overlays and
+choices directly, including on resize outside a projection transaction."
+  (let ((snapshot (pichat-chat-user-ui-snapshot)))
+    (condition-case err
+        (pichat-chat-user-ui--refresh start end source)
+      ((error quit)
+       (pichat-chat-user-ui-restore snapshot)
+       (signal (car err) (cdr err))))))
 
 (provide 'pichat-chat-user-ui)
 ;;; pichat-chat-user-ui.el ends here

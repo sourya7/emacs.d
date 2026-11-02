@@ -140,6 +140,34 @@
           (pichat-chat-toggle-skill-at-point)
           (should (= 1 (length (pichat-test-user-fold-controls)))))))))
 
+(ert-deftest pichat-user-fold-adjacent-text-parts-share-one-disclosure ()
+  (pichat-test-user-fold-with-windows
+    (pichat-test-with-unit-session (session proc)
+      (pichat-test-with-chat-buffer (buffer session)
+        (switch-to-buffer buffer)
+        (let* ((texts '("one\n" "two\n" "" "three\n" "four\n" "five\n" "six"))
+               (content (mapcar (lambda (text) (list :type "text" :text text)) texts)))
+          (pichat-test-apply-live-events
+           pichat-chat--live-draft
+           (list :type "message_end" :message (list :role "user" :content content)))
+          (should (= 1 (length (pichat-test-user-fold-controls))))
+          (goto-char (overlay-start (car (pichat-test-user-fold-controls))))
+          (pichat-chat-user-ui-copy)
+          (should (equal (mapconcat #'identity texts "") (current-kill 0 t)))
+          (pichat-chat-user-ui-toggle)
+          (should (overlay-get (car (pichat-test-user-fold-controls)) 'pichat-user-expanded))
+          ;; An intervening image separates prose runs and must remain visible.
+          (let ((transcript (pichat-test-user-fold-transcript '("unused"))))
+            (setf (pichat-transcript-node-content (car (pichat-transcript-nodes transcript)))
+                  (pichat-pi--normalize-content
+                   (append content (list '(:type "image")) content) "multipart" #'ignore))
+            (pichat-test-user-fold-project transcript)
+            (should (= 2 (length (pichat-test-user-fold-controls))))
+            (goto-char (point-min))
+            (search-forward "[image]")
+            (should-not (cl-some (lambda (overlay) (overlay-get overlay 'display))
+                                 (overlays-at (1- (point)))))))))))
+
 (ert-deftest pichat-user-fold-draft-stays-expanded-and-projection-rollback-restores-disclosures ()
   (pichat-test-user-fold-with-windows
     (pichat-test-with-unit-session (session proc)
@@ -185,6 +213,7 @@
                  (preview (concat (buffer-substring (overlay-start overlay) cut) "…")))
             (with-temp-buffer
               (visual-line-mode 1)
+              (setq-local truncate-partial-width-windows nil)
               (let ((inhibit-read-only t)) (insert preview))
               (should (<= (count-screen-lines (point-min) (point-max) nil (selected-window)) 5)))
             (should (string-match-p (regexp-quote text)
@@ -275,6 +304,110 @@
                   (goto-char (point-max))
                   (should-not (pichat-chat-user-ui--at-point))))
             (when (buffer-live-p compose) (kill-buffer compose))))))))
+
+(ert-deftest pichat-user-fold-preserves-global-read-only-protection ()
+  ;; Do not dynamically bind `inhibit-read-only': that would conceal a leak
+  ;; into its default value.  Restore it even when testing the broken code.
+  (let* ((defaults '((inhibit-read-only . nil)
+                     (truncate-partial-width-windows . 50)
+                     (face-remapping-alist . nil)))
+         (original (mapcar (lambda (entry)
+                             (cons (car entry) (default-value (car entry))))
+                           defaults)))
+    (unwind-protect
+        (progn
+          (dolist (entry defaults) (set-default (car entry) (cdr entry)))
+          (pichat-test-user-fold-with-windows
+            (pichat-test-with-unit-session (session proc)
+              (pichat-test-with-chat-buffer (buffer session)
+                (switch-to-buffer buffer)
+                (setq-local face-remapping-alist '((default (:height 1.1))))
+                (pichat-test-user-fold-project
+                 (pichat-test-user-fold-transcript
+                  '("one\ntwo\nthree\nfour\nfive\nsix")))
+                (should (pichat-test-user-fold-controls))
+                (dolist (entry defaults)
+                  (should (equal (cdr entry) (default-value (car entry)))))
+                (with-temp-buffer
+                  (setq buffer-read-only t)
+                  (should-error (insert "not editable") :type 'buffer-read-only))))))
+      (dolist (entry original) (set-default (car entry) (cdr entry))))))
+
+(ert-deftest pichat-user-fold-transcript-rejects-repeated-edits ()
+  (let ((inhibit-read-only nil))
+    (pichat-test-user-fold-with-windows
+      (pichat-test-with-unit-session (session proc)
+        (pichat-test-with-chat-buffer (buffer session)
+          (switch-to-buffer buffer)
+          (let ((transcript
+                 (pichat-test-user-fold-transcript
+                  '("one\ntwo\nthree\nfour\nfive\nsix"))))
+            (setf (pichat-transcript-nodes transcript)
+                  (append (pichat-transcript-nodes transcript)
+                          (list (pichat-transcript-node-create
+                                 :kind 'message :role 'assistant :key "reply"
+                                 :content (list (pichat-transcript-content-create
+                                                 :kind 'prose :index 0
+                                                 :text "Assistant response."))))))
+            (pichat-test-user-fold-project transcript))
+          (let ((before (buffer-string))
+                (user (text-property-any (point-min) (point-max)
+                                         'pichat-node-role 'user))
+                (assistant (text-property-any (point-min) (point-max)
+                                              'pichat-node-role 'assistant)))
+            (should user)
+            (should assistant)
+            (dolist (position (list user assistant))
+              (dotimes (_ 3)
+                (goto-char position)
+                (should-error (insert "not editable") :type 'text-read-only)
+                (should-error (delete-char 1) :type 'text-read-only)
+                (should (equal-including-properties before (buffer-string)))))
+            (should (memq #'pichat-chat--before-change before-change-functions)))
+          (goto-char (point-max))
+          (insert "editable draft")
+          (should (equal "editable draft" (pichat-chat--input-text))))))))
+
+(ert-deftest pichat-user-fold-presentation-failure-restores-overlays-without-retry ()
+  (pichat-test-user-fold-with-windows
+    (pichat-test-with-unit-session (session proc)
+      (pichat-test-with-chat-buffer (buffer session)
+        (switch-to-buffer buffer)
+        (pichat-test-user-fold-project
+         (pichat-test-user-fold-transcript
+          '("one\ntwo\nthree\nfour\nfive\nsix\nseven")))
+        (goto-char (overlay-start (car (pichat-test-user-fold-controls))))
+        (pichat-chat-user-ui-toggle)
+        (pichat-test-apply-live-events
+         pichat-chat--live-draft
+         '(:type "message_update" :message
+           (:role "assistant" :content ((:type "text" :text "Before failure")))))
+        (dolist (operation '(refresh status live))
+          (let ((before (buffer-string))
+                (snapshot (pichat-chat-user-ui-snapshot))
+                (present (symbol-function 'pichat-chat-user-ui--present))
+                (calls 0))
+            (cl-letf (((symbol-function 'pichat-chat-user-ui--present)
+                       (lambda (&rest args)
+                         (cl-incf calls)
+                         (apply present args)
+                         (error "Injected persistent disclosure failure"))))
+              (should-error
+               (pcase operation
+                 ('refresh (pichat-chat--refresh-user-disclosures))
+                 ('status (pichat-chat--set-status 'review "Temporary status"))
+                 ('live
+                  (pichat-test-apply-live-events
+                   pichat-chat--live-draft
+                   '(:type "message_update" :message
+                     (:role "assistant" :content
+                      ((:type "text" :text "After failure")))))))))
+            (should (= calls 1))
+            (should (equal-including-properties before (buffer-string)))
+            (should (equal snapshot (pichat-chat-user-ui-snapshot)))
+            ;; No partially-created, untracked disclosure overlays may survive.
+            (should (= (length pichat-chat-user-ui--overlays)
+                       (length (overlays-in (point-min) (point-max)))))))))))
 
 (provide 'pichat-test-chat-user-folding)
 ;;; pichat-test-chat-user-folding.el ends here

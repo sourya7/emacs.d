@@ -787,7 +787,7 @@ narrowest displaying window, including its actual wrapping and prefix width."
     map))
 (define-derived-mode pichat-jobs-detail-mode pichat-view-mode "PiChat Job Details"
   "Read-only cached job/run details with explicit action buttons."
-  (setq-local truncate-lines nil)
+  (setq-local truncate-lines nil truncate-partial-width-windows nil)
   (visual-line-mode 1)
   (pichat-response-view-install-faces))
 

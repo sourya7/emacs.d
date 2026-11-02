@@ -168,5 +168,25 @@
                              (pichat-chat--input-text)))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+(ert-deftest pichat-chat-header-rejects-repeated-edits-without-losing-guard ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-render-markdown nil)
+          (inhibit-read-only nil)
+          buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (with-current-buffer buffer
+              (let ((before (buffer-string)))
+                (dotimes (_ 3)
+                  (goto-char (point-min))
+                  (should-error (insert "not editable") :type 'text-read-only)
+                  (should-error (delete-char 1) :type 'text-read-only)
+                  (should (equal-including-properties before (buffer-string)))
+                  (should (memq #'pichat-chat--before-change
+                                before-change-functions))))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
 (provide 'pichat-test-chat-modification-hooks)
 ;;; pichat-test-chat-modification-hooks.el ends here

@@ -425,11 +425,16 @@ Prose spans exclude image indicators; skill disclosures never call this path."
   (let* ((parts (pichat-transcript-node-content node))
          (text (pichat-render--plain-content parts))
          (rendered (pichat-render--user-block text))
-         (offset 0) ranges)
+         (offset 0) prose-run ranges)
     (cl-loop for part in parts for index from 0
              unless (memq (pichat-transcript-content-kind part) '(thinking tool))
              do (let* ((body (pichat-render--content-text part))
                        (end (+ offset (length body))))
+                  ;; Adjacent text parts are one visible prose block, including
+                  ;; empty parts.  Images/other visible kinds break the run.
+                  (setq prose-run
+                        (and (eq (pichat-transcript-content-kind part) 'prose)
+                             (or prose-run index)))
                   (when (and (eq (pichat-transcript-content-kind part) 'prose)
                              (> end offset))
                     ;; Map exact source offsets through the inserted line bars.
@@ -439,7 +444,7 @@ Prose spans exclude image indicators; skill disclosures never call this path."
                                     (* 2 (cl-count ?\n text :end offset)))))
                       (push (list :start start
                                   :end (+ end 2 (* 2 (cl-count ?\n text :end end)))
-                                  :properties (list 'pichat-user-part index)) ranges)))
+                                  :properties (list 'pichat-user-part prose-run)) ranges)))
                   (setq offset end)))
     (pichat-render--wrap-properties
      (pichat-render-fragment-create :text rendered :ranges (nreverse ranges))

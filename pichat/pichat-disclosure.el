@@ -40,20 +40,21 @@ Do not edit text, point, undo, or existing overlays."
                   (remapping face-remapping-alist)
                   (display-table buffer-display-table))
               (with-temp-buffer
-                (setq truncate-lines nil truncate-partial-width-windows nil
-                      word-wrap wrapping tab-width tabs inhibit-read-only t
-                      face-remapping-alist remapping buffer-display-table display-table)
-                (insert preview)
-                (let ((properties (and (> (point) (point-min))
-                                       (text-properties-at (1- (point))))))
-                  (insert (apply #'propertize "…" properties)))
-                (while (and (> (point-max) 2)
-                            (save-excursion
-                              (goto-char (point-min))
-                              (vertical-motion lines window)
-                              (< (point) (point-max))))
-                  (delete-region (- (point-max) 2) (1- (point-max)))
-                  (setq cut (1- cut)))))
+                (setq-local truncate-lines nil truncate-partial-width-windows nil
+                            word-wrap wrapping tab-width tabs
+                            face-remapping-alist remapping
+                            buffer-display-table display-table)
+                (let ((inhibit-read-only t))
+                  (insert preview)
+                  (let ((properties (and (> (point) (point-min))
+                                         (text-properties-at (1- (point))))))
+                    (insert (apply #'propertize "…" properties)))
+                  (while (and (> (point-max) 2)
+                              (> (count-screen-lines (point-min) (point-max)
+                                                     nil window)
+                                 lines))
+                    (delete-region (- (point-max) 2) (1- (point-max)))
+                    (setq cut (1- cut))))))
             (and (> cut start) cut)))))))
 
 (provide 'pichat-disclosure)

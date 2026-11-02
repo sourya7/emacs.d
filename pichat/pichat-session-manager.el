@@ -43,8 +43,9 @@
   :group 'pichat)
 
 (defun pichat-session-manager-display-chat-current-tab (session)
-  "Open SESSION's chat using PiChat's ordinary current-tab behavior."
-  (pichat-chat-open session))
+  "Open SESSION's owning chat, synchronizing a newly created live chat."
+  (pichat-chat-open session (and (not (pichat-chat-owned-buffer session))
+                                 (pichat-session-alive-p session))))
 
 (defcustom pichat-session-manager-display-chat-function
   #'pichat-session-manager-display-chat-current-tab

@@ -772,6 +772,12 @@ process, switches and synchronizes that exact process, and stops/forgets it if
 startup, switching, cancellation, or synchronization fails. It never mutates
 the runtime from which browsing was invoked.
 
+Opening a runtime reuses its owning chat, including its in-progress live tail
+and draft, even if the Pi session ID or buffer display name has changed. A new
+chat for a live runtime requests authoritative transcript synchronization;
+active turns retain the normal settlement barrier. Stopped runtimes are never
+queried merely to open a chat.
+
 By default the manager opens chats in the current tab. Customize
 `pichat-session-manager-display-chat-function` to select a frame or tab before
 calling `pichat-session-manager-display-chat-current-tab`. PiChat has no Tab Bar

@@ -43,9 +43,10 @@
 (declare-function evil-forward-word-begin "evil-commands" (count &optional bigword))
 
 (defun pichat-evil-chat-copy-or-motion ()
-  "Keep Normal-state word motion over a disclosure; otherwise copy its text."
+  "Keep Normal/Visual word motion over a disclosure; otherwise copy its text."
   (interactive)
-  (if (pichat-view-evil-normal-p)
+  (if (and (bound-and-true-p evil-local-mode)
+           (memq (bound-and-true-p evil-state) '(normal visual)))
       (call-interactively #'evil-forward-word-begin)
     (pichat-chat-user-ui-copy)))
 

@@ -8,6 +8,118 @@
 
 (require 'pichat-test-support)
 
+(ert-deftest pichat-manager-open-reuses-owned-chat-after-source-id-change ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-render-markdown nil)
+          first second)
+      (unwind-protect
+          (progn
+            (setf (pichat-session-id session) "old-source")
+            (setq first (pichat-chat-open session))
+            ;; Match a verified restart that has committed a new Pi session ID
+            ;; while retaining the existing chat and its old display name.
+            (setf (pichat-session-id session) "new-source")
+            (with-current-buffer first
+              (setq pichat-chat--source-session-id "new-source")
+              (pichat-pi-live-draft-apply
+               pichat-chat--live-draft
+               '(:type "message_update" :message
+                 (:role "assistant" :content
+                  ((:type "text" :text "Progress before device switch")))))
+              (pichat-chat--project-live-tail))
+            (let ((handlers (copy-sequence
+                             (gethash 'rpc-event (pichat-session-event-handlers session)))))
+              (dotimes (_ 3)
+                (pichat-session-manager-display-chat-current-tab session)
+                (setq second (pichat-session-buffer session))
+                (should (eq first second)))
+              (should (equal handlers (gethash 'rpc-event
+                                               (pichat-session-event-handlers session)))))
+            (should (string-match-p "Progress before device switch"
+                                    (with-current-buffer second (buffer-string))))
+            (should (equal (buffer-name second) (pichat-chat-buffer-name session))))
+        (dolist (b (delete-dups (list first second)))
+          (when (buffer-live-p b) (kill-buffer b)))))))
+
+(ert-deftest pichat-manager-open-new-chat-synchronizes-existing-history ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-render-markdown nil)
+          buffer requests)
+      (unwind-protect
+          (cl-letf (((symbol-function 'pichat-backend-get-transcript)
+                     (lambda (_session cursor success _failure)
+                       (push cursor requests)
+                       (funcall success
+                                '(:data (:entries
+                                         ((:id "earlier" :parentId nil :type "message"
+                                           :message (:role "user" :content
+                                                     ((:type "text" :text "Earlier history")))))
+                                         :leafId "earlier")) session)
+                       "initial-history")))
+            (pichat-session-manager-display-chat-current-tab session)
+            (setq buffer (pichat-session-buffer session))
+            (should (equal '(nil) requests))
+            (should (string-match-p "Earlier history"
+                                    (with-current-buffer buffer (buffer-string))))
+            (pichat-session-manager-display-chat-current-tab session)
+            (should (= 1 (length requests))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-manager-open-stopped-chat-does-not-request-rpc ()
+  (pichat-test-with-clean-state
+    (let ((session (pichat-session-make :cwd default-directory :state 'stopped))
+          (pichat-chat-stop-session-on-kill nil)
+          buffer)
+      (unwind-protect
+          (cl-letf (((symbol-function 'pichat-backend-get-transcript)
+                     (lambda (&rest _) (ert-fail "Stopped runtime requested RPC"))))
+            (pichat-session-manager-display-chat-current-tab session)
+            (setq buffer (pichat-session-buffer session))
+            (should (eq buffer (pichat-chat-owned-buffer session))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-chat-distinct-runtimes-never-share-a-display-name-buffer ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-render-markdown nil)
+          (peer (pichat-session-make :cwd default-directory))
+          first second)
+      (unwind-protect
+          (progn
+            (setf (pichat-session-id session) "same-source"
+                  (pichat-session-id peer) "same-source")
+            (setq first (pichat-chat-open session)
+                  second (pichat-chat-open peer))
+            (should-not (eq first second))
+            (should (eq first (pichat-chat-owned-buffer session)))
+            (should (eq second (pichat-chat-owned-buffer peer))))
+        (dolist (b (delete-dups (list first second)))
+          (when (buffer-live-p b) (kill-buffer b)))))))
+
+(ert-deftest pichat-chat-nonowning-legacy-buffer-does-not-consume-events ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          (pichat-chat-render-markdown nil)
+          old owner received)
+      (unwind-protect
+          (progn
+            (setq old (pichat-chat-open session))
+            ;; Simulate duplicate subscriptions retained by a pre-fix Emacs.
+            (setq owner (generate-new-buffer " *PiChat duplicate fixture*"))
+            (with-current-buffer owner
+              (pichat-chat-mode)
+              (setq pichat-chat-session session)
+              (setf (pichat-session-buffer session) owner)
+              (pichat-chat--install-handlers session owner))
+            (cl-letf (((symbol-function 'pichat-chat--on-rpc-event)
+                       (lambda (&rest _) (push (current-buffer) received))))
+              (pichat-emit session 'rpc-event :raw '(:type "message_end")))
+            (should (equal (list owner) received)))
+        (dolist (b (list old owner))
+          (when (buffer-live-p b) (kill-buffer b)))))))
+
 (ert-deftest pichat-runtime-registry-retains-default-and-independent-sessions ()
   (pichat-test-with-clean-state
     (let (first second)

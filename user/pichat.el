@@ -55,11 +55,14 @@ Keep tables narrow and pad columns for monospace readability.")
 (declare-function bufferlo-local-buffer-p "bufferlo"
                   (buffer &optional frame tabnum include-hidden))
 (defun my/pichat-bufferlo-location (buffer)
-  "Return one frame and tab containing BUFFER, without prompting."
+  "Return a frame and tab containing BUFFER on the current terminal.
+Never redirect input to another terminal client's frame."
   (when (and (buffer-live-p buffer) (fboundp 'bufferlo-local-buffer-p))
     (cl-loop for frame in (cons (selected-frame)
                                 (delq (selected-frame) (frame-list)))
-             unless (frame-parameter frame 'no-accept-focus)
+             when (and (eq (frame-terminal frame)
+                           (frame-terminal (selected-frame)))
+                       (not (frame-parameter frame 'no-accept-focus)))
              thereis (let ((tabs (funcall tab-bar-tabs-function frame)))
                        (if tabs
                            (cl-loop for index below (length tabs)

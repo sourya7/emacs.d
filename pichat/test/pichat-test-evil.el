@@ -57,6 +57,29 @@
             (should (eq (key-binding (kbd "RET")) #'pichat-chat-ret))
             (should (eq (key-binding (kbd "[")) #'self-insert-command)))
           (with-temp-buffer
+            (pichat-chat-mode)
+            (let* ((text "one\ntwo\nthree\nfour\nfive\nsix")
+                   (node (pichat-transcript-node-create
+                          :kind 'message :role 'user :key "submitted"
+                          :content (list (pichat-transcript-content-create
+                                          :kind 'prose :index 0 :text text)))))
+              (let ((pichat-chat--inhibit-edit-guard t))
+                (insert (pichat-render-fragment-propertized-string
+                         (pichat-render--node-fragment node (pichat-render-default-context)))))
+              (pichat-chat-user-ui-refresh (point-min) (point-max) 0)
+              (goto-char (point-min))
+              (dolist (key '("RET" "TAB" "<tab>"))
+                (call-interactively (key-binding (kbd key))))
+              (should (overlay-get (pichat-chat-user-ui--at-point) 'pichat-user-expanded))
+              (should (eq (key-binding (kbd "w")) #'pichat-evil-chat-copy-or-motion))
+              (let (moved)
+                (cl-letf (((symbol-function 'evil-forward-word-begin)
+                           (lambda () (interactive) (setq moved t))))
+                  (call-interactively (key-binding (kbd "w"))))
+                (should moved))
+              (call-interactively (key-binding (kbd "g y")))
+              (should (equal text (current-kill 0 t)))))
+          (with-temp-buffer
             (pichat-sessions-mode)
             (should (pichat-view-evil-normal-p))
             (should (eq evil-state 'normal))

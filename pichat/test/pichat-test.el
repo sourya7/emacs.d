@@ -36,6 +36,7 @@
 (require 'pichat-test-chat-tools)
 (require 'pichat-test-chat-activity)
 (require 'pichat-test-chat-skills)
+(require 'pichat-test-chat-user-folding)
 (require 'pichat-test-transcript)
 (require 'pichat-test-activity-presentation)
 (require 'pichat-test-render)

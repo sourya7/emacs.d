@@ -8,6 +8,7 @@
 ;;; Code:
 (require 'pichat-job-executor)
 (require 'pichat-view)
+(require 'pichat-disclosure)
 (require 'pichat-response-view)
 (require 'tabulated-list)
 (require 'button)
@@ -460,32 +461,19 @@ Use the chat's input styling without creating a live draft.  Measure with the
 narrowest displaying window, including its actual wrapping and prefix width."
   (let* ((start (point))
          (prefix (pichat-chat--bar-prefix))
-         (window (or (car (sort (get-buffer-window-list (current-buffer) nil t)
-                                (lambda (a b) (< (window-body-width a)
-                                                 (window-body-width b)))))
-                     (selected-window))))
+         (window (or (pichat-disclosure-window) (selected-window))))
     (insert instructions)
     (add-text-properties start (point)
                          (list 'line-prefix prefix 'wrap-prefix prefix
                                'face 'pichat-input-block-face))
     (let* ((end (point))
-           (cut (save-restriction
-                  (narrow-to-region start end)
-                  (save-excursion (goto-char start) (vertical-motion 5 window)
-                                  (point))))
-           (long (< cut end)))
+           (cut (pichat-disclosure-cut start end window))
+           (long cut))
       (when long
         (if (member 'task pichat-jobs--expanded)
             (insert "  Show less")
           (delete-region cut end)
-          (when (eq (char-before) ?\n) (delete-char -1))
-          (insert "…")
-          ;; Reserve room for the control itself, even at an exact wrap boundary.
-          (while (save-restriction
-                   (narrow-to-region start (point))
-                   (save-excursion (goto-char start) (vertical-motion 5 window)
-                                   (< (point) (point-max))))
-            (delete-region (- (point) 2) (1- (point)))))
+          (insert "…"))
         (make-text-button
          start (point) 'face 'pichat-input-block-face
          'keymap pichat-jobs--disclosure-map 'pichat-job-disclosure t 'follow-link t

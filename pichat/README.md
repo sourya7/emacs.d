@@ -43,6 +43,25 @@ display-only: Pi's message, canonical export, and saved session file remain
 unchanged. Mixed image/text messages and unrecognized
 skill markup retain the ordinary user display.
 
+Ordinary submitted user messages fold after five visual lines at the narrowest
+window displaying the chat. A long message ends in `…`; `RET`, terminal or
+graphical `TAB`, or a click within the read-only block toggles it. Expanded
+messages offer **Show less**. Short messages need no disclosure. Drafts always
+remain fully expanded, including history recall, fork restoration, submission
+recovery and compose-editor application. Only authoritative Pi user-message
+events create submitted blocks; sending does not fabricate a local message.
+Explicit choices survive streaming, settlement, same-source repaint and resize,
+but reset on source rebinding (see `GLOSSARY.md`). Skill disclosures remain
+separate; image indicators are never hidden by prose folding.
+
+On a long submitted block, `w` copies the complete original message text without
+display bars (not image data). With optional Evil integration, use `g y` in Normal
+state; `w` retains word motion, and `RET`/`TAB` toggle only on disclosures. Chat
+folding uses non-destructive display overlays: ordinary region copying includes
+hidden source text and display bars, **not** the ellipsis or Show less control.
+This differs from skill-header region copying described above. Canonical export,
+messages sent to Pi, and saved session files are unchanged.
+
 User messages are rendered only from authoritative Pi events.  Unknown protocol
 data is normalized to bounded diagnostics rather than printed as raw objects.
 Consecutive thinking and tool calls are presented in source-ordered activity
@@ -1030,7 +1049,8 @@ Emacs keymaps for other users:
 ```
 
 This repository enables that layer in `user/pichat.el`. In chat, Normal-state
-`RET` retains Evil's movement; enter Insert state to send with `RET`, or use
+`RET` toggles a submitted-message disclosure when on one, otherwise retaining
+Evil's movement; enter Insert state to send with `RET`, or use
 `C-c C-c` / `SPC m s` from either state. In read-only views, `q` uses the
 PiChat-specific close/return policy instead of Evil Collection's generic
 `quit-window`. History uses `j/k` for entries, `RET` to jump, `za` to fold,
@@ -1075,7 +1095,10 @@ Chat keys:
 - `RET` / `TAB` or mouse-1 on a skill header — expand/collapse that invocation
 - `w` on a skill header — copy its original full Pi message
 
-- `RET` — send prompt in Emacs state or Evil Insert state; in Evil Normal state, move as usual
+- `RET` / `TAB` or mouse-1 on a long submitted user block — expand/collapse it
+- `w` on that block (Evil Normal `g y`) — copy its original full message text
+- `RET` — send prompt in Emacs state or Evil Insert state; in Evil Normal state,
+  toggle a submitted-message disclosure or otherwise move as usual
 - `S-RET` — insert newline
 - `C-c C-k` — abort; queued steering and follow-up text is cleared from Pi
   and prepended to the current editor draft before the run is stopped

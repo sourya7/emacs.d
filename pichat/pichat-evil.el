@@ -40,6 +40,15 @@
                   (state keymap key def &rest bindings))
 (declare-function evil-normalize-keymaps "evil-core" ())
 
+(declare-function evil-forward-word-begin "evil-commands" (count &optional bigword))
+
+(defun pichat-evil-chat-copy-or-motion ()
+  "Keep Normal-state word motion over a disclosure; otherwise copy its text."
+  (interactive)
+  (if (pichat-view-evil-normal-p)
+      (call-interactively #'evil-forward-word-begin)
+    (pichat-chat-user-ui-copy)))
+
 ;;;###autoload
 (defun pichat-evil-setup ()
   "Use Vim navigation and PiChat-specific actions in PiChat buffers.
@@ -60,7 +69,9 @@ remain in their original mode maps."
   ;; PiChat also owns the origin, nested displays, and snapshot kill policy.
   (evil-define-key* 'normal pichat-view-mode-map
     (kbd "q") #'pichat-view-quit)
+  (define-key pichat-chat-user-ui-map (kbd "w") #'pichat-evil-chat-copy-or-motion)
   (evil-define-key* 'normal pichat-chat-mode-map
+    (kbd "g y") #'pichat-chat-user-ui-copy
     (kbd "]]") #'pichat-chat-next-user-turn
     (kbd "[[") #'pichat-chat-previous-user-turn
     (kbd "]a") #'pichat-chat-next-activity

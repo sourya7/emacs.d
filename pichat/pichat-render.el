@@ -419,6 +419,38 @@ Return nil for partial blocks or ambiguous trailing content."
              (split-string (or text "") "\n" nil)
              "\n"))
 
+(defun pichat-render--ordinary-user-fragment (node)
+  "Render ordinary user NODE with presentation-only disclosure metadata.
+Prose spans exclude image indicators; skill disclosures never call this path."
+  (let* ((parts (pichat-transcript-node-content node))
+         (text (pichat-render--plain-content parts))
+         (rendered (pichat-render--user-block text))
+         (offset 0) ranges)
+    (cl-loop for part in parts for index from 0
+             unless (memq (pichat-transcript-content-kind part) '(thinking tool))
+             do (let* ((body (pichat-render--content-text part))
+                       (end (+ offset (length body))))
+                  (when (and (eq (pichat-transcript-content-kind part) 'prose)
+                             (> end offset))
+                    ;; Map exact source offsets through the inserted line bars.
+                    (let ((start (+ offset
+                                    (if (or (= offset 0)
+                                            (eq (aref text (1- offset)) ?\n)) 0 2)
+                                    (* 2 (cl-count ?\n text :end offset)))))
+                      (push (list :start start
+                                  :end (+ end 2 (* 2 (cl-count ?\n text :end end)))
+                                  :properties (list 'pichat-user-part index)) ranges)))
+                  (setq offset end)))
+    (pichat-render--wrap-properties
+     (pichat-render-fragment-create :text rendered :ranges (nreverse ranges))
+     (list 'font-lock-face 'pichat-user-block-face
+           'pichat-user-original
+           (mapconcat (lambda (part)
+                        (if (eq (pichat-transcript-content-kind part) 'prose)
+                            (or (pichat-transcript-content-text part) "") ""))
+                      parts "")
+           'pichat-user-signature parts))))
+
 (defun pichat-render--assistant-annotation (node)
   "Return completed stop annotation for assistant NODE, or nil."
   (let ((reason (pichat-transcript-node-stop-reason node))
@@ -455,11 +487,7 @@ Return nil for partial blocks or ambiguous trailing content."
              (pcase role
                ('user
                 (or (pichat-render--skill-user-fragment node context)
-                    (pichat-render--text-fragment
-                     (pichat-render--user-block
-                      (pichat-render--plain-content
-                       (pichat-transcript-node-content node)))
-                     '(font-lock-face pichat-user-block-face))))
+                    (pichat-render--ordinary-user-fragment node)))
                ('custom
                 (pichat-render--concat
                  (list

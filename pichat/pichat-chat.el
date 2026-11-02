@@ -25,6 +25,7 @@
 (require 'pichat-shell-presentation)
 (require 'pichat-chat-tool-ui)
 (require 'pichat-chat-activity-ui)
+(require 'pichat-chat-user-ui)
 (require 'pichat-chat-completion)
 (require 'pichat-chat-input)
 (require 'pichat-chat-diagnostics)
@@ -472,6 +473,8 @@ C-c C-y recovers a failed submission.  C-c C-l provides navigation between
 user messages, activity groups, and tool blocks."
   (setq-local truncate-lines nil)
   (visual-line-mode 1)
+  (pichat-chat-user-ui-reset)
+  (add-hook 'kill-buffer-hook #'pichat-chat-user-ui-reset nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--cancel-pending-ui-requests nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--cancel-live-projection nil t)
   (add-hook 'kill-buffer-hook
@@ -710,6 +713,7 @@ Use its scope label as a unique provisional identity until Pi reports an id."
 (defun pichat-chat--reset-for-source (session-id session-file &optional defer-sync)
   "Reset state for SESSION-ID/SESSION-FILE and advance source generation.
 When DEFER-SYNC is non-nil, wait for a subsequent authoritative state reply."
+  (pichat-chat-user-ui-reset)
   (pichat-chat--cancel-live-projection)
   (pichat-chat--cancel-extension-status-projection)
   (pichat-chat--cancel-sync-request)
@@ -2152,6 +2156,30 @@ Signal a user error when thinking control is disabled or unavailable."
   (pichat-chat-activity-ui-index-groups
    start end live-p pichat-chat--source-generation))
 
+(defun pichat-chat--refresh-user-disclosures ()
+  "Refresh non-destructive submitted-message presentation from committed text."
+  (when (and (markerp pichat-chat--canonical-start)
+             (marker-position pichat-chat--canonical-start)
+             (markerp pichat-chat--live-end)
+             (marker-position pichat-chat--live-end))
+    (pichat-chat-user-ui-refresh
+     (marker-position pichat-chat--canonical-start)
+     (marker-position pichat-chat--live-end)
+     pichat-chat--source-generation)))
+
+(defun pichat-chat--resize-user-disclosures (&optional _frame)
+  "Recompute disclosures only when the narrowest displayed width changes."
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when (derived-mode-p 'pichat-chat-mode)
+        (let ((window (pichat-disclosure-window)))
+          (unless (equal (and window (window-body-width window))
+                         pichat-chat-user-ui--width)
+            (pichat-chat--refresh-user-disclosures)))))))
+
+(add-hook 'window-size-change-functions #'pichat-chat--resize-user-disclosures)
+(add-hook 'window-configuration-change-hook #'pichat-chat--resize-user-disclosures)
+
 (defun pichat-chat--projection-snapshot ()
   "Capture buffer and projection state for transactional rollback."
   (let (block-markers activity-block-markers fragment-markers)
@@ -2481,6 +2509,7 @@ No chat-buffer text is copied; the active Emacs change group owns text undo."
       (activate-change-group change-group)
       (condition-case err
           (prog1 (funcall function)
+            (pichat-chat--refresh-user-disclosures)
             (accept-change-group change-group)
             (setq accepted t))
         ((error quit)
@@ -2490,6 +2519,7 @@ No chat-buffer text is copied; the active Emacs change group owns text undo."
                  (pichat-chat--inhibit-edit-guard t))
              (cancel-change-group change-group)))
          (pichat-chat--restore-focused-live-snapshot snapshot)
+         (pichat-chat--refresh-user-disclosures)
          (signal (car err) (cdr err)))))))
 
 (defmacro pichat-chat--with-projection-rollback (&rest body)
@@ -2502,9 +2532,11 @@ single rollback owner."
      (let ((snapshot (pichat-chat--projection-snapshot))
            (pichat-chat--projection-transaction-depth 1))
        (condition-case err
-           (progn ,@body)
+           (prog1 (progn ,@body)
+             (pichat-chat--refresh-user-disclosures))
          (error
           (pichat-chat--restore-projection-snapshot snapshot)
+          (pichat-chat--refresh-user-disclosures)
           (signal (car err) (cdr err)))))))
 
 (defmacro pichat-chat--with-live-projection-rollback (candidate &rest body)

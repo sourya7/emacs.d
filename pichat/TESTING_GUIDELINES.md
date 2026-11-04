@@ -127,7 +127,11 @@ runs real local Pi jobs against the offline fake provider, including evidence
 capture/overflow, cleanup-failure injection, offline conversation preview and explicit
 saved-session continuation. Manual background continuation also exercises a fresh
 real Pi runtime against captured failure evidence; core/UI tests cover provenance,
-settings edits, uncertainty and missing evidence. Evidence files use the fixture's
+settings edits, uncertainty and missing evidence. Lifecycle follow-up integration
+uses the same offline provider under two isolated provider identities and separate
+scripts/status files. Its example notification goes only to a disposable loopback
+HTTP listener—never real notification services. Shared job fixtures decode UTF-8
+serialized scripts before writing, including Unicode context cases. Evidence files use the fixture's
 temporary metadata root, never normal user storage.
 The SSH runner includes an isolated captured-target background job and independent
 post-completion actual-Pi exit check; it reuses
@@ -167,7 +171,10 @@ whole live-UI prefix (the original layout scenarios require graphics). The
 separate terminal Emacs: it drives the actual settings Transient keys, staged
 Apply/Cancel and nested Tools return, with discovery disabled. Batch fixtures
 cover capture preservation, stale callbacks, pending pickers and continuation
-restrictions. Use the same result
+restrictions. The `pichat-integration-jobs-live-ui-followup` scenario also supports
+terminal Emacs: it drives After this run selection, None bypass, Run once and
+origin/successor navigation using real Pi with the offline provider. Select that
+exact test for a terminal run. Use the same result
 log and explicit `kill-emacs` wrapper above. Never run it in the user's live Emacs.
 
 These are programmatic checks, not human visual acceptance. A graphical frame can

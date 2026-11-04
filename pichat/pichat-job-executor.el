@@ -1,4 +1,4 @@
-;;; pichat-job-executor.el --- Manual independent job execution -*- lexical-binding: t; -*-
+;;; pichat-job-executor.el --- Independent job execution -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 ;; No schedules or plan adapter.  All callbacks belong to one attempt, process
@@ -16,7 +16,7 @@
   "Maximum admitted job attempts, including uncertain executions."
   :type 'natnum :group 'pichat-jobs)
 (defcustom pichat-jobs-queue-limit 20
-  "Maximum queued manual attempts."
+  "Maximum queued attempts, shared by manual and lifecycle submissions."
   :type 'natnum :group 'pichat-jobs)
 (defcustom pichat-jobs-control-timeout 30
   "Seconds to wait for readiness, settlement sync or cancellation.
@@ -92,17 +92,33 @@ Do not call while another executor owns STORE.  No queued work is replayed."
     (let ((run (pichat-job-advance
                 (pichat-job-executor-store (pichat-job-execution-executor execution))
                 (pichat-job-execution-id execution) (pichat-job-execution-token execution)
-                state details)))
+                state details pichat-jobs-queue-limit)))
       (when run
         (when (member state '("finished" "uncertain"))
           (pichat-job-executor--retire execution))
-        (pichat-job-executor--changed (pichat-job-execution-executor execution)))
+        (pichat-job-executor--changed (pichat-job-execution-executor execution))
+        (when (member state '("finished" "uncertain"))
+          (pichat-job-executor-pump (pichat-job-execution-executor execution))))
       run)))
 
 (defun pichat-job-executor--uncertain (execution reason)
   "Retain EXECUTION's claims with bounded redacted REASON; never replay."
-  (pichat-job-executor--advance execution "uncertain"
-                               (list :reason (pichat-chat-diagnostics-safe-summary-text reason))))
+  ;; Retain the last synchronized cache where available, never live UI text.
+  ;; It may predate the stop, so the event remains explicitly partial.
+  (when (pichat-job-executor--owned-p execution)
+    (let* ((session (pichat-job-execution-session execution))
+           (store (pichat-job-executor-store (pichat-job-execution-executor execution)))
+           (cache (and session (pichat-chat-canonical-entry-cache session)))
+           (digest (or (plist-get (pichat-job-executor--run execution) :evidence)
+                       (and cache
+                            (condition-case nil
+                                (pichat-job-evidence-save
+                                 store (plist-get (pichat-job-executor--cache-result cache) :capture))
+                              (error nil))))))
+      (pichat-job-executor--advance
+       execution "uncertain"
+       (append (list :reason (pichat-chat-diagnostics-safe-summary-text reason))
+               (when digest (list :evidence digest)))))))
 
 (defun pichat-job-executor--deadline (execution reason)
   "Start a bounded control wait for EXECUTION, using REASON on timeout."
@@ -439,8 +455,15 @@ last response stays empty.  No domain success is inferred from prose."
   "Persist manual SPEC or saved JOB-ID in EXECUTOR before dispatching it.
 CONTINUE-OF, GUIDANCE and CAPTURE describe a reviewed background continuation.
 Return the new run ID without selecting its runtime or displaying a chat."
-  (let ((id (pichat-job-enqueue (pichat-job-executor-store executor) spec job-id
-                               pichat-jobs-queue-limit repeat-of continue-of guidance capture)))
+  (pichat-job-executor-submit-options
+   executor (list :spec spec :job-id job-id :repeat-of repeat-of
+                  :continue-of continue-of :guidance guidance :capture capture)))
+
+(defun pichat-job-executor-submit-options (executor options)
+  "Persist named submission OPTIONS before ordinary admission in EXECUTOR."
+  (let ((id (pichat-job-enqueue-options
+             (pichat-job-executor-store executor)
+             (plist-put (copy-sequence options) :queue-limit pichat-jobs-queue-limit))))
     (pichat-job-executor--changed executor)
     (pichat-job-executor-pump executor)
     id))
@@ -451,7 +474,7 @@ Return the new run ID without selecting its runtime or displaying a chat."
          (execution (gethash id (pichat-job-executor-contexts executor))))
     (cond
      ((equal (plist-get run :state) "queued")
-      (pichat-job-cancel-queued (pichat-job-executor-store executor) id)
+      (pichat-job-cancel-queued (pichat-job-executor-store executor) id pichat-jobs-queue-limit)
       (pichat-job-executor--changed executor)
       (pichat-job-executor-pump executor))
      ((and execution (pichat-job-execution-cleanup execution)

@@ -67,6 +67,43 @@
         (with-current-buffer chat (setq-local pichat-chat-stop-session-on-kill nil))
         (kill-buffer chat)))))
 
+(ert-deftest pichat-job-followup-startup-failure-does-not-overwrite-worker-or-recurse ()
+  (pichat-test-with-job-executor ()
+    (let* ((pichat-pi-executable "/nonexistent/pichat-pi")
+           (handler (pichat-job-save store (pichat-test-job-spec project-dir "observe")))
+           (spec (plist-put (pichat-test-job-spec project-dir "read") :after-job-id handler))
+           (id (pichat-job-executor-submit executor spec))
+           (origin (pichat-job-record store 'runs id))
+           (child-id (plist-get (plist-get origin :dispatch) :run-id))
+           (child (pichat-job-record store 'runs child-id)))
+      (should (equal (plist-get origin :result) "failed"))
+      (should (equal (plist-get child :result) "failed"))
+      (should-not (plist-get child :after-job))
+      (should-not (plist-get child :dispatch))
+      (should (= (length (pichat-job-records store 'runs)) 2)))))
+
+(ert-deftest pichat-job-followup-observes-process-loss-not-input-or-late-callbacks ()
+  (pichat-test-with-job-executor ()
+    (let* ((pichat-jobs-max-concurrency 1)
+           (handler (pichat-job-save store (pichat-test-job-spec project-dir "observe")))
+           (id (pichat-job-enqueue store
+                                  (plist-put (pichat-test-job-spec project-dir) :after-job-id handler)))
+           (claim (pichat-job-claim store id))
+           (execution (pichat-job-execution--create :executor executor :id id
+                                                   :token (plist-get claim :attempt) :submitted t)))
+      (puthash id execution (pichat-job-executor-contexts executor))
+      (pichat-job-executor--event execution 'user-input-pending-changed nil)
+      (should (= (length (pichat-job-records store 'runs)) 1))
+      (pichat-job-executor--event execution 'session-ended nil)
+      (let* ((origin (pichat-job-record store 'runs id))
+             (child (plist-get (plist-get origin :dispatch) :run-id)))
+        (should (equal (plist-get origin :state) "uncertain"))
+        (should (equal (plist-get (pichat-job-record store 'runs child) :state) "queued"))
+        (should (equal (plist-get (pichat-job-admission store child 1) :reason)
+                       "Global concurrency limit"))
+        (pichat-job-executor--event execution 'session-ended nil)
+        (should (= (length (pichat-job-records store 'runs)) 2))))))
+
 (ert-deftest pichat-job-unsubmitted-local-startup-failure-releases-without-retry ()
   (pichat-test-with-job-executor ()
     (let* ((pichat-pi-executable "/nonexistent/pichat-pi")
@@ -87,6 +124,124 @@
         (should (string-match-p "shutdown not verified" (plist-get run :reason)))))))
 
 (when pichat-test-include-integration
+  (ert-deftest pichat-integration-job-followup-independent-provider-and-fake-notification ()
+    (pichat-test-with-job-executor
+        (:script '(:turns [(:text "WORKER_RESULT café ✓")]))
+      (let* ((extension (expand-file-name "review-provider.ts" agent-dir))
+             (review-script (expand-file-name "review-script.json" agent-dir))
+             (review-status (expand-file-name "review-status.json" agent-dir))
+             (review-directory (expand-file-name "review/" project-dir))
+             (process-environment
+              (append (list (concat "PICHAT_REVIEW_PROVIDER_SCRIPT=" review-script)
+                            (concat "PICHAT_REVIEW_PROVIDER_STATUS=" review-status))
+                      process-environment))
+             (original-buffer (current-buffer)) (original-window (selected-window))
+             (current (pichat-session-make)) (pichat-current-session current)
+             received connections
+             (server
+              (make-network-process
+               :name "pichat-fake-notification" :server t :host "127.0.0.1" :service t
+               :family 'ipv4 :noquery t :coding 'utf-8-unix
+               :log (lambda (_server connection _message) (push connection connections))
+               :filter (lambda (connection chunk)
+                         (let ((request (concat (process-get connection 'request) chunk)))
+                           (process-put connection 'request request)
+                           (when (and (string-match "\r\n\r\n" request)
+                                      (string-suffix-p "Worker completed" request))
+                             (setq received (substring request (match-end 0)))
+                             (process-send-string connection
+                                                  "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK")
+                             (delete-process connection)))))))
+        (unwind-protect
+            (progn
+              ;; A second isolated provider uses the same tested fake-provider
+              ;; mechanics, its own script/status and no real model endpoint.
+              (with-temp-file extension
+                (insert-file-contents pichat-test-fake-provider-extension)
+                (goto-char (point-min))
+                (while (search-forward "PICHAT_FAKE_PROVIDER" nil t)
+                  (replace-match "PICHAT_REVIEW_PROVIDER" t t))
+                (goto-char (point-min))
+                (search-forward "const provider = \"pichat-fake\";")
+                (replace-match "const provider = \"pichat-reviewer\";" t t))
+              (make-directory review-directory)
+              (let* ((url (format "http://127.0.0.1:%d/notify" (process-contact server :service)))
+                     (command
+                      (concat "node -e "
+                              (shell-quote-argument
+                               (format "fetch('%s',{method:'POST',body:'Worker completed'}).then(r=>{if(!r.ok)process.exit(1)})" url))))
+                     (script (list :turns
+                                   (vector (list :expectContextIncludes
+                                                 ["WORKER_RESULT café ✓" "untrusted JSON data"]
+                                                 :expectTool '(:name "bash")
+                                                 :toolCall (list :name "bash" :arguments (list :command command)))
+                                           '(:text "Notification delivered")))))
+                (with-temp-file review-script
+                  (insert (decode-coding-string
+                           (json-serialize script :null-object nil :false-object :false) 'utf-8)))
+                (let* ((handler-spec
+                        (let ((pichat-pi-extra-args (list "-e" extension)))
+                          (pichat-job-launch-capture
+                           "Notify reviewer" (concat "Review supplied context and send only a concise outcome to " url
+                                                     ". Do not send transcripts or credentials; report failure without retry.")
+                           review-directory '(:preset coding :model "pichat-reviewer/pichat-fake" :target local)
+                           "observe")))
+                       (handler (pichat-job-save store handler-spec))
+                       (spec (plist-put (pichat-test-job-spec project-dir "read") :after-job-id handler))
+                       (id (pichat-job-executor-submit executor spec)))
+                  (pichat-test-job-wait store id "finished")
+                  (let* ((origin (pichat-job-record store 'runs id))
+                         (child-id (plist-get (plist-get origin :dispatch) :run-id)))
+                    (pichat-test-job-wait store child-id "finished")
+                    (let* ((child (pichat-job-record store 'runs child-id))
+                           (runtime (pichat-job-execution-session
+                                     (gethash child-id (pichat-job-executor-contexts executor)))))
+                      (should (equal (plist-get child :result) "completed"))
+                      (should (equal (plist-get (plist-get child :spec) :configuration)
+                                     (plist-get handler-spec :configuration)))
+                      (should (equal (plist-get (pichat-session-model runtime) :provider) "pichat-reviewer"))
+                      (should-not (pichat-session-alive-p runtime))
+                      (should-not (plist-get child :dispatch)))
+                    (should (equal received "Worker completed"))
+                    (should (equal origin (pichat-job-record store 'runs id)))
+                    (should (= (length (pichat-job-records store 'runs)) 2))
+                    (should (eq (current-buffer) original-buffer))
+                    (should (eq (selected-window) original-window))
+                    (should (eq pichat-current-session current))
+                    (pichat-test-assert-provider-script-consumed status-file)
+                    (pichat-test-assert-provider-script-consumed review-status)))))
+          (dolist (connection connections) (when (process-live-p connection) (delete-process connection)))
+          (delete-process server)))))
+
+  (ert-deftest pichat-integration-job-followup-handles-agent-error-and-active-cancellation ()
+    (dolist (outcome '(error cancel))
+      (pichat-test-with-job-executor
+          (:script (if (eq outcome 'error)
+                       '(:turns [(:error "Fixture provider failure")])
+                     '(:turns [(:text "Delayed result" :delayMs 800)])))
+        (let* ((handler (pichat-job-save store (pichat-test-job-spec project-dir "observe")))
+               (spec (plist-put (pichat-test-job-spec project-dir "read") :after-job-id handler))
+               (id (pichat-job-executor-submit executor spec))
+               (execution (gethash id (pichat-job-executor-contexts executor))))
+          (when (eq outcome 'cancel)
+            (pichat-test-wait-until
+             (lambda () (and (pichat-job-execution-accepted execution)
+                             (pichat-job-execution-started execution)))
+             5 "worker accepted and started before active cancellation")
+            (pichat-job-executor-cancel executor id))
+          (pichat-test-job-wait store id "finished")
+          (let* ((origin (pichat-job-record store 'runs id))
+                 (child-id (plist-get (plist-get origin :dispatch) :run-id)))
+            (should (equal (plist-get origin :result) (if (eq outcome 'error) "failed" "cancelled")))
+            (pichat-test-job-wait store child-id "finished")
+            (let ((child (pichat-job-record store 'runs child-id)))
+              (should (equal (plist-get child :result) (if (eq outcome 'error) "failed" "completed")))
+              (should (equal (plist-get (plist-get child :event) :result) (plist-get origin :result)))
+              (should-not (plist-get child :dispatch)))
+            (should (equal origin (pichat-job-record store 'runs id)))
+            (should (= (length (pichat-job-records store 'runs)) 2))
+            (pichat-test-assert-provider-script-consumed status-file))))))
+
   (ert-deftest pichat-integration-job-completes-only-after-canonical-sync-without-focus ()
     (pichat-test-with-job-executor
         (:script '(:turns [(:text "DEPENDENCY_RESULT" :delayMs 60)]))
@@ -405,6 +560,76 @@
            (when (and (not (memq buffer initial))
                       (string-prefix-p "*PiChat" (buffer-name buffer)))
              (kill-buffer buffer)))))))
+
+(ert-deftest pichat-jobs-followup-picker-is-draft-only-and-reports-link-exact-runs ()
+  (pichat-test-with-job-views
+    (let* ((spec (pichat-test-job-spec project-dir "observe"))
+           (_other (pichat-job-save store spec))
+           (handler (pichat-job-save store spec))
+           (worker-spec (plist-put (pichat-test-job-spec project-dir) :after-job-id handler))
+           (job (pichat-job-save store worker-spec))
+           (before (pichat-job-records store 'jobs)))
+      (pichat-job--setup worker-spec job executor)
+      (should (string-match-p "After this run: Review files" (buffer-string)))
+      (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "None")))
+        (pichat-test-job-press "Change…"))
+      (should (string-match-p "After this run: None" (buffer-string)))
+      (should-not (plist-get (pichat-job--submission-spec) :after-job-id))
+      (should (equal before (pichat-job-records store 'jobs)))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (_prompt choices &rest _)
+                   (car (rassoc handler choices)))))
+        (pichat-test-job-press "Change…"))
+      (should (equal (plist-get (pichat-job--submission-spec) :after-job-id) handler))
+      (should (= (length (pichat-job-records store 'runs)) 0))
+      (let* ((id (pichat-job-enqueue store (pichat-job--submission-spec))))
+        (pichat-job-cancel-queued store id)
+        (let ((child (plist-get (plist-get (pichat-job-record store 'runs id) :dispatch) :run-id)))
+          (pichat-jobs--show-detail executor 'runs id)
+          (should (string-match-p "After this run: Review files · Waiting" (buffer-string)))
+          (pichat-test-job-press "View follow-up run")
+          (should (equal pichat-jobs--detail (cons 'runs child)))
+          (should (string-match-p "Triggered by:" (buffer-string)))
+          (should (string-match-p "context is partial" (buffer-string)))
+          (pichat-test-job-press "Review files")
+          (should (equal pichat-jobs--detail (cons 'runs id)))
+          (should-not (pichat-session-list)))))))
+
+(ert-deftest pichat-jobs-followup-picker-preserves-noop-quit-and-stale-drafts ()
+  (pichat-test-with-job-views
+    (let* ((handler (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (spec (plist-put (pichat-test-job-spec project-dir) :after-job-id handler)))
+      (pichat-job--setup spec nil executor)
+      (let ((before (copy-tree pichat-job--draft t)))
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (_prompt choices &rest _) (car (rassoc handler choices)))))
+          (pichat-job-change-after-job))
+        (should (equal before pichat-job--draft))
+        (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) (signal 'quit nil))))
+          (condition-case nil (progn (pichat-job-change-after-job) (ert-fail "Quit was ignored"))
+            (quit nil)))
+        (should (equal before pichat-job--draft)))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (&rest _)
+                   (setf (plist-get pichat-job--draft :instructions) "Newer instructions")
+                   "None")))
+        (should-error (pichat-job-change-after-job) :type 'user-error))
+      (should (equal (plist-get pichat-job--draft :after-job-id) handler))
+      (should (equal (plist-get pichat-job--draft :instructions) "Newer instructions")))))
+
+(ert-deftest pichat-jobs-followup-dispatch-problems-need-attention-without-changing-result ()
+  (pichat-test-with-job-views
+    (let* ((handler (pichat-job-save store (pichat-test-job-spec project-dir "observe")))
+           (id (pichat-job-enqueue store
+                                  (plist-put (pichat-test-job-spec project-dir) :after-job-id handler))))
+      (pichat-job-enqueue store (pichat-test-job-spec project-dir))
+      (pichat-job-cancel-queued store id 1)
+      (let ((origin (pichat-job-record store 'runs id)))
+        (should (pichat-jobs--attention-p executor origin))
+        (pichat-jobs--show-detail executor 'runs id)
+        (should (string-match-p "Not dispatched — Job queue is full" (buffer-string)))
+        (should-not (string-match-p "View follow-up run" (buffer-string)))
+        (should (equal (plist-get origin :result) "cancelled"))))))
 
 (ert-deftest pichat-jobs-delete-selected-definition-with-short-confirmation ()
   (pichat-test-with-job-views
@@ -1195,7 +1420,7 @@
   (pichat-test-with-job-views
     (pichat-job--setup (pichat-test-job-spec project-dir) nil executor)
     (let ((setup (current-buffer)) (before (pichat-presets--copy pichat-job--draft))
-          (labels '("Edit instructions…" "Change project…" "Execution settings…" "Run once" "Save job…" "Cancel")))
+          (labels '("Edit instructions…" "Change project…" "Execution settings…" "Change…" "Run once" "Save job…" "Cancel")))
       (cl-letf (((symbol-function 'pichat-rpc-send) (lambda (&rest _) (ert-fail "Sent RPC")))
                 ((symbol-function 'pichat-start-prepared-session) (lambda (&rest _) (ert-fail "Started Pi")))
                 ((symbol-function 'pichat-job-executor-submit) (lambda (&rest _) (ert-fail "Submitted work"))))

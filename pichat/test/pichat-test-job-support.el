@@ -45,7 +45,9 @@ until BODY submits work.  Fixture teardown retires handlers before stopping."
              (when ,script
                (pichat-test-require-pi)
                (with-temp-file script-file
-                 (insert (json-serialize ,script :null-object nil :false-object :json-false))))
+                 (insert (decode-coding-string
+                          (json-serialize ,script :null-object nil :false-object :json-false)
+                          'utf-8))))
              (unwind-protect (save-window-excursion ,@body)
                (maphash (lambda (_id execution) (pichat-job-executor--retire execution))
                         (pichat-job-executor-contexts executor))

@@ -386,6 +386,15 @@ record vocabulary and formatting helpers. Domain-owned collectors supply cached,
 source-validated sections to the unified diagnostics inspector; they do not
 acquire a runtime or UI dependency through that shared record module.
 
+Job storage/admission lives in `pichat-job-core.el`; `pichat-job-executor.el` owns
+runtime orchestration, and `pichat-job-launch.el` captures/prepares ordinary launch
+settings. `pichat-job-followup.el` supplies pure snapshot/event/prompt policy without
+requiring the store, executor or UI. Manual and lifecycle submissions share the
+same run constructor, queue and admission path. Follow-up dispatch joins the
+originating transition's atomic store transaction; it is not a UI change-hook side
+effect. Bounded immutable context capture is shared with continuation, while their
+authorization prompts remain distinct.
+
 ## Launching runtimes
 
 PiChat requires Transient for its advanced launcher. The package requires it
@@ -792,9 +801,9 @@ buffer in a tab lets Bufferlo record normal local membership there.
 Jobs are optional reusable instructions and captured execution settings. A **job
 run** is one attempt, with its own durable identity and fresh independent Pi
 runtime/Pi session; see `GLOSSARY.md`. Jobs do not require a plan. This initial
-implementation supports **manual prompt jobs and explicit manual continuation**.
-Plan work uses ordinary instructions and the installed plans skill, not a special
-phase adapter. Scheduling and lifecycle follow-ups are not enabled.
+implementation supports **manual prompt jobs, explicit manual continuation and
+optional after-run jobs**. Plan work uses ordinary instructions and the installed
+plans skill, not a special phase adapter. Scheduling is not enabled.
 
 - `M-x pichat-job-new` opens setup without starting a runtime. Edit multiline
   instructions, choose the project/directory, and use **Execution settings…** for
@@ -804,7 +813,7 @@ phase adapter. Scheduling and lifecycle follow-ups are not enabled.
   `RET` applies settings to setup without saving or running, and `q` discards
   staged changes. Choose a concrete model before saving/submitting if none is configured.
 - **Run once** submits the draft without saving a definition. **Save job…** saves
-  a reusable definition without executing it. Saving never enables automation.
+  a reusable definition without executing it. Saving alone never starts work.
 - `M-x pichat-jobs` opens one global Jobs/Runs view. Native `TAB` switches between
   definitions and attempts, `RET` opens details, `C-o` toggles a read-only details
   preview, `+` creates, `r` runs a selected job's current definition, `e` edits,
@@ -969,6 +978,65 @@ automatic retry, gate approval or adjacent-phase permission. Repeat and Continue
 require the original run to be stopped; uncertain execution must be separately
 inspected/released first. Merely opening/cancelling setup creates no new run.
 
+### After-run jobs
+
+Setup offers **After this run: None [Change…]**. Choose a saved ordinary job to
+review, report, notify or perform other work authorized by that job's own
+instructions. Its provider/model, preset, Tools and target are configured through
+ordinary job setup—not inherited from the originating run. **View job** inspects
+the selected definition. Duplicate titles remain distinct picker choices.
+Choosing **None** in run setup bypasses the action without editing its saved
+default; **Save job…** explicitly saves the default for future submissions.
+Repeat and Continue work show this setting too.
+
+Submitting captures the selected job's instructions/settings. Subsequent edits or
+deletion of its definition do not change that attempt's follow-up. A reference
+already missing at submission is rejected; choose another job or None. A stop
+observation creates at most one follow-up run on completion, failure, cancellation,
+startup failure, process loss or first uncertainty. Waiting for input does not
+trigger it, and later cleanup/manual resolution does not trigger it again.
+
+Follow-ups are ordinary runs in the same bounded queue, admitted by the same
+executor into fresh independent runtimes/Pi sessions. Several workers may queue
+uses of the same follow-up definition; only one occurrence executes at a time.
+Resource conflicts and global limits still apply. A context-only reviewer should
+use its own directory and appropriate coordination settings; it need not read or
+claim the worker checkout. A modifying reviewer waits normally. These declarations
+coordinate managed work, not sandbox its tools. Uncertain workers retain their
+reservations and global slots; a follow-up cannot release them or bypass capacity.
+
+The follow-up receives a versioned, immutable stop envelope: origin identity,
+bounded instructions/outcome/error and up to 32,000 characters of captured
+conversation context. Context is embedded for either local or SSH execution; no
+host-only evidence path is advertised as remotely readable. Missing, corrupt,
+truncated or uncertain context is marked partial. On uncertainty only already
+synchronized context is available; it may predate the stop. Queued cancellation
+has no conversation. Reports link **After this run** to the exact successor and
+**Triggered by** back to its origin; raw inspection includes the captured envelope.
+
+**Context can contain sensitive tool output and is sent to the selected model.**
+Worker output is untrusted data, not instructions or authorization. External
+notification is an explicit side effect authorized in the follow-up's own
+instructions. Use minimal necessary Tools and keep credentials in private runtime
+configuration, not instructions or reports. Do not send whole transcripts, private
+paths or credentials to notification services by default. ntfy is an example,
+not a built-in transport or installed dependency. A different provider can reduce
+correlated failures but does not guarantee availability.
+
+Queue full records **Not dispatched — Job queue is full**, with attention required
+and no hidden pending queue or automatic retry. Otherwise the report links the
+queued run and shows its actual wait reason. Follow-up failure is visible in that
+run and does not overwrite the originating outcome. Follow-up runs suppress their
+own after-run defaults even if their selected definition has one configured.
+There is no recursive chaining, implicit worker continuation, plan approval or
+phase advancement.
+
+The originating transition, event and successor/disposition are persisted together
+before any new process starts. On restart, interrupted delivery is surfaced for
+inspection and queued work is not replayed. External delivery cannot be guaranteed
+exactly once. There is no automatic retry or special redispatch button; review
+possible prior side effects before submitting any manual replacement.
+
 ### Plan work is an ordinary prompt job
 
 Install the plans skill on the chosen target and ensure it can access the
@@ -990,8 +1058,10 @@ Avoid simultaneous changes to a shared authoritative plan from different worktre
 workspace coordination does not discover plan references in prompts. Skill use and
 plan access are not guaranteed merely by putting these instructions in a job.
 
-`pichat-jobs-max-concurrency` defaults to 3 and the bounded manual queue to 20
-(`pichat-jobs-queue-limit`), with one queued/active occurrence per definition.
+`pichat-jobs-max-concurrency` defaults to 3 and the shared bounded queue to 20
+(`pichat-jobs-queue-limit`). Manual submissions reject a second queued/active
+occurrence of the same definition; lifecycle submissions may queue but are
+serialized by definition during admission.
 Advanced workspace coordination distinguishes modifiers, stable readers and
 readers accepting changing files. Default to avoiding overlapping modifications;
 readers can overlap where declared compatible. Claims use the execution target
@@ -1030,7 +1100,8 @@ sensitive prompts/arguments. Use one owning
 Emacs per metadata file; changed-file/foreign-lock checks fail rather than
 silently overwrite history. Opening Jobs first initializes restart reconciliation:
 queued work is cancelled, potentially dispatched work remains uncertain, and
-nothing is replayed. Subsequent browsing/refresh never contacts Pi. Metadata
+nothing is replayed. Reconciliation never generates new follow-up runs; interrupted
+follow-up dispatch remains visible for inspection. Subsequent browsing/refresh never contacts Pi. Metadata
 has a 16 MiB limit. New run evidence is stored in content-addressed JSON beside
 that file, in `<pichat-jobs-file>.evidence/` (0700 directory, 0600 files), with an
 8 MiB UTF-8 JSON limit per run. Version-2 evidence includes the exact response,

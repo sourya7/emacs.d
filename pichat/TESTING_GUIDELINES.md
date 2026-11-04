@@ -125,8 +125,10 @@ and manual UI behavior share `pichat-test-jobs.el` and the fixtures in
 been combined rather than adding another suite per screen. Full mode additionally
 runs real local Pi jobs against the offline fake provider, including evidence
 capture/overflow, cleanup-failure injection, offline conversation preview and explicit
-saved-session continuation. Evidence files use the fixture's temporary metadata
-root, never normal user storage.
+saved-session continuation. Manual background continuation also exercises a fresh
+real Pi runtime against captured failure evidence; core/UI tests cover provenance,
+settings edits, uncertainty and missing evidence. Evidence files use the fixture's
+temporary metadata root, never normal user storage.
 The SSH runner includes an isolated captured-target background job and independent
 post-completion actual-Pi exit check; it reuses
 the existing real-SSH fixture rather than the user's project or sessions.
@@ -156,6 +158,13 @@ context and uncertain claims without activating a dialog. Neither uses a real
 model provider or normal job metadata. Keep these opt-in graphical checks and
 SSH checks separate from ordinary batch tests because their execution requirements
 differ; reusable mechanics belong in support, not imports of another test suite.
+The additional `pichat-integration-jobs-live-ui-continuation` scenario drives
+More actions, Continue work, optional instructions, Run once and Previous run in a
+live frame with the offline provider. It can run alone in a separate `emacs -Q -nw`
+instance when no graphical display exists; select that exact test instead of the
+whole live-UI prefix (the other scenarios require graphics). Use the same result
+log and explicit `kill-emacs` wrapper above. Never run it in the user's live Emacs.
+
 These are programmatic checks, not human visual acceptance. A graphical frame can
 still be iconified by the window manager: `display-graphic-p` and passing window
 geometry assertions do not prove the layout was visible. Review the displayed

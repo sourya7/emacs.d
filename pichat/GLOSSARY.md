@@ -23,7 +23,7 @@ Shared terms for discussing PiChat. **Runtime**, **Pi session**, **saved session
 | **Chat buffer** | The Emacs conversation UI attached to a runtime. Its transcript follows that runtime's active source; closing the buffer and stopping the runtime are distinct operations. |
 | **Runtime manager** | PiChat's global view of retained runtimes, including live, stopped, and failed ones. It is not a browser of saved session files. |
 | **Job** | A reusable instruction and captured execution settings. Ordinary jobs do not require a managed plan. |
-| **Job run** | One attempt to execute job instructions, with durable identity, outcome and captured run-end evidence distinct from its runtime and Pi session. A one-off job run need not have a saved job definition; later conversation continuation does not change its report. |
+| **Job run** | One attempt to execute job instructions, with durable identity, outcome and captured run-end evidence distinct from its runtime and Pi session. A one-off job run need not have a saved job definition. **Continue work** creates a linked new job run in a fresh Pi session; **Continue in chat** extends the saved conversation without changing the original run's report. |
 | **Jobs view** | The definitions and job-run history view, distinct from the runtime manager, Session History, and saved-session browser. |
 
 ## Launch and ownership

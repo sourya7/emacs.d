@@ -332,5 +332,116 @@
                          (:version 3 :response "Answer" :transcript "Unsupported")))
         (should-error (pichat-job-evidence-save store invalid) :type 'pichat-job-error)))))
 
+(ert-deftest pichat-job-continuation-preserves-scope-provenance-and-admission ()
+  (pichat-test-job--with-store
+    (let* ((spec (pichat-test-job--spec))
+           (job (pichat-job-save store spec))
+           (origin (pichat-job-enqueue store nil job))
+           (claim (pichat-job-claim store origin)))
+      ;; Even a one-off observer cannot turn uncertainty into safe recovery.
+      (pichat-job-advance store origin (plist-get claim :attempt) "uncertain")
+      (should-error (pichat-job-enqueue store spec nil nil nil origin))
+      (should-error (pichat-job-enqueue store spec nil nil origin))
+      (pichat-job-resolve-uncertain store origin "Inspected tools and checkout")
+      (let ((before (pichat-job-record store 'runs origin)))
+        (dolist (key '(:instructions :directory :resources))
+          (let ((changed (pichat-job--copy spec)))
+            (setf (plist-get changed key)
+                  (if (eq key :resources) [(:key "elsewhere" :access "observe")] "different"))
+            (should-error (pichat-job-enqueue store changed nil nil nil origin))))
+        (let ((changed (pichat-job--copy spec)))
+          (setf (plist-get (plist-get changed :configuration) :transport) '(:id "elsewhere"))
+          (should-error (pichat-job-enqueue store changed nil nil nil origin)))
+        (let* ((id (pichat-job-enqueue store spec nil nil nil origin "Verify remaining tests"))
+               (run (pichat-job-record (pichat-job-store-open file) 'runs id)))
+          (should (equal (plist-get run :job-id) job))
+          (should (equal (plist-get (plist-get run :trigger) :continue-of) origin))
+          (should-not (plist-get (plist-get run :trigger) :repeat-of))
+          (should (equal (plist-get run :spec) spec))
+          (should (string-match-p "Verify remaining tests" (pichat-job-prompt run)))
+          (should (string-match-p "checkpoint may be stale" (pichat-job-prompt run)))
+          (should (string-match-p "no captured transcript" (pichat-job-prompt run)))
+          (should (equal before (pichat-job-record store 'runs origin)))
+          (should-error (pichat-job-enqueue store nil job))
+          (should-error (pichat-job-enqueue store spec nil nil nil origin))
+          (pichat-job-cancel-queued store id)
+          ;; Repeat is original instructions, not a replay of continuation context.
+          (let ((repeat (pichat-job-enqueue store nil nil nil id)))
+            (should (equal (pichat-job-prompt (pichat-job-record store 'runs repeat))
+                           (plist-get spec :instructions)))))))))
+
+(ert-deftest pichat-job-continuation-evidence-is-bounded-and-independent-of-session-files ()
+  (pichat-test-job--with-store
+    (let* ((id (pichat-test-job--enqueue store))
+           (token (plist-get (pichat-job-claim store id) :attempt))
+           (digest (pichat-job-evidence-save
+                    store '(:version 1 :response "Partial answer" :transcript "Tool completed"))))
+      (pichat-job-advance store id token "finished"
+                          (list :result "failed" :safe-to-release t :evidence digest
+                                :session-file "/never/read/mutable-session.jsonl"))
+      (let* ((origin (pichat-job-record store 'runs id))
+             (context (pichat-job-continuation-context store origin)))
+        (should-not (plist-get context :warning))
+        (should (string-match-p "Tool completed" (plist-get context :context)))
+        (should-not (string-match-p "mutable-session" (plist-get context :context)))
+        (let* ((next (pichat-job-enqueue store nil nil nil nil id))
+               (prompt (pichat-job-prompt (pichat-job-record store 'runs next))))
+          (delete-file (pichat-job--evidence-file store digest))
+          (should (plist-get (pichat-job-continuation-context store origin) :warning))
+          (should (equal prompt (pichat-job-prompt
+                                 (pichat-job-record (pichat-job-store-open file) 'runs next))))
+          (pichat-job-cancel-queued store next))
+        (let* ((large (pichat-job-evidence-save
+                       store (list :version 1 :response "Partial" :transcript (make-string 40000 ?x))))
+               (copy (pichat-job--copy origin)))
+          (setf (plist-get copy :evidence) large)
+          (let ((excerpt (pichat-job-continuation-context store copy)))
+            (should (string-match-p "Previous run context is incomplete (truncated)"
+                                    (plist-get excerpt :warning)))
+            (should (< (length (plist-get excerpt :context)) 34000))))))))
+
+(ert-deftest pichat-job-continuation-preserves-unicode-and-truncates-by-character ()
+  (pichat-test-job--with-store
+    (dolist (text (list "Pick: café — 日本語 😀" (make-string 40000 ?界)))
+      (let* ((digest (pichat-job-evidence-save
+                      store (list :version 1 :response text :transcript "Tool completed")))
+             (context (pichat-job-continuation-context
+                       store (list :id "unicode-run" :result "failed" :evidence digest)))
+             (outer (json-parse-string (plist-get context :context) :object-type 'plist))
+             (evidence (plist-get outer :evidence)))
+        (if (< (length text) 32000)
+            (progn
+              (should-not (plist-get context :warning))
+              (should (equal text (plist-get (json-parse-string evidence :object-type 'plist)
+                                            :response))))
+          (should (plist-get context :warning))
+          (should (= (length evidence) (+ 32000 (length "\n[Evidence excerpt truncated]"))))
+          (should (string-suffix-p "\n[Evidence excerpt truncated]" evidence))
+          (should (string-match-p (make-string 100 ?界) evidence)))))))
+
+(ert-deftest pichat-job-continuation-errors-do-not-disclose-payloads ()
+  (pichat-test-job--with-store
+    (let* ((secret "PRIVATE-EVIDENCE-PAYLOAD")
+           (digest (pichat-job-evidence-save
+                    store (list :version 1 :response secret :transcript secret)))
+           (run (list :id "private-run" :result "failed" :evidence digest)))
+      (cl-letf (((symbol-function 'pichat-job-evidence-read)
+                 (lambda (&rest _) (signal 'wrong-type-argument (list 'json-value-p secret)))))
+        (let* ((context (pichat-job-continuation-context store run))
+               (warning (plist-get context :warning)))
+          (should (string-match-p "wrong-type-argument" warning))
+          (should-not (string-match-p secret warning))
+          (should-not (string-match-p secret (plist-get context :context)))))
+      (let ((serialize (symbol-function 'json-serialize)))
+        (cl-letf (((symbol-function 'json-serialize)
+                   (lambda (value &rest args)
+                     (if (plist-get value :run)
+                         (signal 'wrong-type-argument (list 'json-value-p secret))
+                       (apply serialize value args)))))
+          (let ((err (should-error (pichat-job-continuation-context store run)
+                                   :type 'user-error)))
+            (should (string-match-p "wrong-type-argument" (error-message-string err)))
+            (should-not (string-match-p secret (error-message-string err)))))))))
+
 (provide 'pichat-test-job-core)
 ;;; pichat-test-job-core.el ends here

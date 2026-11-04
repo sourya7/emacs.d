@@ -792,8 +792,9 @@ buffer in a tab lets Bufferlo record normal local membership there.
 Jobs are optional reusable instructions and captured execution settings. A **job
 run** is one attempt, with its own durable identity and fresh independent Pi
 runtime/Pi session; see `GLOSSARY.md`. Jobs do not require a plan. This initial
-implementation supports **manual prompt jobs only**: plan-phase execution,
-scheduling, and chaining are not enabled.
+implementation supports **manual prompt jobs and explicit manual continuation**.
+Plan work uses ordinary instructions and the installed plans skill, not a special
+phase adapter. Scheduling and lifecycle follow-ups are not enabled.
 
 - `M-x pichat-job-new` opens setup without starting a runtime. Edit multiline
   instructions, choose the project/directory, and use **Execution settings…** for
@@ -817,27 +818,37 @@ scheduling, and chaining are not enabled.
   latest-response previews are omitted; open the exact run to read its response.
   Run details put the instruction block and rendered answer first, with compact
   execution status/context and no duplicate task title or Response heading.
-  Both definition and run instructions use the chat's read-only
-  input-bar styling and fold after five visual lines at the narrowest displayed
-  width. Click the block or press `RET`/`TAB` within it to expand/collapse; a folded
+  Definition/run reports and New/Edit/Repeat/Continue setup share the chat's
+  read-only input-bar styling for instructions and fold after five visual lines
+  at the narrowest displayed width. Additional continuation instructions use a
+  separate block with independent folding. Setup and reports wrap visually;
+  resizing preserves folding choices. Editors and exact-source views stay plain text. Click the block or press `RET`/`TAB` within it to expand/collapse; a folded
   block ends in `…`, and an expanded block offers **Show less**. Short instructions
   need no folding control. In details, `TAB` toggles only the disclosure at point
-  (instructions, **Job details** or **Execution details**); elsewhere it moves to
+  (instructions, **More actions**, **Job details** or **Execution details**); elsewhere it moves to
   the next button without activating it. `S-TAB` moves backward without toggling.
   Ordinary action buttons require `RET` or a click. Setup uses `TAB`/`S-TAB` only
-  for button navigation, including from outside buttons. Terminal and graphical
+  for button navigation, including from outside buttons; fold setup instruction
+  blocks with `RET` or a click. Terminal and graphical
   TAB events and optional Evil Normal state follow these same rules. Refresh/
   resize preserves explicit folding choices.
-  Conversation, repeat/save and job navigation actions stay visible.
-  **Execution details** expands separately, with response source/copy controls,
-  retained-runtime **Diagnostics**, compact model/preset/Tools and whole-second
+  The applicable **Continue work…** or **Repeat…** comes first, followed by
+  **Preview conversation** and **Diagnostics**. **More actions** lists secondary
+  actions one per line; **Continue in chat…** explains its interactive behavior
+  through hover/help text and confirmation rather than inline prose.
+  It discloses remaining Repeat, **Continue in chat…**
+  and **Save as job…** actions when applicable, plus job history/definition,
+  response source/copy controls and **Release reservation…** for uncertain runs.
+  **Diagnostics** is directly accessible alongside conversation inspection; with
+  no retained runtime it shows the recorded execution note instead of live logs.
+  **Execution details** expands separately, with workspace/target, reservation
+  state, compact model/preset/Tools and whole-second
   local times using Emacs's timezone, with timezone
   labels reflecting each date's daylight-saving rules. The Runs queue column and
   latest-run summaries also use local time; chronological sorting is unchanged.
-  It omits repeated workspace/target
-  and the default overlap policy; non-default policies remain visible. Saved-session
+  It omits the default overlap policy; non-default policies remain visible. Saved-session
   path copying remains available there. The response-copy shortcut remains available
-  even when execution details are collapsed. Repeated runs offer **View original
+  even when More actions is collapsed. Repeated runs offer **Previous
   run** directly in execution details. **Inspect raw settings…** opens
   the complete record directly from either details section; there is no intermediate
   settings screen. Full instructions remain in the expandable primary block.
@@ -849,11 +860,13 @@ scheduling, and chaining are not enabled.
   navigation never requires it. Merely inspecting never launches Pi.
   Execution completion is distinct from task quality or domain success.
   **Repeat…** reviews historical settings and records repeat provenance;
-  it does not silently use a changed definition. A repeat retains its saved
-  definition's overlap exclusion. **Save as job…** opens setup, not execution.
+  it does not silently use a changed definition or undo previous effects. It may
+  repeat file changes or external actions. A repeat retains its saved definition's
+  overlap exclusion. **Save as job…** opens setup, not execution.
 - Optional `pichat-evil-setup` gives the list Normal-state `RET`, `TAB`, `zv`
   preview, `gr` refresh, `gc` new, `gx` run, `ge` edit, `gh` history and `ga`
-  attention. Setup and
+  attention. Native `R` or Evil `g R` invokes **Release reservation** on the
+  selected uncertain run; `M-x pichat-jobs-release-reservation` does the same. Setup and
   details use buttons with `RET`; these do not take over Vim movement keys.
   The attention counter's shortcut hint shows `g a` in Evil Normal state and `a`
   in native Emacs state.
@@ -863,8 +876,11 @@ link policy and exact-source fallback, without requiring the originating runtime
 Rendered links are navigable buttons; explicit `RET`/click uses the same checked
 URL action in native Emacs and Evil, while TAB navigation never opens a link.
 The final active-branch assistant message's exact prose is captured, not all
-intermediate commentary; an empty final message explicitly has no prose. **View
-response source**, **Copy response Markdown** (native `w`, Evil `g y`) and explicit
+intermediate commentary. An original error from the last captured assistant
+message is shown directly, without replacing it with an executor interpretation.
+When neither prose nor an error was captured, the report says **No response
+captured.** Technical executor reasons remain in diagnostics/raw records, not the
+main report. **View response source**, **Copy response Markdown** (native `w`, Evil `g y`) and explicit
 refresh (native `g`, Evil `g r`) remain available. Refresh and resize retain
 response reading position and disclosures. Older summary-only records are labelled
 **Response preview**; missing or changed evidence is reported rather than replaced
@@ -878,7 +894,8 @@ starting Pi or reading the current saved session file, including after Emacs
 restart. It has no fork/switch actions and is not Session History or saved-session
 browsing. Older Markdown-only captures remain readable with a labelled fallback;
 PiChat never reconstructs historical evidence from a subsequently continued file.
-Finished runs with saved-session references offer **Continue in chat…**: an explicit
+Finished runs with saved-session references offer **Continue in chat…** under
+**More actions**: an explicit
 new ordinary runtime on the captured target using the current default preset,
 not rerunning the job. New prompts extend the same saved Pi session file, not a
 clone, but cannot alter the historical run report or captured transcript.
@@ -914,6 +931,57 @@ extension code remain live: this is not a frozen or sandboxed environment.
 Complete command wrappers, ephemeral sessions and conversation-loading flags are
 not supported by jobs. Explicit targets never fall back locally.
 
+### Continuing interrupted work
+
+**Continue work…** is offered for failed, cancelled, or manually released
+review-needed runs. It opens the existing setup, not a running agent. Review the
+captured settings, optionally choose a different provider/model in **Execution
+settings…**, or add **Additional instructions…**, then select **Run once**.
+The original instructions, workspace, target/path identity and resource claims
+remain fixed. Explicit execution edits still re-resolve configuration and are
+rejected if the captured target/path identity changes; no silent target fallback.
+Continuation is one run, not a reusable job definition.
+
+The new run links to **Previous run**, starts a fresh independent runtime/Pi
+session and receives the original scope plus **previous run context**: the saved
+response, conversation/tool activity, and recorded outcome or error. The old
+report and saved session file are not changed or loaded for this operation.
+Context is embedded in the new prompt, so remote continuations do not depend on
+local evidence-file paths. Up to 32,000 characters of captured conversation data
+are included; missing, corrupt or truncated context is explicit and requires
+acknowledgment before submission. Later edits to the original saved session are
+never substituted. Context sent to the newly selected model may contain sensitive
+tool output. It is a record of what happened, not proof that the work succeeded.
+
+Continuation instructions require inspecting actual work and current checkpoints,
+avoiding repeated side effects and stopping at original scope/acceptance boundaries.
+These are agent instructions, not a sandbox or certification of plan progress.
+Provider failure may have prevented checkpoint writing. There is no quota detector,
+automatic retry, gate approval or adjacent-phase permission. Repeat and Continue
+require the original run to be stopped; uncertain execution must be separately
+inspected/released first. Merely opening/cancelling setup creates no new run.
+
+### Plan work is an ordinary prompt job
+
+Install the plans skill on the chosen target and ensure it can access the
+execution checkout and authoritative plan. For example, submit ordinary multiline
+instructions (fill the placeholders before running):
+
+```text
+Use the plans skill to run <plan-id> at <authoritative-plan.org>, only the exact
+heading <full phase heading path>, in <execution-checkout>. Inspect the current
+plan and actual work first. Stop at that phase boundary or a human-acceptance
+gate. Do not start adjacent phases, infer approval, commit or push. Update the
+authoritative record and report checks/blockers. If the plan, phase or skill is
+missing or ambiguous, stop; do not create a substitute execution record.
+```
+
+Choose a preset with the tools that work requires. PiChat does not parse phase
+headings or prove human approval; the agent and plans skill handle bookkeeping.
+Avoid simultaneous changes to a shared authoritative plan from different worktrees:
+workspace coordination does not discover plan references in prompts. Skill use and
+plan access are not guaranteed merely by putting these instructions in a job.
+
 `pichat-jobs-max-concurrency` defaults to 3 and the bounded manual queue to 20
 (`pichat-jobs-queue-limit`), with one queued/active occurrence per definition.
 Advanced workspace coordination distinguishes modifiers, stable readers and
@@ -933,9 +1001,15 @@ tools. Aborted/abnormally ended modifying work requires descendant/workspace
 inspection before claims can be released. **Recheck remote Pi exit** reuses the
 existing verified SSH lifetime observer where its process is retained; it cannot
 prove descendant exit. The action is offered only with a retained verified SSH
-lifetime; otherwise details explain why rechecking is unavailable and show held
-resources. **Release after manual inspection…** records an explicit human
-acknowledgement as Needs review, not verified shutdown or success. Its resolution
+lifetime, under Execution details; local runs have no irrelevant SSH message.
+Uncertain runs display **Needs inspection** in the existing table and report,
+without extra scheduling columns or sections. Their reservations still occupy
+workspace/global admission capacity. A waiting run links to its blocker.
+**Release reservation…** (under More actions or via the selected-row command)
+asks for an inspection note and confirms that queued jobs may start and running
+tools are not stopped. It records an explicit human acknowledgement as Needs
+review, not verified shutdown or success. Cancelling the prompts changes nothing.
+Release does not retry or continue work; **Continue work…** is separate. Its resolution
 time is separate from verified finish time. Older records without timeline fields
 show unavailable times rather than inferring them from the last metadata update.
 

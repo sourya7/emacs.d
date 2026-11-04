@@ -230,8 +230,7 @@ SSH reuses the verified-lifetime observer, never the local endpoint's sentinel."
           (setf (pichat-job-execution-submitted execution) t)
           (let ((pichat-job-executor--input-owner execution))
             (pichat-backend-submit-prompt
-             session (plist-get (plist-get (pichat-job-executor--run execution) :spec)
-                                 :instructions) nil nil
+             session (pichat-job-prompt (pichat-job-executor--run execution)) nil nil
              (lambda (ack _session)
                (when (pichat-job-executor--owned-p execution)
                  (if (member (plist-get (plist-get ack :data) :disposition)
@@ -436,11 +435,12 @@ last response stays empty.  No domain success is inferred from prose."
                      executor (pichat-job-claim store id pichat-jobs-max-concurrency))))))))
       (setf (pichat-job-executor-pumping executor) nil))))
 
-(defun pichat-job-executor-submit (executor spec &optional job-id repeat-of)
+(defun pichat-job-executor-submit (executor spec &optional job-id repeat-of continue-of guidance capture)
   "Persist manual SPEC or saved JOB-ID in EXECUTOR before dispatching it.
+CONTINUE-OF, GUIDANCE and CAPTURE describe a reviewed background continuation.
 Return the new run ID without selecting its runtime or displaying a chat."
   (let ((id (pichat-job-enqueue (pichat-job-executor-store executor) spec job-id
-                               pichat-jobs-queue-limit repeat-of)))
+                               pichat-jobs-queue-limit repeat-of continue-of guidance capture)))
     (pichat-job-executor--changed executor)
     (pichat-job-executor-pump executor)
     id))

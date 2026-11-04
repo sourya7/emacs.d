@@ -58,12 +58,14 @@ are not frozen.  Use only one owning Emacs per file."
     map)
   "Button map for local folding, never execution actions.")
 
-(defun pichat-jobs--button (label function &optional disclosure)
-  "Insert LABEL invoking FUNCTION; DISCLOSURE marks a local fold control."
-  (insert-text-button label 'follow-link t
-                      'pichat-job-disclosure disclosure
-                      'keymap (if disclosure pichat-jobs--disclosure-map button-map)
-                      'action (lambda (_button) (funcall function)))
+(defun pichat-jobs--button (label function &optional disclosure help)
+  "Insert LABEL invoking FUNCTION; DISCLOSURE marks a local fold control.
+HELP optionally describes the action without adding inline prose."
+  (let ((button (insert-text-button label 'follow-link t
+                                    'pichat-job-disclosure disclosure
+                                    'keymap (if disclosure pichat-jobs--disclosure-map button-map)
+                                    'action (lambda (_button) (funcall function)))))
+    (when help (button-put button 'help-echo help)))
   (insert "   "))
 
 (defun pichat-jobs--display (text)
@@ -77,7 +79,7 @@ are not frozen.  Use only one owning Emacs per file."
          (session (and execution (pichat-job-execution-session execution)))
          (state (plist-get run :state)))
     (cond ((equal state "queued") "Waiting")
-          ((equal state "uncertain") "Execution uncertain")
+          ((equal state "uncertain") "Needs inspection")
           ((equal state "finished") "Finished")
           ((and execution (pichat-job-execution-cleanup execution)) "Finishing")
           ((and execution (pichat-job-execution-cancelling execution)) "Cancelling")
@@ -239,6 +241,7 @@ every definition row."
   (dolist (window (window-list frame 'no-minibuffer))
     (with-current-buffer (window-buffer window)
       (cond ((derived-mode-p 'pichat-jobs-mode) (pichat-jobs-refresh))
+            ((derived-mode-p 'pichat-job-setup-mode) (pichat-job--render-setup))
             ((and pichat-jobs--detail (derived-mode-p 'pichat-jobs-detail-mode))
              (pichat-jobs--render-detail))))))
 (add-hook 'window-size-change-functions #'pichat-jobs--resize)
@@ -263,12 +266,16 @@ every definition row."
     (define-key map (kbd "RET") #'pichat-jobs-details)
     (define-key map (kbd "r") #'pichat-jobs-run)
     (define-key map (kbd "e") #'pichat-jobs-edit)
+    (define-key map (kbd "R") #'pichat-jobs-release-reservation)
     (define-key map (kbd "h") #'pichat-jobs-history)
     (define-key map (kbd "a") #'pichat-jobs-attention)
     (define-key map (kbd "g") #'pichat-jobs-refresh)
     map))
 (define-derived-mode pichat-jobs-mode tabulated-list-mode "PiChat Jobs"
-  "Inspect saved jobs and individual attempts; browsing never executes work."
+  "Inspect saved jobs and individual attempts; browsing never executes work.
+\\<pichat-jobs-mode-map>\\[pichat-jobs-details] opens the selected row.
+\\[pichat-jobs-release-reservation] releases an uncertain run's scheduling
+reservation after inspection and confirmation.  With Evil, use g R."
   (setq tabulated-list-padding 1)
   ;; Keep native sortable column headings above the rows, with the compact
   ;; overview/filter always visible below rather than replacing those headings.
@@ -318,26 +325,49 @@ every definition row."
                                (plist-get (plist-get run :spec) :directory)))
       (pichat-job-executor-cancel owner id))))
 
+(defun pichat-jobs-release-reservation ()
+  "Release the selected uncertain run's reservation after manual inspection."
+  (interactive)
+  (unless (eq pichat-jobs--kind 'runs)
+    (user-error "Select a run in Runs first"))
+  (pichat-jobs--resolve pichat-jobs--owner
+                        (or (tabulated-list-get-id) (user-error "No run selected"))))
+
 (defun pichat-jobs--resolve (owner id)
   "Explicitly acknowledge manual inspection of uncertain OWNER/ID."
-  (let ((ack (read-string "Describe your process/workspace inspection: ")))
+  (unless (equal (plist-get (pichat-job-record (pichat-job-executor-store owner)
+                                             'runs id) :state) "uncertain")
+    (user-error "This run has no uncertain reservation to release"))
+  (let ((ack (read-string "Inspection note: ")))
     (when (and (not (string-blank-p ack))
-               (yes-or-no-p "Release claims even though shutdown is NOT independently verified? "))
+               (yes-or-no-p "Release reservation? Queued jobs may start; running tools are not stopped. "))
       (pichat-job-executor-resolve owner id ack))))
 
 (defun pichat-jobs--repeat (owner id)
   "Review historical OWNER/ID settings without rerunning automatically."
-  (let ((spec (plist-get (pichat-job-record (pichat-job-executor-store owner) 'runs id) :spec)))
-    (pichat-job--setup spec nil owner)
+  (let ((run (pichat-job-record (pichat-job-executor-store owner) 'runs id)))
+    (unless (equal (plist-get run :state) "finished")
+      (user-error "Previous run must stop and uncertainty must be resolved first"))
+    (pichat-job--setup (plist-get run :spec) nil owner)
     (setf (plist-get pichat-job--draft :repeat-of) id)
+    (pichat-job--render-setup)))
+
+(defun pichat-jobs--continue (owner id)
+  "Review a fresh background continuation of stopped OWNER/ID, without running."
+  (let ((run (pichat-job-record (pichat-job-executor-store owner) 'runs id)))
+    (unless (pichat-job-continuable-p run)
+      (user-error "Continue requires interrupted work with uncertainty resolved"))
+    (pichat-job--setup (plist-get run :spec) nil owner)
+    (setf (plist-get pichat-job--draft :continue-of) id
+          (plist-get pichat-job--draft :guidance) "")
     (pichat-job--render-setup)))
 
 (defun pichat-jobs--diagnostics (owner id)
   "Show exact OWNER/ID's cached runtime diagnostics."
   (let* ((execution (gethash id (pichat-job-executor-contexts owner)))
          (session (and execution (pichat-job-execution-session execution))))
-    (unless session (user-error "No retained runtime; inspect recorded reason"))
-    (pichat-show-diagnostics session)))
+    (if session (pichat-show-diagnostics session)
+      (pichat-jobs--show-detail owner 'runs id 'diagnostics))))
 
 (defun pichat-jobs--access-label (access)
   "Describe coordination ACCESS without implying tool enforcement."
@@ -352,7 +382,7 @@ every definition row."
          (builtins (plist-get (or tools preset) (if tools :builtins :tools)))
          (extensions (plist-get (or tools preset) :extensions))
          (mcp (plist-get tools :mcp)))
-    (if (eq (plist-get preset :inherited) t) "Pi defaults (inherited from preset)"
+    (if (eq (plist-get preset :inherited) t) "Pi defaults"
       (format "%s%s%s%s"
               (if (or (null tools)
                       (and (equal builtins (plist-get preset :tools))
@@ -429,7 +459,7 @@ instructions.  Guard against managed duplicate writers and concurrent opens."
       (unless (and (file-regular-p host-file) (file-readable-p host-file))
         (user-error "The captured saved session is not readable on its target"))
       (when (yes-or-no-p
-             (format "Continue this conversation? Preset: %s · Target: %s. New messages extend the saved conversation; the completed job report will not change. "
+             (format "Continue in chat using preset ‘%s’ on %s? "
                      pichat-default-preset (pichat-transport-label transport)))
         (let ((token (pichat--claim-selected-file key)) (previous pichat-current-session))
           (condition-case err
@@ -455,11 +485,15 @@ instructions.  Guard against managed duplicate writers and concurrent opens."
     (if windows (apply #'min (mapcar #'window-body-width windows))
       (window-body-width))))
 
-(defun pichat-jobs--insert-instructions (instructions)
+(defun pichat-jobs--insert-instructions (instructions &optional key refresh)
   "Insert read-only INSTRUCTIONS, folded after five visual lines.
-Use the chat's input styling without creating a live draft.  Measure with the
-narrowest displaying window, including its actual wrapping and prefix width."
-  (let* ((start (point))
+KEY identifies independent folding state (default task).  REFRESH redraws the
+owning view (default report).  Setup keeps TAB as navigation; RET/click folds.
+Use the chat's input styling, measured at the narrowest displaying window."
+  (let* ((key (or key 'task))
+         (refresh (or refresh #'pichat-jobs--render-detail))
+         (setup (derived-mode-p 'pichat-job-setup-mode))
+         (start (point))
          (prefix (pichat-chat--bar-prefix))
          (window (or (pichat-disclosure-window) (selected-window))))
     (insert instructions)
@@ -470,26 +504,28 @@ narrowest displaying window, including its actual wrapping and prefix width."
            (cut (pichat-disclosure-cut start end window))
            (long cut))
       (when long
-        (if (member 'task pichat-jobs--expanded)
+        (if (member key pichat-jobs--expanded)
             (insert "  Show less")
           (delete-region cut end)
           (insert "…"))
         (make-text-button
          start (point) 'face 'pichat-input-block-face
-         'keymap pichat-jobs--disclosure-map 'pichat-job-disclosure t 'follow-link t
-         'help-echo "TAB, RET or click to expand/collapse instructions"
+         'keymap (if setup button-map pichat-jobs--disclosure-map)
+         'pichat-job-disclosure t 'follow-link t
+         'help-echo (if setup "RET or click to expand/collapse instructions"
+                      "TAB, RET or click to expand/collapse instructions")
          'action (lambda (button)
                    (goto-char (button-start button))
                    (setq pichat-jobs--expanded
-                         (if (member 'task pichat-jobs--expanded)
-                             (remove 'task pichat-jobs--expanded)
-                           (cons 'task pichat-jobs--expanded)))
-                   (pichat-jobs--render-detail)))
-        (put-text-property (- (point) (if (member 'task pichat-jobs--expanded) 9 1))
+                         (if (member key pichat-jobs--expanded)
+                             (remove key pichat-jobs--expanded)
+                           (cons key pichat-jobs--expanded)))
+                   (funcall refresh)))
+        (put-text-property (- (point) (if (member key pichat-jobs--expanded) 9 1))
                            (point) 'face 'button))
       (add-text-properties start (point)
                            (list 'line-prefix prefix 'wrap-prefix prefix
-                                 'pichat-job-section 'task)))
+                                 'pichat-job-section key)))
     (insert "\n\n")))
 
 (defun pichat-jobs-detail-tab ()
@@ -589,6 +625,18 @@ narrowest displaying window, including its actual wrapping and prefix width."
                    (point)))))
          saved)))
 
+(defun pichat-jobs--captured-error (evidence)
+  "Return the last assistant's original error from captured EVIDENCE, if any."
+  (let ((message (cl-loop for entry across (vconcat (plist-get evidence :entries))
+                          for message = (plist-get entry :message)
+                          when (equal (plist-get message :role) "assistant")
+                          collect message into messages
+                          finally return (car (last messages)))))
+    (when-let* ((error (plist-get message :errorMessage))
+                ((stringp error))
+                ((not (string-blank-p error))))
+      (pichat-chat-diagnostics-safe-summary-text error))))
+
 (defun pichat-jobs--render-run (owner record)
   "Insert cached run RECORD's state and applicable actions for OWNER."
   (let* ((id (plist-get record :id)) (spec (plist-get record :spec))
@@ -596,26 +644,16 @@ narrowest displaying window, including its actual wrapping and prefix width."
          (session (and execution (pichat-job-execution-session execution)))
          (chat (and session (pichat-chat-owned-buffer session)))
          (state (plist-get record :state)))
-    (insert (format "%s · Manual%s\nWorkspace: %s · Target: %s\n\n"
-                    (cond ((equal state "finished")
-                           (format "Run %s" (downcase (pichat-jobs--result record))))
+    (insert (format "%s · Manual\n\n"
+                    (cond ((equal state "finished") (pichat-jobs--result record))
                           ((and (equal state "settling") execution
                                 (pichat-job-execution-cleanup execution))
                            "Answer captured · Stopping runtime")
-                          (t (pichat-jobs--state owner record)))
-                    (if-let* ((finish (plist-get record :finished-at))
-                              (start (plist-get record :started-at)))
-                        (format " · %.0fs · %s"
-                                (float-time (time-subtract (date-to-time finish) (date-to-time start)))
-                                (pichat-jobs--local-time finish))
-                      "")
-                    (plist-get spec :directory)
-                    (plist-get (plist-get (plist-get spec :configuration) :transport) :label)))
+                          (t (pichat-jobs--state owner record)))))
     (pichat-jobs--insert-instructions (plist-get spec :instructions))
-    (when (equal state "uncertain")
-      (insert "Claims remain held; inspect execution before continuing.\n"))
+
     (when (equal state "queued")
-      (let ((decision (pichat-job-admission (pichat-jobs--store) id pichat-jobs-max-concurrency)))
+      (let ((decision (pichat-job-admission (pichat-job-executor-store owner) id pichat-jobs-max-concurrency)))
         (insert (format "Waiting reason: %s\n" (or (plist-get decision :reason) "Ready for dispatch")))
         (when-let* ((blocker (plist-get decision :blocking-run)))
           (pichat-jobs--button "Open blocking run"
@@ -624,75 +662,100 @@ narrowest displaying window, including its actual wrapping and prefix width."
     (when session
       (when-let* ((attention (pichat-chat-pending-user-input-summary session)))
         (insert (format "Needs input: %s\nOpen the owning chat to respond; nothing is auto-approved.\n" attention))))
-    (when (plist-get record :reason) (insert (format "Reason: %s\n" (plist-get record :reason))))
     (let ((start (point)))
       (setq pichat-jobs--response-source nil)
       (if (plist-get record :evidence)
           (condition-case err
               (let* ((evidence (pichat-job-evidence-read (pichat-job-executor-store owner)
                                                        (plist-get record :evidence)))
-                     (markdown (plist-get evidence :response)))
-                (setq pichat-jobs--response-source markdown)
-                (insert "\n"
-                        (pichat-response-view-render-markdown markdown (pichat-jobs--width))))
+                     (markdown (plist-get evidence :response))
+                     (error (pichat-jobs--captured-error evidence)))
+                (unless (string-blank-p (or markdown ""))
+                  (setq pichat-jobs--response-source markdown)
+                  (insert "\n" (pichat-response-view-render-markdown markdown (pichat-jobs--width))))
+                (when error (insert "\n" error "\n"))
+                (when (and (string-blank-p (or markdown "")) (not error))
+                  (insert "\nNo response captured.\n")))
             (error (insert (format "\nResponse unavailable: %s\n" (error-message-string err)))))
-        (when (plist-get record :summary)
-          (insert "\nResponse preview (complete response not captured)\n\n"
-                  (plist-get record :summary) "\n")))
+        (when-let* ((summary (plist-get record :summary))
+                    ((not (string-blank-p summary))))
+          (insert "\nResponse preview (complete response not captured)\n\n" summary "\n")))
+      (when (and (= start (point)) (member state '("finished" "uncertain")))
+        (insert "\nNo response captured.\n"))
       (put-text-property start (point) 'pichat-job-section 'response))
     (insert "\n")
+    (cond ((pichat-job-continuable-p record)
+           (pichat-jobs--button "Continue work…" (lambda () (pichat-jobs--continue owner id))))
+          ((equal state "finished")
+           (pichat-jobs--button "Repeat…" (lambda () (pichat-jobs--repeat owner id)))))
     (when (plist-get record :evidence)
       (pichat-jobs--button "Preview conversation" (lambda () (pichat-jobs--preview owner id))))
     (when (and chat (or (not (plist-get record :evidence)) (not (equal state "finished"))))
       (pichat-jobs--button "View chat" (lambda () (pichat-jobs--open-chat owner id))))
-    (when (and (equal state "finished") (plist-get record :session-file))
-      (pichat-jobs--button "Continue in chat…" (lambda () (pichat-jobs--open-saved owner id))))
+    (pichat-jobs--button "Diagnostics" (lambda () (pichat-jobs--diagnostics owner id)))
     (insert "\n")
-    (pichat-jobs--button "Repeat…" (lambda () (pichat-jobs--repeat owner id)))
-    (pichat-jobs--button "Save as job…" (lambda () (pichat-job--setup spec nil owner)))
-    (when-let* ((job-id (plist-get record :job-id)))
-      (pichat-jobs--button "Job history" (lambda () (pichat-jobs--show-history owner job-id)))
-      (pichat-jobs--button "Job definition" (lambda () (pichat-jobs--show-detail owner 'jobs job-id))))
+    (pichat-jobs--disclosure 'actions "More actions")
+    (when (member 'actions pichat-jobs--expanded)
+      (insert "\n")
+      (cl-flet ((action (label function &optional help)
+                  (insert "  ")
+                  (pichat-jobs--button label function nil help)
+                  (insert "\n")))
+        (when (pichat-job-continuable-p record)
+          (action "Repeat…" (lambda () (pichat-jobs--repeat owner id))))
+        (when (and (equal state "finished") (plist-get record :session-file))
+          (action "Continue in chat…" (lambda () (pichat-jobs--open-saved owner id))
+                  "Open the saved conversation for interactive work."))
+        (when (equal state "uncertain")
+          (action "Release reservation…" (lambda () (pichat-jobs--resolve owner id))))
+        (action "Save as job…" (lambda () (pichat-job--setup spec nil owner)))
+        (when-let* ((job-id (plist-get record :job-id)))
+          (action "Job history" (lambda () (pichat-jobs--show-history owner job-id)))
+          (action "Job definition" (lambda () (pichat-jobs--show-detail owner 'jobs job-id))))
+        (when pichat-jobs--response-source
+          (action "Copy response Markdown" #'pichat-jobs-copy-response)
+          (action "View response source" #'pichat-jobs-response-source))))
     (insert "\n")
-    (cond
-     ((equal state "uncertain")
-      (insert "Claims remain held; Pi exit alone does not prove descendant/workspace safety.\n")
-      (seq-doseq (resource (plist-get spec :resources))
-        (insert (format "Held resource: %s\n" (plist-get resource :key))))
-      (if (and session (eq (pichat-transport-kind (pichat-session-transport session)) 'ssh)
-               (pichat-process-lifetime-supported-p (pichat-job-execution-process execution)))
-          (pichat-jobs--button
-           "Recheck remote Pi exit"
-           (lambda ()
-             (pichat-job-executor-recheck-exit
-              owner id (lambda (success reason)
-                         (message "%s" (if success "Pi exit confirmed; inspect descendants/workspace before release"
-                                         (or reason "Exit not confirmed")))))))
-        (insert "Remote exit recheck unavailable: no retained verified SSH lifetime.\n"))
-      (pichat-jobs--button "Release after manual inspection…" (lambda () (pichat-jobs--resolve owner id))))
-     ((and (not (equal state "finished"))
-           (not (and execution (pichat-job-execution-cleanup execution))))
-      (pichat-jobs--button "Cancel run…" (lambda () (pichat-jobs--cancel owner id)))))
+    (when (and (not (member state '("finished" "uncertain")))
+               (not (and execution (pichat-job-execution-cleanup execution))))
+      (pichat-jobs--button "Cancel run…" (lambda () (pichat-jobs--cancel owner id))))
     (insert "\n\n")
     (pichat-jobs--disclosure 'execution "Execution details")
     (when (member 'execution pichat-jobs--expanded)
       (insert "\n")
-      (when (stringp pichat-jobs--response-source)
-        (pichat-jobs--button "Copy response Markdown" #'pichat-jobs-copy-response)
-        (pichat-jobs--button "View response source" #'pichat-jobs-response-source)
-        (insert "\n"))
-      (when session
-        (pichat-jobs--button "Diagnostics" (lambda () (pichat-jobs--diagnostics owner id)))
+      (when (equal state "uncertain")
+        (insert "State: Execution uncertain\nReservation: Held\n"))
+      (insert (format "Workspace: %s · Target: %s\n"
+                      (plist-get spec :directory)
+                      (plist-get (plist-get (plist-get spec :configuration) :transport) :label)))
+      (when (and (equal state "uncertain") session
+                 (eq (pichat-transport-kind (pichat-session-transport session)) 'ssh)
+                 (pichat-process-lifetime-supported-p (pichat-job-execution-process execution)))
+        (pichat-jobs--button
+         "Recheck remote Pi exit"
+         (lambda ()
+           (pichat-job-executor-recheck-exit
+            owner id (lambda (success reason)
+                       (message "%s" (if success "Pi exit confirmed; reservation remains held"
+                                       (or reason "Exit not confirmed")))))))
         (insert "\n"))
       (pichat-jobs--insert-settings spec)
       (insert "\n")
       (pichat-jobs--insert-run-times record)
       (insert "\n")
-      (when-let* ((origin (plist-get (plist-get record :trigger) :repeat-of)))
-        (insert "Repeated from an earlier run.\n")
-        (pichat-jobs--button "View original run"
+      (when-let* ((origin (or (plist-get (plist-get record :trigger) :continue-of)
+                             (plist-get (plist-get record :trigger) :repeat-of))))
+        (insert (if (plist-get record :continuation)
+                    "Continued from an earlier run.\n" "Repeated from an earlier run.\n"))
+        (pichat-jobs--button "Previous run"
                             (lambda () (pichat-jobs--show-detail owner 'runs origin)))
         (insert "\n"))
+      (when-let* ((continuation (plist-get record :continuation)))
+        (unless (string-empty-p (plist-get continuation :guidance))
+          (insert "Additional instructions:\n")
+          (pichat-jobs--insert-instructions (plist-get continuation :guidance) 'guidance))
+        (when (plist-get continuation :warning)
+          (insert (plist-get continuation :warning) "\n")))
       (when-let* ((file (plist-get record :session-file)))
         (pichat-jobs--button "Copy saved-session path" (lambda () (kill-new file))))
       (insert "\n")
@@ -746,12 +809,18 @@ narrowest displaying window, including its actual wrapping and prefix width."
     (cond
      ((eq pichat-jobs--section 'raw)
       (insert (pp-to-string record)))
+     ((eq pichat-jobs--section 'diagnostics)
+      (insert "Recorded execution diagnostics\n\n"
+              (or (plist-get record :reason) "No execution note recorded.")
+              "\n\nRuntime logs are unavailable; no retained runtime.\n\n")
+      (pichat-jobs--button "Inspect raw settings…"
+                          (lambda () (pichat-jobs--show-detail owner kind id 'raw))))
      (t
       (if (eq kind 'jobs)
           (pichat-jobs--render-job owner record)
         (pichat-jobs--render-run owner record))
       (insert "\n\n")))
-    (setq header-line-format "Cached inspection · q Back")
+    (setq header-line-format "q Back")
     (goto-char (pichat-jobs--restore-position position))
     (dolist (saved windows)
       (when (window-live-p (car saved))
@@ -819,7 +888,8 @@ narrowest displaying window, including its actual wrapping and prefix width."
                 :access (or (and spec (plist-get (aref (plist-get spec :resources) 0) :access))
                             "write") :dirty nil))
       (pichat-job--render-setup))
-    (pichat-view-display buffer)))
+    (pichat-view-display buffer)
+    (with-current-buffer buffer (pichat-job--render-setup))))
 
 ;;;###autoload
 (defun pichat-job-new ()
@@ -834,14 +904,41 @@ narrowest displaying window, including its actual wrapping and prefix width."
          (config (plist-get spec :configuration))
          (inhibit-read-only t))
     (erase-buffer)
-    (insert (cond ((plist-get draft :repeat-of) "Repeat captured job run\n\n")
-                  ((plist-get draft :id) "Edit PiChat job\n\n")
-                  (t "New PiChat job\n\n")))
-    (insert (format "Instructions:\n%s\n\n" (plist-get draft :instructions)))
-    (pichat-jobs--button "Edit instructions…" #'pichat-job-edit-instructions)
+    (setq header-line-format
+          (concat (cond ((plist-get draft :continue-of) "Continue work")
+                        ((plist-get draft :repeat-of) "Repeat job run")
+                        ((plist-get draft :id) "Edit job")
+                        (t "New job"))
+                  " · q Cancel"))
+    (when-let* ((origin (or (plist-get draft :continue-of) (plist-get draft :repeat-of)))
+                (owner pichat-jobs--owner))
+      (pichat-jobs--button "Previous run"
+                          (lambda () (pichat-jobs--show-detail owner 'runs origin)))
+      (insert "\n\n"))
+    (insert "Instructions:\n")
+    (pichat-jobs--insert-instructions (plist-get draft :instructions)
+                                      'task #'pichat-job--render-setup)
+    (if (plist-get draft :continue-of)
+        (progn
+          (unless (string-empty-p (or (plist-get draft :guidance) ""))
+            (insert "\nAdditional instructions:\n")
+            (pichat-jobs--insert-instructions (plist-get draft :guidance)
+                                              'guidance #'pichat-job--render-setup))
+          (pichat-jobs--button "Additional instructions…" #'pichat-job-edit-instructions)
+          (when-let* ((warning (plist-get
+                               (pichat-job-continuation-context
+                                (pichat-job-executor-store pichat-jobs--owner)
+                                (pichat-job-record (pichat-job-executor-store pichat-jobs--owner)
+                                                  'runs (plist-get draft :continue-of)))
+                               :warning)))
+            (insert "\n" warning "\n")))
+      (pichat-jobs--button "Edit instructions…" #'pichat-job-edit-instructions))
+    (when (plist-get draft :repeat-of)
+      (insert "\nPrevious effects are not undone; repeating may repeat changes or external actions.\n"))
     (insert (format "\n\nProject: %s\n" (plist-get draft :directory)))
-    (pichat-jobs--button "Change project…" #'pichat-job-change-project)
-    (insert (format "\nExecution: %s · %s · %s%s\n"
+    (unless (plist-get draft :continue-of)
+      (pichat-jobs--button "Change project…" #'pichat-job-change-project))
+    (insert (format "\nExecution: %s · %s · %s\n"
                     (if spec (plist-get (plist-get config :preset) :name) (plist-get profile :preset))
                     (if spec (plist-get config :model)
                       (if (stringp (plist-get profile :model)) (plist-get profile :model)
@@ -853,8 +950,7 @@ narrowest displaying window, including its actual wrapping and prefix width."
                             (plist-get draft :directory)
                             (unless (eq (plist-get profile :target) 'inferred)
                               (plist-get profile :target))))
-                        (error "Target unavailable — choose execution settings")))
-                    (if spec " (captured settings)" "")))
+                        (error "Target unavailable — choose execution settings")))))
     (insert (format "Tools: %s\n"
                     (if spec (pichat-jobs--tools-summary config)
                       (pichat-jobs--tools-summary
@@ -875,9 +971,10 @@ narrowest displaying window, including its actual wrapping and prefix width."
         (when different
           (insert "Current preset differs or is unavailable; captured settings remain in use.\n"))))
     (pichat-jobs--button "Execution settings…" #'pichat-job-execution-settings)
-    (insert "\n\nStart: Now (manual)\n\n")
+    (insert "\n\n")
     (pichat-jobs--button "Run once" #'pichat-job-run-once)
-    (pichat-jobs--button "Save job…" #'pichat-job-save-draft)
+    (unless (plist-get draft :continue-of)
+      (pichat-jobs--button "Save job…" #'pichat-job-save-draft))
     (pichat-jobs--button "Cancel" #'pichat-job-setup-quit)
     (insert "\n")
     (goto-char (point-min))))
@@ -905,7 +1002,9 @@ narrowest displaying window, including its actual wrapping and prefix width."
     (define-key map (kbd "q") #'pichat-job-setup-quit)
     map))
 (define-derived-mode pichat-job-setup-mode pichat-view-mode "PiChat Job Setup"
-  "Compose job settings without starting or reconfiguring a runtime.")
+  "Compose job settings without starting or reconfiguring a runtime."
+  (setq-local truncate-lines nil truncate-partial-width-windows nil)
+  (visual-line-mode 1))
 
 (defun pichat-job--editable ()
   "Reject competing draft edits while an explicitly requested picker is pending."
@@ -916,9 +1015,10 @@ narrowest displaying window, including its actual wrapping and prefix width."
   "Edit multiline instructions separately; applying does not submit them."
   (interactive)
   (pichat-job--editable)
-  (let ((origin (current-buffer))
-        (presentation (pichat-view-capture-origin))
-        (text (plist-get pichat-job--draft :instructions)))
+  (let* ((origin (current-buffer))
+         (presentation (pichat-view-capture-origin))
+         (key (if (plist-get pichat-job--draft :continue-of) :guidance :instructions))
+         (text (or (plist-get pichat-job--draft key) "")))
     (pop-to-buffer (generate-new-buffer "*PiChat Job Instructions*"))
     (text-mode)
     (pichat-view-display (current-buffer) presentation)
@@ -930,7 +1030,7 @@ narrowest displaying window, including its actual wrapping and prefix width."
                     (unless (buffer-live-p origin) (user-error "Job draft no longer exists"))
                     (let ((text (buffer-string)) (editor (current-buffer)))
                       (with-current-buffer origin
-                        (setf (plist-get pichat-job--draft :instructions) text
+                        (setf (plist-get pichat-job--draft key) text
                               (plist-get pichat-job--draft :dirty) t)
                         (pichat-job--render-setup))
                       (with-current-buffer editor (pichat-view-return origin 'kill)))))
@@ -960,6 +1060,8 @@ narrowest displaying window, including its actual wrapping and prefix width."
   "Select project explicitly, retaining instructions and other draft fields."
   (interactive)
   (pichat-job--editable)
+  (when (plist-get pichat-job--draft :continue-of)
+    (user-error "Continuation keeps the original workspace"))
   (let ((directory (read-directory-name "Job workspace: " (plist-get pichat-job--draft :directory))))
     (pichat-job--invalidate-capture)
     (setf (plist-get pichat-job--draft :directory) (file-name-as-directory (expand-file-name directory))
@@ -1013,7 +1115,12 @@ Restore ORIGINAL on failure."
   (pichat-job--editable)
   (let ((choice (completing-read
                  "Execution setting: "
-                 '("Preset" "Tools" "Model" "Target" "Workspace coordination") nil t)))
+                 (if (plist-get pichat-job--draft :continue-of)
+                     '("Preset" "Tools" "Model")
+                   '("Preset" "Tools" "Model" "Target" "Workspace coordination")) nil t)))
+    (when (and (plist-get pichat-job--draft :continue-of)
+               (member choice '("Target" "Workspace coordination")))
+      (user-error "Continuation keeps the original target and resource claims"))
     (if (equal choice "Workspace coordination")
         (let ((access (completing-read
                        "Coordination (not tool permissions): "
@@ -1098,7 +1205,15 @@ Restore ORIGINAL on failure."
   (interactive)
   (let* ((owner pichat-jobs--owner)
          (spec (pichat-job--submission-spec))
-         (id (pichat-job-executor-submit owner spec nil (plist-get pichat-job--draft :repeat-of))))
+         (origin (plist-get pichat-job--draft :continue-of))
+         (capture (when origin
+                    (let ((store (pichat-job-executor-store owner)))
+                      (pichat-job-continuation-context store (pichat-job-record store 'runs origin)))))
+         (_ (when-let* ((warning (plist-get capture :warning)))
+              (unless (yes-or-no-p (concat warning ". Continue with incomplete previous run context? "))
+                (user-error "Continuation not submitted"))))
+         (id (pichat-job-executor-submit owner spec nil (plist-get pichat-job--draft :repeat-of)
+                                         origin (plist-get pichat-job--draft :guidance) capture)))
     (setf (plist-get pichat-job--draft :dirty) nil)
     (pichat-view-return nil 'kill)
     (message "PiChat queued %s; inspect it in Jobs → Runs" id)))
@@ -1107,6 +1222,8 @@ Restore ORIGINAL on failure."
   "Save this draft as a disabled manual definition; never submit work."
   (interactive)
   (pichat-job--editable)
+  (when (plist-get pichat-job--draft :continue-of)
+    (user-error "Continuation is one run; save original instructions from its run report"))
   (let ((name (read-string "Job name: " (plist-get pichat-job--draft :title))))
     (unless (pichat-job--text-p name) (user-error "Job name is required"))
     (let ((spec (pichat-job--submission-spec)))

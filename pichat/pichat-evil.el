@@ -24,6 +24,7 @@
 (declare-function pichat-jobs-toggle "pichat-jobs" ())
 (declare-function pichat-jobs-run "pichat-jobs" ())
 (declare-function pichat-jobs-edit "pichat-jobs" ())
+(declare-function pichat-jobs-release-reservation "pichat-jobs" ())
 (declare-function pichat-jobs-history "pichat-jobs" ())
 (declare-function pichat-jobs-attention "pichat-jobs" ())
 (declare-function pichat-jobs-detail-refresh "pichat-jobs" ())
@@ -134,6 +135,7 @@ remain in their original mode maps."
       (kbd "g c") #'pichat-job-new
       (kbd "g x") #'pichat-jobs-run
       (kbd "g e") #'pichat-jobs-edit
+      (kbd "g R") #'pichat-jobs-release-reservation
       (kbd "g h") #'pichat-jobs-history
       (kbd "g a") #'pichat-jobs-attention
       (kbd "q") #'quit-window)

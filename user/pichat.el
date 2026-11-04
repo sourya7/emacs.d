@@ -161,6 +161,7 @@ Never redirect input to another terminal client's frame."
   "x g" '(pichat-global :which-key "Open global")
   "x n" '(pichat-launch :which-key "Launch runtime")
   "x l" '(pichat-session-manager :which-key "Manage sessions")
+  "x j" '(pichat-jobs :which-key "Launch Jobs")
   "x b" '(pichat-sessions-browse-files :which-key "Browse saved sessions")
   "x s" '(pichat-status :which-key "Status")
   "x m" '(pichat-select-model :which-key "Select model")

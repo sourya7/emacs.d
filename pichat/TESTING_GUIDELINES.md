@@ -138,9 +138,13 @@ owned timer, staged timing/confirmation and local DST picker checks live in the
 Jobs suite. Full mode also runs a real native timer through the ordinary offline
 Pi executor. All use temporary metadata and retire owned timers during teardown;
 never enable a test schedule in the user's store or adjust the system clock.
-The SSH runner includes an isolated captured-target background job and independent
-post-completion actual-Pi exit check; it reuses
-the existing real-SSH fixture rather than the user's project or sessions.
+The SSH runner includes captured-target background work, fresh-session manual
+continuation carrying captured context, and an interval-triggered worker with an
+ordinary follow-up. It checks independent actual-Pi absence before each new process
+and after completion, plus the remote Pi's captured prompt for transferred context.
+These reuse the existing real-SSH fixture, never the user's project or sessions.
+A disposable loopback SSH server with temporary keys is sufficient; this verifies
+real transport/procfs behavior, not separate-host or network-failure behavior.
 
 Run the separate graphical manual-flow smoke (never against your live Emacs):
 
@@ -162,16 +166,16 @@ These checks cover a live frame, multiline setup, save-without-running, one-off
 and saved-job submission without focus changes, progressive settings disclosure,
 latest/history/captured-conversation-preview navigation, report disclosure/refresh and real
 narrow/wide window sizes. A separate
-inert-process graphical scenario covers cached input, blockers, cancellation
-context and uncertain claims without activating a dialog. Neither uses a real
-model provider or normal job metadata. Keep these opt-in graphical checks and
-SSH checks separate from ordinary batch tests because their execution requirements
+inert-process live scenario covers cached input, blockers, cancellation context
+and uncertain claims without activating a dialog. Neither uses a real
+model provider or normal job metadata. Keep these opt-in live-UI and SSH checks
+separate from ordinary batch tests because their execution requirements
 differ; reusable mechanics belong in support, not imports of another test suite.
 The additional `pichat-integration-jobs-live-ui-continuation` scenario drives
 More actions, Continue work, optional instructions, Run once and Previous run in a
 live frame with the offline provider. It can run alone in a separate `emacs -Q -nw`
-instance when no graphical display exists; select that exact test instead of the
-whole live-UI prefix (the original layout scenarios require graphics). The
+instance when no graphical display exists; select that exact test or the terminal
+subset below (the frame-resize scenario requires graphics). The
 `pichat-integration-jobs-live-ui-execution-settings` scenario also supports a
 separate terminal Emacs: it drives the actual settings Transient keys, staged
 Apply/Cancel and nested Tools return, with discovery disabled. Batch fixtures
@@ -183,8 +187,30 @@ exact test for a terminal run. The
 `pichat-integration-jobs-live-ui-schedule` scenario likewise supports terminal
 Emacs: it drives actual timing Transient keys, staged Cancel/Save, separate
 Enable/Disable and a real timer-triggered offline Pi run without focus changes.
-Use the same result
-log and explicit `kill-emacs` wrapper above. Never run it in the user's live Emacs.
+The interval scenario checks one real elapsed-interval occurrence, anchored future
+rearming and Disable; the cached attention/uncertainty scenario also works without
+graphics and checks both resource/global blockers. The selected-phase scenario uses
+an explicitly installed plans skill (`PICHAT_TEST_PLANS_SKILL=/path/to/plans`) and
+only a temporary local plan/artifact. Scripted offline tool choices read the skill
+contracts, complete the selected phase, run structural validation and leave the
+adjacent phase untouched. This verifies ordinary prompt/tool dispatch, not autonomous
+model reasoning or machine-enforced plan gates; no actual project plan is modified.
+Without that explicit skill path the selected-phase scenario reports an opt-in skip.
+
+For all terminal-capable scenarios together, use a separate `emacs -Q -nw` with the
+result/exit wrapper above and selector:
+
+```elisp
+'(and "^pichat-integration-jobs-live-ui-" (not "graphical-resize$"))
+```
+
+The manual-flow scenario covers save, one-off/saved submission, reports and history
+in either live terminal or graphical Emacs. The separate graphical-resize scenario
+requires a GUI-capable Emacs and working display for real frame-resize assertions.
+A terminal-only Emacs build cannot supply that check merely by setting DISPLAY. Optional Evil runs additionally load `evil` and
+`pichat-evil`, enable `evil-mode`, and call `pichat-evil-setup` before running tests.
+Use a private `user-emacs-directory` for the separate instance; picker history must
+not go into normal user state. Never run these scenarios in the user's live Emacs.
 
 These are programmatic checks, not human visual acceptance. A graphical frame can
 still be iconified by the window manager: `display-graphic-p` and passing window

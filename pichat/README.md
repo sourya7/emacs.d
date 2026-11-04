@@ -800,7 +800,7 @@ first, otherwise chooses an existing Bufferlo location without prompting, and
 finally falls back to the current tab. The manager itself remains on demand; showing the same global
 buffer in a tab lets Bufferlo record normal local membership there.
 
-## Manual jobs
+## Jobs
 
 Jobs are optional reusable instructions and captured execution settings. A **job
 run** is one attempt, with its own durable identity and fresh independent Pi
@@ -1785,10 +1785,15 @@ guarantee against unrelated external Pi writers.
 
 Isolated real-SSH tests on Pi 1.4.0, Emacs 31.1 and TRAMP 2.8.2.31.1 cover saved
 and unwritten restart, actual preset/Tools declarations, old-process absence
-before each replacement, and injected post-reload failure/restore. A separate
-live graphical Emacs check drives the launcher, preset chooser, SSH Tools
-picker and confirmed restart. The SSH target used for this verification is the
-same host reached through real SSH/TRAMP, not a cross-host/network-failure lab.
+before each replacement, and injected post-reload failure/restore. Background-job
+checks additionally cover captured-target completion, manual continuation into a
+fresh Pi session with transferred previous run context, and an interval-triggered
+worker followed by an ordinary captured review job. They independently verify
+actual-Pi absence before each new process and after completion; they do not certify
+modifying descendants or workspace safety. A separate live graphical Emacs check
+drives the launcher, preset chooser, SSH Tools picker and confirmed restart. The
+SSH target used for this verification is the same host reached through real
+SSH/TRAMP, not a cross-host/network-failure lab.
 Malformed evidence, lost probes, timeouts, cancellation and stale callbacks
 are covered deterministically offline; shared network connections are not
 interrupted by tests. See `TESTING_GUIDELINES.md` for reproduction commands.

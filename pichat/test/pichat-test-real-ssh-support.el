@@ -41,6 +41,17 @@ use the production observer, its parser, or its confirmed-exit property."
           (equal (nth 19 (split-string (match-string 1 stat)))
                  (plist-get identity :start)))))))
 
+(defun pichat-test-real-ssh--stop-starter (fixture)
+  "Stop FIXTURE's starter before independently owned job execution."
+  (let* ((session (plist-get fixture :session))
+         (process (pichat-session-process session)))
+    (pichat-rpc-stop session)
+    (pichat-test-wait-until
+     (lambda () (not (pichat-test-real-ssh--alive-p fixture process)))
+     15 "starter runtime exit before independent job")
+    (pichat-process-lifetime-confirm process)
+    (pichat-process-lifetime-cleanup process)))
+
 (defun pichat-test-real-ssh--write-script (fixture script)
   "Write fake-provider SCRIPT for the next Pi process in FIXTURE."
   (with-temp-file (plist-get fixture :script)

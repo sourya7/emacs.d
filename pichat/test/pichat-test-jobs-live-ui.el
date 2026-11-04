@@ -1,4 +1,4 @@
-;;; pichat-test-jobs-live-ui.el --- Isolated graphical jobs checks -*- lexical-binding: t; -*-
+;;; pichat-test-jobs-live-ui.el --- Isolated live jobs checks -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 ;; Opt-in separate Emacs only; not loaded by the regular suite.  No user state,
@@ -68,6 +68,122 @@
                 (should (string-match-p "LIVE_SCHEDULE_RESULT" (buffer-string))))
               (pichat-test-assert-provider-script-consumed status-file)))
         (when transient--prefix (transient-quit-all))))))
+
+(ert-deftest pichat-integration-jobs-live-ui-interval ()
+  (should-not noninteractive)
+  (pichat-test-with-job-executor (:script '(:turns [(:text "LIVE_INTERVAL_RESULT")]))
+    (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (start (+ (float-time) 0.3)))
+      (pichat-jobs--show-detail executor 'jobs job)
+      (pichat-job-executor-schedule-change
+       executor job (list :kind "interval" :start start :seconds 3600))
+      (pichat-job-executor-schedule-enable executor job t)
+      (let ((details (current-buffer)) (window (selected-window)))
+        (pichat-test-wait-until (lambda () (= (length (pichat-job-records store 'runs)) 1))
+                                5 "first interval occurrence")
+        (let ((id (plist-get (aref (pichat-job-records store 'runs) 0) :id)))
+          (pichat-test-job-wait store id "finished")
+          (should (equal (plist-get (pichat-job-record store 'runs id) :result) "completed"))
+          (should (eq (current-buffer) details))
+          (should (eq (selected-window) window))
+          (should (string-match-p "Every 1 hour · Enabled" (buffer-string)))
+          (let ((schedule (plist-get (pichat-job-record store 'jobs job) :schedule)))
+            (should (= (plist-get schedule :next) (+ start 3600)))
+            (should (equal (plist-get (plist-get schedule :last) :run-id) id)))
+          (pichat-test-job-goto-button "Disable")
+          (execute-kbd-macro (kbd "RET"))
+          (should (string-match-p "Every 1 hour · Disabled" (buffer-string)))
+          (should (= (hash-table-count (pichat-job-executor-schedules executor)) 0))
+          (should (= (length (pichat-job-records store 'runs)) 1))
+          (pichat-test-assert-provider-script-consumed status-file))))))
+
+(ert-deftest pichat-integration-jobs-live-ui-selected-phase ()
+  (should-not noninteractive)
+  (let* ((skill (getenv "PICHAT_TEST_PLANS_SKILL"))
+         (helper (and skill (expand-file-name "scripts/plans.py" skill))))
+    (unless skill
+      (ert-skip "Set PICHAT_TEST_PLANS_SKILL to the installed plans skill directory"))
+    (unless (file-readable-p helper)
+      (ert-fail "The explicitly configured plans helper is unreadable"))
+    (pichat-test-with-job-executor (:script '(:turns []))
+      (let* ((plan (expand-file-name ".plans/example/plan.org" project-dir))
+             (result (expand-file-name "phase-one.txt" project-dir))
+             (now (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))
+             (pichat-pi-extra-args (append pichat-pi-extra-args (list "--skill" skill))))
+        (should (= 0 (process-file "python3" nil nil nil helper "--root" project-dir "--local"
+                                  "new" "--id" "example" "--title" "Isolated example")))
+        (with-temp-file plan
+          (insert (format
+                   (concat "#+TITLE: Isolated example\n"
+                           "#+TODO: TODO IN-PROGRESS BLOCKED | DONE\n"
+                           "#+PLAN_ID: example\n#+PLAN_STATUS: ready\n"
+                           "#+PLAN_CREATED: %s\n#+PLAN_UPDATED: %s\n\n"
+                           "* Goal\nExercise one selected phase.\n* Tasks\n"
+                           "** Phase 1\n*** TODO Write phase-one.txt\nWrite phase-one, then stop.\n"
+                           "** Phase 2\n*** TODO Do not execute\nAdjacent phase is unauthorized.\n"
+                           "* Checkpoint\n- Plan status: ready\n- Next action: execute Phase 1 only.\n"
+                           "* Verification\nInspect the artifact and check the plan.\n"
+                           "* History\n- Isolated fixture.\n") now now)))
+        ;; Deterministic tool choices verify ordinary dispatch and bookkeeping,
+        ;; not autonomous reasoning or machine-enforced approval of prose gates.
+        (with-temp-file script-file
+          (insert (json-serialize
+                   (list :turns
+                         (vector
+                          (list :toolCall (list :name "read" :arguments
+                                                (list :path (expand-file-name "references/lifecycle.md" skill)))
+                                :expectContextIncludes ["Project plans" "Phase 1 only"])
+                          (list :toolCall (list :name "read" :arguments
+                                                (list :path (expand-file-name "references/storage.md" skill))))
+                          (list :toolCall (list :name "read" :arguments (list :path plan)))
+                          (list :toolCall (list :name "write" :arguments
+                                                (list :path result :content "phase-one\n")))
+                          (list :toolCall (list :name "read" :arguments (list :path result)))
+                          (list :toolCall
+                                (list :name "edit" :arguments
+                                      (list :path plan :edits
+                                            [(:oldText "*** TODO Write phase-one.txt"
+                                              :newText "*** DONE Write phase-one.txt")
+                                             (:oldText "- Next action: execute Phase 1 only."
+                                              :newText "- Next action: await Phase 2 authorization.")
+                                             (:oldText "Inspect the artifact and check the plan."
+                                              :newText "phase-one.txt verified; structural check passed.")])))
+                          (list :toolCall
+                                (list :name "bash" :arguments
+                                      (list :command (mapconcat #'shell-quote-argument
+                                                               (list "python3" helper "--root" project-dir
+                                                                     "--local" "check" "example") " ")
+                                            :timeout 10)))
+                          '(:text "PHASE_ONE_RESULT: stopped before Phase 2."
+                            :expectContextIncludes ["phase-one" "plan.org: OK"]))))))
+        (let* ((prompt (format (concat "/skill:plans run example Phase 1 only. Authoritative plan: %s. "
+                                      "Execution checkout: %s. Stop before Phase 2; do not commit or push.")
+                               plan project-dir))
+               (spec (pichat-job-launch-capture
+                      "One selected phase" prompt project-dir
+                      '(:preset coding :model "pichat-fake/pichat-fake" :target local))))
+          (pichat-job--setup spec nil executor)
+          (pichat-test-job-goto-button "Run once")
+          (execute-kbd-macro (kbd "RET"))
+          (let ((origin (current-buffer)) (window (selected-window))
+                (id (plist-get (aref (pichat-job-records store 'runs) 0) :id)))
+            (pichat-test-job-wait store id "finished")
+            (should (equal (plist-get (pichat-job-record store 'runs id) :result) "completed"))
+            (should (eq (current-buffer) origin))
+            (should (eq (selected-window) window))
+            (should (equal (pichat-job-records store 'jobs) []))
+            (should (equal (with-temp-buffer (insert-file-contents result) (buffer-string)) "phase-one\n"))
+            (with-temp-buffer
+              (insert-file-contents plan)
+              (should (string-match-p "DONE Write phase-one.txt" (buffer-string)))
+              (should (string-match-p "TODO Do not execute" (buffer-string))))
+            (should (= 0 (process-file "python3" nil nil nil helper "--root" project-dir
+                                      "--local" "check" "example")))
+            (pichat-jobs--show-detail executor 'runs id)
+            (should (string-match-p "PHASE_ONE_RESULT" (buffer-string)))
+            (pichat-test-job-press "Preview conversation")
+            (should (string-match-p "Phase 1 only" (buffer-string)))
+            (pichat-test-assert-provider-script-consumed status-file)))))))
 
 (ert-deftest pichat-integration-jobs-live-ui-followup ()
   (pichat-test-with-job-executor
@@ -178,7 +294,7 @@
           (when (buffer-live-p setup) (kill-buffer setup)))))))
 
 (ert-deftest pichat-integration-jobs-live-ui-manual-flow ()
-  (should (display-graphic-p))
+  (should-not noninteractive)
   (pichat-test-with-job-executor
       (:script '(:turns [(:text "LIVE_JOB_RESULT" :delayMs 100)]))
     (let ((pichat-jobs--executor executor)
@@ -271,19 +387,6 @@
             (should (= (length tabulated-list-entries) 1))
             (should (equal pichat-jobs--filter job))
             (should (string-match-p "Live review" mode-line-process))
-            ;; Real window sizes, not a mocked formatter width.
-            (delete-other-windows)
-            (dolist (width '(70 140))
-              (set-frame-width (selected-frame) width)
-              (pichat-test-wait-until
-               (lambda () (if (< width 110) (< (window-body-width) 110)
-                            (>= (window-body-width) 110)))
-               3 "graphical Jobs window to resize")
-              (pichat-jobs-refresh)
-              (should (string-match-p "local" (buffer-string)))
-              (should (string-match-p "Queued" (format-mode-line header-line-format)))
-              (should (eq (not (null (assoc "Project / target" (append tabulated-list-format nil))))
-                          (>= width 110))))
             (call-interactively (key-binding (kbd "TAB")))
             (should (equal (tabulated-list-get-id) job))
             (pichat-test-assert-provider-script-consumed status-file))
@@ -296,8 +399,33 @@
                            (bound-and-true-p pichat-job-executor--buffer-execution))))
             (kill-buffer buffer)))))))
 
-(ert-deftest pichat-integration-jobs-live-ui-attention-and-uncertainty ()
+(ert-deftest pichat-integration-jobs-live-ui-graphical-resize ()
   (should (display-graphic-p))
+  (pichat-test-with-job-executor ()
+    (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (id (pichat-job-enqueue store nil job))
+           (frame (selected-frame)) (original-width (frame-width)))
+      (pichat-jobs--show-history executor job)
+      (delete-other-windows)
+      (unwind-protect
+          ;; Real window sizes, not a mocked formatter width.
+          (dolist (width '(70 140))
+            (set-frame-width frame width)
+            (pichat-test-wait-until
+             (lambda () (if (< width 110) (< (window-body-width) 110)
+                          (>= (window-body-width) 110)))
+             3 "graphical Jobs window to resize")
+            (pichat-jobs-refresh)
+            (should (string-match-p "local" (buffer-string)))
+            (should (string-match-p "Queued" (format-mode-line header-line-format)))
+            (should (eq (not (null (assoc "Project / target" (append tabulated-list-format nil))))
+                        (>= width 110))))
+        (set-frame-width frame original-width))
+      (should (equal (plist-get (pichat-job-record store 'runs id) :state) "queued"))
+      (should-not (pichat-session-list)))))
+
+(ert-deftest pichat-integration-jobs-live-ui-attention-and-uncertainty ()
+  (should-not noninteractive)
   ;; Cached attention states use an inert owned process, not a model/provider.
   (pichat-test-with-owned-job
     (let ((waiter (pichat-job-enqueue store (pichat-test-job-spec project-dir)))
@@ -323,7 +451,7 @@
       (should-not (active-minibuffer-window))
       (setf (pichat-job-execution-cancelling execution) t)
       (pichat-job-executor--advance execution "settling")
-      (should (string-match-p "Execution: Cancelling" (buffer-string)))
+      (should (string-prefix-p "Cancelling · Manual" (buffer-string)))
       (pichat-job-executor--advance execution "uncertain" '(:reason "Inspect descendants/workspace"))
       (should (string-match-p "Needs inspection" (buffer-string)))
       (should-not (string-match-p "Reservation: Held\\|recheck unavailable" (buffer-string)))
@@ -332,7 +460,10 @@
       (pichat-test-job-press "Execution details")
       (should (string-match-p "Reservation: Held" (buffer-string)))
       (should-not (string-match-p "Recheck remote Pi exit" (buffer-string)))
-      (should-not (eq (plist-get (pichat-job-admission store waiter) :ready) t)))))
+      (should (equal (plist-get (pichat-job-admission store waiter 1) :reason)
+                     "Global concurrency limit"))
+      (should (equal (plist-get (pichat-job-admission store waiter 3) :reason)
+                     "Conflicting workspace/resource")))))
 
 (ert-deftest pichat-integration-jobs-live-ui-continuation ()
   ;; Also runnable in a separate terminal Emacs when no graphical display exists.
@@ -368,6 +499,8 @@
             (should (eq window (selected-window)))
             (pichat-jobs--show-detail executor 'runs next)
             (should (string-match-p "CONTINUED_RESULT" (buffer-string)))
+            (should-not (string-match-p "Repeat…\\|Continue work…" (buffer-string)))
+            (pichat-test-job-press "More actions")
             (should (string-match-p "Repeat…" (buffer-string)))
             (should-not (string-match-p "Continue work…" (buffer-string)))
             (pichat-test-job-press "Execution details")

@@ -9,14 +9,8 @@
    (lambda (fixture)
      ;; Reuse the established isolated environment, but retire its starter
      ;; runtime before the fixture's independent no-old-writer spawn assertions.
-     (let* ((previous (plist-get fixture :session))
-            (old (pichat-session-process previous)))
-       (pichat-rpc-stop previous)
-       (pichat-test-wait-until
-        (lambda () (not (pichat-test-real-ssh--alive-p fixture old))) 15
-        "starter runtime exit before independent job")
-       (pichat-process-lifetime-confirm old)
-       (pichat-process-lifetime-cleanup old)
+     (let ((previous (plist-get fixture :session)))
+       (pichat-test-real-ssh--stop-starter fixture)
        (pichat-test-with-temp-dir metadata-directory
          (let* ((store (pichat-job-store-open (expand-file-name "jobs.json" metadata-directory)))
                 (executor (pichat-job-executor-open store))
@@ -60,6 +54,131 @@
              (when session (pichat-rpc-stop session))
              (when-let* ((buffer (and session (pichat-session-buffer session))))
                (when (buffer-live-p buffer) (kill-buffer buffer))))))))))
+
+(ert-deftest pichat-integration-job-ssh-interval-and-followup-use-captured-target ()
+  (pichat-test-real-ssh--run
+   (lambda (fixture)
+     (pichat-test-real-ssh--stop-starter fixture)
+     (pichat-test-real-ssh--write-script
+      fixture '(:turns [(:text "SSH_SCHEDULE_RESULT"
+                         :expectContextIncludes ["SSH schedule payload"])]))
+     (pichat-test-with-temp-dir metadata-directory
+       (let* ((store (pichat-job-store-open (expand-file-name "jobs.json" metadata-directory)))
+              (executor (pichat-job-executor-open store))
+              (pichat-jobs-control-timeout 15)
+              (profile '(:preset review :target real-ssh :model "pichat-fake/pichat-fake-reasoning"))
+              (handler (pichat-job-save
+                        store (pichat-job-launch-capture
+                               "SSH reviewer" "Review supplied previous run context."
+                               (plist-get fixture :project) profile "read")))
+              (spec (pichat-job-launch-capture
+                     "SSH interval worker" "SSH schedule payload" (plist-get fixture :project) profile "read"))
+              (job (pichat-job-save store (plist-put spec :after-job-id handler)))
+              (pichat-targets nil)
+              (pichat-current-session (plist-get fixture :session))
+              (origin (current-buffer)) (window (selected-window))
+              (start (+ (float-time) 1)))
+         (unwind-protect
+             (progn
+               (pichat-job-executor-schedule-change
+                executor job (list :kind "interval" :start start :seconds 3600))
+               (pichat-job-executor-schedule-enable executor job t)
+               (pichat-test-wait-until
+                (lambda () (= (length (pichat-job-records store 'runs)) 2))
+                35 "SSH scheduled worker and follow-up")
+               (let* ((worker (aref (pichat-job-records store 'runs) 0))
+                      (id (plist-get worker :id))
+                      (child (plist-get (plist-get worker :dispatch) :run-id)))
+                 (should child)
+                 (pichat-test-wait-until
+                  (lambda () (equal (plist-get (pichat-job-record store 'runs child) :state) "finished"))
+                  35 "SSH follow-up completion")
+                 (should (equal (plist-get worker :result) "completed"))
+                 (should (equal (plist-get (plist-get worker :trigger) :kind) "interval"))
+                 (should (= (plist-get (plist-get worker :trigger) :due) start))
+                 (should (equal (plist-get (pichat-job-record store 'runs child) :result) "completed"))
+                 (should (equal (plist-get (plist-get (pichat-job-record store 'runs child) :event) :run-id) id))
+                 (should (= (plist-get (plist-get (pichat-job-record store 'jobs job) :schedule) :next)
+                            (+ start 3600)))
+                 (let* ((run (pichat-job-record store 'runs child))
+                        (entries (plist-get (pichat-job-evidence-read store (plist-get run :evidence)) :entries))
+                        (user (seq-find (lambda (entry)
+                                          (equal (plist-get (plist-get entry :message) :role) "user")) entries)))
+                   ;; The remote Pi's persisted prompt, not only our local envelope.
+                   (should (string-match-p "SSH_SCHEDULE_RESULT"
+                                           (prin1-to-string (plist-get user :message)))))
+                 (maphash
+                  (lambda (_id execution)
+                    (let* ((session (pichat-job-execution-session execution))
+                           (process (pichat-session-process session)))
+                      (should (eq (pichat-transport-kind (pichat-session-transport session)) 'ssh))
+                      (should (pichat-process-lifetime-confirmed-p process))
+                      (should-not (pichat-test-real-ssh--alive-p fixture process))))
+                  (pichat-job-executor-contexts executor))
+                 (should (= (plist-get fixture :spawn-checks) 3))
+                 (should (eq (current-buffer) origin))
+                 (should (eq (selected-window) window))
+                 (should (eq pichat-current-session (plist-get fixture :session)))
+                 (pichat-test-assert-provider-script-consumed (plist-get fixture :status))))
+           (pichat-job-executor-schedule-stop executor)
+           (maphash (lambda (_id execution)
+                      (pichat-job-executor--retire execution)
+                      (when-let* ((session (pichat-job-execution-session execution)))
+                        (pichat-rpc-stop session)
+                        (when-let* ((buffer (pichat-session-buffer session)))
+                          (when (buffer-live-p buffer) (kill-buffer buffer)))))
+                    (pichat-job-executor-contexts executor))))))))
+
+(ert-deftest pichat-integration-job-ssh-continuation-embeds-context-in-fresh-session ()
+  (pichat-test-real-ssh--run
+   (lambda (fixture)
+     (pichat-test-real-ssh--stop-starter fixture)
+     (pichat-test-real-ssh--write-script fixture '(:turns [(:error "SSH fixture interruption")]))
+     (pichat-test-with-temp-dir metadata-directory
+       (let* ((store (pichat-job-store-open (expand-file-name "jobs.json" metadata-directory)))
+              (executor (pichat-job-executor-open store))
+              (pichat-jobs-control-timeout 15)
+              (spec (pichat-job-launch-capture
+                     "SSH continuation" "Inspect the supplied files." (plist-get fixture :project)
+                     '(:preset review :target real-ssh :model "pichat-fake/pichat-fake-reasoning") "read"))
+              (id (pichat-job-executor-submit executor spec)))
+         (unwind-protect
+             (progn
+               (pichat-test-wait-until
+                (lambda () (equal (plist-get (pichat-job-record store 'runs id) :state) "finished"))
+                35 "SSH failed worker")
+               (let* ((before (pichat-job-record store 'runs id))
+                      (original (pichat-job-execution-session
+                                 (gethash id (pichat-job-executor-contexts executor)))))
+                 (should (equal (plist-get before :result) "failed"))
+                 (pichat-test-assert-provider-script-consumed (plist-get fixture :status))
+                 (pichat-test-real-ssh--write-script
+                  fixture '(:turns [(:text "SSH_CONTINUED_RESULT"
+                                     :expectContextIncludes ["SSH fixture interruption" "checkpoint may be stale"])]))
+                 (let* ((pichat-targets nil)
+                        (next (pichat-job-executor-submit-options executor (list :spec spec :continue-of id)))
+                        (replacement (pichat-job-execution-session
+                                      (gethash next (pichat-job-executor-contexts executor)))))
+                   (pichat-test-wait-until
+                    (lambda () (equal (plist-get (pichat-job-record store 'runs next) :state) "finished"))
+                    35 "SSH continuation completion")
+                   (should (equal (plist-get (pichat-job-record store 'runs next) :result) "completed"))
+                   (should (equal before (pichat-job-record store 'runs id)))
+                   (should-not (equal (pichat-session-session-file original)
+                                      (pichat-session-session-file replacement)))
+                   (should (eq (pichat-transport-kind (pichat-session-transport replacement)) 'ssh))
+                   (should (pichat-process-lifetime-confirmed-p (pichat-session-process replacement)))
+                   (should-not (pichat-test-real-ssh--alive-p fixture (pichat-session-process replacement)))
+                   (should (= (plist-get fixture :spawn-checks) 3))
+                   (pichat-test-assert-provider-script-consumed (plist-get fixture :status)))))
+           (pichat-job-executor-schedule-stop executor)
+           (maphash (lambda (_id execution)
+                      (pichat-job-executor--retire execution)
+                      (when-let* ((session (pichat-job-execution-session execution)))
+                        (pichat-rpc-stop session)
+                        (when-let* ((buffer (pichat-session-buffer session)))
+                          (when (buffer-live-p buffer) (kill-buffer buffer)))))
+                    (pichat-job-executor-contexts executor))))))))
 
 (provide 'pichat-test-jobs-ssh)
 ;;; pichat-test-jobs-ssh.el ends here

@@ -162,7 +162,12 @@ The additional `pichat-integration-jobs-live-ui-continuation` scenario drives
 More actions, Continue work, optional instructions, Run once and Previous run in a
 live frame with the offline provider. It can run alone in a separate `emacs -Q -nw`
 instance when no graphical display exists; select that exact test instead of the
-whole live-UI prefix (the other scenarios require graphics). Use the same result
+whole live-UI prefix (the original layout scenarios require graphics). The
+`pichat-integration-jobs-live-ui-execution-settings` scenario also supports a
+separate terminal Emacs: it drives the actual settings Transient keys, staged
+Apply/Cancel and nested Tools return, with discovery disabled. Batch fixtures
+cover capture preservation, stale callbacks, pending pickers and continuation
+restrictions. Use the same result
 log and explicit `kill-emacs` wrapper above. Never run it in the user's live Emacs.
 
 These are programmatic checks, not human visual acceptance. A graphical frame can

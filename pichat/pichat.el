@@ -1128,27 +1128,36 @@ This is the first implementation check; it does not send an LLM prompt."
   (cons "default" (mapcar (lambda (entry) (symbol-name (car entry)))
                            pichat-presets)))
 
+(defun pichat--read-configuration-preset (prompt initial tools &optional defaults history)
+  "Read a preset for PROMPT, confirming reset of customized TOOLS.
+INITIAL is its current name.  DEFAULTS allows the launcher's default policy.
+HISTORY is the completion history variable.
+Return a name without changing state."
+  (let* ((choices (if defaults (pichat--launch-preset-choices)
+                    (mapcar (lambda (entry) (symbol-name (car entry))) pichat-presets)))
+         (completion-extra-properties
+          (list :annotation-function
+                (lambda (choice)
+                  (when-let* ((description
+                               (if (equal choice "default")
+                                   (format "Use configured default (%s)" pichat-default-preset)
+                                 (plist-get (pichat-get-preset (intern choice)) :description))))
+                    (concat "  " description)))))
+         (chosen (completing-read prompt choices nil t nil history initial)))
+    (when (and tools (not (equal chosen initial))
+               (not (yes-or-no-p "Discard customized Tools for the new preset? ")))
+      (user-error "Preset change cancelled"))
+    chosen))
+
 (defun pichat--launch-read-preset (prompt initial history)
   "Read a named preset or default policy with descriptions."
-  (let ((completion-extra-properties
-         (list :annotation-function
-               (lambda (choice)
-                 (let ((description
-                        (if (equal choice "default")
-                            (format "Use configured default (%s)" pichat-default-preset)
-                          (plist-get (pichat-get-preset (intern choice))
-                                     :description))))
-                   (when description (concat "  " description)))))))
-    (let ((chosen (completing-read prompt (pichat--launch-preset-choices) nil t
-                                   initial history))
-          (scope (transient-scope)))
-      (when (and (plist-get scope :tool-selection)
-                 (not (equal chosen initial)))
-        (unless (yes-or-no-p "Discard customized Tools for the new preset? ")
-          (user-error "Preset change cancelled"))
-        (setf (plist-get scope :tool-selection) nil
-              (plist-get scope :tool-target) nil))
-      chosen)))
+  (let* ((scope (transient-scope))
+         (chosen (pichat--read-configuration-preset
+                  prompt initial (plist-get scope :tool-selection) t history)))
+    (unless (equal chosen initial)
+      (setf (plist-get scope :tool-selection) nil
+            (plist-get scope :tool-target) nil))
+    chosen))
 
 (defun pichat--launch-target-argument (arguments)
   "Return normalized target selected in Transient ARGUMENTS."
@@ -1511,18 +1520,18 @@ This is the first implementation check; it does not send an LLM prompt."
   (let* ((scope (transient-scope))
          (origin (plist-get scope :origin))
          (draft (plist-get scope :draft))
-         (name (intern (completing-read
-                        "Restart preset: " (mapcar (lambda (p) (symbol-name (car p)))
-                                                    pichat-presets)
-                        nil t))))
+         (name (intern
+                (pichat--read-configuration-preset
+                 "Restart preset: "
+                 ;; Reconfiguration explicitly selects a current definition,
+                 ;; even when its name matches the captured preset.
+                 nil
+                 (and (not (equal (plist-get draft :tool-selection)
+                                  (pichat-tool-selection-resolve
+                                   (plist-get draft :preset-spec))))
+                      (plist-get draft :tool-selection))))))
     (unless (pichat-reconfigure-origin-current-p origin)
       (user-error "Runtime changed; reopen reconfiguration"))
-    (when (and (plist-get draft :tool-selection)
-               (not (equal (plist-get draft :tool-selection)
-                           (pichat-tool-selection-resolve
-                            (plist-get draft :preset-spec))))
-               (not (yes-or-no-p "Discard customized Tools? ")))
-      (user-error "Preset change cancelled"))
     (plist-put scope :draft (pichat-reconfigure-select-preset draft name))
     (pichat--reconfigure-show scope)))
 

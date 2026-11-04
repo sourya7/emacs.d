@@ -8,6 +8,19 @@
 
 (require 'pichat-test-support)
 
+(ert-deftest pichat-launch-preset-reader-does-not-filter-to-current-preset ()
+  (let ((pichat-presets '((standard :description "Default tools")
+                          (review :description "Read-only tools"))))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt choices _predicate require-match initial _history default &rest _)
+                 (should require-match)
+                 (should-not initial)
+                 (should (equal default "standard"))
+                 (should (equal choices '("standard" "review")))
+                 "review")))
+      (should (equal (pichat--read-configuration-preset "Preset: " "standard" nil)
+                     "review")))))
+
 (ert-deftest pichat-start-session-copies-normalized-persistence ()
   (pichat-test-with-clean-state
     (let ((pichat-rpc-command nil)

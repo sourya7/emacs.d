@@ -798,8 +798,11 @@ phase adapter. Scheduling and lifecycle follow-ups are not enabled.
 
 - `M-x pichat-job-new` opens setup without starting a runtime. Edit multiline
   instructions, choose the project/directory, and use **Execution settings…** for
-  the existing preset, Tools picker, run-local model picker, and target choices.
-  Choose a concrete model before saving/submitting if none is configured.
+  a Transient with preset (`p`), Tools (`x`), concrete run-local model (`m`),
+  target (`t`) and workspace coordination (`w`), with values beside each control
+  and customized Tools highlighted. Sub-pickers return to that menu;
+  `RET` applies settings to setup without saving or running, and `q` discards
+  staged changes. Choose a concrete model before saving/submitting if none is configured.
 - **Run once** submits the draft without saving a definition. **Save job…** saves
   a reusable definition without executing it. Saving never enables automation.
 - `M-x pichat-jobs` opens one global Jobs/Runs view. Native `TAB` switches between
@@ -920,7 +923,8 @@ automatically discard their runtime tracking.
 Execution settings are captured, including resolved preset prompts, Tools,
 model, command and target/path mappings. Instruction/name edits preserve them.
 Changing execution explicitly re-resolves the preset/target after confirmation;
-cancelling a sub-picker restores the draft. Model/workspace/target edits preserve
+cancelling a sub-picker retains earlier staged choices without changing setup.
+Closing the settings menu without applying leaves setup untouched. Model/workspace/target edits preserve
 the selected Tools; changing preset explicitly confirms resetting them. Setup
 and detail summaries show non-default overlap policies; the ordinary modifier
 policy stays out of the way. Explicit raw inspection retains every declared policy, and
@@ -938,7 +942,8 @@ review-needed runs. It opens the existing setup, not a running agent. Review the
 captured settings, optionally choose a different provider/model in **Execution
 settings…**, or add **Additional instructions…**, then select **Run once**.
 The original instructions, workspace, target/path identity and resource claims
-remain fixed. Explicit execution edits still re-resolve configuration and are
+remain fixed; the settings Transient omits target/coordination controls for
+continuations. Explicit execution edits still re-resolve configuration and are
 rejected if the captured target/path identity changes; no silent target fallback.
 Continuation is one run, not a reusable job definition.
 

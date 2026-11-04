@@ -322,12 +322,16 @@ advertised as accessible on a remote target."
             warning "Previous run context is incomplete (truncated); inspect actual work before continuing"))
     (list :context
           (condition-case err
-              (json-serialize
-               (list :run (plist-get run :id) :result (plist-get run :result)
-                     :reason (plist-get run :reason)
-                     :summary (plist-get run :summary)
-                     :evidence evidence :warning warning)
-               :null-object nil :false-object :false)
+              ;; This string is nested in the persisted continuation record.
+              ;; Decode UTF-8 bytes before the next JSON serialization as well.
+              (decode-coding-string
+               (json-serialize
+                (list :run (plist-get run :id) :result (plist-get run :result)
+                      :reason (plist-get run :reason)
+                      :summary (plist-get run :summary)
+                      :evidence evidence :warning warning)
+                :null-object nil :false-object :false)
+               'utf-8)
             (error (user-error "Cannot prepare previous run context (%s); inspect the run before continuing"
                                (car err))))
           :warning warning)))
@@ -412,9 +416,13 @@ the caller, avoiding another evidence read after a user confirmation."
           (pichat-job--fail "Additional instructions must be text"))
         (setf (plist-get run :continuation)
               (append (list :guidance (or guidance ""))
-                      (pichat-job--copy
-                       (or capture (pichat-job-continuation-context
-                                    store (pichat-job--find data :runs continue-of)))))))
+                      (let ((context (or capture (pichat-job-continuation-context
+                                                  store (pichat-job--find data :runs continue-of)))))
+                        (condition-case err
+                            (pichat-job--copy context)
+                          ;; Never expose transcript contents in error data.
+                          (error (user-error "Cannot copy previous run context (%s); inspect the run before continuing"
+                                             (car err))))))))
       (setf (plist-get data :runs) (vconcat runs (vector run)))
       (pichat-job--commit store data)
       (copy-sequence (plist-get run :id)))))

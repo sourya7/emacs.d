@@ -419,6 +419,46 @@
           (should (string-suffix-p "\n[Evidence excerpt truncated]" evidence))
           (should (string-match-p (make-string 100 ?界) evidence)))))))
 
+(ert-deftest pichat-job-continuation-unicode-survives-enqueue-and-reopen ()
+  (pichat-test-job--with-store
+    (let* ((id (pichat-test-job--enqueue store))
+           (token (plist-get (pichat-job-claim store id) :attempt))
+           (text "Pick: café — 日本語 😀")
+           (digest (pichat-job-evidence-save
+                    store (list :version 1 :response text :transcript text))))
+      (pichat-job-advance store id token "finished"
+                         (list :result "failed" :safe-to-release t :evidence digest
+                               :reason "Interrupted — inspect work"))
+      (let* ((origin (pichat-job-record store 'runs id))
+             (capture (pichat-job-continuation-context store origin)))
+        ;; Cover both reviewed capture forwarding and enqueue's own capture.
+        (dolist (provided (list nil capture))
+          (let* ((next (pichat-job-enqueue store nil nil nil nil id "Vérifier" provided))
+                 (run (pichat-job-record (pichat-job-store-open file) 'runs next))
+                 (stored (plist-get (plist-get run :continuation) :context))
+                 (outer (json-parse-string stored :object-type 'plist))
+                 (evidence (json-parse-string (plist-get outer :evidence) :object-type 'plist)))
+            (should (equal stored (plist-get capture :context)))
+            (should (equal (plist-get evidence :response) text))
+            (should (string-match-p text (pichat-job-prompt run)))
+            (should (equal origin (pichat-job-record store 'runs id)))
+            (pichat-job-cancel-queued store next)))))))
+
+(ert-deftest pichat-job-continuation-copy-errors-do-not-disclose-payloads ()
+  (pichat-test-job--with-store
+    (let* ((id (pichat-test-job--enqueue store))
+           (secret "PRIVATE-CONTEXT-PAYLOAD")
+           ;; A non-JSON value forces failure at the capture-copy boundary.
+           (capture (list :context (make-symbol secret) :warning nil)))
+      (pichat-job-cancel-queued store id)
+      (let* ((before (pichat-job-records store 'runs))
+             (err (should-error (pichat-job-enqueue store nil nil nil nil id nil capture)
+                                :type 'user-error)))
+        (should (string-match-p "Cannot copy previous run context" (error-message-string err)))
+        (should-not (string-match-p secret (prin1-to-string err)))
+        (should (equal before (pichat-job-records store 'runs)))
+        (should (equal before (pichat-job-records (pichat-job-store-open file) 'runs)))))))
+
 (ert-deftest pichat-job-continuation-errors-do-not-disclose-payloads ()
   (pichat-test-job--with-store
     (let* ((secret "PRIVATE-EVIDENCE-PAYLOAD")

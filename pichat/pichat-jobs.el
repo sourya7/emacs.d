@@ -29,6 +29,8 @@ are not frozen.  Use only one owning Emacs per file."
 (defvar-local pichat-jobs--selection nil)
 (defvar-local pichat-jobs--attention-only nil)
 (defvar-local pichat-job--draft nil)
+(defvar-local pichat-job--settings nil
+  "Identity of the latest staged execution-settings menu for this buffer.")
 (defvar-local pichat-jobs--expanded nil)
 (defvar-local pichat-jobs--response-source nil)
 
@@ -63,6 +65,7 @@ are not frozen.  Use only one owning Emacs per file."
 HELP optionally describes the action without adding inline prose."
   (let ((button (insert-text-button label 'follow-link t
                                     'pichat-job-disclosure disclosure
+                                    'pichat-job-action function
                                     'keymap (if disclosure pichat-jobs--disclosure-map button-map)
                                     'action (lambda (_button) (funcall function)))))
     (when help (button-put button 'help-echo help)))
@@ -897,9 +900,34 @@ Use the chat's input styling, measured at the narrowest displaying window."
   (interactive)
   (pichat-job--setup nil nil (pichat-jobs--engine)))
 
+(defun pichat-job--position-anchor (position)
+  "Capture POSITION as an action button and offset, with a numeric fallback."
+  (let ((button (button-at position)))
+    (list position (and button (button-get button 'pichat-job-action))
+          (and button (- position (button-start button))))))
+
+(defun pichat-job--anchor-position (anchor)
+  "Resolve ANCHOR after rebuilding setup, preferring the same action button."
+  (let ((button (next-button (point-min) t))
+        (action (nth 1 anchor)))
+    (while (and button
+                (not (and action (eq action (button-get button 'pichat-job-action)))))
+      (setq button (next-button (button-end button) t)))
+    (if button
+        (min (+ (button-start button) (nth 2 anchor)) (1- (button-end button)))
+      (min (car anchor) (point-max)))))
+
 (defun pichat-job--render-setup ()
-  "Render the draft without changing it or resolving launch settings."
-  (let* ((draft pichat-job--draft) (spec (plist-get draft :spec))
+  "Render the draft, preserving navigation without resolving launch settings."
+  (let* ((anchor (pichat-job--position-anchor (point)))
+         (windows
+          (mapcar (lambda (window)
+                    (list window
+                          (pichat-job--position-anchor (window-point window))
+                          (pichat-job--position-anchor (window-start window))
+                          (window-vscroll window t)))
+                  (get-buffer-window-list (current-buffer) nil t)))
+         (draft pichat-job--draft) (spec (plist-get draft :spec))
          (profile (plist-get draft :profile))
          (config (plist-get spec :configuration))
          (inhibit-read-only t))
@@ -977,7 +1005,13 @@ Use the chat's input styling, measured at the narrowest displaying window."
       (pichat-jobs--button "Save job…" #'pichat-job-save-draft))
     (pichat-jobs--button "Cancel" #'pichat-job-setup-quit)
     (insert "\n")
-    (goto-char (point-min))))
+    (dolist (state windows)
+      (let ((window (car state)))
+        (when (window-live-p window)
+          (set-window-point window (pichat-job--anchor-position (nth 1 state)))
+          (set-window-start window (pichat-job--anchor-position (nth 2 state)) t)
+          (set-window-vscroll window (nth 3 state) t))))
+    (goto-char (pichat-job--anchor-position anchor))))
 
 (defun pichat-job-setup-quit ()
   "Close setup after explicitly discarding changes, or keep the draft for later."
@@ -1008,7 +1042,9 @@ Use the chat's input styling, measured at the narrowest displaying window."
 
 (defun pichat-job--editable ()
   "Reject competing draft edits while an explicitly requested picker is pending."
-  (when (plist-get pichat-job--draft :pending)
+  (when (or (plist-get pichat-job--draft :pending)
+            (and (plist-get pichat-job--settings :pending)
+                 (pichat-job--settings-current-p pichat-job--settings)))
     (user-error "Finish the pending execution picker before editing or submitting")))
 
 (defun pichat-job-edit-instructions ()
@@ -1068,119 +1104,232 @@ Use the chat's input styling, measured at the narrowest displaying window."
           (plist-get pichat-job--draft :dirty) t)
     (pichat-job--render-setup)))
 
-(defun pichat-job--choose-model (origin original)
-  "Select a run-local model for ORIGIN asynchronously.
-Restore ORIGINAL on failure."
-  (let* ((profile (plist-get pichat-job--draft :profile))
-         (target (plist-get profile :target))
-         (token (make-symbol "job-model"))
-         process)
-    (setf (plist-get pichat-job--draft :pending) token)
-    (setq process
+(defun pichat-job--settings-current-p (scope)
+  "Whether SCOPE still owns an unchanged setup draft."
+  (let ((origin (plist-get scope :origin)))
+    (and (buffer-live-p origin)
+         (not (plist-get scope :closed))
+         (with-current-buffer origin
+           (and (eq scope pichat-job--settings)
+                (equal pichat-job--draft (plist-get scope :original)))))))
+
+(defun pichat-job--settings-show (scope)
+  "Redisplay the configuration menu for current SCOPE."
+  (when (pichat-job--settings-current-p scope)
+    (with-current-buffer (plist-get scope :origin)
+      (transient-setup 'pichat-job-settings-menu nil nil :scope scope))))
+
+(defun pichat-job--settings-abandoned ()
+  "Discard staged menus after explicitly quitting the Transient stack.
+Do not discard model selections merely because their asynchronous picker exited
+its prefix while waiting for the model-list process."
+  (when (memq this-command '(transient-quit-one transient-quit-all transient-quit-seq))
+    (dolist (buffer (buffer-list))
+      (with-current-buffer buffer
+        (when pichat-job--settings
+          (setf (plist-get pichat-job--settings :closed) t))))))
+
+(add-hook 'transient-post-exit-hook #'pichat-job--settings-abandoned)
+
+(defun pichat-job--settings-finish-picker (scope draft)
+  "Accept staged DRAFT or retain prior choices when nil, then return to SCOPE."
+  (when (and (plist-get scope :pending) (pichat-job--settings-current-p scope))
+    (setf (plist-get scope :pending) nil)
+    (when draft (setf (plist-get scope :draft) draft))
+    (pichat-job--settings-show scope)))
+
+(defun pichat-job--settings-model (scope draft)
+  "Choose a concrete model asynchronously for staged DRAFT in SCOPE."
+  (let* ((target (plist-get (plist-get draft :profile) :target))
+         (process
           (pichat--list-models-async
            nil (lambda (models)
-                 (when (buffer-live-p origin)
-                   (with-current-buffer origin
-                     (when (eq token (plist-get pichat-job--draft :pending))
-                       (condition-case err
-                           (let ((model (pichat--read-model-table-choice "Job model: " models t)))
-                             (setf (plist-get (plist-get pichat-job--draft :profile) :model) model
-                                   (plist-get pichat-job--draft :dirty) t
-                                   (plist-get pichat-job--draft :pending) nil)
-                             (pichat-job--render-setup))
-                         ((error quit)
-                          (setq pichat-job--draft original)
-                          (pichat-job--render-setup)
-                          (message "%s" (error-message-string err))))))))
-           (plist-get pichat-job--draft :directory)
-           (unless (eq target 'inferred) target)))
-    ;; The shared model-list helper reports empty/error results without invoking
-    ;; its success callback.  Observe its owned process exit to restore our draft.
+                 (when (and (plist-get scope :pending)
+                            (pichat-job--settings-current-p scope))
+                   (condition-case err
+                       (let ((model (pichat--read-model-table-choice "Job model: " models t)))
+                         (setf (plist-get (plist-get draft :profile) :model) model)
+                         (pichat-job--settings-finish-picker scope draft))
+                     ((error quit)
+                      (pichat-job--settings-finish-picker scope nil)
+                      (message "%s" (error-message-string err))))))
+           (plist-get draft :directory) (unless (eq target 'inferred) target))))
+    ;; Empty/error listings do not call the model helper's success callback.
     (when (processp process)
       (let ((sentinel (process-sentinel process)))
         (set-process-sentinel
          process
          (lambda (process event)
            (unwind-protect (when sentinel (funcall sentinel process event))
-             (when (and (memq (process-status process) '(exit signal))
-                        (buffer-live-p origin))
-               (with-current-buffer origin
-                 (when (eq token (plist-get pichat-job--draft :pending))
-                   (setq pichat-job--draft original)
-                   (pichat-job--render-setup)))))))))))
+             (when (memq (process-status process) '(exit signal))
+               (pichat-job--settings-finish-picker scope nil)))))))))
 
-(defun pichat-job-execution-settings ()
-  "Choose a familiar execution control; preserve the draft across sub-pickers."
-  (interactive)
-  (pichat-job--editable)
-  (let ((choice (completing-read
-                 "Execution setting: "
-                 (if (plist-get pichat-job--draft :continue-of)
-                     '("Preset" "Tools" "Model")
-                   '("Preset" "Tools" "Model" "Target" "Workspace coordination")) nil t)))
-    (when (and (plist-get pichat-job--draft :continue-of)
+(defun pichat-job--settings-edit (choice)
+  "Edit CHOICE transactionally within the current settings menu."
+  (let ((scope (transient-scope)))
+    (unless (pichat-job--settings-current-p scope)
+      (user-error "Job draft changed; reopen Execution settings"))
+    (when (plist-get scope :pending) (user-error "Finish the pending picker first"))
+    (when (and (plist-get (plist-get scope :draft) :continue-of)
                (member choice '("Target" "Workspace coordination")))
       (user-error "Continuation keeps the original target and resource claims"))
-    (if (equal choice "Workspace coordination")
-        (let ((access (completing-read
-                       "Coordination (not tool permissions): "
-                       '("May modify files — avoid overlapping changes"
-                         "Read-only — wait for stable files"
-                         "Read-only — accepts changing files") nil t)))
-          (setf (plist-get pichat-job--draft :access)
-                (cond ((string-prefix-p "May" access) "write")
-                      ((string-match-p "stable" access) "read") (t "observe")))
-          (when-let* ((spec (plist-get pichat-job--draft :spec)))
-            (setf (plist-get (aref (plist-get spec :resources) 0) :access)
-                  (plist-get pichat-job--draft :access)))
-          (setf (plist-get pichat-job--draft :dirty) t)
-          (pichat-job--render-setup))
-      ;; Make execution edits transactional, including cancel in any sub-picker.
-      (let* ((original (pichat-presets--copy pichat-job--draft))
-             (origin (current-buffer)))
-        (condition-case err
-            (progn
-              (pichat-job--invalidate-capture)
+    ;; Existing capture invalidation works on a private copy, never the setup.
+    (let ((draft (copy-tree (plist-get scope :draft) t)))
+      (condition-case err
+          (progn
+            (unless (equal choice "Workspace coordination")
+              (let ((pichat-job--draft draft))
+                (pichat-job--invalidate-capture)
+                (setq draft pichat-job--draft)))
+            (let ((profile (plist-get draft :profile)))
               (pcase choice
                 ("Preset"
-                 (let* ((name (completing-read "Preset: " (mapcar #'symbol-name (mapcar #'car pichat-presets)) nil t))
-                        (profile (plist-get pichat-job--draft :profile)))
-                   (when (and (plist-get profile :tools)
-                              (not (yes-or-no-p "Changing preset resets Tools to its defaults; continue? ")))
-                     (signal 'quit nil))
-                   (setf (plist-get profile :preset) (intern name)
-                         (plist-get profile :tools) nil)))
+                 (let* ((initial (symbol-name (plist-get profile :preset)))
+                        (name (pichat--read-configuration-preset
+                               "Preset: " initial (plist-get profile :tools))))
+                   (unless (equal name initial)
+                     (setf (plist-get profile :tools) nil))
+                   (setf (plist-get profile :preset) (intern name))))
                 ("Target"
-                 (let* ((name (completing-read "Target: " (pichat--launch-target-choices) nil t))
-                        (profile (plist-get pichat-job--draft :profile)))
-                   (setf (plist-get profile :target) (intern name))))
-                ("Model" (pichat-job--choose-model origin original))
-                ("Tools"
-                 (let* ((profile (plist-get pichat-job--draft :profile))
-                        (preset (pichat-presets-resolve (plist-get profile :preset)))
-                        (directory (plist-get pichat-job--draft :directory))
-                        (target (plist-get profile :target))
-                        (transport (pichat-transport-resolve directory (unless (eq target 'inferred) target))))
-                   (setf (plist-get pichat-job--draft :pending) t)
-                   (pichat-tool-picker-open
-                    preset (plist-get profile :tools) directory transport pichat-pi-executable
-                    (lambda (selection)
-                      (when (buffer-live-p origin)
-                        (with-current-buffer origin
-                          (if (eq selection :cancel) (setq pichat-job--draft original)
-                            (setf (plist-get (plist-get pichat-job--draft :profile) :tools) selection
-                                  (plist-get pichat-job--draft :dirty) t
-                                  (plist-get pichat-job--draft :pending) nil))
-                          (pichat-job--render-setup))
-                        (pop-to-buffer origin)))
-                    (let ((model (plist-get profile :model))) (and (stringp model) model))))))
+                 (setf (plist-get profile :target)
+                       (intern (completing-read "Target: " (pichat--launch-target-choices) nil t))))
+                ("Workspace coordination"
+                 (let ((access (completing-read
+                                "Coordination (not tool permissions): "
+                                '("May modify files — avoid overlapping changes"
+                                  "Read-only — wait for stable files"
+                                  "Read-only — accepts changing files") nil t)))
+                   (setf (plist-get draft :access)
+                         (cond ((string-prefix-p "May" access) "write")
+                               ((string-match-p "stable" access) "read") (t "observe")))
+                   (when-let* ((spec (plist-get draft :spec)))
+                     (setf (plist-get (aref (plist-get spec :resources) 0) :access)
+                           (plist-get draft :access)))))
+                ((or "Model" "Tools")
+                 (setf (plist-get scope :pending) t)
+                 (if (equal choice "Model")
+                     (pichat-job--settings-model scope draft)
+                   (let* ((directory (plist-get draft :directory))
+                          (target (plist-get profile :target))
+                          (transport (pichat-transport-resolve
+                                      directory (unless (eq target 'inferred) target))))
+                     (setf (plist-get scope :tool-discovery)
+                           (or (plist-get scope :tool-discovery)
+                               (pichat-tool-discovery-draft-create)))
+                     (pichat-tool-picker-open
+                      (pichat-presets-resolve (plist-get profile :preset))
+                      (plist-get profile :tools) directory transport pichat-pi-executable
+                      (lambda (selection)
+                        (unless (eq selection :cancel)
+                          (setf (plist-get profile :tools) selection))
+                        (pichat-job--settings-finish-picker
+                         scope (unless (eq selection :cancel) draft)))
+                      (let ((model (plist-get profile :model))) (and (stringp model) model))
+                      (plist-get scope :tool-discovery)))))
+                (_ (user-error "Unknown execution setting")))
               (unless (member choice '("Tools" "Model"))
-                (setf (plist-get pichat-job--draft :dirty) t))
-              (with-current-buffer origin (pichat-job--render-setup)))
-          ((error quit)
-           (setq pichat-job--draft original)
-           (pichat-job--render-setup)
-           (signal (car err) (cdr err))))))))
+                (setf (plist-get scope :draft) draft)
+                (pichat-job--settings-show scope))))
+        ((error quit)
+         (setf (plist-get scope :pending) nil)
+         (pichat-job--settings-show scope)
+         (signal (car err) (cdr err)))))))
+
+(defun pichat-job--settings-description (setting)
+  "Describe SETTING inline, using captured values until explicitly edited."
+  (let* ((draft (plist-get (transient-scope) :draft))
+         (config (plist-get (plist-get draft :spec) :configuration))
+         (profile (plist-get draft :profile))
+         (value
+          (pcase setting
+            ('preset (if config (plist-get (plist-get config :preset) :name)
+                       (plist-get profile :preset)))
+            ('model (if config (plist-get config :model) (plist-get profile :model)))
+            ('target (if config (plist-get (plist-get config :transport) :label)
+                       (plist-get profile :target)))
+            ('coordination
+             (pcase (plist-get draft :access)
+               ("read" "Read-only — wait for stable files")
+               ("observe" "Read-only — accepts changing files")
+               (_ "May modify files")))
+            ('tools
+             (if config
+                 (let* ((preset (pichat-job-launch--unpreset (plist-get config :preset)))
+                        (tools (pichat-job-launch--untools preset (plist-get config :tools))))
+                   (not (equal tools (pichat-tool-selection-resolve preset))))
+               (plist-get profile :tools))))))
+    (if (eq setting 'tools)
+        (if value (propertize "Tools" 'face 'transient-value) "Tools")
+      (concat (capitalize (symbol-name setting)) ": "
+              (propertize (if (and (eq setting 'model) (not (stringp value)))
+                              "Choose…"
+                            (format "%s" value))
+                          'face 'transient-value)))))
+
+(defun pichat-job--settings-continuation-p ()
+  "Whether the settings menu belongs to a continuation."
+  (plist-get (plist-get (transient-scope) :draft) :continue-of))
+
+(transient-define-suffix pichat-job-settings-preset ()
+  "Choose a preset." (interactive) (pichat-job--settings-edit "Preset"))
+(transient-define-suffix pichat-job-settings-tools ()
+  "Choose Tools." (interactive) (pichat-job--settings-edit "Tools"))
+(transient-define-suffix pichat-job-settings-model ()
+  "Choose a concrete model." (interactive) (pichat-job--settings-edit "Model"))
+(transient-define-suffix pichat-job-settings-target ()
+  "Choose a target." (interactive) (pichat-job--settings-edit "Target"))
+(transient-define-suffix pichat-job-settings-coordination ()
+  "Choose workspace coordination." (interactive) (pichat-job--settings-edit "Workspace coordination"))
+
+(transient-define-suffix pichat-job-settings-apply ()
+  "Apply staged settings to setup without saving or submitting work."
+  (interactive)
+  (let* ((scope (transient-scope)) (draft (plist-get scope :draft)))
+    (unless (pichat-job--settings-current-p scope)
+      (user-error "Job draft changed; reopen Execution settings"))
+    (when (plist-get scope :pending) (user-error "Finish the pending picker first"))
+    (with-current-buffer (plist-get scope :origin)
+      (unless (equal draft pichat-job--draft)
+        (setq pichat-job--draft (copy-tree draft t))
+        (setf (plist-get pichat-job--draft :dirty) t))
+      (setf (plist-get scope :closed) t)
+      (pichat-job--render-setup))))
+
+(transient-define-suffix pichat-job-settings-cancel ()
+  "Discard all staged settings, leaving setup untouched."
+  (interactive)
+  (let ((scope (transient-scope)))
+    (setf (plist-get scope :closed) t)))
+
+(transient-define-prefix pichat-job-settings-menu ()
+  "Stage job execution settings; applying never runs the job."
+  [["Configuration"
+    ("p" pichat-job-settings-preset
+     :description (lambda () (pichat-job--settings-description 'preset)))
+    ("m" pichat-job-settings-model
+     :description (lambda () (pichat-job--settings-description 'model)))
+    ("x" pichat-job-settings-tools
+     :description (lambda () (pichat-job--settings-description 'tools)))
+    ("t" pichat-job-settings-target
+     :description (lambda () (pichat-job--settings-description 'target))
+     :if-not pichat-job--settings-continuation-p)
+    ("w" pichat-job-settings-coordination
+     :description (lambda () (pichat-job--settings-description 'coordination))
+     :if-not pichat-job--settings-continuation-p)]]
+  [["Action"
+    ("RET" "Apply" pichat-job-settings-apply)
+    ("q" "Cancel" pichat-job-settings-cancel)]]
+  [:hide (lambda () t) ("<return>" pichat-job-settings-apply)])
+
+(defun pichat-job-execution-settings ()
+  "Stage execution choices in a Transient; setup changes only on Apply."
+  (interactive)
+  (pichat-job--editable)
+  (setq pichat-job--settings
+        (list :origin (current-buffer) :pending nil :closed nil :tool-discovery nil
+              :original (copy-tree pichat-job--draft t)
+              :draft (copy-tree pichat-job--draft t)))
+  (pichat-job--settings-show pichat-job--settings))
 
 (defun pichat-job--submission-spec ()
   "Return captured draft work; never launch, silently refresh or pick a model."

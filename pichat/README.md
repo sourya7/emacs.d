@@ -811,7 +811,10 @@ phase adapter. Scheduling and lifecycle follow-ups are not enabled.
   `h` shows its attempts, `a` toggles the input/review attention filter on/off, and `g`
   redraws cached state. `q` buries the list. The overview shows active/limit and
   attention counts plus the current history filter; returning to Jobs restores
-  the selected definition. Compact Runs tables show Work, Queued, and State / result;
+  the selected definition. In the Jobs list, `M-x pichat-jobs-delete` deletes the
+  selected definition after a short title-based `y`/`n` confirmation. Run history
+  is preserved; queued, active or uncertain runs prevent deletion. There is no
+  dedicated deletion keybinding. Compact Runs tables show Work, Queued, and State / result;
   queue times use local date/time to the minute; Project / target stays in wide tables and
   run details. Compact Jobs tables retain their project/target context.
 - Definition details retain the job title and workspace/target, put instructions
@@ -835,11 +838,11 @@ phase adapter. Scheduling and lifecycle follow-ups are not enabled.
   blocks with `RET` or a click. Terminal and graphical
   TAB events and optional Evil Normal state follow these same rules. Refresh/
   resize preserves explicit folding choices.
-  The applicable **Continue work…** or **Repeat…** comes first, followed by
+  When applicable, **Continue work…** comes first, followed by
   **Preview conversation** and **Diagnostics**. **More actions** lists secondary
   actions one per line; **Continue in chat…** explains its interactive behavior
   through hover/help text and confirmation rather than inline prose.
-  It discloses remaining Repeat, **Continue in chat…**
+  It discloses **Repeat…** for finished runs, **Continue in chat…**
   and **Save as job…** actions when applicable, plus job history/definition,
   response source/copy controls and **Release reservation…** for uncertain runs.
   **Diagnostics** is directly accessible alongside conversation inspection; with

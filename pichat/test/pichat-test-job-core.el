@@ -332,6 +332,40 @@
                          (:version 3 :response "Answer" :transcript "Unsupported")))
         (should-error (pichat-job-evidence-save store invalid) :type 'pichat-job-error)))))
 
+(ert-deftest pichat-job-delete-preserves-history-and-rejects-unfinished-runs ()
+  (pichat-test-job--with-store
+    (let* ((spec (pichat-test-job--spec))
+           (job (pichat-job-save store spec))
+           (other (pichat-job-save store spec))
+           (run (pichat-job-enqueue store nil job)))
+      (should-error (pichat-job-delete store job) :type 'pichat-job-error)
+      (let ((token (plist-get (pichat-job-claim store run) :attempt)))
+        (should-error (pichat-job-delete store job) :type 'pichat-job-error)
+        (pichat-job-advance store run token "uncertain")
+        (should-error (pichat-job-delete store job) :type 'pichat-job-error))
+      (pichat-job-resolve-uncertain store run "Inspected")
+      (let ((before (pichat-job-records store 'runs)))
+        (pichat-job-delete store job)
+        (let ((reopened (pichat-job-store-open file)))
+          (should (equal before (pichat-job-records reopened 'runs)))
+          (should (equal (mapcar (lambda (record) (plist-get record :id))
+                                (append (pichat-job-records reopened 'jobs) nil))
+                         (list other))))
+        (should-error (pichat-job-delete store job) :type 'pichat-job-error)
+        ;; Historical repeat/continuation still works without its definition.
+        (let ((next (pichat-job-enqueue store nil nil nil run)))
+          (pichat-job-cancel-queued store next))
+        (pichat-job-enqueue store nil nil nil nil run)))))
+
+(ert-deftest pichat-job-delete-persistence-failure-keeps-definition ()
+  (pichat-test-job--with-store
+    (let* ((job (pichat-job-save store (pichat-test-job--spec)))
+           (before (pichat-job-records store 'jobs)))
+      (cl-letf (((symbol-function 'rename-file) (lambda (&rest _) (error "Fixture write failure"))))
+        (should-error (pichat-job-delete store job)))
+      (should (equal before (pichat-job-records store 'jobs)))
+      (should (equal before (pichat-job-records (pichat-job-store-open file) 'jobs))))))
+
 (ert-deftest pichat-job-continuation-preserves-scope-provenance-and-admission ()
   (pichat-test-job--with-store
     (let* ((spec (pichat-test-job--spec))

@@ -294,6 +294,21 @@ With ID, edit that definition.  Existing run snapshots are never changed."
     (pichat-job--commit store data)
     (copy-sequence (plist-get record :id))))
 
+(defun pichat-job-delete (store id)
+  "Delete saved job ID from STORE, preserving all historical run records.
+Reject deletion while any associated run is queued, active or uncertain."
+  (let ((data (pichat-job--copy (pichat-job-store-data store))))
+    (pichat-job--find data :jobs id)
+    (when (seq-some (lambda (run)
+                      (and (equal (plist-get run :job-id) id)
+                           (not (equal (plist-get run :state) "finished"))))
+                    (plist-get data :runs))
+      (pichat-job--fail "Cannot delete a job with queued, active or uncertain runs"))
+    (setf (plist-get data :jobs)
+          (vconcat (seq-remove (lambda (job) (equal (plist-get job :id) id))
+                               (plist-get data :jobs))))
+    (pichat-job--commit store data)))
+
 (defun pichat-job-continuable-p (run)
   "Whether RUN has stopped with work the user may explicitly continue."
   (and (equal (plist-get run :state) "finished")

@@ -1,12 +1,13 @@
 ;;; pichat-jobs.el --- Manual job setup and inspection -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Saved definitions and one-off attempts share the same executor.  This initial
-;; UI implements manual work only: no schedule or plan adapter controls are shown.
+;; Saved definitions, manual attempts and native timing share one executor.
+;; Schedule controls belong to saved details; there is no plan adapter.
 ;; Saving, running, inspecting and manual uncertainty resolution are distinct.
 
 ;;; Code:
 (require 'pichat-job-executor)
+(require 'pichat-job-schedule-ui)
 (require 'pichat-view)
 (require 'pichat-disclosure)
 (require 'pichat-response-view)
@@ -152,8 +153,9 @@ every definition row."
          (attention (seq-count (lambda (run) (pichat-jobs--attention-p pichat-jobs--owner run)) runs)))
     (setq tabulated-list-format
           (if (eq pichat-jobs--kind 'jobs)
-              (vector (list "Job" title-width t)
-                      '("Latest run" 20 nil) '("Project / target" 0 t))
+              (vconcat (list (list "Job" title-width t))
+                       (unless narrow (list '("Schedule" 26 nil)))
+                       (list '("Latest run" 20 nil) '("Project / target" 0 t)))
             (if narrow
                 (vector (list "Work" title-width t)
                         '("Queued" 16 pichat-jobs--queued-less-p)
@@ -169,9 +171,12 @@ every definition row."
                (lambda (job)
                  (let* ((id (plist-get job :id)) (spec (plist-get job :spec))
                         (latest (pichat-jobs--latest store id runs)))
-                   (list id (vector (pichat-jobs--display (plist-get spec :title))
-                                    (if latest (pichat-jobs--status pichat-jobs--owner latest) "Never run")
-                                    (pichat-jobs--display (pichat-jobs--context spec))))))
+                   (list id (vconcat
+                             (list (pichat-jobs--display (plist-get spec :title)))
+                             (unless narrow
+                               (list (pichat-job-schedule-ui-status (plist-get job :schedule))))
+                             (list (if latest (pichat-jobs--status pichat-jobs--owner latest) "Never run")
+                                   (pichat-jobs--display (pichat-jobs--context spec)))))))
                (append (pichat-job-records store 'jobs) nil))
             (cl-loop for run in (reverse (append runs nil))
                      when (and (or (null pichat-jobs--filter)
@@ -192,8 +197,7 @@ every definition row."
                             (if narrow (list (pichat-jobs--status pichat-jobs--owner run))
                               (list (pichat-jobs--state pichat-jobs--owner run)
                                     (pichat-jobs--result run)
-                                    (if (equal (plist-get (plist-get run :trigger) :kind) "lifecycle")
-                                        "After run" "Manual")))
+                                    (pichat-jobs--trigger-label run)))
                             (unless narrow
                               (list (pichat-jobs--display (pichat-jobs--context (plist-get run :spec))))))))))
     (tabulated-list-init-header)
@@ -251,6 +255,7 @@ every definition row."
          (title (pichat-jobs--display (plist-get (plist-get job :spec) :title))))
     (when (y-or-n-p (format "Delete job ‘%s’? " title))
       (pichat-job-delete store id)
+      (pichat-job-executor-schedule-refresh pichat-jobs--owner)
       (pichat-jobs--changed pichat-jobs--owner)
       (message "Job deleted; run history preserved"))))
 
@@ -692,6 +697,11 @@ Use the chat's input styling, measured at the narrowest displaying window."
                             (lambda () (pichat-jobs--show-detail owner 'runs id))))
       (insert "\n"))))
 
+(defun pichat-jobs--trigger-label (run)
+  "Describe RUN's trigger without conflating timing and outcome."
+  (pcase (plist-get (plist-get run :trigger) :kind)
+    ("lifecycle" "After run") ("once" "Once") ("interval" "Interval") (_ "Manual")))
+
 (defun pichat-jobs--render-run (owner record)
   "Insert cached run RECORD's state and applicable actions for OWNER."
   (let* ((id (plist-get record :id)) (spec (plist-get record :spec))
@@ -705,8 +715,7 @@ Use the chat's input styling, measured at the narrowest displaying window."
                                 (pichat-job-execution-cleanup execution))
                            "Answer captured · Stopping runtime")
                           (t (pichat-jobs--state owner record)))
-                    (if (equal (plist-get (plist-get record :trigger) :kind) "lifecycle")
-                        "After run" "Manual")))
+                    (pichat-jobs--trigger-label record)))
     (when-let* ((event (plist-get record :event)))
       (let ((origin (plist-get event :run-id)))
         (insert "Triggered by: ")
@@ -809,6 +818,8 @@ Use the chat's input styling, measured at the narrowest displaying window."
       (pichat-jobs--insert-settings spec)
       (insert "\n")
       (pichat-jobs--insert-run-times record)
+      (when-let* ((due (plist-get (plist-get record :trigger) :due)))
+        (insert "Scheduled for: " (pichat-job-schedule-ui-time due) "\n"))
       (insert "\n")
       (when-let* ((origin (or (plist-get (plist-get record :trigger) :continue-of)
                              (plist-get (plist-get record :trigger) :repeat-of))))
@@ -844,6 +855,7 @@ Use the chat's input styling, measured at the narrowest displaying window."
     (pichat-jobs--button "Edit…" (lambda () (pichat-job--setup spec id owner)))
     (pichat-jobs--button "Job history" (lambda () (pichat-jobs--show-history owner id)))
     (insert "\n\n")
+    (pichat-job-schedule-ui-insert owner record)
     (if-let* ((latest (pichat-jobs--latest (pichat-jobs--store) id)))
         (let ((run-id (plist-get latest :id)))
           (insert (format "Latest run: %s · %s\n" (pichat-jobs--status owner latest)
@@ -1490,7 +1502,7 @@ its prefix while waiting for the model-list process."
     (message "PiChat queued %s; inspect it in Jobs → Runs" id)))
 
 (defun pichat-job-save-draft ()
-  "Save this draft as a disabled manual definition; never submit work."
+  "Save this draft without submitting work or changing its existing schedule."
   (interactive)
   (pichat-job--editable)
   (when (plist-get pichat-job--draft :continue-of)
@@ -1505,8 +1517,9 @@ its prefix while waiting for the model-list process."
               (plist-get pichat-job--draft :title) name
               (plist-get pichat-job--draft :dirty) nil)
         (pichat-job--render-setup)
+        (pichat-job-executor-schedule-refresh pichat-jobs--owner)
         (pichat-jobs--changed pichat-jobs--owner)
-        (message "Saved job; schedule off, nothing started")))))
+        (message "Saved job; nothing started")))))
 
 (provide 'pichat-jobs)
 ;;; pichat-jobs.el ends here

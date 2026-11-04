@@ -389,11 +389,15 @@ acquire a runtime or UI dependency through that shared record module.
 Job storage/admission lives in `pichat-job-core.el`; `pichat-job-executor.el` owns
 runtime orchestration, and `pichat-job-launch.el` captures/prepares ordinary launch
 settings. `pichat-job-followup.el` supplies pure snapshot/event/prompt policy without
-requiring the store, executor or UI. Manual and lifecycle submissions share the
-same run constructor, queue and admission path. Follow-up dispatch joins the
+requiring the store, executor or UI. Manual, scheduled and lifecycle submissions
+share the same run constructor, queue and admission path. Follow-up dispatch joins the
 originating transition's atomic store transaction; it is not a UI change-hook side
 effect. Bounded immutable context capture is shared with continuation, while their
-authorization prompts remain distinct.
+authorization prompts remain distinct. `pichat-job-schedule.el` validates versioned
+native timing data and computes the next occurrence from an explicit reference
+instant; it owns no store, clock or timers. The executor owns one-shot wakeups;
+core consumes an occurrence and creates its ordinary run in one transaction.
+`pichat-job-schedule-ui.el` supplies the compact saved-job timing Transient.
 
 ## Launching runtimes
 
@@ -801,9 +805,10 @@ buffer in a tab lets Bufferlo record normal local membership there.
 Jobs are optional reusable instructions and captured execution settings. A **job
 run** is one attempt, with its own durable identity and fresh independent Pi
 runtime/Pi session; see `GLOSSARY.md`. Jobs do not require a plan. This initial
-implementation supports **manual prompt jobs, explicit manual continuation and
-optional after-run jobs**. Plan work uses ordinary instructions and the installed
-plans skill, not a special phase adapter. Scheduling is not enabled.
+implementation supports **manual prompt jobs, explicit manual continuation,
+optional after-run jobs and native one-shot/interval schedules**. Plan work uses
+ordinary instructions and the installed plans skill, not a special phase adapter.
+Schedules are opt-in per saved job.
 
 - `M-x pichat-job-new` opens setup without starting a runtime. Edit multiline
   instructions, choose the project/directory, and use **Execution settings…** for
@@ -829,7 +834,8 @@ plans skill, not a special phase adapter. Scheduling is not enabled.
 - Definition details retain the job title and workspace/target, put instructions
   first, and keep **Run job**, **Edit…**, **Job history** and latest-run navigation
   visible. **Job details** separately expands compact model/preset/Tools and
-  explicit **Inspect raw settings…**. Unsupported schedule placeholders and duplicate
+  explicit **Inspect raw settings…**. Saved details also offer **Set schedule…**;
+  timing never appears in unsaved Run once or continuation setup. Duplicate
   latest-response previews are omitted; open the exact run to read its response.
   Run details put the instruction block and rendered answer first, with compact
   execution status/context and no duplicate task title or Response heading.
@@ -1037,6 +1043,63 @@ inspection and queued work is not replayed. External delivery cannot be guarante
 exactly once. There is no automatic retry or special redispatch button; review
 possible prior side effects before submitting any manual replacement.
 
+### Scheduled jobs
+
+Use **Set schedule…** in a saved job's details. This is the only added UI surface:
+its Transient stages **Timing** (`k`, Once/Every), **When/First run** (`s`) and an
+elapsed **Interval** (`i`, whole minutes/hours/days). Enter local dates as
+`YYYY-MM-DD HH:MM`; the host timezone and applicable UTC offset are shown. Invalid
+or nonexistent local times are rejected; repeated DST times require choosing an
+explicit offset. Intervals remain anchored at the first instant, not completion;
+24 hours is elapsed time, not a calendar-day rule, including across DST.
+
+`RET` **Save disabled** saves changed timing without running or enabling it; `q`
+cancels everything staged. `d` stages removal of timing only. Unchanged Save is a
+no-op and preserves an enabled schedule. **Enable…** on the saved definition
+separately confirms future submission. Changing timing disables it until enabled
+again. Ordinary job edits retain timing; each future submission captures the then-
+current saved instructions/settings and after-run default. Already submitted runs
+remain immutable. **Run job** runs now without altering timing. **Disable** prevents
+future submissions but does not cancel queued or active work. Remove schedule and
+delete job invalidate the old timer ownership; deletion retains its existing
+unfinished-run guard. The wide Jobs table separates Schedule from Latest run;
+narrow layouts retain timing in definition details only.
+
+**Initialize Jobs once per Emacs session** (open `M-x pichat-jobs` or New job) to
+restore enabled timers. Merely loading PiChat does not initialize the store.
+Closing/burying its views does not stop timers; Emacs must remain running. At
+initialization, missed intervals advance directly to the next future occurrence;
+missed one-shots show **Run now**, **Reschedule…**, **Dismiss** in the existing
+definition details. Reschedule saves disabled; Dismiss does not run. No queued work
+or missed occurrences are replayed after restart.
+
+While Emacs remains running, a delayed owned timer attempts submission once when
+it fires, even after sleep. Recurring timing then advances strictly past now,
+without firing all missed ticks or drifting with completion. A live one-shot may
+therefore run hours late. Any unfinished occurrence of that definition, including
+queued/uncertain work, makes the tick skip. Other resource/global waits use the
+ordinary bounded queue/admission. Full queue or preparation failure records a
+bounded last-occurrence reason, not a failed worker run or a backlog. A one-shot
+not submitted offers the same explicit intervention actions. Successful one-shots
+become inactive on submission, not worker completion; worker failure never rearms
+them. Definition details link to the exact submitted run; its execution details
+retain the scheduled due time and Once/Interval trigger.
+
+Occurrence consumption and ordinary run creation commit together before launch;
+there is still no exactly-once guarantee for external effects. Timer callbacks
+revalidate durable ownership after edits/disable/delete, and restart never infers
+that interrupted external work is safe to replay. A persistence error stops all
+owned schedule timers and shows a bounded error in definition details; inspect
+storage and restart Emacs after fixing it rather than silently retrying.
+
+Schedules grant no tool approvals, plan acceptance or automatic phase advancement.
+Runtime setup/input still uses the owning execution's existing noninteractive
+startup and attention rules. No cron parser/dependency, external daemon, backend
+selector or execution while Emacs is closed is provided. Timing data is versioned;
+a future cron replacement requires explicit migration, disabling non-equivalent
+rules for review rather than running two timing engines or silently translating
+arbitrary elapsed intervals into cron field steps.
+
 ### Plan work is an ordinary prompt job
 
 Install the plans skill on the chosen target and ensure it can access the
@@ -1100,8 +1163,10 @@ sensitive prompts/arguments. Use one owning
 Emacs per metadata file; changed-file/foreign-lock checks fail rather than
 silently overwrite history. Opening Jobs first initializes restart reconciliation:
 queued work is cancelled, potentially dispatched work remains uncertain, and
-nothing is replayed. Reconciliation never generates new follow-up runs; interrupted
-follow-up dispatch remains visible for inspection. Subsequent browsing/refresh never contacts Pi. Metadata
+old runs are not replayed. Reconciliation never generates new follow-up runs;
+interrupted follow-up dispatch remains visible for inspection. Enabled schedules
+restore future timers under the missed-start policy above. Subsequent browsing/
+refresh never contacts Pi or dispatches execution. Metadata
 has a 16 MiB limit. New run evidence is stored in content-addressed JSON beside
 that file, in `<pichat-jobs-file>.evidence/` (0700 directory, 0600 files), with an
 8 MiB UTF-8 JSON limit per run. Version-2 evidence includes the exact response,

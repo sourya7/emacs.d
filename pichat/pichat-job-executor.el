@@ -1,7 +1,8 @@
 ;;; pichat-job-executor.el --- Independent job execution -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; No schedules or plan adapter.  All callbacks belong to one attempt, process
+;; Native timers submit through ordinary durable admission; no plan adapter.
+;; All execution callbacks belong to one attempt, process
 ;; generation and source.  Acknowledging a prompt is not completion.  Only an
 ;; agent-settled boundary followed by authoritative transcript/state verification
 ;; can release ordinary work.  Uncertainty keeps durable claims and never retries.
@@ -16,7 +17,7 @@
   "Maximum admitted job attempts, including uncertain executions."
   :type 'natnum :group 'pichat-jobs)
 (defcustom pichat-jobs-queue-limit 20
-  "Maximum queued attempts, shared by manual and lifecycle submissions."
+  "Maximum queued attempts, shared by manual, scheduled and lifecycle submissions."
   :type 'natnum :group 'pichat-jobs)
 (defcustom pichat-jobs-control-timeout 30
   "Seconds to wait for readiness, settlement sync or cancellation.
@@ -24,7 +25,7 @@ Running work and user interaction have no implicit timeout."
   :type 'number :group 'pichat-jobs)
 
 (cl-defstruct (pichat-job-executor (:constructor pichat-job-executor--create))
-  store contexts pumping)
+  store contexts pumping schedules schedule-error schedules-closed)
 (cl-defstruct (pichat-job-execution (:constructor pichat-job-execution--create))
   executor id token session process generation source handlers timer watch
   submitted accepted started settled settlement cancelling cleanup retired failure)
@@ -37,13 +38,98 @@ Running work and user interaction have no implicit timeout."
   "Own STORE for execution and explicitly reconcile interrupted work.
 Do not call while another executor owns STORE.  No queued work is replayed."
   (pichat-job-reconcile store)
-  (pichat-job-executor--create :store store :contexts (make-hash-table :test #'equal)))
+  (let ((executor (pichat-job-executor--create
+                   :store store :contexts (make-hash-table :test #'equal)
+                   :schedules (make-hash-table :test #'equal))))
+    (pichat-job-executor-schedule-refresh executor)
+    executor))
 
 (defun pichat-job-executor--changed (executor)
   "Notify cached consumers of EXECUTOR."
   (dolist (handler pichat-job-executor-changed-hook)
     (condition-case err (funcall handler executor)
       (error (message "PiChat Jobs view update failed: %s" (error-message-string err))))))
+
+(defun pichat-job-executor-schedule-stop (executor)
+  "Retire EXECUTOR's timing callbacks without cancelling runs or saved rules."
+  (when (pichat-job-executor-schedules executor)
+    (maphash (lambda (_id entry) (cancel-timer (cdr entry)))
+             (pichat-job-executor-schedules executor))
+    (clrhash (pichat-job-executor-schedules executor)))
+  (setf (pichat-job-executor-schedules-closed executor) t))
+
+(defun pichat-job-executor-schedule-refresh (executor)
+  "Synchronize owned native one-shot timers with EXECUTOR's durable definitions.
+Call explicitly after definition/timing changes, never from a UI redraw or hook.
+Retain identical timers: refreshing a late timer must not skip its due work."
+  (unless (or (pichat-job-executor-schedules-closed executor)
+              (pichat-job-executor-schedule-error executor))
+    (let ((timers (or (pichat-job-executor-schedules executor)
+                      (setf (pichat-job-executor-schedules executor)
+                            (make-hash-table :test #'equal))))
+          (wanted (make-hash-table :test #'equal)))
+      (seq-doseq (job (pichat-job-records (pichat-job-executor-store executor) 'jobs))
+        (let ((schedule (plist-get job :schedule)))
+          (when (eq (plist-get schedule :enabled) t)
+            (puthash (plist-get job :id) schedule wanted))))
+      (maphash (lambda (id entry)
+                 (unless (equal (car entry) (gethash id wanted))
+                   (cancel-timer (cdr entry))
+                   (remhash id timers))) timers)
+      (maphash
+       (lambda (id schedule)
+         (unless (gethash id timers)
+           (let ((entry (cons schedule nil)))
+             (setcdr entry
+                     (run-at-time
+                      (seconds-to-time (plist-get schedule :next)) nil
+                      (lambda ()
+                        (when (and (not (pichat-job-executor-schedules-closed executor))
+                                   (eq entry (gethash id timers)))
+                          (remhash id timers)
+                          (condition-case err
+                              (progn
+                                (pichat-job-schedule-dispatch
+                                 (pichat-job-executor-store executor) id schedule
+                                 (float-time) pichat-jobs-queue-limit)
+                                ;; Rearm before runtime startup can process nested events.
+                                (pichat-job-executor-schedule-refresh executor)
+                                (pichat-job-executor--changed executor)
+                                (pichat-job-executor-pump executor))
+                            (error
+                             ;; Storage failure must not create an unrecorded attempt
+                             ;; or spin/retry the same overdue occurrence.
+                             (pichat-job-executor-schedule-stop executor)
+                             (setf (pichat-job-executor-schedule-error executor)
+                                   (format "Scheduling stopped (%s); inspect storage and restart Emacs"
+                                           (car err)))
+                             (pichat-job-executor--changed executor)
+                             (message "%s" (pichat-job-executor-schedule-error executor))))))))
+             (puthash id entry timers)))) wanted))))
+
+(defun pichat-job-executor-schedule-change (executor id rule)
+  "Save ID's RULE disabled, then update EXECUTOR's timer ownership."
+  (pichat-job-schedule-set (pichat-job-executor-store executor) id rule)
+  (pichat-job-executor-schedule-refresh executor)
+  (pichat-job-executor--changed executor))
+
+(defun pichat-job-executor-schedule-enable (executor id enabled)
+  "Explicitly ENABLED or disable ID's future submissions in EXECUTOR."
+  (when (and enabled (pichat-job-executor-schedule-error executor))
+    (user-error "%s" (pichat-job-executor-schedule-error executor)))
+  (pichat-job-schedule-enable (pichat-job-executor-store executor) id enabled)
+  (pichat-job-executor-schedule-refresh executor)
+  (pichat-job-executor--changed executor))
+
+(defun pichat-job-executor-schedule-run-now (executor id expected)
+  "Explicitly submit ID's missed one-shot owned by EXPECTED in EXECUTOR."
+  (let ((run (pichat-job-schedule-dispatch
+              (pichat-job-executor-store executor) id expected
+              (float-time) pichat-jobs-queue-limit t)))
+    (pichat-job-executor--changed executor)
+    (when run (pichat-job-executor-pump executor))
+    (unless run (user-error "Not submitted; inspect the schedule's current reason"))
+    run))
 
 (defun pichat-job-executor--run (execution)
   "Return EXECUTION's detached durable run."

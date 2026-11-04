@@ -18,6 +18,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'pichat-job-followup)
+(require 'pichat-job-schedule)
 
 (define-error 'pichat-job-error "PiChat job error")
 
@@ -138,8 +139,18 @@ it from the store vector rather than update the stored record."
             (pichat-job--fail "Invalid or duplicate job/run identity"))
           (push id ids))
         (pichat-job--validate-spec (plist-get record :spec))
+        (when (eq kind :jobs)
+          (pichat-job-schedule-validate (plist-get record :schedule)))
         (when (eq kind :runs)
           (pichat-job--validate-followup record)
+          (when (member (plist-get (plist-get record :trigger) :kind) '("once" "interval"))
+            (let ((trigger (plist-get record :trigger)))
+              (unless (and (pichat-job--text-p (plist-get record :job-id))
+                           (pichat-job--text-p (plist-get trigger :schedule-token))
+                           (pichat-job-schedule-instant-p (plist-get trigger :due))
+                           (not (plist-get trigger :repeat-of))
+                           (not (plist-get trigger :continue-of)))
+                (pichat-job--fail "Invalid scheduled run provenance"))))
           (when-let* ((digest (plist-get record :evidence)))
             (unless (and (stringp digest) (string-match-p "\\`[a-f0-9]\\{64\\}\\'" digest))
               (pichat-job--fail "Invalid run evidence reference")))
@@ -168,7 +179,7 @@ it from the store vector rather than update the stored record."
                          (or (null (plist-get record :job-id))
                              (pichat-job--text-p (plist-get record :job-id)))
                          (member (plist-get (plist-get record :trigger) :kind)
-                                 '("manual" "lifecycle"))
+                                 '("manual" "lifecycle" "once" "interval"))
                          (or (not (member state pichat-job--active-states))
                              (pichat-job--text-p (plist-get record :attempt))))
               (pichat-job--fail "Invalid job run lifecycle record")))))))
@@ -179,6 +190,15 @@ it from the store vector rather than update the stored record."
   "Reject broken or duplicate origin/event/successor links in DATA."
   (let ((runs (make-hash-table :test #'equal)))
     (seq-doseq (run (plist-get data :runs)) (puthash (plist-get run :id) run runs))
+    (seq-doseq (job (plist-get data :jobs))
+      (let* ((last (plist-get (plist-get job :schedule) :last))
+             (id (plist-get last :run-id)))
+        (when (equal (plist-get last :state) "submitted")
+          (let* ((run (gethash id runs)) (trigger (plist-get run :trigger)))
+            (unless (and run (equal (plist-get run :job-id) (plist-get job :id))
+                         (member (plist-get trigger :kind) '("once" "interval"))
+                         (equal (plist-get trigger :due) (plist-get last :due)))
+              (pichat-job--fail "Invalid scheduled occurrence/run link"))))))
     (seq-doseq (run (plist-get data :runs))
       (when-let* ((event (plist-get run :stop-event)))
         (unless (equal (plist-get event :run-id) (plist-get run :id))
@@ -372,6 +392,98 @@ Reject deletion while any associated run is queued, active or uncertain."
                                (plist-get data :jobs))))
     (pichat-job--commit store data)))
 
+(defun pichat-job-schedule-set (store id rule)
+  "Save RULE disabled on job ID in STORE, or remove timing when RULE is nil.
+Never submit work.  Replacing timing invalidates all previous timer ownership."
+  (when rule (pichat-job-schedule-validate-rule rule))
+  (let* ((data (pichat-job--copy (pichat-job-store-data store)))
+         (job (pichat-job--find data :jobs id)))
+    (pichat-job--stamp
+     job :schedule (when rule
+                     (list :version 1 :token (pichat-job--id "schedule")
+                           :rule (pichat-job--copy rule) :enabled :false :next nil :last nil)))
+    (setf (plist-get job :updated-at) (pichat-job--now))
+    (pichat-job--commit store data)))
+
+(defun pichat-job-schedule-enable (store id enabled &optional now)
+  "Enable or disable job ID's timing in STORE without cancelling any runs.
+NOW is an optional explicit Unix instant.  Past one-shots cannot be enabled."
+  (let* ((data (pichat-job--copy (pichat-job-store-data store)))
+         (job (pichat-job--find data :jobs id))
+         (schedule (or (plist-get job :schedule) (pichat-job--fail "No schedule configured")))
+         (next (and enabled (pichat-job-schedule-next
+                             (plist-get schedule :rule) (or now (float-time))))))
+    (when (and enabled (not next))
+      (pichat-job--fail "Schedule is in the past; Run now or reschedule"))
+    (setf (plist-get schedule :enabled) (if enabled t :false)
+          (plist-get schedule :next) next
+          (plist-get schedule :token) (pichat-job--id "schedule")
+          (plist-get job :updated-at) (pichat-job--now))
+    (pichat-job--commit store data)))
+
+(defun pichat-job-schedule-dispatch (store id expected now &optional queue-limit run-now)
+  "Consume job ID's EXPECTED occurrence at explicit NOW in STORE atomically.
+Use the ordinary run constructor and queue limit.  Busy/full/preparation
+failures record one bounded disposition, not a failed worker run.
+Stale/early callbacks do nothing.  RUN-NOW explicitly handles a disabled
+missed/skipped one-shot.  Return the submitted run ID, or nil; never launch
+any process here."
+  (let* ((data (pichat-job--copy (pichat-job-store-data store)))
+         (job (seq-find (lambda (item) (equal (plist-get item :id) id)) (plist-get data :jobs)))
+         (schedule (plist-get job :schedule))
+         (once (equal (plist-get (plist-get schedule :rule) :kind) "once"))
+         (due (if run-now (plist-get (plist-get schedule :last) :due)
+                (plist-get schedule :next))))
+    (when (and schedule (equal schedule expected)
+               (if run-now
+                   (and once (not (eq (plist-get schedule :enabled) t))
+                        (member (plist-get (plist-get schedule :last) :state) '("missed" "skipped")))
+                 (and (eq (plist-get schedule :enabled) t) (<= due now))))
+      (let (run-id reason)
+        ;; The shared constructor owns queue bounds and definition exclusion.
+        ;; Scheduling changes only the disposition of a rejected occurrence.
+        (condition-case err
+            (setq run-id
+                  (pichat-job--enqueue-data
+                   store data (list :job-id id :queue-limit queue-limit
+                                    :schedule-trigger
+                                    (list :kind (plist-get (plist-get schedule :rule) :kind)
+                                          :schedule-token (plist-get schedule :token)
+                                          :due due :run-now (if run-now t :false)))))
+          (error
+           (setq reason
+                 (pcase (and (eq (car err) 'pichat-job-error) (cadr err))
+                   ("This job already has a queued or active attempt" "Previous run still unfinished")
+                   ("Job queue is full" "Job queue is full")
+                   (_ (format "Cannot prepare scheduled run (%s)" (car err)))))))
+        (let ((next (and (not once) (pichat-job-schedule-next (plist-get schedule :rule) now))))
+          (setf (plist-get schedule :enabled) (if next t :false)
+                (plist-get schedule :next) next
+                (plist-get schedule :last)
+                (if run-id (list :due due :state "submitted" :run-id run-id)
+                  (list :due due :state "skipped" :reason reason))
+                (plist-get job :updated-at) (pichat-job--now)))
+        ;; Occurrence advance and new run commit together before any launch.
+        (pichat-job--commit store data)
+        run-id))))
+
+(defun pichat-job-schedule-dismiss (store id expected)
+  "Dismiss ID's missed/not-submitted one-shot if EXPECTED still owns it."
+  (let* ((data (pichat-job--copy (pichat-job-store-data store)))
+         (job (pichat-job--find data :jobs id))
+         (schedule (plist-get job :schedule)))
+    (unless (and (equal schedule expected)
+                 (equal (plist-get (plist-get schedule :rule) :kind) "once")
+                 (member (plist-get (plist-get schedule :last) :state) '("missed" "skipped")))
+      (pichat-job--fail "Schedule changed; reopen job details"))
+    (setf (plist-get schedule :enabled) :false
+          (plist-get schedule :next) nil
+          (plist-get schedule :last)
+          (list :due (plist-get (plist-get schedule :last) :due)
+                :state "dismissed" :reason "Dismissed without running")
+          (plist-get job :updated-at) (pichat-job--now))
+    (pichat-job--commit store data)))
+
 (defun pichat-job-continuable-p (run)
   "Whether RUN has stopped with work the user may explicitly continue."
   (and (equal (plist-get run :state) "finished")
@@ -463,6 +575,8 @@ Legacy manual submission delegates here; lifecycle dispatch uses the same data
 constructor inside its originating transition's atomic transaction."
   (when (plist-get options :event)
     (pichat-job--fail "Lifecycle events must originate in a recorded stop transition"))
+  (when (plist-get options :schedule-trigger)
+    (pichat-job--fail "Scheduled runs must consume a recorded occurrence"))
   (let* ((data (pichat-job--copy (pichat-job-store-data store)))
          (id (pichat-job--enqueue-data store data options)))
     (pichat-job--commit store data)
@@ -518,12 +632,15 @@ constructor inside its originating transition's atomic transaction."
            (run (list :id (pichat-job--id "run") :job-id job-id
                       :created-at now :updated-at now
                       :spec (pichat-job--validate-spec (pichat-job--copy spec))
-                      :trigger (if lifecycle
-                                   (list :kind "lifecycle" :origin-run (plist-get event :run-id)
-                                         :event-id (plist-get event :id))
-                                 (append '(:kind "manual")
-                                         (when repeat-of (list :repeat-of repeat-of))
-                                         (when continue-of (list :continue-of continue-of))))
+                      :trigger (cond
+                                (lifecycle
+                                 (list :kind "lifecycle" :origin-run (plist-get event :run-id)
+                                       :event-id (plist-get event :id)))
+                                ((plist-get options :schedule-trigger)
+                                 (pichat-job--copy (plist-get options :schedule-trigger)))
+                                (t (append '(:kind "manual")
+                                           (when repeat-of (list :repeat-of repeat-of))
+                                           (when continue-of (list :continue-of continue-of)))))
                       :state "queued" :result nil
                       :attempt nil :reason nil :summary nil :runtime-id nil :session-file nil)))
       (when lifecycle
@@ -744,6 +861,20 @@ This deliberately cannot infer remote survival or safe release from Emacs exit."
                                '(:state "interrupted" :reason "Interrupted before follow-up dispatch; not replayed")))
           (when (equal state "queued")
             (pichat-job--stamp run :finished-at (plist-get run :updated-at))))))
+    (let ((now (float-time)))
+      (seq-doseq (job (plist-get data :jobs))
+        (when-let* ((schedule (plist-get job :schedule))
+                    ((eq (plist-get schedule :enabled) t))
+                    (due (plist-get schedule :next))
+                    ((<= due now)))
+          (setq changed t)
+          (let ((next (pichat-job-schedule-next (plist-get schedule :rule) now)))
+            (setf (plist-get schedule :next) next
+                  (plist-get schedule :enabled) (if next t :false)
+                  (plist-get schedule :last)
+                  (list :due due :state (if next "skipped" "missed")
+                        :reason "Emacs restarted; missed work not replayed")
+                  (plist-get job :updated-at) (pichat-job--now))))))
     (when changed (pichat-job--commit store data))
     changed))
 

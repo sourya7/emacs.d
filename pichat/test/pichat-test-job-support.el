@@ -49,6 +49,7 @@ until BODY submits work.  Fixture teardown retires handlers before stopping."
                           (json-serialize ,script :null-object nil :false-object :json-false)
                           'utf-8))))
              (unwind-protect (save-window-excursion ,@body)
+               (pichat-job-executor-schedule-stop executor)
                (maphash (lambda (_id execution) (pichat-job-executor--retire execution))
                         (pichat-job-executor-contexts executor))
                (dolist (runtime (pichat-session-list))

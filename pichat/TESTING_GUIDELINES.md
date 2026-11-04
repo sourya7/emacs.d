@@ -133,6 +133,11 @@ scripts/status files. Its example notification goes only to a disposable loopbac
 HTTP listener—never real notification services. Shared job fixtures decode UTF-8
 serialized scripts before writing, including Unicode context cases. Evidence files use the fixture's
 temporary metadata root, never normal user storage.
+Schedule calculation/transactions use explicit-clock fixtures in the core suite;
+owned timer, staged timing/confirmation and local DST picker checks live in the
+Jobs suite. Full mode also runs a real native timer through the ordinary offline
+Pi executor. All use temporary metadata and retire owned timers during teardown;
+never enable a test schedule in the user's store or adjust the system clock.
 The SSH runner includes an isolated captured-target background job and independent
 post-completion actual-Pi exit check; it reuses
 the existing real-SSH fixture rather than the user's project or sessions.
@@ -174,7 +179,11 @@ cover capture preservation, stale callbacks, pending pickers and continuation
 restrictions. The `pichat-integration-jobs-live-ui-followup` scenario also supports
 terminal Emacs: it drives After this run selection, None bypass, Run once and
 origin/successor navigation using real Pi with the offline provider. Select that
-exact test for a terminal run. Use the same result
+exact test for a terminal run. The
+`pichat-integration-jobs-live-ui-schedule` scenario likewise supports terminal
+Emacs: it drives actual timing Transient keys, staged Cancel/Save, separate
+Enable/Disable and a real timer-triggered offline Pi run without focus changes.
+Use the same result
 log and explicit `kill-emacs` wrapper above. Never run it in the user's live Emacs.
 
 These are programmatic checks, not human visual acceptance. A graphical frame can

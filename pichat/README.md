@@ -813,7 +813,7 @@ Schedules are opt-in per saved job.
 - `M-x pichat-job-new` opens setup without starting a runtime. Edit multiline
   instructions, choose the project/directory, and use **Execution settings…** for
   a Transient with preset (`p`), Tools (`x`), concrete run-local model (`m`),
-  target (`t`) and workspace coordination (`w`), with values beside each control
+  and target (`t`), with values beside each control
   and customized Tools highlighted. Sub-pickers return to that menu;
   `RET` applies settings to setup without saving or running, and `q` discards
   staged changes. Choose a concrete model before saving/submitting if none is configured.
@@ -831,59 +831,75 @@ Schedules are opt-in per saved job.
   dedicated deletion keybinding. Compact Runs tables show Work, Queued, and State / result;
   queue times use local date/time to the minute; Project / target stays in wide tables and
   run details. Compact Jobs tables retain their project/target context.
-- Definition details retain the job title and workspace/target, put instructions
-  first, and keep **Run job**, **Edit…**, **Job history** and latest-run navigation
-  visible. **Job details** separately expands compact model/preset/Tools and
-  explicit **Inspect raw settings…**. Saved details also offer **Set schedule…**;
-  timing never appears in unsaved Run once or continuation setup. Duplicate
-  latest-response previews are omitted; open the exact run to read its response.
-  Run details put the instruction block and rendered answer first, with compact
-  execution status/context and no duplicate task title or Response heading.
-  Definition/run reports and New/Edit/Repeat/Continue setup share the chat's
-  read-only input-bar styling for instructions and fold after five visual lines
-  at the narrowest displayed width. Additional continuation instructions use a
-  separate block with independent folding. Setup and reports wrap visually;
-  resizing preserves folding choices. Editors and exact-source views stay plain text. Click the block or press `RET`/`TAB` within it to expand/collapse; a folded
-  block ends in `…`, and an expanded block offers **Show less**. Short instructions
-  need no folding control. In details, `TAB` toggles only the disclosure at point
-  (instructions, **More actions**, **Job details** or **Execution details**); elsewhere it moves to
-  the next button without activating it. `S-TAB` moves backward without toggling.
-  Ordinary action buttons require `RET` or a click. Setup uses `TAB`/`S-TAB` only
-  for button navigation, including from outside buttons; fold setup instruction
-  blocks with `RET` or a click. Terminal and graphical
-  TAB events and optional Evil Normal state follow these same rules. Refresh/
-  resize preserves explicit folding choices.
-  When applicable, **Continue work…** comes first, followed by
-  **Preview conversation** and **Diagnostics**. **More actions** lists secondary
-  actions one per line; **Continue in chat…** explains its interactive behavior
-  through hover/help text and confirmation rather than inline prose.
-  It discloses **Repeat…** for finished runs, **Continue in chat…**
-  and **Save as job…** actions when applicable, plus job history/definition,
-  response source/copy controls and **Release reservation…** for uncertain runs.
-  **Diagnostics** is directly accessible alongside conversation inspection; with
-  no retained runtime it shows the recorded execution note instead of live logs.
-  **Execution details** expands separately, with workspace/target, reservation
-  state, compact model/preset/Tools and whole-second
-  local times using Emacs's timezone, with timezone
-  labels reflecting each date's daylight-saving rules. The Runs queue column and
-  latest-run summaries also use local time; chronological sorting is unchanged.
-  It omits the default overlap policy; non-default policies remain visible. Saved-session
-  path copying remains available there. The response-copy shortcut remains available
-  even when More actions is collapsed. Repeated runs offer **Previous
-  run** directly in execution details. **Inspect raw settings…** opens
-  the complete record directly from either details section; there is no intermediate
-  settings screen. Full instructions remain in the expandable primary block.
-  Raw records preserve the saved-session path, exact UTC timestamps, internal IDs,
-  all policies and complete captured configuration/inputs. IDs have no routine rows
-  or dedicated copy buttons; navigation still uses exact identities, including for
-  duplicate job titles. Raw inspection shows only the complete record, without a
-  repeated title, separate ID heading or warning paragraph. It is explicit; normal
-  navigation never requires it. Merely inspecting never launches Pi.
-  Execution completion is distinct from task quality or domain success.
-  **Repeat…** reviews historical settings and records repeat provenance;
-  it does not silently use a changed definition or undo previous effects. It may
-  repeat file changes or external actions. A repeat retains its saved definition's
-  overlap exclusion. **Save as job…** opens setup, not execution.
+- Saved-job details put instructions first, followed by a clickable latest-run
+  summary, schedule and workspace/target. Completed summaries use the recorded
+  finish time; older records without one label their queue time instead. Enabled
+  schedules show their next occurrence; disabled timing does not imply authorization.
+  Open the exact run to read its answer, without a duplicate response preview.
+  The latest-run link includes manual runs. In Details, **Last occurrence: …**
+  itself links to the run submitted by that occurrence, not a future run; it can
+  still be queued/running. Occurrences without a submitted run remain plain text.
+  That run and Latest run coincide only when no newer attempt exists.
+- Run reports put the compact outcome/time and rendered answer first. **Details**
+  expands the original instructions, continuation guidance, workspace/target,
+  model/preset/Tools, full identities, trigger, local
+  timeline and related-run links. Normal follow-up status is there too; failed
+  dispatch, input requests, blockers and uncertainty stay visible without opening
+  a menu. **View chat** and active **Cancel run…** remain directly available.
+- Both reports show the captured title in their header, with an abbreviated saved
+  job ID when applicable; one-off runs have no saved-job ID. Full IDs are in
+  **Details** and all operations use exact identities, including duplicate titles.
+  `q` still returns without a permanent Back hint.
+- Native `a`, or Evil Normal `g a` in detail buffers, opens the context-sensitive
+  **Actions** Transient. There is no permanent Actions label/button in reports. Saved jobs offer **Run job**, **Edit…**, **Run history**
+  and schedule commands. **Run job** is omitted while this job has unfinished
+  work or the shared queue is full, and rechecked when invoked. Run reports offer
+  conversation preview, diagnostics,
+  response copy/source, repeat, chat continuation, saving and related navigation
+  when applicable. **Continue work…** comes first for recoverable runs; it remains
+  distinct from **Continue in chat…**. Uncertain runs offer reservation release and
+  supported remote-exit inspection, retaining their existing safeguards.
+  Commands recheck the exact report/current state; closing the menu does nothing.
+  **Set schedule…** / **Change…** opens the existing staged timing Transient;
+  timing remains saved-job-only. **Run now** handles a
+  missed one-shot, whereas **Run job** is an ordinary manual attempt.
+  **Diagnostics** uses the recorded execution note when no runtime is retained.
+- Saved-job **Edit…** and the Jobs row's `e` (Evil `g e`) open the same compact
+  staged Transient over the originating view, without a setup buffer. Job fields
+  are `n` Name, `i` Instructions, `d` Workspace and `a` After this run; execution
+  fields are `p/m/x/t` for Preset/Model/Tools/Target, with inline values.
+  The multiline instructions editor's Apply returns to this menu without saving;
+  its Cancel keeps the previously staged text. Other pickers return here too.
+  `RET` **Save** updates that exact definition without another name prompt or
+  starting work; `q`/explicit Transient quit discards all staged changes.
+  Save preserves timing and historical runs; no-op Save preserves the entire
+  definition and captured settings. Validation/write errors retain the editable
+  draft. Pending pickers block Save; deleted, changed or retargeted origins are
+  rejected. Opening another editing menu invalidates late returns from the old one.
+- **Details** holds information and contextual links; routine operations live in
+  **Actions**. **Inspect raw settings…** is under **Inspect** (`I`) in both reports.
+  Run reports also offer **Copy saved-session path** (`f`) there when a path is
+  recorded; it copies the reference without opening or checking the file.
+  **Recheck remote Pi exit** (`x`) is menu-only when supported; uncertainty stays
+  visible and rechecking never releases a reservation by itself.
+  Raw inspection shows the complete record directly, including exact UTC times,
+  internal IDs, all policies and captured configuration/inputs. There is no
+  intermediate settings screen or raw-record detour for ordinary navigation.
+  Execution completion remains distinct from task quality or domain success.
+  **Repeat…** reviews historical settings and records repeat provenance; it does
+  not silently use a changed definition or undo effects. It may repeat file changes
+  or external actions and retains the definition's overlap exclusion.
+  **Save as job…** opens setup, not execution.
+- Reports and New/Repeat/Continue setup share the chat's read-only input-bar
+  styling and five-visual-line instruction folding at the narrowest displayed
+  width. Run instructions live inside **Details**; continuation guidance folds
+  independently. Click or press `RET`/`TAB` within report folds to toggle them;
+  short blocks need no control. A folded block ends in `…`; expanded blocks offer
+  **Show less**. Elsewhere `TAB`/`S-TAB` navigate without activating commands or
+  links. Open Actions with its keybinding. Setup uses TAB only for button
+  navigation; fold its instructions with RET/click. Native/Evil and terminal/GUI
+  follow the same rules. Refresh/resize retain folding choices and reading position;
+  editors and exact-source views remain plain text.
 - Optional `pichat-evil-setup` gives the list Normal-state `RET`, `TAB`, `zv`
   preview, `gr` refresh, `gc` new, `gx` run, `ge` edit, `gh` history and `ga`
   attention. Native `R` or Evil `g R` invokes **Release reservation** on the
@@ -916,7 +932,7 @@ restart. It has no fork/switch actions and is not Session History or saved-sessi
 browsing. Older Markdown-only captures remain readable with a labelled fallback;
 PiChat never reconstructs historical evidence from a subsequently continued file.
 Finished runs with saved-session references offer **Continue in chat…** under
-**More actions**: an explicit
+**Actions**: an explicit
 new ordinary runtime on the captured target using the current default preset,
 not rerunning the job. New prompts extend the same saved Pi session file, not a
 clone, but cannot alter the historical run report or captured transcript.
@@ -924,15 +940,15 @@ Managed duplicate writers are refused; uncertain execution must be resolved firs
 Job-owned chats allow
 inspection and existing extension UI responses, not additional prompts, source
 switching, reconfiguration or preferred designation; use Jobs to repeat/cancel.
-Required interactions show Needs input and retain the slot/resource claims until
+Required interactions show Needs input and retain the concurrency slot until
 answered or cancelled. There is no automatic approval or waiting-input timeout.
 Killing an active owning chat is refused; closing a window or burying Jobs is
 harmless. After synchronized evidence is durably captured, the owning runtime is
 stopped through the existing backend shutdown barrier before completion releases
-claims. During that stop barrier the report status says **Answer captured ·
+its concurrency slot. During that stop barrier the report status says **Answer captured ·
 Stopping runtime**; finished reports show no pending-cleanup message.
 SSH additionally requires verified actual-Pi exit; transport EOF alone is
-insufficient. Cleanup failure retains uncertainty, claims and captured evidence.
+insufficient. Cleanup failure retains uncertainty, the slot and captured evidence.
 An existing chat remains read-only; stopped manager entries are retained until
 explicitly forgotten. Runtime, saved Pi session and durable run evidence have
 independent lifetimes. Pending input, cancellation and uncertain execution do not
@@ -943,11 +959,10 @@ model, command and target/path mappings. Instruction/name edits preserve them.
 Changing execution explicitly re-resolves the preset/target after confirmation;
 cancelling a sub-picker retains earlier staged choices without changing setup.
 Closing the settings menu without applying leaves setup untouched. Model/workspace/target edits preserve
-the selected Tools; changing preset explicitly confirms resetting them. Setup
-and detail summaries show non-default overlap policies; the ordinary modifier
-policy stays out of the way. Explicit raw inspection retains every declared policy, and
-**Execution settings… → Workspace coordination** changes it separately from tool
-permissions. Routine screens omit generic sandbox/save disclaimers. Setup warns
+the selected Tools; changing preset explicitly confirms resetting them.
+There is no workspace coordination setting or workspace locking. Old resource
+metadata is retained for historical inspection only, not used for admission or
+as a read-only guarantee. Routine screens omit generic sandbox/save disclaimers. Setup warns
 when the current preset no longer matches its capture. The environment, credentials and installed
 extension code remain live: this is not a frozen or sandboxed environment.
 Complete command wrappers, ephemeral sessions and conversation-loading flags are
@@ -959,8 +974,8 @@ not supported by jobs. Explicit targets never fall back locally.
 review-needed runs. It opens the existing setup, not a running agent. Review the
 captured settings, optionally choose a different provider/model in **Execution
 settings…**, or add **Additional instructions…**, then select **Run once**.
-The original instructions, workspace, target/path identity and resource claims
-remain fixed; the settings Transient omits target/coordination controls for
+The original instructions, workspace and target/path identity
+remain fixed; the settings Transient omits the target control for
 continuations. Explicit execution edits still re-resolve configuration and are
 rejected if the captured target/path identity changes; no silent target fallback.
 Continuation is one run, not a reusable job definition.
@@ -986,10 +1001,11 @@ inspected/released first. Merely opening/cancelling setup creates no new run.
 
 ### After-run jobs
 
-Setup offers **After this run: None [Change…]**. Choose a saved ordinary job to
+Setup offers **After this run: None [Change…]**; the saved-job editor uses `a`.
+Choose a saved ordinary job to
 review, report, notify or perform other work authorized by that job's own
 instructions. Its provider/model, preset, Tools and target are configured through
-ordinary job setup—not inherited from the originating run. **View job** inspects
+ordinary job setup or saved-job editing—not inherited from the originating run. **View job** inspects
 the selected definition. Duplicate titles remain distinct picker choices.
 Choosing **None** in run setup bypasses the action without editing its saved
 default; **Save job…** explicitly saves the default for future submissions.
@@ -1005,11 +1021,11 @@ trigger it, and later cleanup/manual resolution does not trigger it again.
 Follow-ups are ordinary runs in the same bounded queue, admitted by the same
 executor into fresh independent runtimes/Pi sessions. Several workers may queue
 uses of the same follow-up definition; only one occurrence executes at a time.
-Resource conflicts and global limits still apply. A context-only reviewer should
-use its own directory and appropriate coordination settings; it need not read or
-claim the worker checkout. A modifying reviewer waits normally. These declarations
-coordinate managed work, not sandbox its tools. Uncertain workers retain their
-reservations and global slots; a follow-up cannot release them or bypass capacity.
+Global limits still apply, but workspaces are not locked: a reviewer may overlap
+another job using the same directory. Choose separate directories yourself when
+changes could conflict; PiChat does not provision isolated workspaces.
+Uncertain workers retain their global slots; a follow-up cannot release them
+or bypass capacity.
 
 The follow-up receives a versioned, immutable stop envelope: origin identity,
 bounded instructions/outcome/error and up to 32,000 characters of captured
@@ -1017,8 +1033,10 @@ conversation context. Context is embedded for either local or SSH execution; no
 host-only evidence path is advertised as remotely readable. Missing, corrupt,
 truncated or uncertain context is marked partial. On uncertainty only already
 synchronized context is available; it may predate the stop. Queued cancellation
-has no conversation. Reports link **After this run** to the exact successor and
-**Triggered by** back to its origin; raw inspection includes the captured envelope.
+has no conversation. The run report's **After this run: …** status text itself
+links to the exact successor; pending/undispatched status without a successor is
+plain text. **Triggered by** links back to the origin; raw inspection includes the
+captured envelope.
 
 **Context can contain sensitive tool output and is sent to the selected model.**
 Worker output is untrusted data, not instructions or authorization. External
@@ -1045,8 +1063,8 @@ possible prior side effects before submitting any manual replacement.
 
 ### Scheduled jobs
 
-Use **Set schedule…** in a saved job's details. This is the only added UI surface:
-its Transient stages **Timing** (`k`, Once/Every), **When/First run** (`s`) and an
+Use **Actions → Set schedule…** (`a`, Evil `g a`) in a saved job's details. The timing
+Transient stages **Timing** (`k`, Once/Every), **When/First run** (`s`) and an
 elapsed **Interval** (`i`, whole minutes/hours/days). Enter local dates as
 `YYYY-MM-DD HH:MM`; the host timezone and applicable UTC offset are shown. Invalid
 or nonexistent local times are rejected; repeated DST times require choosing an
@@ -1055,7 +1073,7 @@ explicit offset. Intervals remain anchored at the first instant, not completion;
 
 `RET` **Save disabled** saves changed timing without running or enabling it; `q`
 cancels everything staged. `d` stages removal of timing only. Unchanged Save is a
-no-op and preserves an enabled schedule. **Enable…** on the saved definition
+no-op and preserves an enabled schedule. **Enable…** in the saved job's Actions
 separately confirms future submission. Changing timing disables it until enabled
 again. Ordinary job edits retain timing; each future submission captures the then-
 current saved instructions/settings and after-run default. Already submitted runs
@@ -1069,21 +1087,21 @@ narrow layouts retain timing in definition details only.
 restore enabled timers. Merely loading PiChat does not initialize the store.
 Closing/burying its views does not stop timers; Emacs must remain running. At
 initialization, missed intervals advance directly to the next future occurrence;
-missed one-shots show **Run now**, **Reschedule…**, **Dismiss** in the existing
-definition details. Reschedule saves disabled; Dismiss does not run. No queued work
+missed one-shots show their status in definition details and offer **Run now**,
+**Reschedule…**, **Dismiss** under Actions. Reschedule saves disabled; Dismiss does not run. No queued work
 or missed occurrences are replayed after restart.
 
 While Emacs remains running, a delayed owned timer attempts submission once when
 it fires, even after sleep. Recurring timing then advances strictly past now,
 without firing all missed ticks or drifting with completion. A live one-shot may
 therefore run hours late. Any unfinished occurrence of that definition, including
-queued/uncertain work, makes the tick skip. Other resource/global waits use the
+queued/uncertain work, makes the tick skip. Global capacity waits use the
 ordinary bounded queue/admission. Full queue or preparation failure records a
 bounded last-occurrence reason, not a failed worker run or a backlog. A one-shot
 not submitted offers the same explicit intervention actions. Successful one-shots
 become inactive on submission, not worker completion; worker failure never rearms
-them. Definition details link to the exact submitted run; its execution details
-retain the scheduled due time and Once/Interval trigger.
+them. The definition's Details links to the exact submitted run; the run's Details
+retains the scheduled due time and Once/Interval trigger.
 
 Occurrence consumption and ordinary run creation commit together before launch;
 there is still no exactly-once guarantee for external effects. Timer callbacks
@@ -1118,35 +1136,35 @@ missing or ambiguous, stop; do not create a substitute execution record.
 Choose a preset with the tools that work requires. PiChat does not parse phase
 headings or prove human approval; the agent and plans skill handle bookkeeping.
 Avoid simultaneous changes to a shared authoritative plan from different worktrees:
-workspace coordination does not discover plan references in prompts. Skill use and
+PiChat does not lock workspaces or discover plan references in prompts. Skill use and
 plan access are not guaranteed merely by putting these instructions in a job.
 
 `pichat-jobs-max-concurrency` defaults to 3 and the shared bounded queue to 20
 (`pichat-jobs-queue-limit`). Manual submissions reject a second queued/active
 occurrence of the same definition; lifecycle submissions may queue but are
 serialized by definition during admission.
-Advanced workspace coordination distinguishes modifiers, stable readers and
-readers accepting changing files. Default to avoiding overlapping modifications;
-readers can overlap where declared compatible. Claims use the execution target
-and canonical workspace/project root, not a blanket project-wide single-run
-rule. Different worktrees can run together. This is Emacs-local coordination,
-not enforcement against user edits, external agents or equivalent hosts reached
-through different SSH aliases. Declaring read-only never restricts tools.
+Different jobs may execute concurrently in the same workspace, including old
+jobs with saved resource/access metadata. There is no workspace lock, access-mode
+inference, or automatic worktree/workspace isolation. Arrange separate workspaces
+or avoid concurrent submissions when changes could conflict. Same-job exclusion,
+global concurrency, runtime ownership and saved-session duplicate-writer guards
+remain independent safeguards; they do not prevent conflicting file edits.
 
 Prompt acknowledgment is not completion. A run finishes only after agent
 settlement, a snapshot requested after that settlement, and authoritative idle
 state verification. Synchronization failure, process loss and interrupted
-execution retain uncertain state and claims; no work is retried/replayed.
+execution retain uncertain state and a concurrency slot; no work is retried/replayed.
 Cancellation requests abort but does not equate its acknowledgment with stopped
-tools. Aborted/abnormally ended modifying work requires descendant/workspace
-inspection before claims can be released. **Recheck remote Pi exit** reuses the
+tools. Aborted/abnormally ended work requires descendant/workspace
+inspection before its slot can be released; legacy read-only declarations do not
+waive this requirement. **Recheck remote Pi exit** reuses the
 existing verified SSH lifetime observer where its process is retained; it cannot
 prove descendant exit. The action is offered only with a retained verified SSH
-lifetime, under Execution details; local runs have no irrelevant SSH message.
+lifetime, under Actions; local runs have no irrelevant SSH message.
 Uncertain runs display **Needs inspection** in the existing table and report,
 without extra scheduling columns or sections. Their reservations still occupy
-workspace/global admission capacity. A waiting run links to its blocker.
-**Release reservation…** (under More actions or via the selected-row command)
+global admission capacity, not a workspace lock. Same-job waits link to the blocking run.
+**Release reservation…** (under Actions or via the selected-row command)
 asks for an inspection note and confirms that queued jobs may start and running
 tools are not stopped. It records an explicit human acknowledgement as Needs
 review, not verified shutdown or success. Cancelling the prompts changes nothing.
@@ -1173,11 +1191,11 @@ that file, in `<pichat-jobs-file>.evidence/` (0700 directory, 0600 files), with 
 response entry/source identity, run-end leaf and structured active-branch entries,
 including tool output/thinking; it can be sensitive. Version-1 Markdown-only
 captures remain readable without migration. Overflow or publication failure retains
-uncertainty/claims instead of silently truncating a report or declaring completion.
+uncertainty and its slot instead of silently truncating a report or declaring completion.
 Evidence is published before the metadata reference; interrupted commits may leave
 unreferenced files. Back up/move evidence with metadata. There is no automatic
 pruning of records, evidence, or saved Pi sessions; archive only when no
-work/uncertain claims need preservation. Control waits default to 30 seconds
+work/uncertain executions need preservation. Control waits default to 30 seconds
 (`pichat-jobs-control-timeout`); active model work has no implicit timeout.
 
 ## Diagnostics: inspect versus setup

@@ -2,8 +2,8 @@
 
 ;;; Commentary:
 
-;; Data-only job/run storage and resource admission.  No runtime, timer, UI or
-;; Org dependency.  The executor must resolve configuration/resource identities
+;; Data-only job/run storage and bounded admission.  No runtime, timer, UI or
+;; Org dependency.  The executor must resolve captured execution configuration
 ;; before enqueueing, persist admission before spawning, and supply verified
 ;; synchronization/release evidence before finishing.  Agent output is not that
 ;; evidence.  This module never executes stored instructions or Lisp.
@@ -71,13 +71,14 @@ it from the store vector rather than update the stored record."
                (pichat-job--text-p (plist-get spec :directory))
                (file-name-absolute-p (plist-get spec :directory))
                (consp (plist-get spec :configuration))
-               (keywordp (car (plist-get spec :configuration)))
-               (vectorp (plist-get spec :resources))
-               (> (length (plist-get spec :resources)) 0))
+               (keywordp (car (plist-get spec :configuration))))
     (pichat-job--fail "Invalid captured job specification"))
   (when (and (plist-get spec :after-job-id)
              (not (pichat-job--text-p (plist-get spec :after-job-id))))
     (pichat-job--fail "Invalid after-run job reference"))
+  ;; Old snapshots retain their resource metadata for historical fidelity only.
+  (when (and (plist-member spec :resources) (not (vectorp (plist-get spec :resources))))
+    (pichat-job--fail "Invalid legacy job resource metadata"))
   (let (seen)
     (seq-doseq (claim (plist-get spec :resources))
       (let ((key (plist-get claim :key)))
@@ -612,7 +613,7 @@ constructor inside its originating transition's atomic transaction."
         (when continue-of
           (unless (pichat-job-continuable-p origin)
             (pichat-job--fail "Only interrupted or review-needed work can be continued"))
-          (dolist (key '(:directory :resources :instructions))
+          (dolist (key '(:directory :instructions))
             (unless (equal (plist-get original key) (plist-get spec key))
               (pichat-job--fail "Continuation must preserve original %s" key)))
           (dolist (key '(:transport :runtime-directory :mappings :strict))
@@ -696,24 +697,11 @@ No external execution occurs here.  Later resolution never observes a new stop."
       (pichat-job--stamp run :stop-event event)
       (pichat-job--stamp run :dispatch dispatch))))
 
-(defun pichat-job--conflicting-resource (left right)
-  "Return a resource key conflicting between LEFT and RIGHT run snapshots."
-  (catch 'conflict
-    (seq-doseq (a (plist-get (plist-get left :spec) :resources))
-      (seq-doseq (b (plist-get (plist-get right :spec) :resources))
-        (when (and (equal (plist-get a :key) (plist-get b :key))
-                   (not (member "observe" (list (plist-get a :access)
-                                               (plist-get b :access))))
-                   (member "write" (list (plist-get a :access)
-                                         (plist-get b :access))))
-          (throw 'conflict (plist-get a :key)))))
-    nil))
-
 (defun pichat-job-admission (store id &optional concurrency)
   "Return admission disposition for queued ID without mutating STORE.
-CONCURRENCY defaults to 3.  Uncertain attempts retain their claims and slots.
-Earlier conflicting queued attempts take precedence, avoiding writer starvation.
-Keys are :ready, :reason and optionally :blocking-run and :resource."
+CONCURRENCY defaults to 3.  Uncertain attempts retain their slots.
+Only the global limit and same-job exclusion apply; workspaces are not locked.
+Keys are :ready, :reason and optionally :blocking-run."
   (let* ((data (pichat-job-store-data store))
          (run (pichat-job--find data :runs id))
          (runs (plist-get data :runs))
@@ -741,11 +729,7 @@ Keys are :ready, :reason and optionally :blocking-run and :resource."
                                 (equal (plist-get run :job-id) (plist-get other :job-id)))
                        (throw 'blocked
                               (list :ready :false :reason "Previous run of this job"
-                                    :blocking-run (plist-get other :id))))
-                     (when-let* ((key (pichat-job--conflicting-resource run other)))
-                       (throw 'blocked
-                              (list :ready :false :reason "Conflicting workspace/resource"
-                                    :blocking-run (plist-get other :id) :resource key)))))))
+                                    :blocking-run (plist-get other :id))))))))
              nil)
            '(:ready t :reason nil)))))))
 
@@ -826,7 +810,7 @@ QUEUE-LIMIT bounds follow-up enqueueing in this same transaction (default 20)."
 (defun pichat-job-reconcile (store)
   "Persist restart reconciliation of STORE without replaying any work.
 Call only when no executor still owns this store.  Queued work is cancelled;
-possibly dispatched work becomes uncertain and retains resource claims.
+possibly dispatched work becomes uncertain and retains its concurrency slot.
 This deliberately cannot infer remote survival or safe release from Emacs exit."
   (let ((data (pichat-job--copy (pichat-job-store-data store))) changed)
     ;; Distinguish a queued successor (never spawned) from an ambiguous one.
@@ -852,7 +836,7 @@ This deliberately cannot infer remote survival or safe release from Emacs exit."
                 (plist-get run :result) (and (equal state "queued") "cancelled")
                 (plist-get run :reason) (if (equal state "queued")
                                             "Not dispatched; queue not replayed after restart"
-                                          "Execution interrupted; inspect before releasing claims")
+                                          "Execution interrupted; inspect before releasing its slot")
                 (plist-get run :updated-at) (pichat-job--now))
           (when (and (or (plist-get run :after-job)
                          (plist-get (plist-get run :spec) :after-job-id))

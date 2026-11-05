@@ -172,7 +172,7 @@ model provider or normal job metadata. Keep these opt-in live-UI and SSH checks
 separate from ordinary batch tests because their execution requirements
 differ; reusable mechanics belong in support, not imports of another test suite.
 The additional `pichat-integration-jobs-live-ui-continuation` scenario drives
-More actions, Continue work, optional instructions, Run once and Previous run in a
+Actions, Continue work, optional instructions, Run once and Previous run in a
 live frame with the offline provider. It can run alone in a separate `emacs -Q -nw`
 instance when no graphical display exists; select that exact test or the terminal
 subset below (the frame-resize scenario requires graphics). The
@@ -189,7 +189,7 @@ Emacs: it drives actual timing Transient keys, staged Cancel/Save, separate
 Enable/Disable and a real timer-triggered offline Pi run without focus changes.
 The interval scenario checks one real elapsed-interval occurrence, anchored future
 rearming and Disable; the cached attention/uncertainty scenario also works without
-graphics and checks both resource/global blockers. The selected-phase scenario uses
+graphics and checks global capacity without workspace blocking. The selected-phase scenario uses
 an explicitly installed plans skill (`PICHAT_TEST_PLANS_SKILL=/path/to/plans`) and
 only a temporary local plan/artifact. Scripted offline tool choices read the skill
 contracts, complete the selected phase, run structural validation and leave the
@@ -207,8 +207,35 @@ result/exit wrapper above and selector:
 The manual-flow scenario covers save, one-off/saved submission, reports and history
 in either live terminal or graphical Emacs. The separate graphical-resize scenario
 requires a GUI-capable Emacs and working display for real frame-resize assertions.
-A terminal-only Emacs build cannot supply that check merely by setting DISPLAY. Optional Evil runs additionally load `evil` and
-`pichat-evil`, enable `evil-mode`, and call `pichat-evil-setup` before running tests.
+A terminal-only Emacs build cannot supply that check merely by setting DISPLAY.
+The Actions scenario checks the absence of a permanent report label/button and
+drives actual native a/Evil g a entry, quit, raw inspection/return and command keys;
+other scenarios enter report commands through the same contextual menu, including
+nested timing. The schedule scenario follows the linked last-occurrence text to
+its submitted run. Batch cases distinguish that run from newer manual attempts,
+keep occurrences with no run unlinked, and check TAB navigation does not activate
+links or expose raw inspection inline. The manual-flow scenario also drives the
+Actions/f path-copy key without leaving its report; follow-up navigation activates
+the status text itself. Batch cases cover pending/undispatched plain follow-up
+status, guarded path copying/absence and menu-only remote-exit rechecking with
+capability loss. The menu-only remote-exit fixture uses an inert process and
+stubbed recheck callbacks, never an SSH connection.
+The saved-editor scenario drives both list and Actions entry, all field keys,
+multiline Apply/Cancel, asynchronous model return, nested Tools Apply/Cancel and
+whole-menu Save/Cancel/quit. Discovery/model choices are fixture-only, not normal
+provider lookups. Batch cases cover no-op capture/schedule/history preservation,
+write/validation failure, stale/deleted/dead/retargeted origins and cross-buffer
+late callbacks. Instruction drafts must retain plain text, not editor display
+properties; the saved-editor scenario also collects garbage after editor cleanup.
+Admission cases exercise legacy resource metadata as inert historical data alongside
+new captures without it. A real offline-Pi scenario starts two jobs in the same
+workspace concurrently while checking the global limit still applies. Error/abort
+fixtures require explicit inspection/release before continuation; legacy access
+labels never waive descendant uncertainty.
+Batch command fixtures invoke the validated dispatch path without a popup; use
+`pichat-test-job-goto-button` when asserting a control is present inline.
+Optional Evil runs additionally load `evil` and `pichat-evil`, enable `evil-mode`,
+and call `pichat-evil-setup` before running tests.
 Use a private `user-emacs-directory` for the separate instance; picker history must
 not go into normal user state. Never run these scenarios in the user's live Emacs.
 

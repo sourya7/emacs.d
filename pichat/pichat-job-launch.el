@@ -114,9 +114,8 @@
    :mappings (pichat-transport--copy-mappings
               (pichat-job-launch--unpairs (plist-get data :mappings)))))
 
-(defun pichat-job-launch-capture (title instructions directory profile &optional access)
+(defun pichat-job-launch-capture (title instructions directory profile)
   "Resolve prompt work into a durable spec using existing launch PROFILE.
-ACCESS is write (default), read (stable files), or observe (changing files).
 No runtime is registered/spawned or made current.  Model must be selected before
 submission.  Complete wrappers and conversation-loading flags are unsupported."
   (when pichat-rpc-command
@@ -138,16 +137,7 @@ submission.  Complete wrappers and conversation-loading flags are unsupported."
            (transport (pichat-session-transport session))
            (context (pichat-session-path-context session))
            (command (pichat-rpc-build-command session))
-           (runtime-cwd (pichat-session-runtime-cwd session))
-           ;; Canonicalize on the execution host, not the local mount alias.
-           (canonical-directory
-            (file-truename (pichat-transport-runtime-file-name transport runtime-cwd)))
-           (canonical (or (pichat--project-root canonical-directory)
-                          canonical-directory))
-           (key (format "%s:%s"
-                        (if (eq (pichat-transport-kind transport) 'ssh)
-                            (pichat-transport-tramp-prefix transport) "local")
-                        (or (file-remote-p canonical 'localname) canonical))))
+           (runtime-cwd (pichat-session-runtime-cwd session)))
       (dolist (arg command)
         (when (or (member arg '("--no-session" "--continue" "-c" "--resume" "-r"))
                   (string-match-p "\\`--session\\(?:=\\|\\'\\)" arg))
@@ -155,7 +145,6 @@ submission.  Complete wrappers and conversation-loading flags are unsupported."
       (pichat-job--copy
        (pichat-job--validate-spec
         (list :title title :instructions instructions :directory directory
-              :resources (vector (list :key key :access (or access "write")))
               :configuration
               (list :version 1 :command (vconcat command) :model model
                     :preset (pichat-job-launch--preset (pichat-session-preset-spec session))

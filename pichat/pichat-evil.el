@@ -28,6 +28,7 @@
 (declare-function pichat-jobs-history "pichat-jobs" ())
 (declare-function pichat-jobs-attention "pichat-jobs" ())
 (declare-function pichat-jobs-detail-refresh "pichat-jobs" ())
+(declare-function pichat-jobs-actions "pichat-jobs" ())
 (declare-function pichat-jobs-detail-tab "pichat-jobs" ())
 (declare-function pichat-jobs-copy-response "pichat-jobs" ())
 (declare-function pichat-job-setup-quit "pichat-jobs" ())
@@ -155,6 +156,7 @@ remain in their original mode maps."
       (kbd "S-TAB") #'backward-button
       (kbd "S-<tab>") #'backward-button
       (kbd "g r") #'pichat-jobs-detail-refresh
+      (kbd "g a") #'pichat-jobs-actions
       (kbd "g y") #'pichat-jobs-copy-response))
   (with-eval-after-load 'pichat-artifact-result
     (evil-define-key* 'normal pichat-artifact-result-mode-map

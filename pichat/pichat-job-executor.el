@@ -5,7 +5,7 @@
 ;; All execution callbacks belong to one attempt, process
 ;; generation and source.  Acknowledging a prompt is not completion.  Only an
 ;; agent-settled boundary followed by authoritative transcript/state verification
-;; can release ordinary work.  Uncertainty keeps durable claims and never retries.
+;; can release ordinary work.  Uncertainty keeps its global slot and never retries.
 
 ;;; Code:
 (require 'pichat-job-launch)
@@ -188,7 +188,7 @@ Retain identical timers: refreshing a late timer must not skip its due work."
       run)))
 
 (defun pichat-job-executor--uncertain (execution reason)
-  "Retain EXECUTION's claims with bounded redacted REASON; never replay."
+  "Retain EXECUTION's global slot with bounded redacted REASON; never replay."
   ;; Retain the last synchronized cache where available, never live UI text.
   ;; It may predate the stop, so the event remains explicitly partial.
   (when (pichat-job-executor--owned-p execution)
@@ -418,26 +418,20 @@ last response stays empty.  No domain success is inferred from prose."
                 (capture (append (plist-get outcome :capture)
                                  (list :source (vconcat (pichat-job-execution-source execution)))))
                 (digest (pichat-job-evidence-save store capture))
-                (run (pichat-job-executor--run execution))
                 (captured (list :summary (plist-get outcome :summary)
-                                :evidence digest :synchronized t))
-                (modifying (seq-some
-                            (lambda (claim) (equal (plist-get claim :access) "write"))
-                            (plist-get (plist-get run :spec) :resources))))
+                                :evidence digest :synchronized t)))
            ;; Persist evidence before stopping.  A crash/failed stop leaves
-           ;; settling/uncertain with the report intact and claims still held.
+           ;; settling/uncertain with the report intact and its slot still held.
            (pichat-job-advance store (pichat-job-execution-id execution)
                                (pichat-job-execution-token execution) "settling" captured)
-           (if (and modifying (or (pichat-job-execution-cancelling execution)
-                                 (equal (plist-get outcome :result) "failed")))
+           ;; Without declared access modes, no job can assert that descendants
+           ;; are harmless.  Keep the existing conservative abnormal-stop guard.
+           (if (or (pichat-job-execution-cancelling execution)
+                   (equal (plist-get outcome :result) "failed"))
                (pichat-job-executor--uncertain
-                execution "Agent stopped abnormally; modifying tool descendants need inspection")
+                execution "Agent stopped abnormally; tool descendants need inspection")
              (pichat-job-executor--stop-before-prompt
-              execution (if (pichat-job-execution-cancelling execution) "cancelled"
-                          (plist-get outcome :result))
-              (if (pichat-job-execution-cancelling execution)
-                  "Agent abort settled and synchronized" (plist-get outcome :reason))
-              captured)))))))))
+              execution (plist-get outcome :result) (plist-get outcome :reason) captured)))))))))
 
 (defun pichat-job-executor--event (execution event payload)
   "Handle an owned runtime EVENT/PAYLOAD for EXECUTION."
@@ -577,7 +571,7 @@ Return the new run ID without selecting its runtime or displaying a chat."
 
 (defun pichat-job-executor-recheck-exit (executor id callback)
   "Recheck exact SSH Pi exit for uncertain ID; call CALLBACK (SUCCESS REASON).
-Never releases claims: Pi exit does not prove tool descendants stopped."
+Never releases the slot: Pi exit does not prove tool descendants stopped."
   (let* ((execution (gethash id (pichat-job-executor-contexts executor)))
          (session (and execution (pichat-job-execution-session execution)))
          (process (and execution (pichat-job-execution-process execution))))

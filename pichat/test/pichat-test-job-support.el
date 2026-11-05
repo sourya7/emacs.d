@@ -63,10 +63,14 @@ until BODY submits work.  Fixture teardown retires handlers before stopping."
                      (kill-buffer buffer)))))))))))
 
 (defun pichat-test-job-spec (directory &optional access)
-  "Capture a deterministic job rooted in DIRECTORY with ACCESS."
-  (pichat-job-launch-capture
-   "Review files" "Inspect the supplied files." directory
-   '(:preset review :model "pichat-fake/pichat-fake" :target local) access))
+  "Capture work in DIRECTORY; optional ACCESS adds inert legacy metadata."
+  (let ((spec (pichat-job-launch-capture
+               "Review files" "Inspect the supplied files." directory
+               '(:preset review :model "pichat-fake/pichat-fake" :target local))))
+    (when access
+      (setf (plist-get spec :resources)
+            (vector (list :key directory :access access))))
+    spec))
 
 (defun pichat-test-job-wait (store id state)
   "Wait for run ID to reach STATE in STORE with failure diagnostics."
@@ -113,13 +117,37 @@ until BODY submits work.  Fixture teardown retires handlers before stopping."
     (goto-char (button-start button))
     button))
 
+(defun pichat-test-job-actions ()
+  "Return the inspected report's available command labels without running work."
+  (let (scope)
+    (cl-letf (((symbol-function 'transient-setup)
+               (lambda (prefix _layout _edit &rest args)
+                 (should (eq prefix 'pichat-jobs-actions-menu))
+                 (setq scope (plist-get args :scope)))))
+      (pichat-jobs-actions))
+    (mapcar (lambda (item) (nth 2 item))
+            (pichat-jobs--action-items (plist-get scope :owner)
+                                      (car (plist-get scope :detail))
+                                      (pichat-jobs--actions-current scope)))))
+
+(defun pichat-test-job-command (label)
+  "Invoke LABEL through report Actions; live Emacs drives the actual menu key."
+  (if noninteractive (pichat-test-job-actions) (pichat-jobs-actions))
+  (let ((item (seq-find (lambda (entry) (equal (nth 2 entry) label))
+                        (pichat-jobs--action-items pichat-jobs--owner (car pichat-jobs--detail)
+                                                  (pichat-jobs--actions-current pichat-jobs--actions)))))
+    (should item)
+    (if noninteractive (pichat-jobs--action pichat-jobs--actions (nth 3 item))
+      (execute-kbd-macro (kbd (nth 1 item))))))
+
 (defun pichat-test-job-press (label)
-  "Activate the visible job button LABEL, failing if absent."
+  "Activate a visible job button or a contextual Actions command LABEL.
+Use `pichat-test-job-goto-button' when asserting that a control is inline."
   (goto-char (point-min))
-  (should (search-forward label nil t))
-  (let ((button (button-at (1- (point)))))
-    (should button)
-    (button-activate button)))
+  (let* ((found (search-forward label nil t))
+         (button (and found (button-at (1- (point))))))
+    (if button (button-activate button)
+      (pichat-test-job-command label))))
 
 (provide 'pichat-test-job-support)
 ;;; pichat-test-job-support.el ends here

@@ -103,21 +103,20 @@
       (should (equal (plist-get (pichat-job-record store 'runs id) :result) "cancelled"))
       (should (pichat-job-enqueue store nil job)))))
 
-(ert-deftest pichat-job-resource-conflict-matrix ()
-  (dolist (case '(("read" "read" t) ("read" "write" nil)
-                  ("write" "read" nil) ("write" "write" nil)
-                  ("observe" "write" t) ("write" "observe" t)))
+(ert-deftest pichat-job-legacy-resource-modes-never-lock-workspaces ()
+  (dolist (case '(("read" "read") ("read" "write")
+                  ("write" "read") ("write" "write")
+                  ("observe" "write") ("write" "observe")))
     (pichat-test-job--with-store
       (let* ((a (pichat-test-job--enqueue store "workspace" (nth 0 case)))
              (_claimed (pichat-job-claim store a))
              (b (pichat-test-job--enqueue store "workspace" (nth 1 case)))
              (decision (pichat-job-admission store b)))
-        (should (eq (eq (plist-get decision :ready) t) (nth 2 case)))
-        (unless (nth 2 case)
-          (should (equal (plist-get decision :blocking-run) a))
-          (should-error (pichat-job-claim store b) :type 'pichat-job-error))))))
+        (should (eq (plist-get decision :ready) t))
+        (should-not (plist-get decision :blocking-run))
+        (should (pichat-job-claim store b))))))
 
-(ert-deftest pichat-job-no-project-wide-limit-but-shared-resources-conflict ()
+(ert-deftest pichat-job-no-project-or-shared-resource-locks ()
   (pichat-test-job--with-store
     (let* ((a (pichat-test-job--enqueue store "worktree-a"))
            (_claimed (pichat-job-claim store a))
@@ -135,17 +134,17 @@
                        [(:key "shared-plan" :access "write")])))
       (pichat-job-claim store (pichat-job-enqueue store a))
       (let ((decision (pichat-job-admission store (pichat-job-enqueue store b))))
-        (should (equal (plist-get decision :resource) "shared-plan"))))))
+        (should (eq (plist-get decision :ready) t))))))
 
-(ert-deftest pichat-job-earlier-writer-is-not-starved-by-later-readers ()
+(ert-deftest pichat-job-earlier-writer-does-not-block-other-jobs ()
   (pichat-test-job--with-store
     (let* ((reader (pichat-test-job--enqueue store "workspace" "read"))
            (_claimed (pichat-job-claim store reader))
            (writer (pichat-test-job--enqueue store "workspace" "write"))
            (later-reader (pichat-test-job--enqueue store "workspace" "read"))
            (other (pichat-test-job--enqueue store "other" "write")))
-      (should (equal (plist-get (pichat-job-admission store later-reader) :blocking-run)
-                     writer))
+      (should (eq (plist-get (pichat-job-admission store writer) :ready) t))
+      (should (eq (plist-get (pichat-job-admission store later-reader) :ready) t))
       (should (eq (plist-get (pichat-job-admission store other) :ready) t)))))
 
 (ert-deftest pichat-job-concurrency-counts-uncertain-executions ()
@@ -197,7 +196,7 @@
       (should-not (pichat-job-advance store id token "finished"
                                      '(:result "cancelled" :safe-to-release t)))
       (let ((next (pichat-test-job--enqueue store)))
-        (should-not (eq (plist-get (pichat-job-admission store next) :ready) t))))))
+        (should-not (eq (plist-get (pichat-job-admission store next 1) :ready) t))))))
 
 (ert-deftest pichat-job-restart-preserves-history-and-claims-without-replay ()
   (pichat-test-job--with-store
@@ -218,8 +217,9 @@
                                        "running"))
         (should-not (pichat-job-reconcile reopened))
         (let ((next (pichat-test-job--enqueue reopened)))
-          (should (equal (plist-get (pichat-job-admission reopened next) :blocking-run)
-                         active)))))))
+          (should (equal (plist-get (pichat-job-admission reopened next 1) :reason)
+                         "Global concurrency limit"))
+          (should (eq (plist-get (pichat-job-admission reopened next 2) :ready) t)))))))
 
 (ert-deftest pichat-job-corrupt-or-future-store-is-not-overwritten ()
   (pichat-test-job--with-store
@@ -386,9 +386,9 @@
              (blocked (pichat-job-enqueue store (pichat-test-job--spec "local:/worker/" "write"))))
         (should (equal (plist-get (plist-get origin :stop-event) :completeness) "partial"))
         (should (eq (plist-get (pichat-job-admission store child 1) :ready) :false))
-        ;; Context-only handler has its own workspace; no claim bypass is needed.
+        ;; Uncertainty consumes a global slot, not a workspace lock.
         (should (eq (plist-get (pichat-job-admission store child 3) :ready) t))
-        (should (eq (plist-get (pichat-job-admission store blocked 3) :ready) :false))
+        (should (eq (plist-get (pichat-job-admission store blocked 3) :ready) t))
         (pichat-job-cancel-queued store second)
         (let* ((child2 (plist-get (plist-get (pichat-job-record store 'runs second) :dispatch) :run-id))
                (child-token (plist-get (pichat-job-claim store child 3) :attempt)))
@@ -572,6 +572,24 @@
       (should (equal before (pichat-job-records store 'jobs)))
       (should (equal before (pichat-job-records (pichat-job-store-open file) 'jobs))))))
 
+(ert-deftest pichat-job-legacy-snapshots-survive-new-capture-and-continuation ()
+  (pichat-test-job--with-store
+    (let* ((legacy (pichat-test-job--spec))
+           (job (pichat-job-save store legacy))
+           (origin (pichat-job-enqueue store nil job)))
+      (pichat-job-cancel-queued store origin)
+      (let ((before (pichat-job-record store 'runs origin))
+            (fresh (pichat-job--copy legacy)))
+        (cl-remf fresh :resources)
+        (pichat-job-save store fresh job)
+        (let* ((next (pichat-job-enqueue store fresh nil nil nil origin))
+               (reopened (pichat-job-store-open file)))
+          (should (equal before (pichat-job-record reopened 'runs origin)))
+          (should (equal legacy (plist-get before :spec)))
+          (should (equal fresh (plist-get (pichat-job-record reopened 'runs next) :spec)))
+          (should (equal fresh (plist-get (pichat-job-record reopened 'jobs job) :spec)))
+          (should (eq (plist-get (pichat-job-admission reopened next) :ready) t)))))))
+
 (ert-deftest pichat-job-continuation-preserves-scope-provenance-and-admission ()
   (pichat-test-job--with-store
     (let* ((spec (pichat-test-job--spec))
@@ -584,10 +602,9 @@
       (should-error (pichat-job-enqueue store spec nil nil origin))
       (pichat-job-resolve-uncertain store origin "Inspected tools and checkout")
       (let ((before (pichat-job-record store 'runs origin)))
-        (dolist (key '(:instructions :directory :resources))
+        (dolist (key '(:instructions :directory))
           (let ((changed (pichat-job--copy spec)))
-            (setf (plist-get changed key)
-                  (if (eq key :resources) [(:key "elsewhere" :access "observe")] "different"))
+            (setf (plist-get changed key) "different")
             (should-error (pichat-job-enqueue store changed nil nil nil origin))))
         (let ((changed (pichat-job--copy spec)))
           (setf (plist-get (plist-get changed :configuration) :transport) '(:id "elsewhere"))
@@ -895,7 +912,7 @@
           (should (equal before (pichat-job-record store 'runs run)))
           (should-not (plist-get (pichat-job-record store 'jobs job) :schedule)))))))
 
-(ert-deftest pichat-job-schedule-uses-shared-resource-and-global-admission ()
+(ert-deftest pichat-job-schedule-uses-global-admission-without-workspace-locks ()
   (pichat-test-job--with-store
     (let* ((blocker (pichat-test-job--enqueue store))
            (_claim (pichat-job-claim store blocker))
@@ -905,8 +922,8 @@
       (let ((run (pichat-job-schedule-dispatch
                   store job (plist-get (pichat-job-record store 'jobs job) :schedule) 100)))
         (should (equal (plist-get (pichat-job-admission store run 1) :reason) "Global concurrency limit"))
-        (should (equal (plist-get (pichat-job-admission store run 3) :reason) "Conflicting workspace/resource"))
-        (should (equal (plist-get (pichat-job-admission store run 3) :blocking-run) blocker))))))
+        (should (eq (plist-get (pichat-job-admission store run 3) :ready) t))
+        (should-not (plist-get (pichat-job-admission store run 3) :blocking-run))))))
 
 (provide 'pichat-test-job-core)
 ;;; pichat-test-job-core.el ends here

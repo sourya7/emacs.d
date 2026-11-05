@@ -1,7 +1,7 @@
 ;;; pichat-job-schedule-ui.el --- Saved-job timing controls -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; One compact timing Transient, embedded in the existing saved-job details.
+;; One compact timing Transient, reached from saved-job Actions.
 ;; Picks stage privately; Save changes timing only, Enable authorizes submission.
 
 ;;; Code:
@@ -196,45 +196,40 @@ Reject nonexistent dates/times.  Preserve both DST-fold choices."
         (user-error "Job changed; review its schedule again"))
       (pichat-job-executor-schedule-enable owner id t))))
 
-(defun pichat-job-schedule-ui-insert (owner job)
-  "Insert compact timing and actions for saved JOB owned by OWNER."
-  (let* ((id (plist-get job :id)) (schedule (plist-get job :schedule))
-         (rule (plist-get schedule :rule)) (last (plist-get schedule :last))
-         (enabled (eq (plist-get schedule :enabled) t)))
-    (insert "Schedule: " (pichat-job-schedule-ui-status schedule) "   ")
-    (pichat-jobs--button (if schedule "Change…" "Set schedule…")
-                        (lambda () (pichat-job-schedule-ui-open owner id)))
-    (when schedule
-      (cond (enabled
-             (pichat-jobs--button "Disable" (lambda () (pichat-job-executor-schedule-enable owner id nil))))
-            ((or (equal (plist-get rule :kind) "interval")
-                 (> (plist-get rule :start) (float-time)))
-             (pichat-jobs--button "Enable…" (lambda () (pichat-job-schedule-ui--enable owner id job))))))
-    (insert "\n")
-    (when schedule
-      (let ((next (or (plist-get schedule :next)
-                      (and (or (not last) (equal (plist-get rule :kind) "interval"))
-                           (pichat-job-schedule-next rule (float-time))))))
-        (when next (insert "Next: " (pichat-job-schedule-ui-time next) "\n")))
-      (when last
-        (insert (format "Last occurrence: %s at %s%s\n"
-                        (capitalize (plist-get last :state))
-                        (pichat-job-schedule-ui-time (plist-get last :due))
-                        (if (plist-get last :reason) (concat " — " (plist-get last :reason)) "")))
-        (when-let* ((run (plist-get last :run-id)))
-          (pichat-jobs--button "View scheduled run" (lambda () (pichat-jobs--show-detail owner 'runs run)))
-          (insert "\n")))
-      (when (and (not enabled) (equal (plist-get rule :kind) "once")
-                 (member (plist-get last :state) '("missed" "skipped")))
-        (pichat-jobs--button "Run now" (lambda () (pichat-job-executor-schedule-run-now owner id schedule)))
-        (pichat-jobs--button "Reschedule…" (lambda () (pichat-job-schedule-ui-open owner id)))
-        (pichat-jobs--button "Dismiss"
-                            (lambda ()
-                              (pichat-job-schedule-dismiss (pichat-job-executor-store owner) id schedule)
-                              (pichat-job-executor--changed owner)))
-        (insert "\n")))
-    (when-let* ((error (pichat-job-executor-schedule-error owner))) (insert error "\n"))
-    (insert "\n")))
+(defun pichat-job-schedule-ui-missed-p (schedule)
+  "Whether SCHEDULE offers explicit recovery for a missed one-shot."
+  (and (not (eq (plist-get schedule :enabled) t))
+       (equal (plist-get (plist-get schedule :rule) :kind) "once")
+       (member (plist-get (plist-get schedule :last) :state) '("missed" "skipped"))))
+
+(defun pichat-job-schedule-ui-insert (owner job &optional details)
+  "Insert JOB timing in OWNER, or occurrence history when DETAILS is non-nil.
+Commands live in Actions; disabled timing never advertises an authorized
+next run."
+  (let* ((schedule (plist-get job :schedule))
+         (last (plist-get schedule :last)))
+    (if details
+        (when schedule
+          (let ((rule (plist-get schedule :rule)))
+            (insert (if (equal (plist-get rule :kind) "once") "When: " "First run: ")
+                    (pichat-job-schedule-ui-time (plist-get rule :start)) "\n"))
+          (when last
+            (let ((label (format "Last occurrence: %s at %s%s"
+                                 (capitalize (plist-get last :state))
+                                 (pichat-job-schedule-ui-time (plist-get last :due))
+                                 (if (plist-get last :reason) (concat " — " (plist-get last :reason)) ""))))
+              (if-let* ((run (plist-get last :run-id)))
+                  (pichat-jobs--button label (lambda () (pichat-jobs--show-detail owner 'runs run)))
+                (insert label)))
+            (insert "\n")))
+      (insert "Schedule: " (pichat-job-schedule-ui-status schedule) "\n")
+      (when (eq (plist-get schedule :enabled) t)
+        (when-let* ((next (plist-get schedule :next)))
+          (insert "Next: " (pichat-job-schedule-ui-time next) "\n")))
+      (when (and (pichat-job-schedule-ui-missed-p schedule) (plist-get last :reason))
+        (insert (plist-get last :reason) "\n"))
+      (when-let* ((error (pichat-job-executor-schedule-error owner)))
+        (insert error "\n")))))
 
 (provide 'pichat-job-schedule-ui)
 ;;; pichat-job-schedule-ui.el ends here

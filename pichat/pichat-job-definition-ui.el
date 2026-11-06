@@ -233,7 +233,7 @@ opens the job store, resolves execution settings or initializes the executor."
   (pichat-job-definition-ui--close pichat-job-definition-ui--session)
   (setq pichat-job-definition-ui--session
         (list :origin (current-buffer) :record (pichat-job--copy record)
-              :review nil :closed nil :inspector nil :technical nil))
+              :review nil :closed nil :inspector nil))
   (pichat-job-definition-ui--show pichat-job-definition-ui--session))
 
 (defun pichat-job-definition-ui--spec (session)
@@ -289,8 +289,6 @@ opens the job store, resolves execution settings or initializes the executor."
   "Describe SESSION or the current menu using cached values only."
   (let* ((session (or session (transient-scope))) (record (plist-get session :record))
          (data (plist-get record :definition)) (review (plist-get session :review))
-         (spec (pichat-job-definition-ui--spec session))
-         (config (plist-get spec :configuration))
          (status (when review
                    (concat " — " (pcase (pichat-job-import-review-action review)
                                     ("unchanged" "Already up to date")
@@ -303,20 +301,34 @@ opens the job store, resolves execution settings or initializes the executor."
     (mapconcat
      #'pichat-job-definition-ui--bounded
      (append
-      (list title "")
-      (unless review (list (plist-get data :instructions) ""))
-      (list (concat "Directory  " (abbreviate-file-name (or (plist-get spec :directory)
-                                                          (plist-get record :directory))))
-            (concat "Model      " (or (plist-get config :model) (plist-get data :model)))
-            (concat "Preset     " (or (plist-get (plist-get config :preset) :name)
-                                     (plist-get data :preset)))
-            (concat "Target     " (or (plist-get (plist-get config :transport) :id)
-                                     (plist-get (plist-get data :target) :name) "local")))
+      (list (propertize title 'face 'transient-heading))
+      (unless review (list "" (plist-get data :instructions)))
       (when-let* ((changes (pichat-job-definition-ui--changes session)))
         (list (concat "Changes    " (string-join changes ", "))))
       (when (and review (pichat-job-import-review-diverged review))
         (list (propertize "Native edits will be replaced; confirmation required" 'face 'warning))))
      "\n")))
+
+(defun pichat-job-definition-ui--field (field &optional session)
+  "Describe cached read-only FIELD from SESSION in a native Transient column."
+  (let* ((session (or session (transient-scope)))
+         (record (plist-get session :record)) (data (plist-get record :definition))
+         (spec (pichat-job-definition-ui--spec session))
+         (config (plist-get spec :configuration))
+         (value (pcase field
+                  (:directory (abbreviate-file-name (or (plist-get spec :directory)
+                                                       (plist-get record :directory))))
+                  (:model (or (plist-get config :model) (plist-get data :model)))
+                  (:preset (or (plist-get (plist-get config :preset) :name)
+                               (plist-get data :preset)))
+                  (:target (or (plist-get (plist-get config :transport) :id)
+                               (plist-get (plist-get data :target) :name) "local"))))
+         (label (concat (capitalize (substring (symbol-name field) 1)) ": "))
+         (width (max 20 (/ (- (frame-width) 8) 2))))
+    (concat label
+            (propertize (truncate-string-to-width (pichat-jobs--display value)
+                                                  (- width (length label)) nil nil "…")
+                        'face 'transient-value))))
 
 (defun pichat-job-definition-ui--reviewed-p ()
   "Whether the current menu has an explicit prepared review."
@@ -384,16 +396,24 @@ opens the job store, resolves execution settings or initializes the executor."
 
 (transient-define-prefix pichat-job-definition-menu ()
   "Review an authored job; imported fields are read-only until edited in JSON."
-  [:description (lambda () (pichat-job-definition-ui--summary))
-   ("i" "Review" pichat-job-definition-import :if-not pichat-job-definition-ui--reviewed-p)
-   ("RET" "Save" pichat-job-definition-ui-save :if pichat-job-definition-ui--reviewed-p)
-   ("d" "Inspect" pichat-job-definition-inspect)
-   ("o" "Open file" pichat-job-definition-open-source
-    :if-not pichat-job-definition-ui--reviewed-p)
-   ("q" pichat-job-definition-ui-cancel
-    :description (lambda () (if (pichat-job-definition-ui--reviewed-p) "Cancel" "Close")))]
-  ["Settings" :if pichat-job-definition-ui--reviewed-p
-   ("r" "Use current settings" pichat-job-definition-refresh-capture)]
+  [(:info (lambda () (pichat-job-definition-ui--summary)))]
+  [["Job"
+    (:info (lambda () (pichat-job-definition-ui--field :directory)))]
+   ["Execution"
+    (:info (lambda () (pichat-job-definition-ui--field :model)))
+    (:info (lambda () (pichat-job-definition-ui--field :preset)))
+    (:info (lambda () (pichat-job-definition-ui--field :target)))]]
+  [["File"
+    ("d" "Inspect" pichat-job-definition-inspect)
+    ("o" "Open file" pichat-job-definition-open-source
+     :if-not pichat-job-definition-ui--reviewed-p)]
+   ["Settings" :if pichat-job-definition-ui--reviewed-p
+    ("r" "Use current settings" pichat-job-definition-refresh-capture)]]
+  [[""
+    ("i" "Review" pichat-job-definition-import :if-not pichat-job-definition-ui--reviewed-p)
+    ("RET" "Save" pichat-job-definition-ui-save :if pichat-job-definition-ui--reviewed-p)
+    ("q" pichat-job-definition-ui-cancel
+     :description (lambda () (if (pichat-job-definition-ui--reviewed-p) "Cancel" "Close")))]]
   [:hide (lambda () t)
    ("<return>" pichat-job-definition-ui-save :if pichat-job-definition-ui--reviewed-p)])
 
@@ -402,48 +422,89 @@ opens the job store, resolves execution settings or initializes the executor."
     (set-keymap-parent map pichat-job-definition-ui-mode-map)
     (define-key map (kbd "q") #'pichat-job-definition-inspector-quit)
     (define-key map (kbd "g") #'pichat-job-definition-ui--render-inspector)
+    (define-key map (kbd "TAB") #'pichat-jobs-detail-tab)
+    (define-key map (kbd "<tab>") #'pichat-jobs-detail-tab)
     map))
 
 (define-derived-mode pichat-job-definition-inspector-mode
   pichat-job-definition-ui-mode "PiChat Job Import"
   "Inspect a cached authored import; q returns to the unchanged staged menu.
 Technical details disclose the exact cached capture.
-This view never recaptures.")
+This view never recaptures."
+  (setq-local truncate-lines nil truncate-partial-width-windows nil)
+  (visual-line-mode 1))
 
 (defun pichat-job-definition-ui--value (value)
   "Format a readable cached field VALUE without Lisp syntax."
-  (cond ((null value) "None")
+  (cond ((or (null value) (and (sequencep value) (seq-empty-p value))) "None")
         ((stringp value) value)
         ((vectorp value) (string-join (append value nil) ", "))
         (t (format "%s" value))))
 
+(defun pichat-job-definition-ui--inspector-settings (data spec)
+  "Insert cached DATA or resolved SPEC settings using the Jobs presentation."
+  (if spec
+      (pichat-jobs--insert-settings spec)
+    (insert "Model: " (plist-get data :model) "\nPreset: " (plist-get data :preset) "\n"))
+  (when spec
+    (let* ((config (plist-get spec :configuration)) (preset (plist-get config :preset))
+           (runtime (plist-get config :runtime-directory))
+           (extensions (cdr (assoc "Extension tools" (pichat-job-definition-ui--fields spec))))
+           (prompts (seq-filter (lambda (field) (not (seq-empty-p (cdr field))))
+                               (list (cons "System prompt" (plist-get preset :system-prompt))
+                                     (cons "Appended prompt" (plist-get preset :append-system-prompt))))))
+      (when (and runtime (not (equal runtime (plist-get spec :directory))))
+        (insert "Runtime directory: " runtime "\n"))
+      (unless (seq-empty-p extensions)
+        (insert "Extension tools: " (pichat-job-definition-ui--value extensions) "\n"))
+      (when prompts
+        (pichat-jobs--disclosure 'prompts "Prompts" #'pichat-job-definition-ui--render-inspector)
+        (when (memq 'prompts pichat-jobs--expanded)
+          (insert "\n")
+          (dolist (field prompts) (insert (car field) ": " (cdr field) "\n")))))))
+
 (defun pichat-job-definition-ui--render-inspector ()
-  "Render the inspector from the same cached session and immutable review."
+  "Render cached import data with shared Jobs styling and disclosures."
   (interactive)
   (let* ((session pichat-job-definition-ui--session) (record (plist-get session :record))
          (data (plist-get record :definition)) (review (plist-get session :review))
          (spec (pichat-job-definition-ui--spec session))
          (old (and review (plist-get (pichat-job-import-review-previous review) :spec)))
+         (changes (and old (pichat-job-definition-ui--changes session)))
+         (position (pichat-jobs--reading-position (point)))
+         (windows (mapcar (lambda (window)
+                            (list window (pichat-jobs--reading-position (window-start window))
+                                  (pichat-jobs--reading-position (window-point window))))
+                          (get-buffer-window-list (current-buffer) nil t)))
          (inhibit-read-only t))
     (erase-buffer)
-    (insert (plist-get data :title) "\n\nInstructions\n" (plist-get data :instructions) "\n\n")
-    (insert "File: " (plist-get record :file) "\n")
-    (insert "Directory: " (plist-get record :directory) "\n")
-    (dolist (key '(:model :preset))
-      (insert (capitalize (substring (symbol-name key) 1)) ": " (plist-get data key) "\n"))
-    (insert "Target: " (or (plist-get (plist-get data :target) :name) "local") "\n")
+    (setq header-line-format
+          (propertize (replace-regexp-in-string "%" "%%"
+                       (pichat-jobs--display (or (plist-get spec :title) (plist-get data :title))) t t)
+                      'face 'bold))
+    (pichat-jobs--insert-instructions
+     (or (plist-get spec :instructions) (plist-get data :instructions))
+     'task #'pichat-job-definition-ui--render-inspector)
     (when review
-      (insert "\n" (pcase (pichat-job-import-review-action review)
-                      ("unchanged" "Already up to date")
-                      ("refresh" "Update")
-                      (action (capitalize action))) "\n")
+      (insert (pcase (pichat-job-import-review-action review)
+                ("unchanged" "Already up to date") ("refresh" "Update")
+                (action (capitalize action))) "\n")
       (when (pichat-job-import-review-diverged review)
-        (insert (propertize "Native edits will be replaced; confirmation required\n" 'face 'warning)))
-      (dolist (field (pichat-job-definition-ui--fields spec))
-        (insert (car field) ": " (pichat-job-definition-ui--value (cdr field)) "\n"))
-      (when old
-        (insert "\nChanges\n")
-        (dolist (label (pichat-job-definition-ui--changes session))
+        (insert (propertize "Native edits will be replaced; confirmation required\n" 'face 'warning))))
+    (insert "File: " (plist-get record :file) "\nWorkspace: "
+            (abbreviate-file-name (or (plist-get spec :directory) (plist-get record :directory)))
+            " · " (or (plist-get (plist-get (plist-get spec :configuration) :transport) :id)
+                       (plist-get (plist-get data :target) :name) "local") "\n\n")
+    (pichat-jobs--disclosure 'definition "Details" #'pichat-job-definition-ui--render-inspector)
+    (when (memq 'definition pichat-jobs--expanded)
+      (insert "\n")
+      (pichat-job-definition-ui--inspector-settings data spec))
+    (when changes
+      (insert "\n")
+      (pichat-jobs--disclosure 'changes "Changes" #'pichat-job-definition-ui--render-inspector)
+      (when (memq 'changes pichat-jobs--expanded)
+        (insert "\n")
+        (dolist (label changes)
           (let ((before (assoc label (pichat-job-definition-ui--fields old)))
                 (after (assoc label (pichat-job-definition-ui--fields spec))))
             (insert label "\n")
@@ -451,20 +512,20 @@ This view never recaptures.")
               (insert "Before: " (pichat-job-definition-ui--value (cdr before)) "\n"
                       "After: " (pichat-job-definition-ui--value (cdr after)) "\n"))))))
     (insert "\n")
-    (pichat-jobs--button
-     "Technical details"
-     (lambda ()
-       (setf (plist-get pichat-job-definition-ui--session :technical)
-             (not (plist-get pichat-job-definition-ui--session :technical)))
-       (pichat-job-definition-ui--render-inspector)))
-    (when (plist-get session :technical)
+    (pichat-jobs--disclosure 'technical "Technical details" #'pichat-job-definition-ui--render-inspector)
+    (when (memq 'technical pichat-jobs--expanded)
       (insert "\n")
       (pichat-job-definition-ui--source record)
       (insert "\nAuthored data\n" (pp-to-string data))
       (when review
         (insert "\nPrevious capture\n" (pp-to-string old)
                 "\nProposed capture\n" (pp-to-string spec))))
-    (goto-char (point-min)) (set-buffer-modified-p nil)))
+    (goto-char (pichat-jobs--restore-position position))
+    (dolist (saved windows)
+      (when (window-live-p (car saved))
+        (set-window-start (car saved) (pichat-jobs--restore-position (cadr saved)) t)
+        (set-window-point (car saved) (pichat-jobs--restore-position (caddr saved)))))
+    (set-buffer-modified-p nil)))
 
 (defun pichat-job-definition-inspect ()
   "Inspect cached instructions, provenance and capture without preparation."

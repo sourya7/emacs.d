@@ -575,15 +575,15 @@ Use the chat's input styling, measured at the narrowest displaying window."
       (button-activate button)
     (forward-button 1 t)))
 
-(defun pichat-jobs--disclosure (key label)
-  "Insert an explicit disclosure for KEY with LABEL."
+(defun pichat-jobs--disclosure (key label &optional refresh)
+  "Insert a disclosure for KEY with LABEL, redrawing with REFRESH or Jobs."
   (pichat-jobs--button
    (concat (if (member key pichat-jobs--expanded) "▾ " "▸ ") label)
    (lambda ()
      (setq pichat-jobs--expanded
            (if (member key pichat-jobs--expanded) (remove key pichat-jobs--expanded)
              (cons key pichat-jobs--expanded)))
-     (pichat-jobs--render-detail))
+     (funcall (or refresh #'pichat-jobs--render-detail)))
    t))
 
 (defun pichat-jobs-copy-response ()

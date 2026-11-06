@@ -109,6 +109,8 @@
             (should (eq evil-state 'normal))
             (should (eq (key-binding (kbd "q")) #'pichat-job-definition-inspector-quit))
             (should (eq (key-binding (kbd "g r")) #'pichat-job-definition-ui--render-inspector))
+            (should (eq (key-binding (kbd "TAB")) #'pichat-jobs-detail-tab))
+            (should (eq (key-binding (kbd "<tab>")) #'pichat-jobs-detail-tab))
             (should (eq (key-binding (kbd "w")) #'evil-forward-word-begin)))
           (with-temp-buffer
             (pichat-job-definition-ui-mode)

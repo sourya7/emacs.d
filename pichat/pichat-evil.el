@@ -179,6 +179,8 @@ remain in their original mode maps."
     (evil-define-key* 'normal pichat-job-definition-diagnostics-mode-map
       (kbd "g r") #'pichat-job-definition-ui--render-diagnostics)
     (evil-define-key* 'normal pichat-job-definition-inspector-mode-map
+      (kbd "TAB") #'pichat-jobs-detail-tab
+      (kbd "<tab>") #'pichat-jobs-detail-tab
       (kbd "q") #'pichat-job-definition-inspector-quit
       (kbd "g r") #'pichat-job-definition-ui--render-inspector)
     (evil-define-key* 'normal pichat-job-definition-ui-mode-map

@@ -74,8 +74,9 @@ Then ask the user to:
    does not resolve settings, initialize an executor, write metadata or start Pi.
    **d Inspect** shows full instructions and file path; **q** returns to the menu.
 3. Choose **i Review** to resolve settings in the same menu, then
-   **RET Save**; **q Cancel** discards staging. **Inspect** shows resolved
-   settings and before/after changes, with optional technical details. Import
+   **RET Save**; **q Cancel** discards staging. In **Inspect**, expand **Details**
+   for settings, **Changes** for differences, and **Technical details** for raw
+   captures. TAB/RET toggles disclosures; **q** returns without recapturing. Import
    saves only; Run and timing require separate authorization. Project files are
    untrusted data, not a Pi trust gate.
 4. Edit the JSON (initial menu **o Open file**), save it, then rediscover

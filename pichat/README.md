@@ -835,7 +835,11 @@ Schedules are opt-in per saved job.
   files for the current project and effective global agent root; a prefix selects
   another project. Like Jobs, it uses native sortable column headers, width-aware
   rows and a compact mode-line overview; its body contains only file rows.
-  `RET` opens a compact, read-only import Transient; `g` (Evil `g r`) rediscovers
+  `RET` opens a compact, read-only import Transient using the Jobs editor's
+  Job/Execution column layout and value faces, without field-editing keys.
+  Inspect/Open file and reviewed Settings occupy supporting groups; Review/Save
+  and Close/Cancel have a separate bottom action group.
+  `g` (Evil `g r`) rediscovers
   the same roots, and `q` returns. In the menu, `i` **Review** resolves
   settings and stages a Create/Update review in that same menu;
   **Already up to date** means ordinary reimport did not recapture settings.
@@ -847,9 +851,13 @@ Schedules are opt-in per saved job.
   staging. Save closes the menu and keeps the selected file row. Errors retain
   the review for inspection/retry; stale sources or stores require rediscovery
   and a new review. Replacing native edits requires explicit confirmation.
-  `d` **Inspect** opens one reusable read-only inspector for full instructions,
-  file path, resolved settings and changes; **Technical details** discloses scoped
-  identity/root and raw captures. Inspector `q` returns to the same menu without resolving again.
+  `d` **Inspect** opens one reusable read-only inspector using Jobs instruction
+  styling, header title and compact status/file/workspace context. **Details**
+  discloses settings once; nonempty prompt content is under **Prompts**. **Changes**
+  appears only for actual differences and discloses before/after values.
+  **Technical details** discloses scoped identity/root and raw captures. These use
+  Jobs disclosure controls: TAB toggles a disclosure at point, otherwise navigates;
+  RET/click also toggles. Inspector `q` returns to the same menu without resolving again.
   In the initial menu, `o` **Open file** closes staging and opens the
   ordinary file editor; imported fields are not editable in the menu. Save the
   file, then rediscover/review explicitly. Nothing auto-imports or runs.

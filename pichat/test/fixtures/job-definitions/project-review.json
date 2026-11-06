@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "id": "dependency-review",
+  "title": "Review dependencies",
+  "instructions": "Inspect dependencies and report findings. Do not modify files. Include λ and 日本語 in the report.",
+  "directory": ".",
+  "model": "fixture-provider/fixture-model",
+  "preset": "review"
+}

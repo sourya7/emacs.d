@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "id": "dependency-review",
+  "title": "Review shared workspace",
+  "instructions": "Inspect the selected workspace and report findings without modifying files.",
+  "directory": "/example/workspace/",
+  "model": "fixture-provider/fixture-model",
+  "preset": "review",
+  "target": {"name": "local"}
+}

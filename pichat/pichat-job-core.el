@@ -46,6 +46,59 @@
                      :object-type 'plist :array-type 'array
                      :null-object nil :false-object :false))
 
+(defun pichat-job-data-digest (value)
+  "Hash plist/vector JSON VALUE, ignoring object-key order, not array order."
+  (cl-labels ((canonical (data)
+                (cond ((vectorp data) (vconcat (mapcar #'canonical data)))
+                      ((consp data)
+                       (apply #'append
+                              (mapcar (lambda (pair) (list (car pair) (canonical (cdr pair))))
+                                      (sort (cl-loop for (key val) on data by #'cddr
+                                                     collect (cons key val))
+                                            (lambda (a b) (string< (symbol-name (car a))
+                                                                  (symbol-name (car b))))))))
+                      (t data))))
+    (secure-hash 'sha256 (json-serialize (canonical value) :null-object nil :false-object :false))))
+
+(defun pichat-job-spec-digest (spec)
+  "Hash authored fields and execution capture in SPEC, not native add-ons.
+After-run defaults and inert legacy resource metadata are preserved separately."
+  (pichat-job-data-digest
+   (list :title (plist-get spec :title) :instructions (plist-get spec :instructions)
+         :directory (plist-get spec :directory) :configuration (plist-get spec :configuration))))
+
+(defun pichat-job-source-diverged-p (job)
+  "Whether JOB's authored fields/capture differ from its last imported source.
+This is cached-data-only: never read the authored file or resolve settings."
+  (when-let* ((source (plist-get job :source)))
+    (not (equal (plist-get source :spec-digest)
+                (pichat-job-spec-digest (plist-get job :spec))))))
+
+(defun pichat-job--validate-source (source)
+  "Validate optional authored SOURCE linkage without filesystem access."
+  (when source
+    (unless (and (consp source) (keywordp (car source)))
+      (pichat-job--fail "Invalid authored job source linkage"))
+    (let ((identity (plist-get source :identity))
+          (file (plist-get source :file))
+          (case-fold-search nil))
+      (unless (and (eql (plist-get source :version) 1)
+                   (vectorp identity) (= (length identity) 3)
+                   (member (aref identity 0) '("global" "project"))
+                   (pichat-job--text-p (aref identity 1))
+                   (file-name-absolute-p (aref identity 1))
+                   (not (file-remote-p (aref identity 1)))
+                   (pichat-job--text-p (aref identity 2))
+                   (pichat-job--text-p file) (file-name-absolute-p file)
+                   (not (file-remote-p file))
+                   (cl-every (lambda (key)
+                               (let ((digest (plist-get source key)))
+                                 (and (stringp digest)
+                                      (string-match-p "\\`[a-f0-9]\\{64\\}\\'" digest))))
+                             '(:authored-digest :spec-digest)))
+        (pichat-job--fail "Invalid authored job source linkage"))))
+  source)
+
 (defun pichat-job--now ()
   "Return a UTC timestamp."
   (format-time-string "%Y-%m-%dT%H:%M:%S.%NZ" nil t))
@@ -130,7 +183,7 @@ it from the store vector rather than update the stored record."
                (vectorp (plist-get data :jobs))
                (vectorp (plist-get data :runs)))
     (pichat-job--fail "Unsupported or invalid PiChat job store"))
-  (let (ids)
+  (let ((sources (make-hash-table :test #'equal)) ids)
     (dolist (kind '(:jobs :runs))
       (seq-doseq (record (plist-get data kind))
         (let ((id (plist-get record :id)))
@@ -141,7 +194,12 @@ it from the store vector rather than update the stored record."
           (push id ids))
         (pichat-job--validate-spec (plist-get record :spec))
         (when (eq kind :jobs)
-          (pichat-job-schedule-validate (plist-get record :schedule)))
+          (pichat-job-schedule-validate (plist-get record :schedule))
+          (when-let* ((source (pichat-job--validate-source (plist-get record :source))))
+            (let ((identity (plist-get source :identity)))
+              (when (gethash identity sources)
+                (pichat-job--fail "Duplicate authored source linkage in saved jobs"))
+              (puthash identity t sources))))
         (when (eq kind :runs)
           (pichat-job--validate-followup record)
           (when (member (plist-get (plist-get record :trigger) :kind) '("once" "interval"))
@@ -248,6 +306,16 @@ explicitly at executor startup, not on UI refresh."
                  '(:version 1 :jobs [] :runs []))))
     (pichat-job--make-store :file file :bytes bytes
                             :data (pichat-job--validate data))))
+
+(defun pichat-job-store-check (store)
+  "Reject stale disk state or a foreign lock on STORE, without writes."
+  (let ((owner (file-locked-p (pichat-job-store-file store))))
+    (when (and owner (not (eq owner t)))
+      (pichat-job--fail "Job store is locked by another Emacs")))
+  (unless (equal (pichat-job-store-bytes store)
+                 (pichat-job--read-bytes (pichat-job-store-file store)))
+    (pichat-job--fail "Job store changed on disk; reload before writing"))
+  store)
 
 (defun pichat-job--commit (store data)
   "Atomically replace STORE with validated DATA, publishing only after success."
@@ -361,9 +429,11 @@ an unreferenced private file, never a reference to uncommitted evidence."
   (pichat-job--copy (pichat-job--find (pichat-job-store-data store)
                                     (if (eq kind 'jobs) :jobs :runs) id)))
 
-(defun pichat-job-save (store spec &optional id)
+(defun pichat-job-save (store spec &optional id source)
   "Save captured SPEC in STORE without executing it; return its stable ID.
-With ID, edit that definition.  Existing run snapshots are never changed."
+With ID, edit that definition.  Existing run snapshots are never changed.
+Non-nil SOURCE atomically sets validated authored linkage.  Omitting it
+preserves existing linkage, including on native edits; timing is preserved."
   (let* ((data (pichat-job--copy (pichat-job-store-data store)))
          (spec (pichat-job--validate-spec (pichat-job--copy spec)))
          (now (pichat-job--now))
@@ -372,6 +442,9 @@ With ID, edit that definition.  Existing run snapshots are never changed."
                          :updated-at now :spec nil))))
     (setf (plist-get record :spec) spec
           (plist-get record :updated-at) now)
+    (when source
+      (pichat-job--stamp record :source
+                         (pichat-job--copy (pichat-job--validate-source source))))
     (unless id
       (setf (plist-get data :jobs)
             (vconcat (plist-get data :jobs) (vector record))))

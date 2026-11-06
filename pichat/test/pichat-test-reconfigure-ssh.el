@@ -331,10 +331,11 @@
      (let ((session (plist-get fixture :session)) cleaned)
        (plist-put fixture :unknown-replacement t)
        (cl-letf (((symbol-function 'pichat-tool-runtime-prepare)
-                  (lambda (_session _names)
+                  (lambda (_session _names &optional skill-file)
                     (setf (pichat-session-rpc-startup-control session)
                           (list :process nil :helper
-                                (list :cleanup (lambda () (setq cleaned t)))))
+                                (list :skill (and skill-file "/fixture/pichat-jobs/SKILL.md")
+                                      :cleanup (lambda () (setq cleaned t)))))
                     "/fixture-helper.ts"))
                  ((symbol-function 'pichat-tool-runtime-begin)
                   (lambda (&rest _) (error "Identity helper failed before readiness"))))

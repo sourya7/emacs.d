@@ -15,6 +15,16 @@
 (require 'pichat-chat-diagnostics)
 (require 'pichat-session-manager)
 
+(defvar pichat-job-definitions-mode-map)
+(defvar pichat-job-definition-ui-mode-map)
+(defvar pichat-job-definition-diagnostics-mode-map)
+(defvar pichat-job-definition-inspector-mode-map)
+(declare-function pichat-job-definition-inspector-quit "pichat-job-definition-ui" ())
+(declare-function pichat-job-definition-ui--render-inspector "pichat-job-definition-ui" ())
+(declare-function pichat-job-definition-diagnostics "pichat-job-definition-ui" ())
+(declare-function pichat-job-definition-ui--render-diagnostics "pichat-job-definition-ui" ())
+(declare-function pichat-job-definition-preview "pichat-job-definition-ui" (&optional record))
+(declare-function pichat-job-definition-ui-refresh "pichat-job-definition-ui" ())
 (defvar pichat-jobs-mode-map)
 (defvar pichat-jobs-detail-mode-map)
 (defvar pichat-job-setup-mode-map)
@@ -68,6 +78,7 @@ remain in their original mode maps."
   (evil-set-initial-state 'pichat-artifact-elisp-result-mode 'normal)
   (evil-set-initial-state 'pichat-artifact-runner-result-mode 'normal)
   (evil-set-initial-state 'pichat-session-manager-mode 'normal)
+  (evil-set-initial-state 'pichat-job-definitions-mode 'normal)
   ;; The shared view close must beat Evil Collection's generic quit-window:
   ;; PiChat also owns the origin, nested displays, and snapshot kill policy.
   (evil-define-key* 'normal pichat-view-mode-map
@@ -134,6 +145,7 @@ remain in their original mode maps."
       (kbd "z v") #'pichat-jobs-preview
       (kbd "g r") #'pichat-jobs-refresh
       (kbd "g c") #'pichat-job-new
+      (kbd "g i") #'pichat-job-definitions
       (kbd "g x") #'pichat-jobs-run
       (kbd "g e") #'pichat-jobs-edit
       (kbd "g R") #'pichat-jobs-release-reservation
@@ -158,6 +170,23 @@ remain in their original mode maps."
       (kbd "g r") #'pichat-jobs-detail-refresh
       (kbd "g a") #'pichat-jobs-actions
       (kbd "g y") #'pichat-jobs-copy-response))
+  (with-eval-after-load 'pichat-job-definition-ui
+    (evil-define-key* 'normal pichat-job-definitions-mode-map
+      (kbd "RET") #'pichat-job-definition-preview
+      (kbd "q") #'pichat-view-quit
+      (kbd "g D") #'pichat-job-definition-diagnostics
+      (kbd "g r") #'pichat-job-definition-ui-refresh)
+    (evil-define-key* 'normal pichat-job-definition-diagnostics-mode-map
+      (kbd "g r") #'pichat-job-definition-ui--render-diagnostics)
+    (evil-define-key* 'normal pichat-job-definition-inspector-mode-map
+      (kbd "q") #'pichat-job-definition-inspector-quit
+      (kbd "g r") #'pichat-job-definition-ui--render-inspector)
+    (evil-define-key* 'normal pichat-job-definition-ui-mode-map
+      (kbd "RET") #'push-button
+      (kbd "TAB") #'forward-button
+      (kbd "<tab>") #'forward-button
+      (kbd "<backtab>") #'backward-button
+      (kbd "g r") #'pichat-job-definition-ui-refresh))
   (with-eval-after-load 'pichat-artifact-result
     (evil-define-key* 'normal pichat-artifact-result-mode-map
       (kbd "s") #'pichat-artifact-result-share

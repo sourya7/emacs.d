@@ -188,5 +188,48 @@
                           (when (buffer-live-p buffer) (kill-buffer buffer)))))
                     (pichat-job-executor-contexts executor))))))))
 
+(ert-deftest pichat-integration-job-ssh-authoring-skill-is-staged-only-at-launch ()
+  (pichat-test-real-ssh--run
+   (lambda (fixture)
+     (pichat-test-real-ssh--stop-starter fixture)
+     (pichat-test-real-ssh--write-script
+      fixture '(:turns [(:text "SSH_SKILL_RESULT" :expectContextIncludes ["<name>pichat-jobs</name>"])]))
+     (pichat-test-with-temp-dir metadata-directory
+       (let* ((pichat-targets (copy-tree pichat-targets))
+              (pichat-pi-extra-env `(("HOME" . ,(file-local-name (plist-get fixture :root)))))
+              (target (cdr (assq 'real-ssh pichat-targets)))
+              (_args (setf (plist-get target :pi-args) (remove "--no-skills" (plist-get target :pi-args))))
+              (store (pichat-job-store-open (expand-file-name "jobs.json" metadata-directory)))
+              (executor (pichat-job-executor-open store))
+              (pichat-jobs-control-timeout 15)
+              (spec (pichat-job-launch-capture
+                     "SSH skill" "Inspect supplied files." (plist-get fixture :project)
+                     '(:preset review :target real-ssh :model "pichat-fake/pichat-fake-reasoning")))
+              (command (plist-get (plist-get spec :configuration) :command))
+              (_check (should-not (member "--skill" (append command nil))))
+              (id (pichat-job-executor-submit executor spec))
+              (execution (gethash id (pichat-job-executor-contexts executor)))
+              (session (pichat-job-execution-session execution)) skill)
+         (unwind-protect
+             (progn
+               (setq skill (cadr (member "--skill" (pichat-session-rpc-command session))))
+               (should (stringp skill))
+               (should-not (equal skill pichat-rpc-job-authoring-skill))
+               (should-not (file-remote-p skill))
+               (pichat-test-wait-until
+                (lambda () (equal (plist-get (pichat-job-record store 'runs id) :state) "finished"))
+                25 "SSH job using staged skill")
+               (should (equal (plist-get (pichat-job-record store 'runs id) :result) "completed"))
+               (should-not (pichat-test-real-ssh--alive-p fixture (pichat-session-process session)))
+               (should-not (file-exists-p
+                            (pichat-transport-runtime-file-name (pichat-session-transport session) skill)))
+               (should (equal command (plist-get (plist-get (plist-get (pichat-job-record store 'runs id) :spec)
+                                                                             :configuration) :command)))
+               (pichat-test-assert-provider-script-consumed (plist-get fixture :status)))
+           (pichat-job-executor--retire execution)
+           (pichat-rpc-stop session)
+           (when-let* ((buffer (pichat-session-buffer session)))
+             (when (buffer-live-p buffer) (kill-buffer buffer)))))))))
+
 (provide 'pichat-test-jobs-ssh)
 ;;; pichat-test-jobs-ssh.el ends here

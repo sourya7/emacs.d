@@ -25,7 +25,7 @@ UNWRITTEN selects a metadata-only source without an existing file."
              (pichat-chat-render-markdown nil)
              (pichat-rpc-command nil)
              (pichat-pi-extra-args nil)
-             (pichat-pi-default-args '("--mode" "rpc"))
+             (pichat-pi-default-args '("--mode" "rpc" "--no-skills"))
              (pichat-default-model nil)
              (pichat--sessions-by-id (make-hash-table :test #'equal))
              (pichat--sessions-by-scope (make-hash-table :test #'equal))

@@ -26,12 +26,12 @@
 (defconst pichat-tool-discovery--title "__pichat_tool_control_v1__")
 (defconst pichat-tool-discovery--limit (* 1024 1024))
 
-(defun pichat-tool-discovery-prepare-helper (transport)
-  "Return (:path PATH :cleanup FUNCTION) for the helper on TRANSPORT.
-SSH gets a private target-side copy, not a translated host path.  The caller
-must invoke cleanup only after its Pi process has stopped using the helper."
+(defun pichat-tool-discovery-prepare-helper (transport &optional skill-file)
+  "Return helper paths and owned cleanup for TRANSPORT.
+Optional SKILL-FILE shares the helper's private SSH storage and lifetime.
+The caller must clean up only after Pi has stopped using these resources."
   (if (eq (pichat-transport-kind transport) 'local)
-      (list :path pichat-tool-discovery-helper :cleanup #'ignore)
+      (list :path pichat-tool-discovery-helper :skill skill-file :cleanup #'ignore)
     (let* ((prefix (pichat-transport-runtime-file-name
                     transport "/tmp/pichat-tool-control-"))
            (directory (make-temp-file prefix t))
@@ -41,8 +41,16 @@ must invoke cleanup only after its Pi process has stopped using the helper."
             (set-file-modes directory #o700)
             (copy-file pichat-tool-discovery-helper file)
             (set-file-modes file #o600)
-            (list :path (file-local-name file)
-                  :cleanup (lambda () (delete-directory directory t))))
+            (let ((skill (when skill-file
+                           (expand-file-name "pichat-jobs/SKILL.md" directory))))
+              (when skill
+                (make-directory (file-name-directory skill))
+                (set-file-modes (file-name-directory skill) #o700)
+                (copy-file skill-file skill)
+                (set-file-modes skill #o600))
+              (list :path (file-local-name file)
+                    :skill (and skill (file-local-name skill))
+                    :cleanup (lambda () (delete-directory directory t)))))
         ((error quit) (ignore-errors (delete-directory directory t))
                       (signal (car err) (cdr err)))))))
 

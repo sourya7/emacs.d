@@ -22,6 +22,8 @@ credentials in job instructions/arguments.  Environment and installed extensions
 are not frozen.  Use only one owning Emacs per file."
   :type 'file :group 'pichat-jobs)
 (defvar pichat-jobs--executor nil)
+(defvar pichat-jobs--owned-store nil
+  "Store retained before explicit executor initialization (for definition import).")
 (defvar-local pichat-jobs--kind 'jobs)
 (defvar-local pichat-jobs--filter nil)
 (defvar-local pichat-jobs--owner nil)
@@ -39,14 +41,25 @@ are not frozen.  Use only one owning Emacs per file."
 (defvar-local pichat-jobs--actions nil
   "Exact owning context of this buffer's most recent Actions menu.")
 
+(defun pichat-jobs--owning-store ()
+  "Return the shared store without executor initialization or reconciliation.
+Retain an initially opened store so later explicit executor entry adopts that
+same object, rather than reopening behind a definition import's back."
+  (let ((store (or (and pichat-jobs--executor
+                        (pichat-job-executor-store pichat-jobs--executor))
+                   pichat-jobs--owned-store)))
+    (unless store
+      (setq store (pichat-job-store-open pichat-jobs-file)
+            pichat-jobs--owned-store store))
+    (unless (equal (expand-file-name pichat-jobs-file) (pichat-job-store-file store))
+      (user-error "Jobs already owns another metadata file; restart before changing it"))
+    store))
+
 (defun pichat-jobs--engine ()
   "Return the owning executor, initializing/reconciling once on explicit entry."
-  (unless pichat-jobs--executor
-    (setq pichat-jobs--executor
-          (pichat-job-executor-open (pichat-job-store-open pichat-jobs-file))))
-  (unless (equal (expand-file-name pichat-jobs-file)
-                 (pichat-job-store-file (pichat-job-executor-store pichat-jobs--executor)))
-    (user-error "Jobs already owns another metadata file; restart before changing it"))
+  (let ((store (pichat-jobs--owning-store)))
+    (unless pichat-jobs--executor
+      (setq pichat-jobs--executor (pichat-job-executor-open store))))
   pichat-jobs--executor)
 
 (defun pichat-jobs--store ()
@@ -299,6 +312,7 @@ every definition row."
     (define-key map (kbd "<tab>") #'pichat-jobs-toggle)
     (define-key map (kbd "C-o") #'pichat-jobs-preview)
     (define-key map (kbd "+") #'pichat-job-new)
+    (define-key map (kbd "i") #'pichat-job-definitions)
     (define-key map (kbd "RET") #'pichat-jobs-details)
     (define-key map (kbd "r") #'pichat-jobs-run)
     (define-key map (kbd "e") #'pichat-jobs-edit)
@@ -991,12 +1005,17 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
       (insert "Never run"))
     (insert "\n")
     (pichat-job-schedule-ui-insert owner record)
+    (when (pichat-job-source-diverged-p record)
+      (insert (propertize "Saved edits differ from last import; reimport requires replacement confirmation.\n"
+                          'face 'warning)))
     (insert (format "Workspace: %s · %s\n\n"
                     (plist-get spec :directory)
                     (plist-get (plist-get (plist-get spec :configuration) :transport) :label)))
     (pichat-jobs--disclosure 'definition "Details")
     (when (member 'definition pichat-jobs--expanded)
-      (insert "\nJob: " id "\n")
+      (insert "\n")
+      (when-let* ((source (plist-get record :source)))
+        (insert "Imported from: " (plist-get source :file) "\n"))
       (pichat-jobs--insert-settings spec)
       (when (plist-get spec :after-job-id)
         (insert (format "After this run: %s\n"
@@ -1041,7 +1060,7 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
             (concat (propertize
                      (replace-regexp-in-string "%" "%%" (pichat-jobs--display (plist-get spec :title)) t t)
                      'face 'bold)
-                    (when (and record job-id (null pichat-jobs--section))
+                    (when (and (eq kind 'runs) record job-id (null pichat-jobs--section))
                       (propertize (format " (%s…)" (substring job-id 0 (min 12 (length job-id))))
                                   'face 'shadow)))))
     (goto-char (pichat-jobs--restore-position position))
@@ -1703,6 +1722,12 @@ its prefix while waiting for the model-list process."
               (unless (pichat-job--settings-current-p scope)
                 (user-error "Job changed; reopen Edit"))
               (unless (equal spec (plist-get (plist-get scope :job) :spec))
+                (when (and (plist-get (plist-get scope :job) :source)
+                           (not (yes-or-no-p
+                                 "Save native edits without changing authored file? Reimport may replace instructions/settings. ")))
+                  (user-error "Save cancelled; authored file and saved job unchanged"))
+                (unless (pichat-job--settings-current-p scope)
+                  (user-error "Job changed; reopen Edit"))
                 (pichat-job-save (pichat-jobs--store) spec id))
               (setf (plist-get scope :closed) t)
               (pichat-jobs--changed owner)

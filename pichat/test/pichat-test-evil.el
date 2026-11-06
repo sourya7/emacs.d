@@ -14,9 +14,11 @@
   (skip-unless (require 'evil nil t))
   (require 'pichat-evil)
   (require 'pichat-artifacts-embark)
+  (require 'pichat-job-definition-ui)
   (let* ((was-active (bound-and-true-p evil-mode))
          (modes '(pichat-chat-mode pichat-chat-compose-mode
                   pichat-view-mode pichat-session-manager-mode pichat-jobs-mode
+                  pichat-job-definitions-mode
                   pichat-artifact-result-mode pichat-artifact-elisp-result-mode
                   pichat-artifact-runner-result-mode))
          (open-inspectors (list (generate-new-buffer " *evil-existing-safe*")
@@ -89,6 +91,33 @@
                 (should (eq evil-state 'visual))
                 (should (equal kill-ring '("unchanged"))))
               (evil-normal-state)))
+          (with-temp-buffer
+            (pichat-job-definitions-mode)
+            (should (eq evil-state 'normal))
+            (should (eq (key-binding (kbd "RET")) #'pichat-job-definition-preview))
+            (should (eq (key-binding (kbd "g D")) #'pichat-job-definition-diagnostics))
+            (should (eq (key-binding (kbd "q")) #'pichat-view-quit))
+            (should (eq (key-binding (kbd "g r")) #'pichat-job-definition-ui-refresh))
+            (should (eq (key-binding (kbd "w")) #'evil-forward-word-begin)))
+          (with-temp-buffer
+            (pichat-job-definition-diagnostics-mode)
+            (should (eq evil-state 'normal))
+            (should (eq (key-binding (kbd "g r")) #'pichat-job-definition-ui--render-diagnostics))
+            (should (eq (key-binding (kbd "q")) #'pichat-view-quit)))
+          (with-temp-buffer
+            (pichat-job-definition-inspector-mode)
+            (should (eq evil-state 'normal))
+            (should (eq (key-binding (kbd "q")) #'pichat-job-definition-inspector-quit))
+            (should (eq (key-binding (kbd "g r")) #'pichat-job-definition-ui--render-inspector))
+            (should (eq (key-binding (kbd "w")) #'evil-forward-word-begin)))
+          (with-temp-buffer
+            (pichat-job-definition-ui-mode)
+            (should (eq evil-state 'normal))
+            (should (eq (key-binding (kbd "RET")) #'push-button))
+            (should (eq (key-binding (kbd "TAB")) #'forward-button))
+            (should (eq (key-binding (kbd "q")) #'pichat-view-quit))
+            (should (eq (key-binding (kbd "g r")) #'pichat-job-definition-ui-refresh))
+            (should (eq (key-binding (kbd "w")) #'evil-forward-word-begin)))
           (with-temp-buffer
             (pichat-sessions-mode)
             (should (pichat-view-evil-normal-p))
@@ -215,6 +244,7 @@
           (pichat-test-with-job-executor ()
             (with-temp-buffer
               (pichat-jobs-mode)
+              (should (eq (key-binding (kbd "g i")) #'pichat-job-definitions))
               (setq pichat-jobs--owner executor)
               (pichat-jobs-refresh)
               (should (string-match-p "attention (g a)" mode-line-process))

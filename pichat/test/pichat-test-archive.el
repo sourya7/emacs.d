@@ -465,6 +465,7 @@
 
 (ert-deftest pichat-rpc-queues-initial-ssh-input-until-transport-is-ready ()
   (let* ((pichat-rpc-remote-startup-delay 30)
+         (pichat-pi-default-args '("--mode" "rpc" "--no-skills"))
          (transport
           (pichat-transport--create
            :id 'remote :kind 'ssh :label "remote"

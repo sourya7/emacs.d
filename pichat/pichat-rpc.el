@@ -19,6 +19,11 @@
 (require 'pichat-pi-environment)
 (require 'pichat-chat-diagnostics)
 
+(defconst pichat-rpc-job-authoring-skill
+  (expand-file-name "skills/pichat-jobs/SKILL.md"
+                    (file-name-directory (or load-file-name buffer-file-name)))
+  "Bundled authoring skill, injected only at actual structured startup.")
+
 (define-error 'pichat-rpc-invalid-record "Invalid Pi RPC record")
 
 (defun pichat-rpc--report-event-handler-error (session _event condition)
@@ -295,7 +300,7 @@ Do not dispatch callbacks into a replacement process."
 (defvar pichat-rpc--internal-request nil
   "Non-nil for an owned startup-control request, not conversation input.")
 
-(declare-function pichat-tool-runtime-prepare "pichat-tool-runtime" (session names))
+(declare-function pichat-tool-runtime-prepare "pichat-tool-runtime" (session names &optional skill-file))
 (declare-function pichat-tool-runtime-begin "pichat-tool-runtime" (session &optional callback))
 (declare-function pichat-tool-runtime-dispose "pichat-tool-runtime" (session))
 
@@ -315,6 +320,11 @@ committed configuration).  A local startup failure retains a diagnostic."
          (program (car argv))
          (args (cdr argv))
          (transport (pichat-session-transport session))
+         (skill (when (and (or validated-command
+                              (not pichat-rpc-command)
+                              (eq (pichat-transport-kind transport) 'ssh))
+                          (not (seq-some (lambda (arg) (member arg '("--no-skills" "-ns"))) argv)))
+                  pichat-rpc-job-authoring-skill))
          (tool-selection (if tools-p startup-tools
                            (or (pichat-session-tool-selection session)
                                (when (pichat-session-preset-spec session)
@@ -334,13 +344,24 @@ committed configuration).  A local startup failure retains a diagnostic."
         (progn
           (unless (and (stringp program) (not (string-empty-p program)))
             (signal 'file-error '("Empty Pi RPC command")))
+          (when (and skill (not (file-readable-p skill)))
+            (error "Bundled PiChat job-authoring skill is unreadable: %s" skill))
           (when (or (plist-get tool-selection :extensions)
                     (eq (pichat-transport-kind transport) 'ssh))
             (require 'pichat-tool-runtime)
-            (let ((path (pichat-tool-runtime-prepare session (plist-get tool-selection :extensions))))
+            (let ((path (if skill
+                            (pichat-tool-runtime-prepare session (plist-get tool-selection :extensions) skill)
+                          (pichat-tool-runtime-prepare session (plist-get tool-selection :extensions)))))
+              (when skill
+                (setq skill (plist-get (plist-get (pichat-session-rpc-startup-control session) :helper) :skill))
+                (unless (and (stringp skill) (not (string-empty-p skill)))
+                  (error "Startup staging did not supply a job-authoring skill path")))
               (setq argv (append argv (list "--extension" path))
                     args (cdr argv))
               (setf (pichat-session-rpc-command session) argv)))
+          (when skill
+            (setq argv (append argv (list "--skill" skill)) args (cdr argv))
+            (setf (pichat-session-rpc-command session) argv))
           (setq buffer (generate-new-buffer " *pichat-rpc*")
                 stderr-buffer (generate-new-buffer " *pichat-rpc-stderr*"))
           (let* ((process-environment (pichat-pi-process-environment))

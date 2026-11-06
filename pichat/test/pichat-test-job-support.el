@@ -59,7 +59,10 @@ until BODY submits work.  Fixture teardown retires handlers before stopping."
                (when (boundp 'pichat-jobs--owner)
                  (dolist (buffer (buffer-list))
                    (when (and (not (memq buffer initial-buffers))
-                              (eq (buffer-local-value 'pichat-jobs--owner buffer) executor))
+                              (or (eq (buffer-local-value 'pichat-jobs--owner buffer) executor)
+                                  (with-current-buffer buffer
+                                    (derived-mode-p 'pichat-job-definition-ui-mode
+                                                     'pichat-job-definitions-mode))))
                      (kill-buffer buffer)))))))))))
 
 (defun pichat-test-job-spec (directory &optional access)
@@ -148,6 +151,23 @@ Use `pichat-test-job-goto-button' when asserting that a control is inline."
          (button (and found (button-at (1- (point))))))
     (if button (button-activate button)
       (pichat-test-job-command label))))
+
+(defun pichat-test-job-author (directory &rest changes)
+  "Write an isolated project definition in DIRECTORY with plist CHANGES.
+Return its fresh discovery record.  No import, store or executor initialization."
+  (require 'pichat-job-definition)
+  (let* ((data (with-temp-buffer
+                 (insert-file-contents (expand-file-name
+                                       "job-definitions/project-review.json"
+                                       pichat-test-fixture-directory))
+                 (json-parse-buffer :object-type 'plist)))
+         (file (expand-file-name ".pi/jobs/job.json" directory)))
+    (setf (plist-get data :model) "pichat-fake/pichat-fake")
+    (while changes (setq data (plist-put data (pop changes) (pop changes))))
+    (make-directory (file-name-directory file) t)
+    (with-temp-file file (insert (decode-coding-string (json-serialize data) 'utf-8)))
+    (or (aref (plist-get (pichat-job-definition-discover nil directory) :definitions) 0)
+        (error "Invalid authored test fixture"))))
 
 (provide 'pichat-test-job-support)
 ;;; pichat-test-job-support.el ends here

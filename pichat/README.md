@@ -831,10 +831,41 @@ Schedules are opt-in per saved job.
   dedicated deletion keybinding. Compact Runs tables show Work, Queued, and State / result;
   queue times use local date/time to the minute; Project / target stays in wide tables and
   run details. Compact Jobs tables retain their project/target context.
+- `M-x pichat-job-definitions` (Jobs `i`, Evil `g i`) discovers authored job
+  files for the current project and effective global agent root; a prefix selects
+  another project. Like Jobs, it uses native sortable column headers, width-aware
+  rows and a compact mode-line overview; its body contains only file rows.
+  `RET` opens a compact, read-only import Transient; `g` (Evil `g r`) rediscovers
+  the same roots, and `q` returns. In the menu, `i` **Review** resolves
+  settings and stages a Create/Update review in that same menu;
+  **Already up to date** means ordinary reimport did not recapture settings.
+  In the reviewed stage, the secondary Settings action `r` **Use current settings**
+  prepares fresh settings from the current named preset/target definitions, even
+  when the file is unchanged. It still requires Save; it does not refresh the
+  file listing or run the job.
+  Only `RET` **Save** writes the saved job; `q`/Transient quit discards
+  staging. Save closes the menu and keeps the selected file row. Errors retain
+  the review for inspection/retry; stale sources or stores require rediscovery
+  and a new review. Replacing native edits requires explicit confirmation.
+  `d` **Inspect** opens one reusable read-only inspector for full instructions,
+  file path, resolved settings and changes; **Technical details** discloses scoped
+  identity/root and raw captures. Inspector `q` returns to the same menu without resolving again.
+  In the initial menu, `o` **Open file** closes staging and opens the
+  ordinary file editor; imported fields are not editable in the menu. Save the
+  file, then rediscover/review explicitly. Nothing auto-imports or runs.
+  `D` (Evil `g D`) in the file table separately inspects cached file diagnostics
+  and full root context. Inspector refresh redraws snapshots without rescanning
+  files. Empty lists show zero files in the overview. Opening the initial menu
+  or its inspector does not access the job store, resolve settings, initialize
+  an executor or start Pi. Import never enables timing or changes follow-ups,
+  queued captures or historical attempts; Run and timing remain separate.
 - Saved-job details put instructions first, followed by a clickable latest-run
   summary, schedule and workspace/target. Completed summaries use the recorded
   finish time; older records without one label their queue time instead. Enabled
   schedules show their next occurrence; disabled timing does not imply authorization.
+  Imported jobs show **Imported from** in Details; identity/root and internal job
+  IDs remain available through Actions → **Inspect raw settings…**, not normal
+  job details. Replacement warnings remain visible when saved edits differ.
   Open the exact run to read its answer, without a duplicate response preview.
   The latest-run link includes manual runs. In Details, **Last occurrence: …**
   itself links to the run submitted by that occurrence, not a future run; it can

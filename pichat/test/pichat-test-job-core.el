@@ -925,5 +925,454 @@
         (should (eq (plist-get (pichat-job-admission store run 3) :ready) t))
         (should-not (plist-get (pichat-job-admission store run 3) :blocking-run))))))
 
+;; Authored-file parsing and discovery.  All roots are disposable; these tests
+;; never import definitions, capture launch settings or start work.
+(defconst pichat-test-job-definition-fixtures
+  (expand-file-name "fixtures/job-definitions/"
+                    (file-name-directory (or load-file-name buffer-file-name))))
+
+(defun pichat-test-job-definition--require ()
+  "Load the data-only authored definition reader."
+  (require 'pichat-job-definition))
+
+(defun pichat-test-job-definition--fixture (name)
+  "Read authored definition fixture NAME as text."
+  (with-temp-buffer
+    (insert-file-contents (expand-file-name name pichat-test-job-definition-fixtures))
+    (buffer-string)))
+
+(ert-deftest pichat-job-definition-project-and-global-schema ()
+  (pichat-test-job-definition--require)
+  (let ((project (pichat-job-definition-parse
+                  (pichat-test-job-definition--fixture "project-review.json")))
+        (global (pichat-job-definition-parse
+                 (pichat-test-job-definition--fixture "global-review.json"))))
+    (should (equal (plist-get project :id) (plist-get global :id)))
+    (should (equal (plist-get project :directory) "."))
+    (should (string-match-p "λ and 日本語" (plist-get project :instructions)))
+    (should-not (plist-member project :target))
+    (should (equal (plist-get global :target) '(:name "local")))))
+
+(ert-deftest pichat-job-definition-rejects-invalid-or-ambiguous-json ()
+  (pichat-test-job-definition--require)
+  (dolist (text '("{}" "[]" "null" "{broken"
+                  "{\"version\":1,\"version\":1}"
+                  "{\"version\":1} trailing"))
+    (should-error (pichat-job-definition-parse text))))
+
+(ert-deftest pichat-job-definition-rejects-unsupported-fields-and-types ()
+  (pichat-test-job-definition--require)
+  (let ((valid (json-parse-string
+                (pichat-test-job-definition--fixture "project-review.json")
+                :object-type 'plist)))
+    (dolist (change '((:version 2) (:version "1") (:version 1.0)
+                      (:id "Bad ID") (:id "-review") (:id "review--all")
+                      (:title " ") (:instructions "") (:directory 12)
+                      (:model "default") (:preset "default")
+                      (:target "local") (:target (:name "inferred"))
+                      (:target (:name "local" :executable "other-pi"))
+                      (:schedule (:enabled t)) (:after-job-id "other")
+                      (:configuration (:command ["pi"]))))
+      (let ((data (copy-tree valid)))
+        (setf (plist-get data (car change)) (cadr change))
+        (should-error (pichat-job-definition-parse (json-serialize data)))))
+    (dolist (key '(:version :id :title :instructions :model :preset))
+      (let ((data (copy-tree valid)))
+        (cl-remf data key)
+        (should-error (pichat-job-definition-parse (json-serialize data)))))))
+
+(ert-deftest pichat-job-definition-rejects-duplicate-valid-field ()
+  (pichat-test-job-definition--require)
+  (let ((text (pichat-test-job-definition--fixture "project-review.json")))
+    (should-error
+     (pichat-job-definition-parse
+      (replace-regexp-in-string
+       "\"version\": 1" "\"version\": 1, \"version\": 1" text t t)))))
+
+(ert-deftest pichat-job-definition-limits-utf8-bytes-and-rejects-nul ()
+  (pichat-test-job-definition--require)
+  (should-error (pichat-job-definition-parse (make-string (1+ (* 256 1024)) ?x)))
+  (let ((data (json-parse-string
+               (pichat-test-job-definition--fixture "project-review.json")
+               :object-type 'plist)))
+    (dolist (instructions (list (make-string 131073 ?x)
+                                (make-string 100000 ?日) "read\0hidden"))
+      (setf (plist-get data :instructions) instructions)
+      (should-error (pichat-job-definition-parse (json-serialize data))))))
+
+(ert-deftest pichat-job-definition-discovery-keeps-scope-and-project-cwd ()
+  (pichat-test-job-definition--require)
+  (pichat-test-job--with-store
+    (let ((agent (expand-file-name "agent/" directory))
+          (project (expand-file-name "project/" directory)))
+      (make-directory (expand-file-name "jobs/" agent) t)
+      (make-directory (expand-file-name ".pi/jobs/" project) t)
+      (copy-file (expand-file-name "global-review.json" pichat-test-job-definition-fixtures)
+                 (expand-file-name "jobs/global.json" agent))
+      (copy-file (expand-file-name "project-review.json" pichat-test-job-definition-fixtures)
+                 (expand-file-name ".pi/jobs/project.json" project))
+      (let* ((result (pichat-job-definition-discover agent project))
+             (records (append (plist-get result :definitions) nil))
+             (local (seq-find (lambda (record)
+                                (equal (plist-get record :scope) "project")) records)))
+        (should (= (length records) 2))
+        (should (seq-empty-p (plist-get result :diagnostics)))
+        (should (equal (plist-get local :directory) (file-truename project)))
+        (should-not (equal (plist-get (car records) :identity)
+                           (plist-get (cadr records) :identity)))
+        (should-not (file-exists-p file))
+        (should (equal (pichat-job-records store 'runs) []))))))
+
+(ert-deftest pichat-job-definition-duplicate-id-is-not-filename-shadowing ()
+  (pichat-test-job-definition--require)
+  (pichat-test-job--with-store
+    (let* ((project (expand-file-name "project/" directory))
+           (root (expand-file-name ".pi/jobs/" project)))
+      (make-directory root t)
+      (dolist (name '("a.json" "b.json"))
+        (copy-file (expand-file-name "project-review.json" pichat-test-job-definition-fixtures)
+                   (expand-file-name name root)))
+      (let ((result (pichat-job-definition-discover nil project)))
+        (should (seq-empty-p (plist-get result :definitions)))
+        (should (= (length (plist-get result :diagnostics)) 2))))))
+
+(ert-deftest pichat-job-definition-discovery-rejects-links-and-does-not-recurse ()
+  (pichat-test-job-definition--require)
+  (pichat-test-job--with-store
+    (let* ((project (expand-file-name "project/" directory))
+           (root (expand-file-name ".pi/jobs/" project))
+           (source (expand-file-name "project-review.json" pichat-test-job-definition-fixtures)))
+      (make-directory (expand-file-name "nested/" root) t)
+      (copy-file source (expand-file-name "nested/ignored.json" root))
+      (make-symbolic-link source (expand-file-name "linked.json" root))
+      (let ((result (pichat-job-definition-discover nil project)))
+        (should (seq-empty-p (plist-get result :definitions)))
+        (should (= (length (plist-get result :diagnostics)) 1))
+        (should (string-suffix-p "linked.json"
+                                 (plist-get (aref (plist-get result :diagnostics) 0) :file)))))))
+
+(ert-deftest pichat-job-definition-discovery-missing-and-remote-roots ()
+  (pichat-test-job-definition--require)
+  (pichat-test-job--with-store
+    (let ((result (pichat-job-definition-discover nil directory)))
+      (should (seq-empty-p (plist-get result :definitions)))
+      (should (seq-empty-p (plist-get result :diagnostics)))))
+  ;; No connection is attempted to diagnose unsupported source hosts.
+  (cl-letf (((symbol-function 'file-attributes)
+             (lambda (&rest _) (ert-fail "Remote source must fail before I/O"))))
+    (should-error (pichat-job-definition-discover nil "/ssh:fixture:/project/"))))
+
+(ert-deftest pichat-job-definition-renaming-preserves-scope-identity ()
+  (pichat-test-job-definition--require)
+  (pichat-test-job--with-store
+    (let* ((root (expand-file-name ".pi/jobs/" directory))
+           (a (expand-file-name "a.json" root))
+           (b (expand-file-name "b.json" root)))
+      (make-directory root t)
+      (copy-file (expand-file-name "project-review.json" pichat-test-job-definition-fixtures) a)
+      (let ((before (aref (plist-get (pichat-job-definition-discover nil directory)
+                                     :definitions) 0)))
+        (rename-file a b)
+        (let ((after (aref (plist-get (pichat-job-definition-discover nil directory)
+                                      :definitions) 0)))
+          (should (equal (plist-get before :identity) (plist-get after :identity)))
+          (should (equal (plist-get after :file) b)))))))
+
+(ert-deftest pichat-job-definition-global-cwd-must-be-explicit-and-absolute ()
+  (pichat-test-job-definition--require)
+  (pichat-test-job--with-store
+    (let* ((root (expand-file-name "jobs/" directory))
+           (source (expand-file-name "relative.json" root)))
+      (make-directory root t)
+      (copy-file (expand-file-name "project-review.json" pichat-test-job-definition-fixtures) source)
+      (let ((result (pichat-job-definition-discover directory nil)))
+        (should (seq-empty-p (plist-get result :definitions)))
+        (should (equal (plist-get (aref (plist-get result :diagnostics) 0) :file)
+                       source))))))
+
+(defun pichat-test-job-definition--write (file &optional data)
+  "Write fixture or explicit DATA to temporary FILE, creating its parent."
+  (make-directory (file-name-directory file) t)
+  (with-temp-file file
+    (insert (cond ((stringp data) data)
+                  (data (decode-coding-string (json-serialize data) 'utf-8))
+                  (t (pichat-test-job-definition--fixture "project-review.json"))))))
+
+(ert-deftest pichat-job-definition-field-boundaries-and-detached-parsing ()
+  (pichat-test-job-definition--require)
+  (let* ((data (json-parse-string
+                (pichat-test-job-definition--fixture "project-review.json") :object-type 'plist))
+         (text (pichat-test-job-definition--fixture "project-review.json"))
+         (parsed (pichat-job-definition-parse text)))
+    (aset text 0 ?X)
+    (should (equal (plist-get parsed :id) "dependency-review"))
+    (should (equal (pichat-job-definition-parse (json-serialize data)) parsed))
+    (dolist (case '((:id 64) (:title 200) (:instructions 131072) (:directory 4096)))
+      (let ((changed (copy-tree data)))
+        (setf (plist-get changed (car case)) (make-string (cadr case) ?a))
+        (should (pichat-job-definition-parse (json-serialize changed)))
+        (setf (plist-get changed (car case)) (make-string (1+ (cadr case)) ?a))
+        (should-error (pichat-job-definition-parse (json-serialize changed))
+                      :type 'pichat-job-definition-error)))
+    (dolist (change '((:id "Review") (:id "review-") (:id "re_view")
+                      (:model "provider/model:high") (:model "provider/")
+                      (:model " /model") (:model "provider/model name")
+                      (:directory "~/work") (:directory "/ssh:fixture:/work/")
+                      (:target (:name "default")) (:target (:name "two names"))
+                      (:target :null) (:directory :null) (:title :null)))
+      (let ((changed (copy-tree data)))
+        (setf (plist-get changed (car change)) (cadr change))
+        (should-error (pichat-job-definition-parse
+                       (json-serialize changed :null-object :null))
+                      :type 'pichat-job-definition-error)))
+    ;; Nested model IDs and unknown registry names are data, not discovery errors.
+    (setf (plist-get data :model) "provider/family/model"
+          (plist-get data :preset) "not-installed-here"
+          (plist-get data :target) '(:name "configured-ssh"))
+    (should (equal (plist-get (pichat-job-definition-parse (json-serialize data)) :target)
+                   '(:name "configured-ssh")))))
+
+(ert-deftest pichat-job-definition-rejects-escaped-duplicate-keys ()
+  (pichat-test-job-definition--require)
+  (let ((text (pichat-test-job-definition--fixture "project-review.json")))
+    (dolist (replacement '("\"version\": 1, \"\\u0076ersion\": 1"
+                           "\"version\": 1, \"target\": {\"name\":\"local\",\"name\":\"local\"}"))
+      (should-error (pichat-job-definition-parse
+                     (replace-regexp-in-string "\"version\": 1" replacement text t t))
+                    :type 'pichat-job-definition-error))))
+
+(ert-deftest pichat-job-definition-effective-agent-environment-and-explicit-project ()
+  (pichat-test-job-definition--require)
+  (pichat-test-job--with-store
+    (let* ((process-environment (copy-sequence process-environment))
+           (agent (expand-file-name "override/" directory))
+           (project (expand-file-name "project/" directory))
+           (pichat-pi-extra-env `(("PI_CODING_AGENT_DIR" . ,agent))))
+      (setenv "PI_CODING_AGENT_DIR" (expand-file-name "ignored/" directory))
+      (pichat-test-job-definition--write
+       (expand-file-name "jobs/global.json" agent)
+       (pichat-test-job-definition--fixture "global-review.json"))
+      (pichat-test-job-definition--write (expand-file-name ".pi/jobs/project.json" project))
+      (let ((default-directory directory)
+            (before (copy-sequence process-environment)))
+        (should (equal (pichat-job-definition-agent-directory) agent))
+        (should (= (length (plist-get
+                            (pichat-job-definition-discover
+                             (pichat-job-definition-agent-directory) project) :definitions)) 2))
+        (should (equal process-environment before)))
+      (let ((pichat-pi-extra-env nil))
+        (should (equal (pichat-job-definition-agent-directory) (getenv "PI_CODING_AGENT_DIR")))
+        (setenv "PI_CODING_AGENT_DIR" nil)
+        (should (equal (pichat-job-definition-agent-directory)
+                       (expand-file-name "~/.pi/agent/")))))))
+
+(ert-deftest pichat-job-definition-same-id-in-different-projects-and-root-alias ()
+  (pichat-test-job-definition--require)
+  (pichat-test-job--with-store
+    (let ((a (expand-file-name "a/" directory))
+          (b (expand-file-name "b/" directory))
+          (alias (expand-file-name "alias" directory)))
+      (dolist (project (list a b))
+        (pichat-test-job-definition--write (expand-file-name ".pi/jobs/job.json" project)))
+      (make-symbolic-link (directory-file-name a) alias)
+      (let ((one (aref (plist-get (pichat-job-definition-discover nil a) :definitions) 0))
+            (two (aref (plist-get (pichat-job-definition-discover nil b) :definitions) 0))
+            (same (aref (plist-get (pichat-job-definition-discover nil alias) :definitions) 0)))
+        (should-not (equal (plist-get one :identity) (plist-get two :identity)))
+        (should (equal (plist-get one :identity) (plist-get same :identity)))))))
+
+(ert-deftest pichat-job-definition-project-default-parent-and-absolute-cwd ()
+  (pichat-test-job-definition--require)
+  (pichat-test-job--with-store
+    (let ((source (expand-file-name ".pi/jobs/job.json" directory))
+          (data (json-parse-string
+                 (pichat-test-job-definition--fixture "project-review.json") :object-type 'plist)))
+      (cl-remf data :directory)
+      (dolist (cwd (list nil "../other" "/example/workspace/"))
+        (when cwd (setf (plist-get data :directory) cwd))
+        (pichat-test-job-definition--write source data)
+        (let ((record (aref (plist-get (pichat-job-definition-discover nil directory) :definitions) 0)))
+          (should (equal (plist-get record :directory)
+                         (file-name-as-directory (expand-file-name (or cwd ".") directory)))))))))
+
+(ert-deftest pichat-job-definition-invalid-files-retain-good-siblings-and-bound-diagnostics ()
+  (pichat-test-job-definition--require)
+  (pichat-test-job--with-store
+    (let ((root (expand-file-name ".pi/jobs/" directory)))
+      (pichat-test-job-definition--write (expand-file-name "z.json" root))
+      (pichat-test-job-definition--write (expand-file-name "a.json" root)
+                                           (concat "{\"" (make-string 1000 ?x) "\":1}"))
+      (make-directory (expand-file-name "directory.json" root))
+      (dolist (name '(".ignored.json" "ignored.JSON" "ignored.txt"))
+        (pichat-test-job-definition--write (expand-file-name name root) "invalid"))
+      (let ((result (pichat-job-definition-discover nil directory)))
+        (should (= (length (plist-get result :definitions)) 1))
+        (should (= (length (plist-get result :diagnostics)) 2))
+        (seq-doseq (diagnostic (plist-get result :diagnostics))
+          (should (file-name-absolute-p (plist-get diagnostic :file)))
+          (should (<= (length (plist-get diagnostic :message)) 512)))))))
+
+(ert-deftest pichat-job-definition-strict-utf8-and-file-byte-boundary ()
+  (pichat-test-job-definition--require)
+  (pichat-test-job--with-store
+    (let* ((source (expand-file-name ".pi/jobs/job.json" directory))
+           (fixture (pichat-test-job-definition--fixture "project-review.json"))
+           (padded (concat fixture (make-string
+                                   (- (* 256 1024) (string-bytes (encode-coding-string fixture 'utf-8)))
+                                   ?\s))))
+      (pichat-test-job-definition--write source padded)
+      (should (= (length (plist-get (pichat-job-definition-discover nil directory) :definitions)) 1))
+      (dolist (bytes (list (encode-coding-string (concat padded " ") 'utf-8)
+                           (unibyte-string #xff) (unibyte-string #xc0 #xaf)
+                           (unibyte-string #xe2 #x82) (unibyte-string #xed #xa0 #x80)))
+        (let ((coding-system-for-write 'no-conversion))
+          (with-temp-file source (set-buffer-multibyte nil) (insert bytes)))
+        (let ((result (pichat-job-definition-discover nil directory)))
+          (should (seq-empty-p (plist-get result :definitions)))
+          (should (equal (plist-get (aref (plist-get result :diagnostics) 0) :file) source)))))))
+
+(ert-deftest pichat-job-definition-unreadable-files-and-roots-are-diagnostics ()
+  (pichat-test-job-definition--require)
+  (pichat-test-job--with-store
+    (let* ((root (expand-file-name ".pi/jobs/" directory))
+           (source (expand-file-name "job.json" root))
+           (readable (symbol-function 'file-readable-p)))
+      (pichat-test-job-definition--write source)
+      ;; Stub access checks so this works even when the test owner is root.
+      (dolist (blocked (list source root (expand-file-name ".pi/" directory) directory))
+        (cl-letf (((symbol-function 'file-readable-p)
+                   (lambda (path) (and (not (equal path blocked)) (funcall readable path)))))
+          (let ((result (pichat-job-definition-discover nil directory)))
+            (should (seq-empty-p (plist-get result :definitions)))
+            (should (= (length (plist-get result :diagnostics)) 1))))))))
+
+(ert-deftest pichat-job-definition-symlink-resource-roots-and-broken-links-are-errors ()
+  (pichat-test-job-definition--require)
+  (pichat-test-job--with-store
+    (let ((outside (expand-file-name "outside/" directory))
+          (project (expand-file-name "project/" directory)))
+      (make-directory project)
+      (make-directory outside)
+      (make-symbolic-link outside (expand-file-name ".pi" project))
+      (should (= (length (plist-get (pichat-job-definition-discover nil project) :diagnostics)) 1))))
+  (pichat-test-job--with-store
+    (let ((jobs (expand-file-name "jobs" directory)))
+      (make-symbolic-link (expand-file-name "absent" directory) jobs)
+      (should (= (length (plist-get (pichat-job-definition-discover directory nil) :diagnostics)) 1)))))
+
+(ert-deftest pichat-job-definition-hardlinked-duplicate-claims-and-sorted-results ()
+  (pichat-test-job-definition--require)
+  (pichat-test-job--with-store
+    (let* ((root (expand-file-name ".pi/jobs/" directory))
+           (source (expand-file-name "a.json" root))
+           (other (json-parse-string
+                   (pichat-test-job-definition--fixture "project-review.json") :object-type 'plist)))
+      (pichat-test-job-definition--write source)
+      (setf (plist-get other :id) "other")
+      (pichat-test-job-definition--write (expand-file-name "z.json" root) other)
+      (should (string-suffix-p "a.json" (plist-get (aref (plist-get
+                                       (pichat-job-definition-discover nil directory) :definitions) 0) :file)))
+      (add-name-to-file source (expand-file-name "b.json" root))
+      (let ((result (pichat-job-definition-discover nil directory)))
+        (should (= (length (plist-get result :definitions)) 1))
+        (should (= (length (plist-get result :diagnostics)) 2))))))
+
+(ert-deftest pichat-job-definition-discovery-is-read-only-and-never-prepares-work ()
+  (pichat-test-job-definition--require)
+  (pichat-test-job--with-store
+    (let* ((source (expand-file-name ".pi/jobs/job.json" directory))
+           (job (pichat-job-save store (pichat-test-job--spec)))
+           (_run (pichat-job-enqueue store nil job))
+           (before (pichat-job--read-bytes file)))
+      (pichat-test-job-definition--write source)
+      (cl-letf (((symbol-function 'pichat-job-launch-capture) (lambda (&rest _) (ert-fail "capture")))
+                ((symbol-function 'pichat-job-reconcile) (lambda (&rest _) (ert-fail "reconcile")))
+                ((symbol-function 'pichat-job-store-open) (lambda (&rest _) (ert-fail "open store")))
+                ((symbol-function 'make-process) (lambda (&rest _) (ert-fail "spawn")))
+                ((symbol-function 'start-file-process) (lambda (&rest _) (ert-fail "remote spawn")))
+                ((symbol-function 'pichat-job-save) (lambda (&rest _) (ert-fail "save")))
+                ((symbol-function 'run-at-time) (lambda (&rest _) (ert-fail "timer"))))
+        (should (= (length (plist-get (pichat-job-definition-discover nil directory) :definitions)) 1)))
+      (should (equal before (pichat-job--read-bytes file)))
+      (should (equal (pichat-test-job-definition--fixture "project-review.json")
+                     (with-temp-buffer (insert-file-contents source) (buffer-string))))
+      (delete-file source)
+      (should (seq-empty-p (plist-get (pichat-job-definition-discover nil directory) :definitions)))
+      (should (equal before (pichat-job--read-bytes file))))))
+
+(ert-deftest pichat-job-definition-nonregular-candidates-fail-before-read ()
+  (pichat-test-job-definition--require)
+  (pichat-test-job--with-store
+    (let* ((source (expand-file-name ".pi/jobs/nonregular.json" directory))
+           (regular (symbol-function 'file-regular-p)))
+      (pichat-test-job-definition--write source)
+      ;; file-attribute-type is nil for FIFOs/sockets too, not only regular files.
+      (cl-letf (((symbol-function 'file-regular-p)
+                 (lambda (path) (and (not (equal path source)) (funcall regular path))))
+                ((symbol-function 'insert-file-contents-literally)
+                 (lambda (&rest _) (ert-fail "Must reject nonregular file before read"))))
+        (let ((result (pichat-job-definition-discover nil directory)))
+          (should (seq-empty-p (plist-get result :definitions)))
+          (should (string-match-p "regular file"
+                   (plist-get (aref (plist-get result :diagnostics) 0) :message))))))))
+
+(ert-deftest pichat-job-definition-encoding-errors-inside-otherwise-valid-json ()
+  (pichat-test-job-definition--require)
+  (let* ((fixture (pichat-test-job-definition--fixture "project-review.json"))
+         (bytes (encode-coding-string fixture 'utf-8)))
+    (dolist (invalid (list (unibyte-string #xff) (unibyte-string #xc0 #xaf)
+                           (unibyte-string #xed #xa0 #x80)))
+      (should-error (pichat-job-definition-parse
+                     (replace-regexp-in-string "Review dependencies" invalid bytes t t))
+                    :type 'pichat-job-definition-error))
+    (should-error (pichat-job-definition-parse
+                   (replace-regexp-in-string "Review dependencies" "\\ud800" fixture t t))
+                  :type 'pichat-job-definition-error)))
+
+(defun pichat-test-job--source (spec)
+  "Make isolated authored linkage for captured SPEC."
+  (list :version 1 :identity ["project" "/example/" "review"]
+        :file "/example/.pi/jobs/review.json"
+        :authored-digest (pichat-job-data-digest '(:id "review"))
+        :spec-digest (pichat-job-spec-digest spec)))
+
+(ert-deftest pichat-job-source-linkage-roundtrip-native-edits-and-divergence ()
+  (pichat-test-job--with-store
+    (let* ((spec (pichat-test-job--spec))
+           (source (pichat-test-job--source spec))
+           (job (pichat-job-save store spec nil source)))
+      (should-not (pichat-job-source-diverged-p (pichat-job-record store 'jobs job)))
+      (should (equal (plist-get (pichat-job-record (pichat-job-store-open file) 'jobs job) :source) source))
+      (setf (plist-get spec :after-job-id) "followup")
+      (pichat-job-save store spec job)
+      (should-not (pichat-job-source-diverged-p (pichat-job-record store 'jobs job)))
+      (setf (plist-get spec :title) "Native title")
+      (pichat-job-save store spec job)
+      (should (pichat-job-source-diverged-p (pichat-job-record store 'jobs job)))
+      (should (equal (plist-get (pichat-job-record store 'jobs job) :source) source)))))
+
+(ert-deftest pichat-job-source-digests-ignore-object-order-not-array-order ()
+  (should (equal (pichat-job-data-digest '(:a 1 :b (:c "λ" :d [1 2])))
+                 (pichat-job-data-digest '(:b (:d [1 2] :c "λ") :a 1))))
+  (should-not (equal (pichat-job-data-digest '(:a [1 2]))
+                     (pichat-job-data-digest '(:a [2 1])))))
+
+(ert-deftest pichat-job-source-invalid-and-duplicate-links-never-publish ()
+  (pichat-test-job--with-store
+    (let* ((spec (pichat-test-job--spec))
+           (source (pichat-test-job--source spec))
+           (_job (pichat-job-save store spec nil source))
+           (before (pichat-job--read-bytes file))
+           (data (pichat-job--copy (pichat-job-store-data store))))
+      (should-error (pichat-job-save store spec nil source) :type 'pichat-job-error)
+      (dolist (change '((:version 2) (:identity ["other" "/example/" "review"])
+                        (:file "relative.json") (:authored-digest "bad")
+                        (:spec-digest "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")))
+        (let ((bad (copy-tree source)))
+          (setf (plist-get bad (car change)) (cadr change))
+          (should-error (pichat-job-save store spec nil bad) :type 'pichat-job-error)))
+      (should (equal before (pichat-job--read-bytes file)))
+      (should (equal data (pichat-job-store-data store))))))
+
 (provide 'pichat-test-job-core)
 ;;; pichat-test-job-core.el ends here

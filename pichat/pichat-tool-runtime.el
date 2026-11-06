@@ -13,11 +13,13 @@
 (require 'pichat-events)
 (require 'pichat-process-lifetime)
 
-(defun pichat-tool-runtime-prepare (session names)
+(defun pichat-tool-runtime-prepare (session names &optional skill-file)
   "Stage the helper for SESSION and capture exact selected NAMES.
-Return its runtime path.  Called only during actual process startup, never
-when building a replacement command during preflight."
-  (let ((helper (pichat-tool-discovery-prepare-helper (pichat-session-transport session))))
+Optional SKILL-FILE shares its owned storage, cleanup and uncertain-exit policy.
+Return the helper path.  Only actual startup stages resources, not preflight."
+  (let ((helper (if skill-file
+                    (pichat-tool-discovery-prepare-helper (pichat-session-transport session) skill-file)
+                  (pichat-tool-discovery-prepare-helper (pichat-session-transport session)))))
     (setf (pichat-session-rpc-startup-control session)
           (list :helper helper :names (copy-sequence names) :process nil :verified nil
                 :queue nil :handler nil :timer nil :requests nil :callback nil))
@@ -43,7 +45,7 @@ when building a replacement command during preflight."
                         'stopping)
               (pichat-chat-diagnostics-record
                session :origin 'tool-control
-               :message "Remote shutdown is uncertain; private tool-control helper retained on target")))
+               :message "Remote shutdown is uncertain; private startup resources retained on target")))
         (condition-case err
             (funcall (plist-get (plist-get control :helper) :cleanup))
           (error (pichat-chat-diagnostics-record

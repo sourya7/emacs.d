@@ -1694,6 +1694,7 @@ Return a name without changing state."
   (transient-setup 'pichat-launch nil nil
                    :scope (or context (pichat--make-launch-context))))
 
+(autoload 'pichat-job-definitions "pichat-job-definition-ui" "Discover authored job files without execution." t)
 (autoload 'pichat-jobs "pichat-jobs" "Inspect jobs and attempts." t)
 (autoload 'pichat-job-new "pichat-jobs" "Compose a manual job without launching." t)
 

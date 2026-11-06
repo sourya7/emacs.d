@@ -19,7 +19,8 @@
             :main ,(my/emacs-main-dir "pichat/pichat.el")
             :files ("*.el"
                     ("bridge" "bridge/pichat-bridge.ts"
-                              "bridge/pichat-tool-control.ts"))
+                              "bridge/pichat-tool-control.ts")
+                    ("skills" "skills/pichat-jobs/SKILL.md"))
             :inherit nil)
   :custom
   (pichat-jobs-file (my/emacs-local-dir "pichat/jobs.json"))

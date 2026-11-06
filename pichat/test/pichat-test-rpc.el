@@ -188,7 +188,7 @@
                        (lambda (&rest _) (cl-incf events)) session)
             (pichat-rpc--process-filter old "{\"type\":\"agent_start\"}\npartial")
             (should (= events 0))
-            (should (equal "" (pichat-session-rpc-receive-buffer session)))
+            (should-not (pichat-session-rpc-receive-buffer session))
             (delete-process old)
             (pichat-rpc--process-sentinel old "finished\n")
             (should (eq (pichat-session-process session) replacement))
@@ -332,12 +332,12 @@
           (progn
             (puthash id (plist-put pending :timer timer)
                      (pichat-session-pending-responses session))
-            (setf (pichat-session-rpc-receive-buffer session) "partial"
-                  (pichat-session-rpc-send-queue session) '("outbound"))
+            (pichat-rpc--process-filter proc "partial")
+            (setf (pichat-session-rpc-send-queue session) '("outbound"))
             (pichat-rpc--retire-process-state session)
             (should-not (gethash id (pichat-session-pending-responses session)))
             (should-not (memq timer timer-list))
-            (should (equal "" (pichat-session-rpc-receive-buffer session)))
+            (should-not (pichat-session-rpc-receive-buffer session))
             (should-not (pichat-session-rpc-send-queue session)))
         (cancel-timer timer)))))
 
@@ -351,7 +351,7 @@
       (pichat-rpc--process-filter
        proc "{\"type\":\"agent_start\"}\n{\"type\":\"agent_start\"}\n")
       (should (= events 1))
-      (should (equal "" (pichat-session-rpc-receive-buffer session))))))
+      (should-not (pichat-session-rpc-receive-buffer session)))))
 
 (ert-deftest pichat-rpc-start-refuses-duplicate-live-process ()
   (pichat-test-with-unit-session (session proc)
@@ -379,6 +379,144 @@
       (pichat-rpc--process-filter proc "{\"type\":\"agent_start\"}\n{\"type\":\"agent_settled\"}\n")
       (should (equal '(agent-settled agent-start) events))
       (should (eq (pichat-session-state session) 'idle)))))
+
+(ert-deftest pichat-rpc-filter-framing-survives-every-chunk-boundary ()
+  (pichat-test-with-unit-session (session proc)
+    (let* ((text (concat "α" (string #x2028 #x2029) "\nquoted: \"value\""))
+           (record (pichat-rpc--json-encode
+                    (list :type "message_update" :delta text)))
+           (wire (concat "\n\r\n" record "\r\n" record "\n"))
+           deltas errors)
+      (pichat-on 'message-update
+                 (lambda (_s _e plist)
+                   (push (plist-get (plist-get plist :raw) :delta) deltas)) session)
+      (pichat-on 'error (lambda (&rest args) (push args errors)) session)
+      (dotimes (split (1+ (length wire)))
+        (setq deltas nil)
+        (pichat-rpc--process-filter proc (substring wire 0 split))
+        (pichat-rpc--process-filter proc "")
+        (pichat-rpc--process-filter proc (substring wire split))
+        (should (equal (list text text) deltas))
+        (should-not errors)
+        (should-not (pichat-session-rpc-receive-buffer session)))
+      ;; Keep a trailing unfinished record, even after complete/blank records.
+      (setq deltas nil)
+      (pichat-rpc--process-filter proc (concat wire (substring record 0 -1)))
+      (should (= 2 (length deltas)))
+      (pichat-rpc--process-filter proc "}\r")
+      (should (= 2 (length deltas)))
+      (pichat-rpc--process-filter proc "\n")
+      (should (equal (list text text text) deltas))
+      (should-not (pichat-session-rpc-receive-buffer session)))))
+
+(ert-deftest pichat-rpc-filter-large-fragmented-tree-response-is-exact ()
+  (pichat-test-with-unit-session (session proc)
+    (let* ((summary (concat (make-string (* 2 1024 1024) ?x) "終"))
+           (calls 0)
+           received
+           (id (pichat-rpc-get-tree
+                session
+                (lambda (response _session)
+                  (cl-incf calls)
+                  (setq received response))))
+           (wire (pichat-rpc--json-encode
+                  (list :type "response" :id id :command "get_tree" :success t
+                        :data (list :leafId "entry"
+                                    :tree (vector
+                                           (list :entry (list :id "entry"
+                                                              :type "compaction"
+                                                              :summary summary)
+                                                 :children [])))))))
+      (cl-loop for start from 0 below (length wire) by 4096
+               do (pichat-rpc--process-filter
+                   proc (substring wire start (min (length wire) (+ start 4096)))))
+      (should (= calls 0))
+      (pichat-rpc--process-filter proc "\n")
+      (should (= calls 1))
+      (should (equal summary
+                     (plist-get
+                      (plist-get (car (plist-get (plist-get received :data) :tree))
+                                 :entry)
+                      :summary)))
+      (should-not (gethash id (pichat-session-pending-responses session)))
+      (should-not (pichat-session-rpc-receive-buffer session)))))
+
+(ert-deftest pichat-rpc-filter-accepts-pre-fragment-session-state-after-reload ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((started 0))
+      (pichat-on 'agent-start (lambda (&rest _) (cl-incf started)) session)
+      (dolist (old-remainder '("" "{\"type\":"))
+        (setf (pichat-session-rpc-receive-buffer session) old-remainder)
+        (when (string-empty-p old-remainder)
+          (pichat-rpc--process-filter proc "{\"type\":"))
+        (pichat-rpc--process-filter proc "\"agent_")
+        (pichat-rpc--process-filter proc "start\"}\n")
+        (should-not (pichat-session-rpc-receive-buffer session)))
+      (should (= started 2)))))
+
+(ert-deftest pichat-rpc-filter-replacement-keeps-only-new-process-fragments ()
+  (pichat-test-with-unit-session (session old)
+    (let (replacement deltas)
+      (unwind-protect
+          (progn
+            (pichat-on 'message-update
+                       (lambda (_s _e plist)
+                         (let ((delta (plist-get (plist-get plist :raw) :delta)))
+                           (push delta deltas)
+                           (when (equal delta "old")
+                             (pichat-rpc--retire-process-state session)
+                             (setq replacement (pichat-test--make-unit-process session))
+                             (pichat-rpc--process-filter
+                              replacement "{\"type\":\"message_update\",\"delta\":\"new"))))
+                       session)
+            (pichat-rpc--process-filter old "{\"type\":\"message_update\",\"delta\":\"ol")
+            (pichat-rpc--process-filter
+             old "d\"}\n{\"type\":\"message_update\",\"delta\":\"stale\"}\nstale-tail")
+            (delete-process old)
+            (pichat-rpc--process-sentinel old "finished\n")
+            (pichat-rpc--process-filter old "ignored\n")
+            (pichat-rpc--process-filter replacement "\"}\n")
+            (should (equal '("new" "old") deltas))
+            (should-not (pichat-session-rpc-receive-buffer session)))
+        (when (process-live-p replacement) (delete-process replacement))
+        (when-let* ((buffer (and replacement (process-buffer replacement))))
+          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
+(ert-deftest pichat-rpc-filter-stop-during-dispatch-discards-old-tail ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((calls 0))
+      (pichat-on 'agent-start
+                 (lambda (&rest _)
+                   (cl-incf calls)
+                   (pichat-rpc-stop session)) session)
+      (pichat-rpc--process-filter proc "{\"type\":\"agent_")
+      (pichat-rpc--process-filter
+       proc "start\"}\n{\"type\":\"agent_start\"}\nunfinished")
+      (should (= calls 1))
+      (should-not (pichat-session-rpc-receive-buffer session)))))
+
+(ert-deftest pichat-rpc-sentinel-releases-unfinished-record ()
+  (pichat-test-with-unit-session (session proc)
+    (pichat-rpc--process-filter proc "unfinished")
+    (delete-process proc)
+    (pichat-rpc--process-sentinel proc "finished\n")
+    (should-not (pichat-session-rpc-receive-buffer session))))
+
+(ert-deftest pichat-rpc-filter-request-cancellation-does-not-discard-next-record ()
+  (pichat-test-with-unit-session (session proc)
+    (let* ((calls 0)
+           (id (pichat-rpc-get-tree session (lambda (&rest _) (cl-incf calls))))
+           (started 0))
+      (pichat-on 'message-update
+                 (lambda (&rest _) (pichat-rpc-cancel-request session id)) session)
+      (pichat-on 'agent-start (lambda (&rest _) (cl-incf started)) session)
+      (pichat-rpc--process-filter proc "{\"type\":\"message_update\"")
+      (pichat-rpc--process-filter
+       proc (format "}\n{\"type\":\"response\",\"id\":%S,\"success\":true,\"data\":{}}\n{\"type\":\"agent_start\"}\n" id))
+      (should (= calls 0))
+      (should (= started 1))
+      (should-not (gethash id (pichat-session-pending-responses session)))
+      (should-not (pichat-session-rpc-receive-buffer session)))))
 
 (ert-deftest pichat-rpc-active-run-survives-retry-and-compaction-phase-ends ()
   (pichat-test-with-unit-session (session proc)

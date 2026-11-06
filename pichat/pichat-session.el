@@ -56,6 +56,8 @@
   event-log
   diagnostics
   event-handlers
+  ;; Reversed string fragments of the unfinished JSONL record; nil when empty.
+  ;; This is not an Emacs buffer and needs no separate resource cleanup.
   rpc-receive-buffer
   rpc-ready-p
   rpc-send-queue
@@ -131,8 +133,6 @@ Callers supply owned snapshots; this function does not resolve registry values."
     (unless (pichat-session-event-handlers session)
       (setf (pichat-session-event-handlers session)
             (make-hash-table :test #'eq)))
-    (unless (pichat-session-rpc-receive-buffer session)
-      (setf (pichat-session-rpc-receive-buffer session) ""))
     (unless (pichat-session-rpc-ready-p session)
       (setf (pichat-session-rpc-ready-p session) t))
     (unless (pichat-session-rpc-seq session)

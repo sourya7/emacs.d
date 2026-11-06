@@ -281,7 +281,7 @@ Do not dispatch callbacks into a replacement process."
   (maphash (lambda (_id pending) (pichat-rpc--cancel-pending-timer pending))
            (pichat-session-pending-responses session))
   (clrhash (pichat-session-pending-responses session))
-  (setf (pichat-session-rpc-receive-buffer session) ""
+  (setf (pichat-session-rpc-receive-buffer session) nil
         (pichat-session-rpc-ready-timer session) nil
         (pichat-session-rpc-send-queue session) nil))
 
@@ -408,6 +408,7 @@ committed configuration).  A local startup failure retains a diagnostic."
   (when (timerp (pichat-session-rpc-ready-timer session))
     (cancel-timer (pichat-session-rpc-ready-timer session)))
   (setf (pichat-session-stop-requested-p session) t
+        (pichat-session-rpc-receive-buffer session) nil
         (pichat-session-rpc-ready-timer session) nil
         (pichat-session-rpc-send-queue session) nil)
   (if-let* ((proc (pichat-session-process session)))
@@ -441,7 +442,8 @@ When LIMIT is non-nil, copy at most LIMIT leading characters."
       (when (pichat-rpc--current-process-p session process)
         (when (timerp (pichat-session-rpc-ready-timer session))
           (cancel-timer (pichat-session-rpc-ready-timer session)))
-        (setf (pichat-session-rpc-ready-timer session) nil
+        (setf (pichat-session-rpc-receive-buffer session) nil
+              (pichat-session-rpc-ready-timer session) nil
               (pichat-session-rpc-send-queue session) nil)
         (let* ((intentional (pichat-session-stop-requested-p session))
                (stderr (pichat-rpc--buffer-string
@@ -488,25 +490,43 @@ When LIMIT is non-nil, copy at most LIMIT leading characters."
       (pichat-rpc--current-process-p session pichat-rpc--dispatch-process)))
 
 (defun pichat-rpc--process-filter (process chunk)
-  "Handle PROCESS output CHUNK.
-Records are split only on LF, preserving JSON strings containing Unicode line
-separator characters.  A trailing CR is stripped for CRLF compatibility."
+  "Handle PROCESS output CHUNK with linear-time JSONL accumulation.
+Scan only CHUNK for LF and retain unfinished records as reversed fragments;
+assemble a record once, when its LF arrives.  Unicode line separators inside
+JSON strings are preserved.  Strip a trailing CR for CRLF compatibility."
   (when-let* ((session (process-get process 'pichat-session)))
-    (when (pichat-rpc--current-process-p session process)
-      (pichat-rpc--mark-ready session process)
-      (let ((buf (concat (or (pichat-session-rpc-receive-buffer session) "") chunk))
-            line)
-        (while (and (pichat-rpc--current-process-p session process)
-                    (string-match "\n" buf))
-          (setq line (substring buf 0 (match-beginning 0))
-                buf (substring buf (match-end 0)))
-          (when (string-suffix-p "\r" line)
-            (setq line (substring line 0 -1)))
-          (unless (string-empty-p line)
-            (let ((pichat-rpc--dispatch-process process))
-              (pichat-rpc--handle-line session line))))
-        (when (pichat-rpc--current-process-p session process)
-          (setf (pichat-session-rpc-receive-buffer session) buf))))))
+    (cl-labels ((current-p ()
+                 (and (pichat-rpc--current-process-p session process)
+                      (not (pichat-session-stop-requested-p session)))))
+      (when (current-p)
+        (pichat-rpc--mark-ready session process)
+        ;; A live session may still hold the pre-fragment string accumulator
+        ;; after reloading this module.  Normalize it once without losing input.
+        (when-let* ((pending (pichat-session-rpc-receive-buffer session))
+                    ((stringp pending)))
+          (setf (pichat-session-rpc-receive-buffer session)
+                (unless (string-empty-p pending) (list pending))))
+        (let ((start 0) end line)
+          (while (and (current-p)
+                      (setq end (string-match "\n" chunk start)))
+            (setq line (substring chunk start end)
+                  start (1+ end))
+            (when (pichat-session-rpc-receive-buffer session)
+              (setq line
+                    (apply #'concat
+                           (nreverse
+                            (cons line (pichat-session-rpc-receive-buffer session))))))
+            ;; Retire the completed record before callbacks can stop/restart
+            ;; the process or recursively accept more output.
+            (setf (pichat-session-rpc-receive-buffer session) nil)
+            (when (string-suffix-p "\r" line)
+              (setq line (substring line 0 -1)))
+            (unless (string-empty-p line)
+              (let ((pichat-rpc--dispatch-process process))
+                (pichat-rpc--handle-line session line))))
+          (when (and (current-p) (< start (length chunk)))
+            (push (if (zerop start) chunk (substring chunk start))
+                  (pichat-session-rpc-receive-buffer session))))))))
 
 (defun pichat-rpc--report-record-error (session origin condition raw)
   "Report ORIGIN and CONDITION with RAW available only to explicit inspection."

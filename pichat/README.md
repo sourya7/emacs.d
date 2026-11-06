@@ -885,9 +885,11 @@ Schedules are opt-in per saved job.
   timeline and related-run links. Normal follow-up status is there too; failed
   dispatch, input requests, blockers and uncertainty stay visible without opening
   a menu. **View chat** and active **Cancel run…** remain directly available.
-- Both reports show the captured title in their header, with an abbreviated saved
-  job ID when applicable; one-off runs have no saved-job ID. Full IDs are in
-  **Details** and all operations use exact identities, including duplicate titles.
+- Both reports show the captured title in their header. Saved-job headers omit
+  internal IDs; run headers append an abbreviated saved-job ID when applicable.
+  One-off runs have no saved-job ID. Full identities remain available through
+  explicit raw inspection (and run **Details**); all operations use exact
+  identities, including duplicate titles.
   `q` still returns without a permanent Back hint.
 - Native `a`, or Evil Normal `g a` in detail buffers, opens the context-sensitive
   **Actions** Transient. There is no permanent Actions label/button in reports. Saved jobs offer **Run job**, **Edit…**, **Run history**
@@ -1006,6 +1008,79 @@ when the current preset no longer matches its capture. The environment, credenti
 extension code remain live: this is not a frozen or sandboxed environment.
 Complete command wrappers, ephemeral sessions and conversation-loading flags are
 not supported by jobs. Explicit targets never fall back locally.
+
+### Authored job files
+
+An **authored job definition** is a JSON source file, not the saved job or its
+run history (see `GLOSSARY.md`). PiChat discovers direct, non-dot `*.json` files in:
+
+- Project: `<selected-project-root>/.pi/jobs/`.
+- Global: `<effective-Emacs-agent-directory>/jobs/`, normally `~/.pi/agent/jobs/`.
+  Resolution honors `PI_CODING_AGENT_DIR`, including `pichat-pi-extra-env` overrides.
+
+Sources must be local to Emacs; mounted files are supported, TRAMP roots are not.
+An SSH execution target does not synchronize files or make its remote agent
+folder an Emacs discovery root. Symlink source files and resource directories
+are rejected; scanning is not recursive. Missing directories are empty; invalid,
+unreadable or conflicting files appear in the file table's diagnostics.
+Every matching filename is a candidate, including `name.example.json`. To keep
+an example out of discovery, use a non-JSON suffix such as `name.json.example`.
+Git ignore rules do not control discovery.
+
+A project definition can omit directory to use the selected project root:
+
+```json
+{
+  "version": 1,
+  "id": "dependency-review",
+  "title": "Review dependencies",
+  "instructions": "Inspect dependencies and report risks. Do not change files.",
+  "model": "provider/model-id",
+  "preset": "review",
+  "target": {"name": "local"}
+}
+```
+
+Replace `provider/model-id` with a concrete model. Version 1 accepts only the
+fields above plus optional `directory`. Global files require an absolute,
+Emacs-visible directory; project-relative directories resolve against the project
+root, not `.pi/jobs/`. No tilde expansion or environment interpolation occurs.
+Omitted target means local; a different name must identify a configured target.
+Preset must be an explicit named preset, not `default`. Names resolve at Review,
+not discovery. Tools and prompts come from that preset; schedules, follow-ups,
+inline target configuration and arbitrary command arguments are not source fields.
+
+Use strict UTF-8 JSON with unique keys, integer version `1`, no nulls or NUL text,
+and at most 256 KiB. ID is lowercase kebab-case, at most 64 characters. Nonblank
+text limits are: title 200, instructions 131072, directory 4096, model 1024,
+preset/target name 200 characters. Model must be `provider/model` without a
+thinking suffix; model, preset and target names cannot contain whitespace.
+
+Identity is scope kind + canonical scope root + authored ID, not filename or
+job title. Same-scope duplicate IDs diagnose every claimant; project/global and
+separate projects never shadow one another. Rename within a scope retains
+identity; moving scope creates a distinct saved job. Missing sources never delete
+saved jobs or run history. Ordinary unchanged reimport is a true no-op, including
+captured settings, timestamps and the last modifying import path. Explicit
+**Use current settings** prepares recapture and still requires Save.
+
+Native saved-job edits never write back into source files. Reimport over native
+edits requires reviewed replacement confirmation. Updates preserve timing,
+follow-ups, queued captures and historical evidence. Stale source/store errors
+require fixing the source and discovering/reviewing again, not editing runtime
+metadata. Project files are untrusted data; import is not a Pi trust gate or a
+sandbox. Import saves only; execution and timing require separate authorization.
+
+PiChat bundles the `pichat-jobs` authoring skill for actual structured launches,
+including job runs. It teaches file creation/editing and explicit Emacs review;
+it cannot import or execute a job automatically. Standalone Pi does not receive
+this bundled skill. PiChat adds no global/project skill installation or settings
+writes. Complete command wrappers are not amended. Explicit `--no-skills`/`-ns`
+suppresses PiChat's injection without changing user skill arguments/settings;
+`enableSkillCommands` controls command discovery rather than resource loading.
+Local launches use the bundled asset; SSH launches privately stage it on the
+execution target with the existing helper cleanup/uncertain-exit policy. Capture
+and preview never stage it, and saved job arguments retain no temporary skill path.
 
 ### Continuing interrupted work
 

@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "id": "ui-check",
+  "title": "UI check",
+  "instructions": "Report the working directory and time of day. Do not change files.",
+  "model": "cliproxyapi/opencode-go/glm-5.3",
+  "preset": "coding"
+}

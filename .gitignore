@@ -59,3 +59,4 @@ flycheck_*.el
 /pichat/todo.org
 # Legacy/default Jobs runtime state must not enter the package sources.
 /pichat/jobs.json
+/.pi/jobs/ui-status.json

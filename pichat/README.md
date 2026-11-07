@@ -94,6 +94,14 @@ before canonical synchronization and are explicitly reported as unavailable
 afterward. Compatibility diagnostics are deduplicated and displayed as bounded
 status entries.
 
+## Chat buffer names
+
+Chat buffers use `*pi:project:7*` for project runtimes and `*pi:8*` for
+global runtimes. The integer identifies the runtime, not its loaded Pi session
+(see `GLOSSARY.md`). Numbers increase across all scopes for this Emacs lifetime
+and are not reused. Switching, forking, cloning, or reopening the same runtime's
+chat preserves its number; restarting Emacs resets the counter.
+
 ## Persistent chat header
 
 The fixed header stays visible while scrolling or composing. It shows the

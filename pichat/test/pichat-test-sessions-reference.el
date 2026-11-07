@@ -329,15 +329,17 @@
         (should (eq registered
                     (gethash "project:/tmp/project/" pichat--sessions-by-scope)))))))
 
-(ert-deftest pichat-manual-sessions-have-distinct-provisional-buffer-names ()
-  (let ((first (pichat-session-make :scope-label "manual:project#1"))
-        (second (pichat-session-make :scope-label "manual:project#2")))
-    (should-not (equal (pichat-chat-buffer-name first)
-                       (pichat-chat-buffer-name second)))
-    (should (string-match-p "manual:project#1"
-                            (pichat-chat-buffer-name first)))
-    (should (string-match-p "manual:project#2"
-                            (pichat-chat-buffer-name second)))))
+(ert-deftest pichat-chat-buffer-names-use-global-incremental-runtime-numbers ()
+  (let* ((pichat-session--runtime-counter 0)
+         (first (pichat-session-make :owner-scope-key "project:/tmp/project/"
+                                      :owner-directory "/tmp/project/"))
+         (second (pichat-session-make :owner-scope-key "global")))
+    (should (equal "*pi:project:1*" (pichat-chat-buffer-name first)))
+    (should (equal "*pi:2*" (pichat-chat-buffer-name second)))
+    ;; Learning or rebinding the Pi source does not rename the runtime's chat.
+    (dolist (id '("first-source" "second-source" nil))
+      (setf (pichat-session-id first) id)
+      (should (equal "*pi:project:1*" (pichat-chat-buffer-name first))))))
 
 (ert-deftest pichat-chat-transcript-is-protected-while-current-input-is-editable ()
   (pichat-test-with-unit-session (session proc)

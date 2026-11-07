@@ -49,7 +49,7 @@ Keep tables narrow and pad columns for monospace readability.")
 ;; (setq pichat-project-target-alist '(("/home/mojo/Dev" . lima-devbox)))
 
 (my/add-all-to-list 'display-buffer-alist
-                    '(("\\`\\*PiChat:" (display-buffer-same-window))
+                    '(("\\`\\*pi:" (display-buffer-same-window))
                       ("\\`\\*PiChat Sessions" (display-buffer-same-window))
                       ("\\`\\*PiChat Response:" (display-buffer-same-window))
                       ("\\`\\*PiChat Jobs" (display-buffer-same-window))))

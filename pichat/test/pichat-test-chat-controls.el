@@ -129,7 +129,9 @@
           (pichat-session-model session)
           '(:provider "test" :id "reasoner" :reasoning t)
           (pichat-session-thinking-level session) "high")
-    (should (equal "*PiChat:emacs.mine:019ffc5b*"
+    (should (equal (format "*pi:emacs.mine:%s*"
+                           (string-remove-prefix
+                            "pichat-runtime-" (pichat-session-runtime-id session)))
                    (pichat-chat-buffer-name session)))
     (with-temp-buffer
       (setq-local pichat-chat-session session)

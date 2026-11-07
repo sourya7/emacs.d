@@ -642,17 +642,6 @@ user messages, activity groups, and tool blocks."
       (when (fboundp 'pichat-forget-session)
         (pichat-forget-session session)))))
 
-(defun pichat-chat--short-session-id (session)
-  "Return a compact display id for SESSION.
-Use its scope label as a unique provisional identity until Pi reports an id."
-  (let ((id (pichat-session-id session))
-        (label (pichat-session-scope-label session)))
-    (cond
-     ((and (stringp id) (not (string-empty-p id)))
-      (substring id 0 (min 8 (length id))))
-     ((and (stringp label) (not (string-empty-p label))) label)
-     (t "pending"))))
-
 (defun pichat-chat--project-name (session)
   "Return SESSION's immutable owner project name, or nil for global scope."
   (let ((scope-key (pichat-session-owner-scope-key session))
@@ -664,12 +653,13 @@ Use its scope label as a unique provisional identity until Pi reports an id."
       (file-name-nondirectory (directory-file-name directory)))))
 
 (defun pichat-chat-buffer-name (session)
-  "Return chat buffer name for SESSION."
-  (let ((short-id (pichat-chat--short-session-id session))
+  "Return chat buffer name for SESSION using its stable runtime number."
+  (let ((short-id (string-remove-prefix
+                   "pichat-runtime-" (pichat-session-runtime-id session)))
         (project-name (pichat-chat--project-name session)))
     (if project-name
-        (format "*PiChat:%s:%s*" project-name short-id)
-      (format "*PiChat:%s*" short-id))))
+        (format "*pi:%s:%s*" project-name short-id)
+      (format "*pi:%s*" short-id))))
 
 (defun pichat-chat--rename-buffer-maybe (&optional session)
   "Rename the current chat buffer to match SESSION's compact identity."

@@ -194,6 +194,32 @@ it from the store vector rather than update the stored record."
   "Whether RUN explicitly targets a captured existing conversation."
   (equal (plist-get (plist-get run :destination) :kind) "conversation"))
 
+(defun pichat-job--validate-invalidation (evidence)
+  "Validate optional bounded, value-free continuation cancellation EVIDENCE."
+  (when evidence
+    (unless (and (listp evidence) (<= (length evidence) 8) (cl-evenp (length evidence))
+                 (let ((keys (cl-loop for (key _value) on evidence by #'cddr collect key)))
+                   (= (length keys) (length (delete-dups (copy-sequence keys)))))
+                 (cl-loop for (key _value) on evidence by #'cddr
+                          always (memq key '(:code :event :command :fields)))
+                 (member (plist-get evidence :code)
+                         '("input" "source" "process" "history" "ownership" "busy"
+                           "unavailable" "verification" "queue" "model"))
+                 (member (plist-get evidence :event)
+                         '("rpc-input-sending" "session-rebinding" "session-ended" "transcript-synchronized"
+                           "session-state-changed" "rpc-event" "chat-closed" "verification"))
+                 (member (plist-get evidence :command)
+                         '(nil "prompt" "steer" "follow_up" "new_session" "switch_session" "fork"
+                           "clone" "compact" "set_thinking_level" "cycle_thinking_level" "unknown"))
+                 (vectorp (plist-get evidence :fields))
+                 (<= (length (plist-get evidence :fields)) 8)
+                 (seq-every-p (lambda (field)
+                                (member field '("runtime-id" "session-id" "session-file" "source-generation"
+                                                "process-generation" "input-generation" "entries-digest"
+                                                "chat-owner" "availability" "verification" "queue" "model")))
+                              (plist-get evidence :fields)))
+      (pichat-job--fail "Invalid continuation cancellation evidence"))))
+
 (defun pichat-job--validate-destination (record kind)
   "Validate RECORD's optional versioned destination for store KIND."
   (let ((destination (plist-get record :destination))
@@ -250,6 +276,11 @@ it from the store vector rather than update the stored record."
               (puthash identity t sources))))
         (when (eq kind :runs)
           (pichat-job--validate-followup record)
+          (pichat-job--validate-invalidation (plist-get record :invalidation))
+          (when-let* ((model (plist-get record :execution-model)))
+            (unless (and (pichat-job-conversation-p record)
+                         (pichat-job--text-p model) (<= (length model) 1024))
+              (pichat-job--fail "Invalid dispatch model provenance")))
           (when (member (plist-get (plist-get record :trigger) :kind) '("once" "interval"))
             (let ((trigger (plist-get record :trigger)))
               (unless (and (pichat-job--text-p (plist-get record :job-id))
@@ -871,6 +902,9 @@ cancellation; persistence failure leaves the entire occurrence unchanged."
                (<= (plist-get (plist-get run :trigger) :due) now))
       (when (>= (seq-count (lambda (item) (equal (plist-get item :state) "queued"))
                            (plist-get data :runs)) (or queue-limit 20))
+        (unless reason
+          (pichat-job--stamp run :invalidation
+                             '(:code "queue" :event "verification" :fields ["queue"])))
         (setq reason (or reason "Job queue is full; scheduled prompt not sent")))
       (setf (plist-get run :state) (if reason "finished" "queued")
             (plist-get run :result) (and reason "cancelled")
@@ -966,7 +1000,7 @@ signals an error without changing STORE.  No runtime is launched."
 (defun pichat-job-advance (store id attempt state &optional details queue-limit)
   "Record an executor-owned transition of ID with ATTEMPT in STORE to STATE.
 Stale/duplicate transitions return nil.  DETAILS may contain :runtime-id,
-:session-file, :reason and :result.  Finishing additionally requires
+:session-file, :reason, :result, :execution-model and :invalidation.  Finishing additionally requires
 :safe-to-release t from the executor, not an agent-produced outcome.  Completed
 or needs-review results require the settling state and :synchronized t.
 Uncertainty cannot be cleared by a late callback; reconciliation is separate.
@@ -988,7 +1022,10 @@ QUEUE-LIMIT bounds follow-up enqueueing in this same transaction (default 20)."
                          (and (equal old "settling")
                               (eq (plist-get details :synchronized) t))))
           (pichat-job--fail "Finishing requires verified release/result evidence")))
-      (dolist (key '(:runtime-id :session-file :reason :summary :evidence))
+      (when (plist-member details :invalidation)
+        (pichat-job--validate-invalidation (plist-get details :invalidation))
+        (pichat-job--stamp run :invalidation (pichat-job--copy (plist-get details :invalidation))))
+      (dolist (key '(:runtime-id :session-file :reason :summary :evidence :execution-model))
         (when (plist-member details key)
           (let ((value (plist-get details key)))
             (unless (or (null value) (stringp value))
@@ -1006,13 +1043,16 @@ QUEUE-LIMIT bounds follow-up enqueueing in this same transaction (default 20)."
       (pichat-job--commit store data)
       (pichat-job--copy run))))
 
-(defun pichat-job-cancel-queued (store id &optional queue-limit reason)
+(defun pichat-job-cancel-queued (store id &optional queue-limit reason invalidation)
   "Cancel queued ID in STORE without claiming that a running process stopped.
-QUEUE-LIMIT bounds follow-up enqueueing in this same transaction (default 20)."
+QUEUE-LIMIT bounds follow-up enqueueing in this same transaction (default 20).
+Optional INVALIDATION is validated bounded cause evidence committed atomically."
   (let* ((data (pichat-job--copy (pichat-job-store-data store)))
          (run (pichat-job--find data :runs id)))
     (unless (member (plist-get run :state) '("scheduled" "queued"))
       (pichat-job--fail "Only pending attempts can be cancelled without an executor"))
+    (pichat-job--validate-invalidation invalidation)
+    (when invalidation (pichat-job--stamp run :invalidation (pichat-job--copy invalidation)))
     (setf (plist-get run :state) "finished"
           (plist-get run :result) "cancelled"
           (plist-get run :reason) (or reason "Cancelled before dispatch")

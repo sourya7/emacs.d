@@ -969,6 +969,8 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
           (insert "Emacs and this chat/runtime must remain alive. Sleep may delay delivery.\n"))
         (when (and (equal state "finished") (equal (plist-get record :result) "cancelled"))
           (insert "Not sent: " (or (plist-get record :reason) "Cancelled before dispatch") "\n"))
+        (when-let* ((model (plist-get record :execution-model)))
+          (insert "Verified dispatch model: " model "\n"))
         (insert "\n")))
     (when (equal (plist-get (plist-get record :event) :completeness) "partial")
       (insert "Previous run context is partial or unavailable.\n"))
@@ -1035,6 +1037,10 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
       (insert (format "Workspace: %s · Target: %s\n"
                       (plist-get spec :directory)
                       (plist-get (plist-get (plist-get spec :configuration) :transport) :label)))
+      (when (pichat-job-conversation-p record)
+        (insert "Scheduling-time settings (historical):\n")
+        (unless (plist-get record :execution-model)
+          (insert "Dispatch model: not recorded\n")))
       (pichat-jobs--insert-settings spec)
       (insert "\n")
       (pichat-jobs--insert-run-times record)
@@ -1407,6 +1413,32 @@ SAVE creates a definition only.  Failures retain a recoverable detached draft."
   (interactive)
   (pichat-job--compose (pichat-jobs--engine) 'new))
 
+(defun pichat-job--continuation-notice-context ()
+  "Return this chat's exact notice context, rejecting rebound/dead sources."
+  (pcase-let ((`(,owner ,id ,capture) pichat-job-executor--continuation-notice))
+    (unless (and (derived-mode-p 'pichat-chat-mode)
+                 (eq (current-buffer) (plist-get capture :buffer))
+                 (pichat-job-conversation-notice-p capture)
+                 (pichat-job-record (pichat-job-executor-store owner) 'runs id))
+      (user-error "Scheduled-continuation notice is stale; inspect Jobs Runs"))
+    (list owner id capture)))
+
+(defun pichat-job-review-continuation ()
+  "Open the exact cancelled attempt named by this chat's current notice."
+  (interactive)
+  (pcase-let ((`(,owner ,id ,_capture) (pichat-job--continuation-notice-context)))
+    (pichat-jobs--show-detail owner 'runs id)))
+
+(defun pichat-job-reschedule-continuation ()
+  "Review a fresh capture and the cancelled prompt; never reschedule silently.
+No time is selected.  Choose When and explicitly Schedule to authorize it."
+  (interactive)
+  (pcase-let* ((`(,owner ,id ,_capture) (pichat-job--continuation-notice-context))
+               (run (pichat-job-record (pichat-job-executor-store owner) 'runs id))
+               (capture (pichat-job-conversation-capture pichat-chat-session))
+               (spec (pichat-job-conversation-spec capture (plist-get (plist-get run :spec) :instructions))))
+    (pichat-job--compose owner 'schedule spec nil capture)))
+
 ;;;###autoload
 (defun pichat-job-schedule-continuation ()
   "Schedule a one-shot prompt in this exact live Pi conversation.
@@ -1416,8 +1448,9 @@ cancelling the composer sends nothing and preserves the chat draft.
 
 Execution settings are inherited read-only; inspect full settings and
 conversation provenance with the composer's inspection action.
-Emacs and the captured chat/runtime must remain alive.  Intervening work
-invalidates the attempt; no other conversation or runtime is substituted.
+Emacs and the captured chat/runtime must remain alive.  Submitted input
+invalidates the attempt; renaming and model selection do not.  Execution uses
+Pi's verified current model; no other conversation or runtime is substituted.
 Sleep may delay delivery, and quota availability is not checked.
 Review or cancel the pending attempt in Jobs Runs."
   (interactive)

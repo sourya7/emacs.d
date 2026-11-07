@@ -537,7 +537,8 @@
                4 "unknown context usage after compaction")
               (with-current-buffer buffer
                 (should (string-match-p
-                         "?/128k" (pichat-chat--mode-line-status))))
+                         (regexp-quote "Context unknown ?/128k")
+                         (pichat-chat--header-text session (selected-window)))))
               (pichat-test-chat-send-and-wait
                session buffer "measure after compaction" 8)
               (pichat-test-wait-until

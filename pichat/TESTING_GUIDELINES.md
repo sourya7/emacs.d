@@ -214,6 +214,11 @@ Apply/Cancel, absolute-time picking, explicit Schedule, report cancellation and
 real timer execution in the same live Pi conversation. It supports native and
 Evil terminal runs with private storage and the offline provider. It does not
 establish real-SSH or human visual acceptance for this execution mode.
+The separate `pichat-integration-jobs-live-ui-continuation-invalidation-feedback`
+scenario drives cancellation feedback, repaint, exact report return and explicit
+rescheduling with no preselected time, then verifies native timer delivery after
+rename/model selection. It supports isolated native/Evil terminal runs using the
+same private offline-provider fixture.
 
 The manual-flow scenario covers shared-composer New, multiline Apply, explicit
 Name/Save, the saved report, independent one-off/saved submission, reports and

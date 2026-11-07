@@ -219,6 +219,10 @@ from final newlines or redisplay edge cases."
 (defvar-local pichat-chat--inhibit-edit-guard nil
   "Non-nil while PiChat is programmatically editing the chat buffer.")
 
+(defvar pichat-chat-source-reset-hook nil
+  "Hook run in the owning chat after its source generation is reset.
+Source-qualified integrations should discard presentation and stale actions here.")
+
 (defvar-local pichat-chat--handlers nil
   "Session event handlers installed by this chat buffer.")
 
@@ -779,6 +783,7 @@ When DEFER-SYNC is non-nil, wait for a subsequent authoritative state reply."
         (make-hash-table :test #'equal)
         pichat-chat--tool-enrichments
         (make-hash-table :test #'equal))
+  (run-hooks 'pichat-chat-source-reset-hook)
   (unless defer-sync
     (pichat-chat--request-sync t)))
 

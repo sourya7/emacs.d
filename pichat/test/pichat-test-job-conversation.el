@@ -40,7 +40,7 @@
         (should (equal [] (pichat-job-records store 'runs)))))))
 
 (ert-deftest pichat-job-conversation-invalidations-never-retarget-or-wait-until-idle ()
-  (dolist (change '(source-away-back process model input-generation busy queued dead-chat))
+  (dolist (change '(source-away-back process input-generation busy queued dead-chat))
     (pichat-test-with-conversation-job
       (pichat-test-with-conversation-rpc
         (let* ((id (pichat-test-job-conversation-schedule executor session))
@@ -48,7 +48,6 @@
           (pcase change
             ('source-away-back (with-current-buffer buffer (cl-incf pichat-chat--source-generation 2)))
             ('process (cl-incf (pichat-session-process-generation session)))
-            ('model (setf (pichat-session-model session) '(:provider "other" :id "model")))
             ('input-generation (cl-incf (pichat-session-input-generation session)))
             ('busy (setf (pichat-session-state session) 'running))
             ('queued (with-current-buffer buffer (setq pichat-chat--queue-counts '(1 . 0))))
@@ -328,7 +327,214 @@
           (should (member "abort" commands))
           (should (process-live-p process)))))))
 
+(ert-deftest pichat-job-conversation-rename-model-suffix-survives-cached-and-fresh-checks ()
+  (pichat-test-with-conversation-job
+    (pichat-test-with-conversation-rpc
+      (let* ((id (pichat-test-job-conversation-schedule executor session))
+             (original (pichat-job-record store 'runs id))
+             (capture (gethash id (pichat-job-executor-conversations executor)))
+             (new (append entries '((:type "session_info" :id "name" :parentId "old" :name "Renamed")
+                                    (:type "model_change" :id "model" :parentId "name"
+                                     :provider "other" :modelId "model")))))
+        (pichat-rpc-send session "set_session_name" '(:name "Renamed"))
+        (pichat-rpc-send session "set_model" nil)
+        (setf (pichat-session-model session) '(:provider "other" :id "model"))
+        (with-current-buffer buffer
+          (setq pichat-chat--entry-cache (pichat-pi-entry-cache-full (pichat-session-id session) nil new "model")))
+        (pichat-emit session 'transcript-synchronized)
+        (should (pichat-job-conversation-current-p capture))
+        (pichat-test-job-conversation-due executor id)
+        (let ((run (pichat-job-record store 'runs id)))
+          (should (equal "running" (plist-get run :state)))
+          (should (equal "other/model" (plist-get run :execution-model)))
+          (should (equal (plist-get original :spec) (plist-get run :spec)))
+          (should (equal (plist-get original :destination) (plist-get run :destination))))
+        (should (= 1 (seq-count (lambda (type) (equal type "prompt")) commands)))
+        (should-error (pichat-rpc-send session "set_model" nil) :type 'user-error)))))
+
+(ert-deftest pichat-job-conversation-history-projection-never-hides-edits-custom-entries-or-branches ()
+  (dolist (change '(edit custom branch broken-parent standalone-thinking))
+    (pichat-test-with-conversation-job
+      (let* ((capture (pichat-job-conversation-capture session))
+             (new (append (copy-tree entries)
+                          '((:type "session_info" :id "name" :parentId "old" :name "Renamed"))))
+             (leaf "name"))
+        (pcase change
+          ('edit (setf (plist-get (car new) :timestamp) "changed"))
+          ('custom (setf (plist-get (cadr new) :type) "custom"))
+          ('standalone-thinking (setf (plist-get (cadr new) :type) "thinking_level_change"))
+          ('branch (setq leaf "old"))
+          ('broken-parent (setf (plist-get (cadr new) :parentId) nil)))
+        (should-not (pichat-job-conversation--history-p capture new leaf))))))
+
+(ert-deftest pichat-job-conversation-input-cancels-before-send-with-bounded-durable-evidence ()
+  (dolist (command '("prompt" "steer" "follow_up" "get_unknown" "unknown-private-payload"))
+    (pichat-test-with-conversation-job
+      (pichat-test-with-conversation-rpc
+        (let* ((id (pichat-test-job-conversation-schedule executor session))
+               (selected (current-buffer)))
+          ;; Even rejected/handled input invalidates at the outgoing-intent seam.
+          (pichat-rpc--require-operation-ownership session command)
+          (let* ((run (pichat-job-record store 'runs id))
+                 (evidence (plist-get run :invalidation)))
+            (should (equal "cancelled" (plist-get run :result)))
+            (should (equal "input" (plist-get evidence :code)))
+            (should (equal ["input-generation"] (plist-get evidence :fields)))
+            (should (equal (if (member command '("prompt" "steer" "follow_up")) command "unknown")
+                           (plist-get evidence :command)))
+            (should-not (string-match-p "private-payload" (prin1-to-string evidence)))
+            (should (equal evidence (plist-get (pichat-job-record
+                                                (pichat-job-store-open (pichat-job-store-file store)) 'runs id)
+                                               :invalidation))))
+          (should (eq selected (current-buffer)))
+          (with-current-buffer buffer
+            (should (string-match-p "Intervening submitted input" (buffer-string)))
+            (should (pichat-job--continuation-notice-context))
+            (pichat-chat-repaint)
+            (should (string-match-p "Intervening submitted input" (buffer-string)))
+            (cl-incf pichat-chat--source-generation 2)
+            (should-error (pichat-job-review-continuation) :type 'user-error)
+            (should-error (pichat-job-reschedule-continuation) :type 'user-error)
+            (pichat-chat--reset-for-source "replacement" nil t)
+            (should-not pichat-job-executor--continuation-notice)
+            (should-not (string-match-p "Intervening submitted input" (buffer-string)))))))))
+
+(ert-deftest pichat-job-conversation-invalidation-storage-failure-cannot-revive-authority ()
+  (pichat-test-with-conversation-job
+    (pichat-test-with-conversation-rpc
+      (let* ((id (pichat-test-job-conversation-schedule executor session))
+             (capture (gethash id (pichat-job-executor-conversations executor))))
+        (cl-letf (((symbol-function 'rename-file) (lambda (&rest _) (error "Write failed"))))
+          (pichat-rpc--require-operation-ownership session "prompt"))
+        (should (plist-get capture :invalidated))
+        (should-not (pichat-job-conversation-current-p capture))
+        (should (pichat-job-executor-schedule-error executor))
+        (should-not (member "prompt" commands))))))
+
+(ert-deftest pichat-job-conversation-transition-reentrancy-cannot-send-with-stale-model-or-source ()
+  (dolist (change '(model source process))
+    (pichat-test-with-conversation-job
+      (pichat-test-with-conversation-rpc
+        (let* ((id (pichat-test-job-conversation-schedule executor session))
+               (changed (symbol-function 'pichat-job-executor--changed)) injected)
+          (cl-letf (((symbol-function 'pichat-job-executor--changed)
+                     (lambda (owner)
+                       (when (and (not injected)
+                                  (equal "running" (plist-get (pichat-job-record store 'runs id) :state)))
+                         (setq injected t)
+                         (pcase change
+                           ('model (setf (pichat-session-model session) '(:provider "other" :id "model")))
+                           ('source (with-current-buffer buffer (cl-incf pichat-chat--source-generation)))
+                           ('process (cl-incf (pichat-session-process-generation session)))))
+                       (funcall changed owner))))
+            (pichat-test-job-conversation-due executor id))
+          (should injected)
+          (should (equal "cancelled" (plist-get (pichat-job-record store 'runs id) :result)))
+          (should (equal (symbol-name change)
+                         (plist-get (plist-get (pichat-job-record store 'runs id) :invalidation) :code)))
+          (should-not (member "prompt" commands))
+          (should-not (pichat-session-input-guard session)))))))
+
+(ert-deftest pichat-job-conversation-notice-failure-never-strands-a-cancelled-guard ()
+  (pichat-test-with-conversation-job
+    (pichat-test-with-conversation-rpc
+      (let ((id (pichat-test-job-conversation-schedule executor session)) callback)
+        (cl-letf (((symbol-function 'pichat-rpc-send)
+                   (lambda (_session _type _payload success _failure) (setq callback success))))
+          (pichat-test-job-conversation-due executor id))
+        (cl-letf (((symbol-function 'pichat-chat--set-status) (lambda (&rest _) (error "UI failed"))))
+          (funcall callback '(:success t :data (:entries nil :leafId "wrong")) session))
+        (should (equal "cancelled" (plist-get (pichat-job-record store 'runs id) :result)))
+        (should-not (pichat-session-input-guard session))
+        (should-not (pichat-job-executor-schedule-error executor))
+        (should-not (member "prompt" commands))))))
+
+(ert-deftest pichat-job-conversation-model-change-during-capacity-wait-does-not-restore-old-settings ()
+  (pichat-test-with-conversation-job
+    (pichat-test-with-conversation-rpc
+      (let* ((pichat-jobs-max-concurrency 1)
+             (other (pichat-job-enqueue store (pichat-test-job-spec project-dir)))
+             (claimed (pichat-job-claim store other))
+             (id (pichat-test-job-conversation-schedule executor session)))
+        (pichat-test-job-conversation-due executor id)
+        (should (equal "queued" (plist-get (pichat-job-record store 'runs id) :state)))
+        (pichat-rpc-send session "cycle_model" nil)
+        (setf (pichat-session-model session) '(:provider "other" :id "model"))
+        (pichat-job-executor-pump executor)
+        (should (equal "queued" (plist-get (pichat-job-record store 'runs id) :state)))
+        (pichat-job-advance store other (plist-get claimed :attempt) "finished"
+                           '(:result "cancelled" :safe-to-release t))
+        (pichat-job-executor-pump executor)
+        (should (equal "other/model" (plist-get (pichat-job-record store 'runs id) :execution-model)))
+        (should (= 1 (seq-count (lambda (type) (equal type "prompt")) commands)))))))
+
+(ert-deftest pichat-job-conversation-cancellation-evidence-rejects-unbounded-or-content-fields ()
+  (dolist (evidence '((:code "input" :event "rpc-input-sending" :fields ["prompt body"])
+                      (:code "input" :event "rpc-input-sending" :fields [] :payload "secret")
+                      (:code "input" :event "rpc-input-sending" :fields [] :command "secret")
+                      (:code "input" :event "rpc-input-sending" :fields [] :code "secret")))
+    (pichat-test-with-conversation-job
+      (pichat-test-with-conversation-rpc
+        (let ((id (pichat-test-job-conversation-schedule executor session)))
+          (should-error (pichat-job-cancel-queued store id nil "not sent" evidence) :type 'pichat-job-error)
+          (should (equal "scheduled" (plist-get (pichat-job-record store 'runs id) :state))))))))
+
 (when pichat-test-include-integration
+  (ert-deftest pichat-integration-job-conversation-model-clamping-and-rejected-settings-preserve-intent ()
+    (pichat-test-with-job-executor (:script '(:turns [(:text "Initial") (:text "Clamped model answer")]))
+      (let* ((session (pichat-test-job-conversation-start project-dir)) id failed)
+        (pichat-test-prompt-and-wait session "Initial")
+        (pichat-test-rpc-call session "set_model" '(:provider "pichat-fake" :modelId "pichat-fake-reasoning"))
+        (pichat-test-rpc-call session "set_thinking_level" '(:level "high"))
+        (with-current-buffer (pichat-session-buffer session) (pichat-chat-repaint))
+        (pichat-test-job-conversation-ready session)
+        (pichat-job-executor-conversation-schedule
+         executor (pichat-job-conversation-capture session) "continue" (+ (float-time) 3600) nil
+         (lambda (value) (setq id value)) (lambda (reason) (setq failed reason)))
+        (pichat-test-wait-until (lambda () (or id failed)) 5 "schedule")
+        (should-not failed)
+        (pichat-test-rpc-call session "set_model" '(:provider "pichat-fake" :modelId "pichat-fake-reasoning"))
+        (let (rejected)
+          (pichat-rpc-send session "set_model" '(:provider "missing" :modelId "missing")
+                           (lambda (&rest _) (ert-fail "Accepted missing model"))
+                           (lambda (&rest _) (setq rejected t)))
+          (pichat-test-wait-until (lambda () rejected) 5 "model selection rejection"))
+        (should (equal "scheduled" (plist-get (pichat-job-record store 'runs id) :state)))
+        (should-not (plist-get (pichat-job-record store 'runs id) :execution-model))
+        (pichat-test-rpc-call session "set_model" '(:provider "pichat-fake" :modelId "pichat-fake"))
+        (pichat-test-job-conversation-due executor id)
+        (pichat-test-job-wait store id "finished")
+        (should (equal "completed" (plist-get (pichat-job-record store 'runs id) :result)))
+        (should (equal "pichat-fake/pichat-fake" (plist-get (pichat-job-record store 'runs id) :execution-model)))
+        (pichat-test-assert-provider-script-consumed status-file))))
+
+  (ert-deftest pichat-integration-job-conversation-rename-and-model-selection-use-current-model ()
+    (pichat-test-with-job-executor
+        (:script '(:turns [(:text "Initial answer") (:text "New model answer")]))
+      (let* ((session (pichat-test-job-conversation-start project-dir)) id failure)
+        (pichat-test-prompt-and-wait session "Initial work")
+        (pichat-test-job-conversation-ready session)
+        (pichat-job-executor-conversation-schedule
+         executor (pichat-job-conversation-capture session) "continue" (+ (float-time) 3600) nil
+         (lambda (value) (setq id value)) (lambda (reason) (setq failure reason)))
+        (pichat-test-wait-until (lambda () (or id failure)) 5 "schedule acceptance")
+        (should-not failure)
+        (pichat-test-rpc-call session "set_session_name" '(:name "Fixture renamed"))
+        (pichat-test-rpc-call session "set_model" '(:provider "pichat-fake" :modelId "pichat-fake-reasoning"))
+        ;; Real Pi's suffix must pass fresh verification even before a cached sync.
+        (pichat-test-job-conversation-due executor id)
+        (pichat-test-job-wait store id "finished")
+        (let* ((run (pichat-job-record store 'runs id))
+               (evidence (pichat-job-evidence-read store (plist-get run :evidence)))
+               (entries (plist-get evidence :entries)))
+          (should (equal "completed" (plist-get run :result)))
+          (should (equal "pichat-fake/pichat-fake-reasoning" (plist-get run :execution-model)))
+          (should (equal "pichat-fake/pichat-fake" (plist-get (plist-get run :destination) :model)))
+          (should (equal "pichat-fake-reasoning" (plist-get (pichat-session-model session) :id)))
+          (should (seq-some (lambda (entry)
+                              (equal "pichat-fake-reasoning" (plist-get (plist-get entry :message) :model)))
+                            entries)))
+        (pichat-test-assert-provider-script-consumed status-file))))
   (ert-deftest pichat-integration-job-conversation-native-timer-preserves-runtime-and-retry ()
     (pichat-test-with-job-executor
         (:script '(:turns [(:error "Quota limit reached") (:error "WebSocket error")

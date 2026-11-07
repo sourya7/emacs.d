@@ -90,6 +90,16 @@ Do not allocate a TTY for JSONL transports."
 (defvar pichat-rpc--operation-token nil
   "Dynamically bound by an owned runtime restart when sending its RPC calls.")
 
+(defun pichat-rpc-command-intent (command)
+  "Classify COMMAND for pending continuation intent; unknowns invalidate.
+This does not grant permission to bypass a runtime's input guard."
+  (cond
+   ((member command '("get_state" "get_entries" "get_messages" "get_session_stats"
+                      "get_available_models" "get_commands" "get_tree"
+                      "get_last_assistant_text" "get_fork_messages")) 'inspection)
+   ((member command '("set_session_name" "set_model" "cycle_model")) 'pending-setting)
+   (t 'input)))
+
 (defun pichat-rpc--require-operation-ownership (session &optional command)
   "Reject unowned input while SESSION is restarting or guarded.
 COMMAND lets an execution owner distinguish inspection from mutation."
@@ -99,10 +109,12 @@ COMMAND lets an execution owner distinguish inspection from mutation."
     (unless (and (plist-get operation :token)
                  (eq pichat-rpc--operation-token (plist-get operation :token)))
       (user-error "PiChat runtime is restarting; RPC input is temporarily unavailable")))
-  (when (and (stringp command) (not (string-prefix-p "get_" command)))
-    ;; Record intent before any asynchronous send.  Going away and back, or a
-    ;; rejected/handled prompt, cannot silently restore a scheduled intent.
-    (cl-incf (pichat-session-input-generation session))
+  (when (and (stringp command)
+             (not (eq (pichat-rpc-command-intent command) 'inspection)))
+    ;; Record submitted-input intent even if Pi later rejects or handles it.
+    ;; Renaming/model selection remains observable but does not consume intent.
+    (when (eq (pichat-rpc-command-intent command) 'input)
+      (cl-incf (pichat-session-input-generation session)))
     (pichat-emit session 'rpc-input-sending :command command)))
 
 (defcustom pichat-rpc-request-timeout nil

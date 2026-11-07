@@ -1375,14 +1375,30 @@ scheduled/queued attempt requires confirmation; active or uncertain work must
 be inspected rather than silently replaced. Cancel before submission sends
 nothing. Finished unreferenced attempts can be deleted with ordinary run deletion.
 
-While waiting, normal chat use is not locked. Intervening input, model/source
-changes (including switching away and back), process replacement or loss of chat
-ownership invalidates the intent. A due attempt that is busy, changed or cannot
-be verified becomes visibly **Not sent**; it does not poll until the chat is idle.
+While waiting, normal chat use is not locked. Renaming the Pi session or selecting
+another model does **not** cancel the attempt. It uses the authoritative model
+verified immediately before dispatch, not the scheduling-time model; reports keep
+those two settings separate. Failed/same-model selections do not invent a change.
+Submitted prompts, steering and follow-up messages still cancel before competing
+input is sent, even if Pi later rejects/handles that input. Editing an unsent draft
+is harmless. Source changes (including switching away and back), actual history
+changes, process replacement or loss of chat ownership invalidate the intent.
+A due attempt that is busy, changed or cannot be verified becomes visibly
+**Not sent**; it does not poll until the chat is idle.
 An unchanged due attempt uses ordinary queue/concurrency limits and is checked
 again after any capacity wait and immediately before submission. A full queue
 records not sent, without a hidden backlog or retry. There is no preferred-runtime,
 saved-file, fresh-conversation or local-target fallback.
+
+Invalidation records a bounded cause, triggering command/event where known, and
+changed field names—never prompt bodies or raw RPC payloads. The still-matching
+originating chat receives one source-qualified status without stealing focus;
+it survives repaint but is cleared with the source. Use
+`M-x pichat-job-review-continuation` there to inspect the exact attempt, or
+`M-x pichat-job-reschedule-continuation` to review its prompt with a fresh capture
+and **no selected time**. Choose When and explicitly Schedule again; neither
+command sends automatically. Stale notices cannot act on a rebound source.
+Legacy reports without cause/dispatch-model evidence remain readable.
 
 Emacs, the captured chat and its runtime **must remain alive**. A late timer,
 including after sleep, attempts delivery once when it wakes; the chosen time is

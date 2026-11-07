@@ -839,7 +839,12 @@ Schedules are opt-in per saved job.
   the selected definition. In the Jobs list, `M-x pichat-jobs-delete` deletes the
   selected definition after a short title-based `y`/`n` confirmation. Run history
   is preserved; queued, active or uncertain runs prevent deletion. There is no
-  dedicated deletion keybinding. Compact Runs tables show Work, Queued, and State / result;
+  dedicated deletion keybinding. In Runs, `M-x pichat-jobs-delete-run` deletes
+  the selected finished run after confirmation; its report offers **Actions →
+  Delete run…** (`D`) too. Runs referenced by other runs or a saved schedule's
+  last occurrence cannot be deleted. Definitions, saved session files and captured
+  evidence are retained; this removes history metadata, not files or runtime chats.
+  Compact Runs tables show Work, Queued, and State / result;
   queue times use local date/time to the minute; Project / target stays in wide tables and
   run details. Compact Jobs tables retain their project/target context.
 - `M-x pichat-job-definitions` (Jobs `i`, Evil `g i`) discovers authored job
@@ -1319,7 +1324,8 @@ captures remain readable without migration. Overflow or publication failure reta
 uncertainty and its slot instead of silently truncating a report or declaring completion.
 Evidence is published before the metadata reference; interrupted commits may leave
 unreferenced files. Back up/move evidence with metadata. There is no automatic
-pruning of records, evidence, or saved Pi sessions; archive only when no
+pruning of records, evidence, or saved Pi sessions; explicit run deletion retains
+its evidence and saved Pi session file. Archive only when no
 work/uncertain executions need preservation. Control waits default to 30 seconds
 (`pichat-jobs-control-timeout`); active model work has no implicit timeout.
 

@@ -31,6 +31,74 @@
   "Enqueue a fresh spec in STORE for RESOURCE and ACCESS."
   (pichat-job-enqueue store (pichat-test-job--spec resource access)))
 
+(ert-deftest pichat-job-run-delete-preserves-other-records-and-evidence ()
+  (pichat-test-job--with-store
+    (let* ((job (pichat-job-save store (pichat-test-job--spec)))
+           (id (pichat-job-enqueue store nil job))
+           (token (plist-get (pichat-job-claim store id) :attempt))
+           (evidence '(:version 1 :response "Answer" :transcript "Tools"))
+           (digest (pichat-job-evidence-save store evidence)))
+      (pichat-job-advance store id token "running")
+      (pichat-job-advance store id token "settling")
+      (pichat-job-advance store id token "finished"
+                          (list :result "completed" :safe-to-release t :synchronized t
+                                :evidence digest))
+      (let* ((other (pichat-job-enqueue store nil job))
+             (before (pichat-job-record store 'runs other))
+             (jobs (pichat-job-records store 'jobs)))
+        (pichat-job-run-delete store id)
+        (should-error (pichat-job-record (pichat-job-store-open file) 'runs id)
+                      :type 'pichat-job-error)
+        (should (equal before (pichat-job-record store 'runs other)))
+        (should (equal jobs (pichat-job-records store 'jobs)))
+        (should (equal evidence (pichat-job-evidence-read store digest)))))))
+
+(ert-deftest pichat-job-run-delete-rejects-unfinished-and-stale-store ()
+  (pichat-test-job--with-store
+    (let ((id (pichat-test-job--enqueue store)))
+      (should-error (pichat-job-run-delete store id) :type 'pichat-job-error)
+      (let ((token (plist-get (pichat-job-claim store id) :attempt)))
+        (dolist (state '("starting" "running" "settling" "uncertain"))
+          (unless (equal state "starting") (pichat-job-advance store id token state))
+          (should-error (pichat-job-run-delete store id) :type 'pichat-job-error)))
+      (pichat-job-resolve-uncertain store id "Inspected tools and workspace")
+      (let ((before (pichat-job-records store 'runs)))
+        (with-temp-file file (insert "Changed externally"))
+        (should-error (pichat-job-run-delete store id) :type 'pichat-job-error)
+        (should (equal before (pichat-job-records store 'runs)))))))
+
+(ert-deftest pichat-job-run-delete-keeps-repeat-and-continuation-provenance ()
+  (dolist (kind '(repeat continue))
+    (pichat-test-job--with-store
+      (let ((origin (pichat-test-job--enqueue store)))
+        (pichat-job-cancel-queued store origin)
+        (let ((child (if (eq kind 'repeat)
+                         (pichat-job-enqueue store nil nil nil origin)
+                       (pichat-job-enqueue store nil nil nil nil origin "Inspect first"))))
+          (should-error (pichat-job-run-delete store origin) :type 'pichat-job-error)
+          (pichat-job-cancel-queued store child)
+          (pichat-job-run-delete store child)
+          (pichat-job-run-delete store origin)
+          (should (equal (pichat-job-records store 'runs) [])))))))
+
+(ert-deftest pichat-job-run-delete-protects-followup-and-schedule-links ()
+  (pichat-test-job--with-store
+    (let* ((handler (pichat-job-save store (pichat-test-job--spec)))
+           (origin (pichat-job-enqueue store
+                                      (plist-put (pichat-test-job--spec) :after-job-id handler))))
+      (pichat-job-cancel-queued store origin)
+      (let ((child (plist-get (plist-get (pichat-job-record store 'runs origin) :dispatch) :run-id)))
+        (pichat-job-cancel-queued store child)
+        (should-error (pichat-job-run-delete store origin) :type 'pichat-job-error)
+        (should-error (pichat-job-run-delete store child) :type 'pichat-job-error)))
+    (let ((job (pichat-job-save store (pichat-test-job--spec))))
+      (pichat-job-schedule-set store job '(:kind "once" :start 100))
+      (pichat-job-schedule-enable store job t 99)
+      (let* ((schedule (plist-get (pichat-job-record store 'jobs job) :schedule))
+             (id (pichat-job-schedule-dispatch store job schedule 100)))
+        (pichat-job-cancel-queued store id)
+        (should-error (pichat-job-run-delete store id) :type 'pichat-job-error)))))
+
 (ert-deftest pichat-job-read-and-save-do-not-enqueue-or-recover ()
   (pichat-test-job--with-store
     (should-not (file-exists-p file))

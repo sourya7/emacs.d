@@ -466,6 +466,33 @@ Reject deletion while any associated run is queued, active or uncertain."
                                (plist-get data :jobs))))
     (pichat-job--commit store data)))
 
+(defun pichat-job-run-delete (store id)
+  "Delete finished run ID from STORE unless another record references it.
+Preserve saved session files and evidence, which may be shared or needed for
+inspection.  Never change another run's immutable provenance or report."
+  (let* ((data (pichat-job--copy (pichat-job-store-data store)))
+         (run (pichat-job--find data :runs id)))
+    (unless (equal (plist-get run :state) "finished")
+      (pichat-job--fail "Only finished runs can be deleted"))
+    (when (seq-some
+           (lambda (other)
+             (let ((trigger (plist-get other :trigger)))
+               (or (equal id (plist-get trigger :repeat-of))
+                   (equal id (plist-get trigger :continue-of))
+                   (equal id (plist-get trigger :origin-run))
+                   (equal id (plist-get (plist-get other :dispatch) :run-id)))))
+           (plist-get data :runs))
+      (pichat-job--fail "Another run references this run; deletion refused"))
+    (when (seq-some
+           (lambda (job)
+             (equal id (plist-get (plist-get (plist-get job :schedule) :last) :run-id)))
+           (plist-get data :jobs))
+      (pichat-job--fail "Schedule history references this run; deletion refused"))
+    (setf (plist-get data :runs)
+          (vconcat (seq-remove (lambda (other) (equal id (plist-get other :id)))
+                               (plist-get data :runs))))
+    (pichat-job--commit store data)))
+
 (defun pichat-job-schedule-set (store id rule)
   "Save RULE disabled on job ID in STORE, or remove timing when RULE is nil.
 Never submit work.  Replacing timing invalidates all previous timer ownership."

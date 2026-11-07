@@ -552,6 +552,14 @@ Return the new run ID without selecting its runtime or displaying a chat."
     (pichat-job-executor-pump executor)
     id))
 
+(defun pichat-job-executor-delete-run (executor id)
+  "Delete finished run ID from EXECUTOR without dispatching any work."
+  (pichat-job-run-delete (pichat-job-executor-store executor) id)
+  (when-let* ((execution (gethash id (pichat-job-executor-contexts executor))))
+    (pichat-job-executor--retire execution)
+    (remhash id (pichat-job-executor-contexts executor)))
+  (pichat-job-executor--changed executor))
+
 (defun pichat-job-executor-cancel (executor id)
   "Request cancellation of exact ID owned by EXECUTOR; never equate ack with exit."
   (let* ((run (pichat-job-record (pichat-job-executor-store executor) 'runs id))

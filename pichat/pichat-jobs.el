@@ -163,6 +163,12 @@ every definition row."
   (let* ((store (pichat-jobs--store))
          (runs (pichat-job-records store 'runs))
          (windows (get-buffer-window-list (current-buffer) nil t))
+         (positions (mapcar
+                     (lambda (window)
+                       (save-excursion
+                         (goto-char (window-point window))
+                         (list window (tabulated-list-get-id) (current-column))))
+                     windows))
          (width (if windows (apply #'min (mapcar #'window-body-width windows))
                   (window-body-width)))
          (narrow (< width 110))
@@ -237,7 +243,16 @@ every definition row."
                                    :spec)
                                   :title)))
                         (t ""))))
-    (tabulated-list-print t)))
+    (tabulated-list-print t)
+    ;; Printing remembers buffer point, but erasing the table also moves every
+    ;; nonselected window's point marker.  In particular, M-x can trigger a
+    ;; resize while the minibuffer is selected, before a row command runs.
+    (dolist (position positions)
+      (when (cadr position)
+        (save-excursion
+          (pichat-jobs--select (cadr position))
+          (move-to-column (caddr position))
+          (set-window-point (car position) (point)))))))
 
 (defun pichat-jobs--status (owner run)
   "Return the relevant cached execution/result summary of RUN in OWNER."
@@ -277,6 +292,32 @@ every definition row."
       (pichat-job-executor-schedule-refresh pichat-jobs--owner)
       (pichat-jobs--changed pichat-jobs--owner)
       (message "Job deleted; run history preserved"))))
+
+(defun pichat-jobs-delete-run ()
+  "Confirm deletion of the exact run at point or in the current run report.
+Only finished, unreferenced runs may be deleted.  Evidence and saved session
+files are retained."
+  (interactive)
+  (let ((id (cond
+             ((and (derived-mode-p 'pichat-jobs-mode) (eq pichat-jobs--kind 'runs))
+              (or (tabulated-list-get-id) (user-error "No run selected")))
+             ((and (derived-mode-p 'pichat-jobs-detail-mode)
+                   (eq (car pichat-jobs--detail) 'runs) (null pichat-jobs--section))
+              (cdr pichat-jobs--detail))
+             (t (user-error "Select a run in Runs or open its report first")))))
+    (pichat-jobs--delete-run pichat-jobs--owner id)))
+
+(defun pichat-jobs--delete-run (owner id)
+  "Confirm and delete exact run ID belonging to OWNER."
+  (let ((run (pichat-job-record (pichat-job-executor-store owner) 'runs id)))
+    (unless (equal (plist-get run :state) "finished")
+      (user-error "Only finished runs can be deleted"))
+    (when (y-or-n-p
+           (format "Delete run ‘%s’ (%s, %s)? Evidence and saved session retained. "
+                   (pichat-jobs--display (plist-get (plist-get run :spec) :title))
+                   (pichat-jobs--local-time (plist-get run :created-at)) id))
+      (pichat-job-executor-delete-run owner id)
+      (message "Run deleted; evidence and saved session retained"))))
 
 (defun pichat-jobs-history ()
   "Show attempts for the selected saved job."
@@ -754,7 +795,7 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
          '((inspect "I" "Inspect raw settings…" raw)))
       (append
        (when (pichat-job-continuable-p record) '((work "c" "Continue work…" continue)))
-       (when finished '((work "r" "Repeat…" repeat)))
+       (when finished '((work "r" "Repeat…" repeat) (work "D" "Delete run…" delete-run)))
        (when (and finished (plist-get record :session-file))
          '((work "i" "Continue in chat…" open-saved)))
        (when (pichat-jobs--cancellable-p owner record) '((work "k" "Cancel run…" cancel)))
@@ -822,6 +863,7 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
        (pichat-job-executor--changed owner))
       ('continue (pichat-jobs--continue owner id))
       ('repeat (pichat-jobs--repeat owner id))
+      ('delete-run (pichat-jobs--delete-run owner id))
       ('open-saved (pichat-jobs--open-saved owner id))
       ('release (pichat-jobs--resolve owner id))
       ('save (pichat-job--compose owner 'save-as spec record))
@@ -1021,10 +1063,8 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
   (interactive)
   (let* ((owner pichat-jobs--owner)
          (kind (car pichat-jobs--detail)) (id (cdr pichat-jobs--detail))
-         (record (if (eq kind 'jobs)
-                     (seq-find (lambda (job) (equal (plist-get job :id) id))
-                               (pichat-job-records (pichat-jobs--store) 'jobs))
-                   (pichat-job-record (pichat-jobs--store) kind id)))
+         (record (seq-find (lambda (item) (equal (plist-get item :id) id))
+                           (pichat-job-records (pichat-jobs--store) kind)))
          (spec (plist-get record :spec))
          (inhibit-read-only t)
          (position (pichat-jobs--reading-position (point)))
@@ -1035,7 +1075,9 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
     (erase-buffer)
     (cond
      ((null record)
-      (insert "Job deleted. Run history is preserved.\n"))
+      (setq pichat-jobs--response-source nil)
+      (insert (if (eq kind 'jobs) "Job deleted. Run history is preserved.\n"
+                "Run deleted. Evidence and saved session retained.\n")))
      ((eq pichat-jobs--section 'raw)
       (insert (pp-to-string record)))
      ((eq pichat-jobs--section 'diagnostics)

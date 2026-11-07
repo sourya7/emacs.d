@@ -531,19 +531,23 @@ last response stays empty.  No domain success is inferred from prose."
                      executor (pichat-job-claim store id pichat-jobs-max-concurrency))))))))
       (setf (pichat-job-executor-pumping executor) nil))))
 
-(defun pichat-job-executor-submit (executor spec &optional job-id repeat-of continue-of guidance capture)
+(defun pichat-job-executor-submit (executor spec &optional job-id repeat-of continue-of guidance capture accepted)
   "Persist manual SPEC or saved JOB-ID in EXECUTOR before dispatching it.
 CONTINUE-OF, GUIDANCE and CAPTURE describe a reviewed background continuation.
+Optional ACCEPTED receives the durable run ID before refresh or dispatch, so a
+composer can retire its submission even if a later presentation/pump step fails.
 Return the new run ID without selecting its runtime or displaying a chat."
   (pichat-job-executor-submit-options
    executor (list :spec spec :job-id job-id :repeat-of repeat-of
-                  :continue-of continue-of :guidance guidance :capture capture)))
+                  :continue-of continue-of :guidance guidance :capture capture)
+   accepted))
 
-(defun pichat-job-executor-submit-options (executor options)
-  "Persist named submission OPTIONS before ordinary admission in EXECUTOR."
+(defun pichat-job-executor-submit-options (executor options &optional accepted)
+  "Persist OPTIONS before admission in EXECUTOR; notify ACCEPTED after commit."
   (let ((id (pichat-job-enqueue-options
              (pichat-job-executor-store executor)
              (plist-put (copy-sequence options) :queue-limit pichat-jobs-queue-limit))))
+    (when accepted (funcall accepted id))
     (pichat-job-executor--changed executor)
     (pichat-job-executor-pump executor)
     id))

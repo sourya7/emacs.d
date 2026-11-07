@@ -26,8 +26,9 @@
 (declare-function pichat-job-definition-preview "pichat-job-definition-ui" (&optional record))
 (declare-function pichat-job-definition-ui-refresh "pichat-job-definition-ui" ())
 (defvar pichat-jobs-mode-map)
+(defvar pichat-job-composer-review-mode-map)
+(declare-function pichat-job-composer-inspection-return "pichat-jobs" ())
 (defvar pichat-jobs-detail-mode-map)
-(defvar pichat-job-setup-mode-map)
 (declare-function pichat-jobs-preview "pichat-jobs" ())
 (declare-function pichat-jobs-refresh "pichat-jobs" ())
 (declare-function pichat-jobs-details "pichat-jobs" ())
@@ -41,7 +42,6 @@
 (declare-function pichat-jobs-actions "pichat-jobs" ())
 (declare-function pichat-jobs-detail-tab "pichat-jobs" ())
 (declare-function pichat-jobs-copy-response "pichat-jobs" ())
-(declare-function pichat-job-setup-quit "pichat-jobs" ())
 (defvar pichat-artifacts-preview-mode-map)
 (defvar pichat-artifact-result-mode-map)
 (declare-function pichat-artifact-result-share "pichat-artifact-result" ())
@@ -152,14 +152,8 @@ remain in their original mode maps."
       (kbd "g h") #'pichat-jobs-history
       (kbd "g a") #'pichat-jobs-attention
       (kbd "q") #'quit-window)
-    (evil-define-key* 'normal pichat-job-setup-mode-map
-      (kbd "RET") #'push-button
-      (kbd "TAB") #'forward-button
-      (kbd "<tab>") #'forward-button
-      (kbd "<backtab>") #'backward-button
-      (kbd "S-TAB") #'backward-button
-      (kbd "S-<tab>") #'backward-button
-      (kbd "q") #'pichat-job-setup-quit)
+    (evil-define-key* 'normal pichat-job-composer-review-mode-map
+      (kbd "q") #'pichat-job-composer-inspection-return)
     (evil-define-key* 'normal pichat-jobs-detail-mode-map
       (kbd "RET") #'push-button
       (kbd "TAB") #'pichat-jobs-detail-tab

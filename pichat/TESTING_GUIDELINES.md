@@ -162,7 +162,7 @@ On a Wayland setup where graphical startup is unavailable from the test process,
 use `GDK_BACKEND=x11` with a working X display. The explicit result/exit wrapper
 avoids graphical shutdown prompts that can leave `ert-run-tests-batch-and-exit`
 waiting indefinitely; `/tmp/pichat-jobs-live-result.log` retains the evidence.
-These checks cover a live frame, multiline setup, save-without-running, one-off
+These checks cover a live frame, multiline composition, save-without-running, one-off
 and saved-job submission without focus changes, progressive settings disclosure,
 latest/history/captured-conversation-preview navigation, report disclosure/refresh and real
 narrow/wide window sizes. A separate
@@ -172,13 +172,13 @@ model provider or normal job metadata. Keep these opt-in live-UI and SSH checks
 separate from ordinary batch tests because their execution requirements
 differ; reusable mechanics belong in support, not imports of another test suite.
 The additional `pichat-integration-jobs-live-ui-continuation` scenario drives
-Actions, Continue work, optional instructions, Run once and Previous run in a
+Actions, Continue work, additional guidance, Run once and Previous run in a
 live frame with the offline provider. It can run alone in a separate `emacs -Q -nw`
 instance when no graphical display exists; select that exact test or the terminal
 subset below (the frame-resize scenario requires graphics). The
 `pichat-integration-jobs-live-ui-execution-settings` scenario also supports a
-separate terminal Emacs: it drives the actual settings Transient keys, staged
-Apply/Cancel and nested Tools return, with discovery disabled. Batch fixtures
+separate terminal Emacs: it drives the actual shared-composer keys, staged
+field edits/cancellation and nested Tools Apply/Cancel return, with discovery disabled. Batch fixtures
 cover capture preservation, stale callbacks, pending pickers and continuation
 restrictions. The `pichat-integration-jobs-live-ui-followup` scenario also supports
 terminal Emacs: it drives After this run selection, None bypass, Run once and
@@ -204,8 +204,11 @@ result/exit wrapper above and selector:
 '(and "^pichat-integration-jobs-live-ui-" (not "graphical-resize$"))
 ```
 
-The manual-flow scenario covers save, one-off/saved submission, reports and history
-in either live terminal or graphical Emacs. The separate graphical-resize scenario
+The manual-flow scenario covers shared-composer New, multiline Apply, explicit
+Name/Save, the saved report, independent one-off/saved submission, reports and
+history in either live terminal or graphical Emacs. The repeat-and-save-as
+scenario drives actual Actions/composer/inspection keys, repeated execution and
+save-only creation of a reusable definition. Both use the offline fake provider. The separate graphical-resize scenario
 requires a GUI-capable Emacs and working display for real frame-resize assertions.
 A terminal-only Emacs build cannot supply that check merely by setting DISPLAY.
 The Actions scenario checks the absence of a permanent report label/button and
@@ -225,7 +228,10 @@ multiline Apply/Cancel, asynchronous model return, nested Tools Apply/Cancel and
 whole-menu Save/Cancel/quit. Discovery/model choices are fixture-only, not normal
 provider lookups. Batch cases cover no-op capture/schedule/history preservation,
 write/validation failure, stale/deleted/dead/retargeted origins and cross-buffer
-late callbacks. Instruction drafts must retain plain text, not editor display
+late callbacks. Shared-composer cases also exercise chat-origin draft/attachment
+preservation, duplicate callbacks during a later picker in the same scope, owned
+discovery cleanup, reentrant final actions during capture/confirmation and
+post-commit dispatch failure without duplicate submission. Instruction drafts must retain plain text, not editor display
 properties; the saved-editor scenario also collects garbage after editor cleanup.
 Admission cases exercise legacy resource metadata as inert historical data alongside
 new captures without it. A real offline-Pi scenario starts two jobs in the same

@@ -397,6 +397,9 @@ authorization prompts remain distinct. `pichat-job-schedule.el` validates versio
 native timing data and computes the next occurrence from an explicit reference
 instant; it owns no store, clock or timers. The executor owns one-shot wakeups;
 core consumes an occurrence and creates its ordinary run in one transaction.
+`pichat-jobs.el` owns the shared composer: explicit origin/record identity,
+detached staging, per-picker/final-action ownership and nested-editor return.
+Capture and admission remain separate from that presentation lifecycle.
 `pichat-job-schedule-ui.el` supplies the compact saved-job timing Transient.
 
 ## Launching runtimes
@@ -810,15 +813,23 @@ optional after-run jobs and native one-shot/interval schedules**. Plan work uses
 ordinary instructions and the installed plans skill, not a special phase adapter.
 Schedules are opt-in per saved job.
 
-- `M-x pichat-job-new` opens setup without starting a runtime. Edit multiline
-  instructions, choose the project/directory, and use **Execution settings…** for
-  a Transient with preset (`p`), Tools (`x`), concrete run-local model (`m`),
-  and target (`t`), with values beside each control
-  and customized Tools highlighted. Sub-pickers return to that menu;
-  `RET` applies settings to setup without saving or running, and `q` discards
-  staged changes. Choose a concrete model before saving/submitting if none is configured.
-- **Run once** submits the draft without saving a definition. **Save job…** saves
-  a reusable definition without executing it. Saving alone never starts work.
+- `M-x pichat-job-new` opens the shared compact Transient composer without
+  starting a runtime or opening a setup buffer. Job fields are `n` Name,
+  `i` Instructions, `d` Workspace and `a` After this run; execution fields are
+  `p/m/x/t` for Preset/Model/Tools/Target, with inline values and customized Tools
+  highlighted. Choose a concrete model before saving/submitting if none is configured.
+  `v` inspects complete instructions and settings; `q` there returns to the composer.
+  Multiline editing uses `C-c C-c` Apply / `C-c C-k` Cancel. Sub-picker Apply
+  returns to the composer without saving or running.
+- New and Repeat offer explicit `r` **Run once**, `s` **Save job** and `q`
+  **Cancel (discard draft)**. Run once submits without saving a definition;
+  Save requires a nonempty reviewed Name, saves only, and opens the saved job's
+  report. A later **Run job** remains a separate explicit action. New has no
+  ambiguous `RET` action. Save as job offers Save/Cancel; Continue work offers
+  Run once/Cancel. Closing or replacing a composer discards its detached draft,
+  including staged changes, without a resumable setup buffer. Errors retain it
+  for correction. New from a chat never borrows its runtime or consumes its
+  prompt or attachments.
 - `M-x pichat-jobs` opens one global Jobs/Runs view. Native `TAB` switches between
   definitions and attempts, `RET` opens details, `C-o` toggles a read-only details
   preview, `+` creates, `r` runs a selected job's current definition, `e` edits,
@@ -930,22 +941,21 @@ Schedules are opt-in per saved job.
   **Repeat…** reviews historical settings and records repeat provenance; it does
   not silently use a changed definition or undo effects. It may repeat file changes
   or external actions and retains the definition's overlap exclusion.
-  **Save as job…** opens setup, not execution.
-- Reports and New/Repeat/Continue setup share the chat's read-only input-bar
-  styling and five-visual-line instruction folding at the narrowest displayed
-  width. Run instructions live inside **Details**; continuation guidance folds
-  independently. Click or press `RET`/`TAB` within report folds to toggle them;
-  short blocks need no control. A folded block ends in `…`; expanded blocks offer
-  **Show less**. Elsewhere `TAB`/`S-TAB` navigate without activating commands or
-  links. Open Actions with its keybinding. Setup uses TAB only for button
-  navigation; fold its instructions with RET/click. Native/Evil and terminal/GUI
-  follow the same rules. Refresh/resize retain folding choices and reading position;
-  editors and exact-source views remain plain text.
+  **Save as job…** opens the shared composer, not execution.
+- Reports use the chat's read-only input-bar styling and five-visual-line
+  instruction folding at the narrowest displayed width. Run instructions live
+  inside **Details**; continuation guidance folds independently. Click or press
+  `RET`/`TAB` within report folds to toggle them; short blocks need no control.
+  A folded block ends in `…`; expanded blocks offer **Show less**. Elsewhere
+  `TAB`/`S-TAB` navigate without activating commands or links. Open Actions with
+  its keybinding. Native/Evil and terminal/GUI follow the same rules.
+  Refresh/resize retain folding choices and reading position; editors and
+  exact-source views remain plain text.
 - Optional `pichat-evil-setup` gives the list Normal-state `RET`, `TAB`, `zv`
   preview, `gr` refresh, `gc` new, `gx` run, `ge` edit, `gh` history and `ga`
   attention. Native `R` or Evil `g R` invokes **Release reservation** on the
-  selected uncertain run; `M-x pichat-jobs-release-reservation` does the same. Setup and
-  details use buttons with `RET`; these do not take over Vim movement keys.
+  selected uncertain run; `M-x pichat-jobs-release-reservation` does the same.
+  Details use buttons with `RET`; these do not take over Vim movement keys.
   The attention counter's shortcut hint shows `g a` in Evil Normal state and `a`
   in native Emacs state.
 
@@ -998,12 +1008,12 @@ automatically discard their runtime tracking.
 Execution settings are captured, including resolved preset prompts, Tools,
 model, command and target/path mappings. Instruction/name edits preserve them.
 Changing execution explicitly re-resolves the preset/target after confirmation;
-cancelling a sub-picker retains earlier staged choices without changing setup.
-Closing the settings menu without applying leaves setup untouched. Model/workspace/target edits preserve
+cancelling a sub-picker retains earlier staged choices in the composer.
+Closing the composer discards all staged choices. Model/workspace/target edits preserve
 the selected Tools; changing preset explicitly confirms resetting them.
 There is no workspace coordination setting or workspace locking. Old resource
 metadata is retained for historical inspection only, not used for admission or
-as a read-only guarantee. Routine screens omit generic sandbox/save disclaimers. Setup warns
+as a read-only guarantee. Routine screens omit generic sandbox/save disclaimers. The composer warns
 when the current preset no longer matches its capture. The environment, credentials and installed
 extension code remain live: this is not a frozen or sandboxed environment.
 Complete command wrappers, ephemeral sessions and conversation-loading flags are
@@ -1085,9 +1095,9 @@ and preview never stage it, and saved job arguments retain no temporary skill pa
 ### Continuing interrupted work
 
 **Continue work…** is offered for failed, cancelled, or manually released
-review-needed runs. It opens the existing setup, not a running agent. Review the
-captured settings, optionally choose a different provider/model in **Execution
-settings…**, or add **Additional instructions…**, then select **Run once**.
+review-needed runs. It opens the shared composer, not a running agent. Review
+captured settings, optionally choose a different provider/model with `m`, or
+edit additional guidance with `i`, then select `r` **Run once**.
 The original instructions, workspace and target/path identity
 remain fixed; the settings Transient omits the target control for
 continuations. Explicit execution edits still re-resolve configuration and are
@@ -1111,18 +1121,19 @@ These are agent instructions, not a sandbox or certification of plan progress.
 Provider failure may have prevented checkpoint writing. There is no quota detector,
 automatic retry, gate approval or adjacent-phase permission. Repeat and Continue
 require the original run to be stopped; uncertain execution must be separately
-inspected/released first. Merely opening/cancelling setup creates no new run.
+inspected/released first. Merely opening/cancelling the composer creates no new run.
 
 ### After-run jobs
 
-Setup offers **After this run: None [Change…]**; the saved-job editor uses `a`.
+The composer uses `a` **After this run** (initially None).
 Choose a saved ordinary job to
 review, report, notify or perform other work authorized by that job's own
 instructions. Its provider/model, preset, Tools and target are configured through
-ordinary job setup or saved-job editing—not inherited from the originating run. **View job** inspects
-the selected definition. Duplicate titles remain distinct picker choices.
-Choosing **None** in run setup bypasses the action without editing its saved
-default; **Save job…** explicitly saves the default for future submissions.
+ordinary job composition or saved-job editing—not inherited from the originating
+run. Inspect the selected definition separately in Jobs. Duplicate titles remain
+distinct picker choices. Choosing **None** in the composer bypasses the action
+without editing its saved default; **Save job** explicitly saves the default for
+future submissions.
 Repeat and Continue work show this setting too.
 
 Submitting captures the selected job's instructions/settings. Subsequent edits or

@@ -75,6 +75,13 @@ until BODY submits work.  Fixture teardown retires handlers before stopping."
             (vector (list :key directory :access access))))
     spec))
 
+(defun pichat-test-job-composer-spec (scope)
+  "Capture SCOPE's staged work through the ordinary submission boundary."
+  (with-current-buffer (plist-get scope :origin)
+    (let ((pichat-job--draft (plist-get scope :draft))
+          (pichat-jobs--owner (plist-get scope :owner)))
+      (pichat-job--submission-spec))))
+
 (defun pichat-test-job-wait (store id state)
   "Wait for run ID to reach STATE in STORE with failure diagnostics."
   (pichat-test-wait-until
@@ -135,7 +142,8 @@ until BODY submits work.  Fixture teardown retires handlers before stopping."
 
 (defun pichat-test-job-command (label)
   "Invoke LABEL through report Actions; live Emacs drives the actual menu key."
-  (if noninteractive (pichat-test-job-actions) (pichat-jobs-actions))
+  (if noninteractive (pichat-test-job-actions)
+    (execute-kbd-macro (kbd (if (pichat-view-evil-normal-p) "g a" "a"))))
   (let ((item (seq-find (lambda (entry) (equal (nth 2 entry) label))
                         (pichat-jobs--action-items pichat-jobs--owner (car pichat-jobs--detail)
                                                   (pichat-jobs--actions-current pichat-jobs--actions)))))

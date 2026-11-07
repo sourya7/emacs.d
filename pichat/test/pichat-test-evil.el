@@ -235,14 +235,9 @@
             (should (eq (key-binding (kbd "n")) #'evil-search-next))
             (should (eq (key-binding (kbd "q")) #'pichat-view-quit)))
           (with-temp-buffer
-            (pichat-job-setup-mode)
-            (let ((inhibit-read-only t))
-              (insert "Setup\n")
-              (pichat-jobs--button "Run once" (lambda () (ert-fail "Navigation submitted work"))))
-            (dolist (key '("TAB" "<tab>" "<backtab>" "S-TAB" "S-<tab>"))
-              (goto-char (point-min))
-              (call-interactively (key-binding (kbd key)))
-              (should (equal (button-label (button-at (point))) "Run once"))))
+            (pichat-job-composer-review-mode)
+            (should (eq (key-binding (kbd "q")) #'pichat-job-composer-inspection-return))
+            (should (eq (key-binding (kbd "w")) #'evil-forward-word-begin)))
           (pichat-test-with-job-executor ()
             (with-temp-buffer
               (pichat-jobs-mode)

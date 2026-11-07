@@ -29,6 +29,7 @@
 (require 'pichat-test-chat-core)
 (require 'pichat-test-chat-controls)
 (require 'pichat-test-chat-diagnostics)
+(require 'pichat-test-chat-notices)
 (require 'pichat-test-diagnostics-views)
 (require 'pichat-test-chat-live)
 (require 'pichat-test-chat-input)

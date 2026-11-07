@@ -29,6 +29,7 @@
 (require 'pichat-chat-completion)
 (require 'pichat-chat-input)
 (require 'pichat-chat-diagnostics)
+(require 'pichat-chat-notices)
 (require 'pichat-chat-navigation)
 (require 'pichat-response-view)
 (require 'pichat-view)
@@ -253,6 +254,12 @@ from final newlines or redisplay edge cases."
 (defvar-local pichat-chat--status-lines nil
   "Alist of bounded status lines keyed by lifecycle category.")
 
+(defvar-local pichat-chat--diagnostic-notice-timer nil
+  "Owned timer for the next diagnostic notice expiration.")
+
+(defvar-local pichat-chat--diagnostic-notice-timer-token nil
+  "Identity rejecting cancelled or superseded notice timer callbacks.")
+
 (defvar-local pichat-chat--source-generation 0
   "Generation of the Pi session identity bound to this buffer.")
 
@@ -425,6 +432,7 @@ Markup characters remain visible; this is fontification only."
     (define-key map (kbd "C-c C-s") #'pichat-chat-steer)
     (define-key map (kbd "C-c C-f") #'pichat-chat-follow-up)
     (define-key map (kbd "C-c C-o") #'pichat-chat-compact)
+    (define-key map (kbd "C-c C-0") #'pichat-chat-dismiss-diagnostic-notices)
     (define-key map (kbd "C-c C-n") #'pichat-chat-new-session)
     (define-key map (kbd "C-c C-e") #'pichat-chat-set-session-name)
     (define-key map (kbd "C-c C-m") #'pichat-chat-cycle-model)
@@ -481,6 +489,7 @@ user messages, activity groups, and tool blocks."
             #'pichat-chat--cancel-extension-status-projection nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--cancel-sync-request nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--cancel-stats-request nil t)
+  (add-hook 'kill-buffer-hook #'pichat-chat--cancel-diagnostic-notice-timer nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--remove-event-handlers nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--stop-session-on-kill nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--release-session-buffer nil t)
@@ -720,6 +729,7 @@ When DEFER-SYNC is non-nil, wait for a subsequent authoritative state reply."
   (pichat-chat--cancel-stats-request)
   (pichat-chat-input-abandon-in-flight)
   (pichat-chat--release-live-projection-fragments)
+  (pichat-chat--cancel-diagnostic-notice-timer)
   (cl-incf pichat-chat--source-generation)
   (setq pichat-chat--source-session-id session-id
         pichat-chat--source-session-file session-file
@@ -788,6 +798,7 @@ When DEFER-SYNC is non-nil, wait for a subsequent authoritative state reply."
     (setq pichat-chat--source-bound-p nil
           pichat-chat--source-rebinding-p t)
     (pichat-chat--set-status 'source "[session source changing]"))
+  (pichat-chat--project-diagnostic-notices pichat-chat-session)
   (force-mode-line-update))
 
 (defun pichat-chat-stage-restart (session)
@@ -971,12 +982,7 @@ Creating ownership never displays a window or activates pending dialog requests.
       (pichat-chat--refresh-slash-commands session)
       (when synchronize
         (pichat-chat--request-sync t))
-      (when-let* ((diagnostic (pichat-chat-diagnostics-latest session)))
-        (pichat-chat--set-status
-         (if (eq 'rpc-parse (plist-get diagnostic :origin))
-             'rpc-parse
-           'error)
-         (format "[diagnostic] %s" (plist-get diagnostic :summary)))))
+      (pichat-chat--project-diagnostic-notices session))
     buffer))
 
 (defun pichat-chat-open (session &optional synchronize)
@@ -3438,6 +3444,7 @@ ordinary browser opens retain their existing state-ready contract."
          (generation (cl-incf pichat-chat--sync-sequence))
          (settlement-sequence pichat-chat--settlement-sequence)
          (source-generation pichat-chat--source-generation)
+         (parse-recovery (pichat-chat-notices-recovery session 'rpc-parse))
          (session-id (pichat-session-id session))
          (session-file (pichat-session-session-file session)))
     (setq pichat-chat--sync-in-flight generation
@@ -3461,7 +3468,8 @@ ordinary browser opens retain their existing state-ready contract."
                      ;; transcript event lost to malformed RPC framing.  Keep
                      ;; the retained diagnostic available in the explicit
                      ;; diagnostics view, but remove its recovered chat notice.
-                     (pichat-chat--set-status 'rpc-parse nil)
+                     (pichat-chat-notices-resolve session parse-recovery)
+                     (pichat-chat--project-diagnostic-notices session)
                      (pichat-emit session 'transcript-synchronized
                                   :settlement-sequence settlement-sequence
                                   :process-generation
@@ -3570,6 +3578,7 @@ ordinary browser opens retain their existing state-ready contract."
                 (queue-update . ,(funcall handler #'pichat-chat--on-simple-event))
                 (session-state-changed . ,(funcall handler #'pichat-chat--on-state-changed))
                 (extension-ui-request . ,(funcall handler #'pichat-chat--on-extension-ui-request))
+                (diagnostic-notices-changed . ,(funcall handler #'pichat-chat--project-diagnostic-notices))
                 (error . ,(funcall handler #'pichat-chat--on-error))
                 (session-ended . ,(funcall handler #'pichat-chat--on-session-ended))))
         (dolist (pair pichat-chat--handlers)
@@ -3978,9 +3987,10 @@ Return non-nil only when the projected status value changes."
         ((plist-get raw :errorMessage)
          (pichat-chat--set-status
           'compaction
-          (format "[compaction failed: %s]"
-                  (pichat-chat--bounded-notice
-                   (plist-get raw :errorMessage)))))
+          (unless (pichat-chat-notices-current session 'compaction-event "compact")
+            (format "[compaction failed: %s]"
+                    (pichat-chat--bounded-notice
+                     (plist-get raw :errorMessage))))))
         (t
          (pichat-chat--set-status 'compaction nil)
          (pichat-chat--refresh-stats session 'compaction)
@@ -4041,22 +4051,88 @@ Return non-nil only when the projected status value changes."
   (pichat-chat--rename-buffer-maybe session)
   (pichat-chat--refresh-header session)
   (pichat-chat--refresh-stats session 'state)
+  (pichat-chat--project-diagnostic-notices session)
   (force-mode-line-update))
 
-(defun pichat-chat--on-error (_session _event plist)
-  "Render only a bounded, redacted summary for diagnostic PLIST."
-  (let* ((diagnostic (plist-get plist :diagnostic))
-         (summary (or (plist-get diagnostic :summary)
-                      (pichat-chat-diagnostics-safe-summary-text
-                       (plist-get plist :message)))))
-    (pichat-chat--set-status
-     (if (eq 'rpc-parse (plist-get diagnostic :origin))
-         'rpc-parse
-       'error)
-     (format "[diagnostic] %s"
-             (if (string-empty-p (or summary ""))
-                 "unknown PiChat error"
-               summary)))))
+(defun pichat-chat--cancel-diagnostic-notice-timer ()
+  "Cancel the current chat's owned notice timer and invalidate its callback."
+  (when (timerp pichat-chat--diagnostic-notice-timer)
+    (cancel-timer pichat-chat--diagnostic-notice-timer))
+  (setq pichat-chat--diagnostic-notice-timer nil
+        pichat-chat--diagnostic-notice-timer-token nil))
+
+(defun pichat-chat--schedule-diagnostic-notice-expiry (session records)
+  "Schedule projection when the first active SESSION RECORDS expire."
+  (when-let* ((deadlines (delq nil (mapcar (lambda (record)
+                                           (plist-get record :notice-expires-at))
+                                         records))))
+    (let ((buffer (current-buffer))
+          (context (pichat-chat-diagnostics-context session))
+          (token (make-symbol "notice-expiry")))
+      (setq pichat-chat--diagnostic-notice-timer-token token
+            pichat-chat--diagnostic-notice-timer
+            (run-at-time
+             (max 0.01 (- (apply #'min deadlines) (float-time))) nil
+             (lambda ()
+               (when (buffer-live-p buffer)
+                 (with-current-buffer buffer
+                   (when (eq token pichat-chat--diagnostic-notice-timer-token)
+                     (setq pichat-chat--diagnostic-notice-timer nil
+                           pichat-chat--diagnostic-notice-timer-token nil)
+                     (when (and (eq session pichat-chat-session)
+                                (eq buffer (pichat-session-buffer session))
+                                (equal context (pichat-chat-diagnostics-context session)))
+                       (pichat-chat--project-diagnostic-notices session)))))))))))
+
+(defun pichat-chat--project-diagnostic-notices (session &rest _event)
+  "Project only currently active SESSION notices, not historical failures."
+  (pichat-chat--cancel-diagnostic-notice-timer)
+  (let ((records (pichat-chat-notices-current session)))
+    (dolist (key '(error rpc-parse))
+      (let ((selected
+             (seq-filter
+              (lambda (record)
+                (eq (eq key 'rpc-parse)
+                    (eq (plist-get record :origin) 'rpc-parse)))
+              records)))
+        (pichat-chat--set-status
+         key (when selected
+               (concat
+                (truncate-string-to-width
+                 (mapconcat
+                  (lambda (record)
+                    (format "[diagnostic] %s" (plist-get record :summary)))
+                  (reverse selected) "\n")
+                 3600 nil nil "\n[additional notice text omitted]")
+                "\n[C-c C-0: dismiss notices; M-x pichat-show-diagnostics: history]")))))
+    (pichat-chat--schedule-diagnostic-notice-expiry session records)))
+
+(defun pichat-chat-dismiss-diagnostic-notices ()
+  "Dismiss active chat diagnostic notices without deleting retained history.
+This acknowledges all active notices, not the draft, attachments or runtime."
+  (interactive)
+  (unless pichat-chat-session (user-error "No PiChat runtime"))
+  (pichat-chat-notices-retire
+   (pichat-chat-notices-current pichat-chat-session) 'dismissed)
+  ;; Compaction's event status is transient, separate from retained RPC errors.
+  (when (string-match-p "\\`\\[compaction \\(?:failed\\|aborted\\)"
+                        (or (cdr (assq 'compaction pichat-chat--status-lines)) ""))
+    (pichat-chat--set-status 'compaction nil))
+  (pichat-chat--project-diagnostic-notices pichat-chat-session))
+
+(defun pichat-chat--on-error (session _event plist)
+  "Project bounded diagnostic PLIST for SESSION without reviving history."
+  (unless (plist-get plist :diagnostic)
+    (pichat-chat-diagnostics-record
+     session :origin 'chat-error
+     :message (or (plist-get plist :message) "unknown PiChat error")))
+  (when (and (equal "compact" (plist-get (plist-get plist :diagnostic) :command))
+             (memq (plist-get plist :diagnostic)
+                   (pichat-chat-notices-current session))
+             (string-prefix-p "[compaction failed:"
+                              (or (cdr (assq 'compaction pichat-chat--status-lines)) "")))
+    (pichat-chat--set-status 'compaction nil))
+  (pichat-chat--project-diagnostic-notices session))
 
 (defun pichat-chat--update-pending-ui-count ()
   "Synchronize and publish the current chat's pending user-input count."

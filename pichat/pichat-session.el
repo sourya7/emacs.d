@@ -57,6 +57,9 @@
   pending-responses
   event-log
   diagnostics
+  ;; Runtime-owned epochs survive chat closure and invalidate old notices.
+  (diagnostic-source-generation 0)
+  diagnostic-compaction-recovery
   event-handlers
   ;; Reversed string fragments of the unfinished JSONL record; nil when empty.
   ;; This is not an Emacs buffer and needs no separate resource cleanup.
@@ -182,6 +185,11 @@ buffer-local sessions-browser session, then an existing live session for
 (defun pichat-session-apply-rpc-state (session state-plist)
   "Update SESSION cache from Pi RPC STATE-PLIST."
   (when state-plist
+    (when (and (pichat-session-id session)
+               (not (equal (pichat-session-id session)
+                           (plist-get state-plist :sessionId))))
+      (cl-incf (pichat-session-diagnostic-source-generation session))
+      (setf (pichat-session-diagnostic-compaction-recovery session) nil))
     (setf (pichat-session-id session) (plist-get state-plist :sessionId)
           (pichat-session-name session) (plist-get state-plist :sessionName)
           (pichat-session-session-file session) (plist-get state-plist :sessionFile)

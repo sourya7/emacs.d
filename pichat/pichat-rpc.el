@@ -18,6 +18,7 @@
 (require 'pichat-transport)
 (require 'pichat-pi-environment)
 (require 'pichat-chat-diagnostics)
+(require 'pichat-chat-notices)
 
 (defconst pichat-rpc-job-authoring-skill
   (expand-file-name "skills/pichat-jobs/SKILL.md"
@@ -662,7 +663,8 @@ JSON strings are preserved.  Strip a trailing CR for CRLF compatibility."
            (diagnostic
             (pichat-chat-diagnostics-record
              session :origin 'rpc-timeout :message (plist-get response :error)
-             :response response :command (pichat-rpc--pending-command pending))))
+             :response response :command (pichat-rpc--pending-command pending)
+             :context (plist-get pending :diagnostic-context))))
       (setq response (plist-put response :pichat-diagnostic diagnostic))
       (pichat-emit session 'response-received :response response)
       (pichat-rpc--dispatch-failure session response pending))))
@@ -719,16 +721,20 @@ FAILURE-KIND is the machine-readable local failure cause."
 
 (defun pichat-rpc--dispatch-response (session response)
   "Dispatch RPC RESPONSE for SESSION."
-  (unless (plist-get response :success)
-    (let ((diagnostic
-           (pichat-chat-diagnostics-record
-            session :origin 'rpc-response
-            :message (plist-get response :error) :response response
-            :command (plist-get response :command))))
-      (setq response (plist-put response :pichat-diagnostic diagnostic))))
   (let* ((id (plist-get response :id))
          (pending (and id (gethash id (pichat-session-pending-responses session))))
          (success (plist-get response :success)))
+    (unless success
+      (let ((diagnostic
+             (pichat-chat-diagnostics-record
+              session :origin 'rpc-response
+              :message (plist-get response :error) :response response
+              :command (plist-get response :command)
+              :context (plist-get pending :diagnostic-context))))
+        ;; Uncorrelated/duplicate responses remain inspectable, not actionable.
+        (unless pending
+          (setf (plist-get diagnostic :notice-state) 'historical))
+        (setq response (plist-put response :pichat-diagnostic diagnostic))))
     (when id
       (remhash id (pichat-session-pending-responses session)))
     (when pending
@@ -744,7 +750,14 @@ FAILURE-KIND is the machine-readable local failure cause."
   "Publish ordinary RESPONSE and deliver PENDING for SESSION.
 SUCCESS and ID are the correlated response fields.  Internal startup requests
 must not update public state or become conversation/prompt acceptance events."
-    (pichat-emit session 'response-received :response response)
+  (when (and pending success
+             (equal "compact" (pichat-rpc--pending-command pending))
+             (not (eq t (plist-get (plist-get response :data) :aborted)))
+             (not (eq t (plist-get (plist-get response :data) :cancelled))))
+    (pichat-chat-notices-resolve session (plist-get pending :notice-recovery))
+    (pichat-emit session 'diagnostic-notices-changed))
+  (when (pichat-rpc--dispatch-current-p session)
+    (pichat-emit session 'response-received :response response))
     (when (pichat-rpc--dispatch-current-p session)
       (let ((command (or (plist-get response :command)
                          (pichat-rpc--pending-command pending))))
@@ -762,6 +775,8 @@ must not update public state or become conversation/prompt acceptance events."
             (setf (pichat-session-context-usage session) nil)
             ;; Invalidate consumers before command callbacks can request state
             ;; for the newly rebound session.
+            (cl-incf (pichat-session-diagnostic-source-generation session))
+            (setf (pichat-session-diagnostic-compaction-recovery session) nil)
             (pichat-emit session 'session-rebinding :command command
                          :response response))))
 
@@ -817,9 +832,39 @@ must not update public state or become conversation/prompt acceptance events."
              (pichat-session-retrying-p session) nil
              (pichat-session-state session) 'idle))
       ('compaction-start
+       (unless (equal
+                (plist-get (pichat-session-diagnostic-compaction-recovery session) :context)
+                (pichat-chat-diagnostics-context session))
+         ;; Manual events carry no request ID.  Their correlated response owns
+         ;; recovery, so an intervening failure cannot enter a wider event capture.
+         (setf (pichat-session-diagnostic-compaction-recovery session)
+               (list :context (pichat-chat-diagnostics-context session)
+                     :reason (plist-get event :reason)
+                     :records (unless (equal "manual" (plist-get event :reason))
+                                (pichat-chat-notices-current session nil "compact")))))
        (setf (pichat-session-compacting-p session) t
              (pichat-session-state session) 'compacting))
       ('compaction-end
+       ;; Manual RPC failures get their retained record from the response.
+       ;; Automatic/event-only failures need their own record as well.
+       (when (and (plist-get event :errorMessage)
+                  (not (cl-loop for pending being the hash-values of
+                                (pichat-session-pending-responses session)
+                                thereis
+                                (and (equal "compact" (pichat-rpc--pending-command pending))
+                                     (equal (plist-get pending :diagnostic-context)
+                                            (pichat-chat-diagnostics-context session))))))
+         (pichat-chat-diagnostics-record
+          session :origin 'compaction-event :command "compact"
+          :message (format "compaction failed: %s"
+                           (plist-get event :errorMessage))))
+       (when (equal (plist-get event :reason)
+                    (plist-get (pichat-session-diagnostic-compaction-recovery session) :reason))
+         (unless (or (eq t (plist-get event :aborted))
+                     (plist-get event :errorMessage))
+           (pichat-chat-notices-resolve
+            session (pichat-session-diagnostic-compaction-recovery session)))
+         (setf (pichat-session-diagnostic-compaction-recovery session) nil))
        (setf (pichat-session-compacting-p session) nil
              (pichat-session-state session)
              (if (pichat-session-streaming-p session) 'running 'idle)))
@@ -830,10 +875,13 @@ must not update public state or become conversation/prompt acceptance events."
        (setf (pichat-session-retrying-p session) nil
              (pichat-session-state session)
              (if (pichat-session-streaming-p session) 'running 'idle))))
+    (when (eq normalized 'compaction-end)
+      (pichat-emit session 'diagnostic-notices-changed))
     ;; Generic consumers see updated session state before the compatibility
     ;; event.  A consumer must subscribe to one form, never both.
-    (pichat-emit session 'rpc-event
-                 :raw event :normalized-event normalized)
+    (when (pichat-rpc--dispatch-current-p session)
+      (pichat-emit session 'rpc-event
+                   :raw event :normalized-event normalized))
     (when (pichat-rpc--dispatch-current-p session)
       (pichat-emit session normalized :raw event))))
 
@@ -864,7 +912,11 @@ CALLBACK and ERROR-CALLBACK receive (RESPONSE SESSION).  Return request id."
          (line (concat (pichat-rpc--json-encode command) "\n"))
          (pending (list :callback callback
                         :error-callback error-callback
-                        :internal pichat-rpc--internal-request :command type)))
+                        :internal pichat-rpc--internal-request :command type
+                        :diagnostic-context (pichat-chat-diagnostics-context session)
+                        :notice-recovery
+                        (when (equal type "compact")
+                          (pichat-chat-notices-recovery session nil "compact")))))
     (when (and pichat-rpc-request-timeout (> pichat-rpc-request-timeout 0))
       (setq pending (plist-put pending :timer
                                (run-at-time pichat-rpc-request-timeout nil

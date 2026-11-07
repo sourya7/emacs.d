@@ -35,6 +35,14 @@ must not fetch data or mutate their collectors.")
   :type 'positive-integer
   :group 'pichat-diagnostics)
 
+(defcustom pichat-diagnostics-notice-timeout 5
+  "Seconds before a new diagnostic notice disappears from chat.
+Nil disables automatic dismissal.  This setting applies to newly recorded
+failures; expiration never deletes retained diagnostic history."
+  :type '(choice (const :tag "Manual dismissal only" nil)
+                 (number :tag "Seconds"))
+  :group 'pichat-diagnostics)
+
 (defcustom pichat-diagnostics-stderr-limit 100000
   "Maximum number of stderr characters retained in one diagnostic record."
   :type 'positive-integer
@@ -306,9 +314,16 @@ codes, or missing files in unrelated output."
         (concat (substring text 0 limit) "\n[truncated by PiChat]")
       text)))
 
+(defun pichat-chat-diagnostics-context (session)
+  "Return SESSION's process and source lifetime identity."
+  (when session
+    (list (pichat-session-process-generation session)
+          (pichat-session-diagnostic-source-generation session)
+          (pichat-session-id session))))
+
 (cl-defun pichat-chat-diagnostics-record
     (session &key origin message condition program stderr exit-status response
-             category command)
+             category command (context (pichat-chat-diagnostics-context session)))
   "Create and retain one bounded diagnostic record for SESSION."
   (let* ((setup-kind (pichat-chat-diagnostics-setup-kind session))
          (classification
@@ -317,6 +332,10 @@ codes, or missing files in unrelated output."
                origin (or stderr message) condition program)))
          (record
           (list :domain 'transport :severity 'error :origin origin
+                :notice-context context :notice-state nil
+                :notice-expires-at
+                (when pichat-diagnostics-notice-timeout
+                  (+ (float-time) (max 0 pichat-diagnostics-notice-timeout)))
                 :category classification
                 :summary
                 (pichat-chat-diagnostics-summary

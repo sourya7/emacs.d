@@ -344,7 +344,10 @@ encoding, wire conversion, and optional acquisition adapters without knowing
 about chat buffers or transcript state. `pichat-chat-diagnostics.el` owns
 conservative transport/Pi-response classification, bounded session diagnostic
 records, safe summaries, explicit raw inspection, and setup launch policy; it
-does not depend on the chat mode. `pichat-command-catalog.el` supplies shared command/template/skill discovery,
+does not depend on the chat mode. `pichat-chat-notices.el` owns notice
+acknowledgment and narrowly captured recovery without editing chat buffers or
+deleting retained records; RPC and chat orchestration supply lifecycle boundaries.
+`pichat-command-catalog.el` supplies shared command/template/skill discovery,
 validated records, and ordered completion metadata for both the command picker
 and CAPF, without owning a cache or action policy.
 `pichat-chat-completion.el` owns the source-generation-scoped slash-command
@@ -1444,6 +1447,30 @@ snapshot remains readable but owner-dependent actions are rejected rather than
 selecting another runtime. See `GLOSSARY.md` for runtime versus Pi session and
 Session History terminology.
 
+Chat notices are separate from retained diagnostic history. Each new failure's
+notice disappears automatically after **5 seconds**, without deleting history,
+changing the draft or attachments, or stopping the runtime. Customize
+`pichat-diagnostics-notice-timeout` to change this delay in seconds, or set it to
+`nil` for manual-only dismissal; the setting applies to newly recorded failures.
+Reopening a chat or receiving unrelated updates does not restart a notice's clock.
+Use `C-c C-0` or `M-x pichat-chat-dismiss-diagnostic-notices` to acknowledge
+**all active chat notices** immediately. The notice displays this shortcut.
+Dismissed or resolved notices do not reappear when the chat is reopened; a new
+failure with identical text is a new notice. Active independent errors remain
+visible together.
+
+Successful compaction resolves only compaction failures captured before that
+manual RPC request or matched automatic compaction-start/end attempt, within the
+same source and process lifetime. Polling, unrelated successful RPCs,
+failed/aborted compaction, and duplicate completions do not resolve them.
+Successful authoritative transcript synchronization similarly resolves previously
+captured malformed-RPC notices. Other errors remain until expiration or explicit
+dismissal. Source-specific notices are not replayed after source rebinding
+(including switching away and back); process-start/exit notices remain runtime-wide
+until expiration, dismissal or process replacement. Retained history stays
+available in the inspectors below, within the existing record limit.
+See `GLOSSARY.md` for source, runtime and process-generation distinctions.
+
 Inspector keys:
 
 - `g` (Evil Normal `g r`) — rebuild the current safe or raw snapshot.
@@ -1580,6 +1607,7 @@ Chat keys:
   warnings, setup actions, and ownership rules
 - Ordinary chat status shows only bounded, redacted diagnostic summaries and
   distinguishes local startup/process exit failures from valid Pi RPC errors
+- `C-c C-0` — dismiss active diagnostic notices, preserving diagnostic history
 - `C-c C-o` — compact
 - `M-<up>` / `M-<down>` — browse submitted prompt history
 - `M-x pichat-chat-steer` / `M-x pichat-chat-follow-up` — queue messages during a run

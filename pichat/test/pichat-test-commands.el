@@ -25,7 +25,9 @@ Exercise the public discovery entry point and its deferred picker."
                      (setq callback success)))
                   ((symbol-function 'run-at-time)
                    (lambda (_time _repeat function &rest args)
-                     (setq scheduled (cons function args))))
+                     ;; Runtime-stop notices have their own unrelated timers.
+                     (when (eq function #'pichat-command--prompt-and-run)
+                       (setq scheduled (cons function args)))))
                   ((symbol-function 'completing-read)
                    (lambda (_prompt choices &rest _)
                      (setq selected t)

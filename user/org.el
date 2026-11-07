@@ -4,6 +4,11 @@
 ;;; org mode packages
 ;;; Code:
 
+(defcustom my/org-ideas-file (my/emacs-main-dir "ideas.org")
+  "File used to capture ideas."
+  :type 'file
+  :group 'org)
+
 (use-package org
   :diminish org-indent-mode
   :ensure nil
@@ -21,7 +26,10 @@
   (org-capture-templates
    `(("c" "Code Flow" entry
       (file+headline "~/org/code-flow.org" "Code Flow Documentation")
-      (file ,(my/emacs-shared-dir "org-templates/code-flow.orgcaptmpl")))))
+      (file ,(my/emacs-shared-dir "org-templates/code-flow.orgcaptmpl")))
+     ("i" "Idea" entry
+      (file+headline (lambda () my/org-ideas-file) "Ideas")
+      "* %?\n")))
   :config
   (defun org-kill-src-block-at-point ()
     (interactive)

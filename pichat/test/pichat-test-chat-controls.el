@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Focused tests for mode-line model and thinking controls.
+;; Focused tests for mode-line controls and the persistent context header.
 
 ;;; Code:
 
@@ -144,7 +144,7 @@
                            "Q:2/1" "UI:3" "W:1"))
           (should (string-match-p (regexp-quote segment) status)))))))
 
-(ert-deftest pichat-chat-controls-mode-line-compacts-context-with-warnings ()
+(ert-deftest pichat-chat-controls-context-formatter-preserves-warning-thresholds ()
   (pichat-test-with-unit-session (session)
     (dolist (spec '((50 nil) (75 warning) (95 error)))
       (setf (pichat-session-context-usage session)
@@ -316,6 +316,191 @@
               :thinkingLevelMap (:medium nil)))
       (should-error (pichat-chat-set-thinking-level "medium")
                     :type 'user-error))))
+
+(ert-deftest pichat-chat-header-keeps-context-at-desktop-tablet-phone-widths ()
+  (pichat-test-with-unit-session (session)
+    (setf (pichat-session-runtime-cwd session)
+          "/runtime/a/very/long/project/with/界/100%/directory/"
+          (pichat-session-cwd session) "/host/not-the-runtime"
+          (pichat-session-context-usage session)
+          '(:tokens 84000 :contextWindow 272000 :percent 31))
+    (let ((pichat-chat-header-functions nil))
+      (dolist (width '(160 100 80 60 40 30 24 18 12 1))
+        (cl-letf (((symbol-function 'window-body-width)
+                   (lambda (&rest _) width)))
+          (let ((text (pichat-chat--header-text session (selected-window))))
+            (should (<= (string-width text) width))
+            (should-not (string-match-p "/host/" text))
+            (when (>= width 16)
+              (should (string-suffix-p
+                       (if (>= width 22) "Context 84k/272k · 31%"
+                         "Context 84k/272k") text)))
+            (when (= width 160)
+              (should (string-match-p "PiChat — /runtime/" text)))
+            (when (= width 60)
+              (should (string-match-p "….*directory/" text)))))))))
+
+(ert-deftest pichat-chat-header-layout-is-per-window-and-configurable ()
+  (pichat-test-with-unit-session (session)
+    (with-temp-buffer
+      (pichat-chat-mode)
+      (setq-local pichat-chat-session session)
+      (setf (pichat-session-runtime-cwd session) "/runtime/project/"
+            (pichat-session-context-usage session)
+            '(:tokens 84000 :contextWindow 272000 :percent 31))
+      (save-window-excursion
+        (delete-other-windows)
+        (switch-to-buffer (current-buffer))
+        (let* ((wide (selected-window))
+               (narrow (split-window wide -18 t)))
+          (set-window-buffer narrow (current-buffer))
+          (let ((a (pichat-chat--header-text session wide))
+                (b (pichat-chat--header-text session narrow)))
+            (should (> (string-width a) (string-width b)))
+            (should (string-match-p "31%" a))
+            (should-not (string-match-p "31%" b))
+            (should (string-match-p "Context 84k/272k" b)))
+          (setq-local pichat-chat-header-show-directory nil)
+          (setq-local pichat-chat-header-show-percentage nil)
+          (should (equal "Context 84k/272k"
+                         (string-trim (pichat-chat--header-text session wide))))
+          (should-not (string-match-p "84k/272k"
+                                      (pichat-chat--mode-line-status))))))))
+
+(ert-deftest pichat-chat-header-labels-missing-unknown-and-request-usage ()
+  (pichat-test-with-unit-session (session)
+    (let ((pichat-chat-header-show-directory nil)
+          (pichat-chat-header-functions nil))
+      (should (equal "Context unavailable"
+                     (string-trim
+                      (pichat-chat--header-text session (selected-window)))))
+      (setf (pichat-session-context-usage session)
+            '(:tokens nil :contextWindow 272000 :percent nil))
+      (let ((text (pichat-chat--header-text session (selected-window))))
+        (should (string-match-p (regexp-quote "Context unknown ?/272k") text))
+        (should-not (string-match-p "0/272k" text)))
+      (setf (pichat-session-context-usage session)
+            '(:scope "accumulatedRequests" :inputTokens 3600
+              :outputTokens 1000 :roundCount 2 :estimated t))
+      (let ((text (pichat-chat--header-text session (selected-window))))
+        (should (string-match-p "Requests ↑3.6k ↓1.0k~" text))
+        (should-not (string-match-p "Context" text))
+        (should (string-match-p "not context-window occupancy"
+                                (get-text-property
+                                 (string-match "↑" text) 'help-echo text)))))))
+
+(ert-deftest pichat-chat-header-custom-segments-compact-drop-and-isolate-errors ()
+  (pichat-test-with-unit-session (session)
+    (setf (pichat-session-context-usage session)
+          '(:tokens 84000 :contextWindow 272000 :percent 95))
+    (let* ((pichat-chat-header-show-directory nil)
+           (pichat-chat-header-show-percentage nil)
+           (quota (propertize "Plan left 62%" 'face 'success
+                              'help-echo "Cached allowance, not context"))
+           (pichat-chat-header-functions
+            (list (lambda (_runtime _window)
+                    '(:id low :text "Low" :priority -1))
+                  (lambda (_runtime _window) (error "Broken integration"))
+                  (lambda (_runtime _window) nil)
+                  (lambda (_runtime _window) '(:id invalid :text "bad\ntext"))
+                  (lambda (_runtime _window)
+                    (list :id 'oversized :text (make-string 257 ?x)))
+                  (lambda (_runtime _window)
+                    '(:id invalid-priority :text "bad" :priority "high"))
+                  (lambda (runtime window)
+                    (should (eq runtime session))
+                    (should (window-live-p window))
+                    (list :id 'quota :text quota :compact "P:62%"
+                          :priority 999)))))
+      (dolist (spec '((80 "Plan left 62%" t) (24 "P:62%" nil) (16 nil nil)))
+        (cl-letf (((symbol-function 'window-body-width)
+                   (lambda (&rest _) (car spec))))
+          (let ((text (pichat-chat--header-text session (selected-window))))
+            (should (string-suffix-p "Context 84k/272k" text))
+            (should (eq 'error (get-text-property
+                               (string-match "84k" text) 'face text)))
+            (if (cadr spec)
+                (should (string-match-p (regexp-quote (cadr spec)) text))
+              (should-not (string-match-p "62%" text)))
+            (should (eq (not (null (nth 2 spec)))
+                        (not (null (string-match-p "Low" text)))))
+            (should-not (string-match-p "bad" text))
+            (when (= (car spec) 80)
+              (should (eq 'success (get-text-property
+                                   (string-match "Plan" text) 'face text)))
+              (should (string-prefix-p "Plan left 62%  Low" text)))))))))
+
+(ert-deftest pichat-chat-header-custom-configuration-is-buffer-local ()
+  (pichat-test-with-unit-session (session)
+    (let ((pichat-chat-header-functions
+           (list (lambda (_s _w) '(:id global :text "Global cached")))))
+      (with-temp-buffer
+        (setq-local pichat-chat-header-functions
+                    (list (lambda (_s _w) '(:id local :text "Local cached"))))
+        (should (string-match-p "Local cached"
+                                (pichat-chat--header-text session (selected-window))))
+        (should-not (string-match-p "Global cached"
+                                    (pichat-chat--header-text session (selected-window)))))
+      (with-temp-buffer
+        (should (string-match-p "Global cached"
+                                (pichat-chat--header-text session (selected-window))))))))
+
+(ert-deftest pichat-chat-header-preserves-literal-percent-and-properties ()
+  (pichat-test-with-unit-session (session)
+    (with-temp-buffer
+      (pichat-chat-mode)
+      (setq-local pichat-chat-session session)
+      (setq-local pichat-chat-header-functions
+                  (list (lambda (_s _w) '(:id quota :text "Plan left 62%"))))
+      (setf (pichat-session-runtime-cwd session) "/runtime/100%/project/"
+            (pichat-session-context-usage session)
+            '(:tokens 84000 :contextWindow 272000 :percent 75))
+      (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 120)))
+        (let ((construct (pichat-chat--header-line)))
+          (dolist (literal '("100%%" "62%%" "75%%"))
+            (should (string-match-p (regexp-quote literal) construct)))
+          (should (eq 'warning (get-text-property
+                                (string-match "84k" construct) 'face construct)))))
+      ;; Batch Emacs does not render mode lines; also run this test in the
+      ;; isolated non-batch terminal fixture for native %-construct processing.
+      (unless noninteractive
+        (should (equal (pichat-chat--header-text session (selected-window))
+                       (format-mode-line header-line-format nil
+                                         (selected-window) (current-buffer))))))))
+
+(ert-deftest pichat-chat-header-cache-refresh-never-edits-transcript ()
+  (pichat-test-with-unit-session (session)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (with-current-buffer buffer
+              (let* ((before (buffer-string))
+                     (undo buffer-undo-list)
+                     (modified (buffer-modified-p))
+                     (markers (mapcar #'marker-position
+                                      (list pichat-chat--canonical-start
+                                            pichat-chat--live-start
+                                            pichat-chat--input-start)))
+                     (cache "Plan left 62%")
+                     (pichat-chat-header-functions
+                      (list (lambda (_s _w)
+                              (list :id 'quota :text cache)))))
+                (setq cache "Plan left 55%")
+                (pichat-chat-refresh-header session)
+                (should (string-match-p "Plan left 55%"
+                                        (pichat-chat--header-text
+                                         session (selected-window))))
+                (should (equal before (buffer-string)))
+                (should (eq undo buffer-undo-list))
+                (should (eq modified (buffer-modified-p)))
+                (should (equal markers
+                               (mapcar #'marker-position
+                                       (list pichat-chat--canonical-start
+                                             pichat-chat--live-start
+                                             pichat-chat--input-start)))))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
 (provide 'pichat-test-chat-controls)
 ;;; pichat-test-chat-controls.el ends here

@@ -969,7 +969,8 @@
               (funcall stats-callback '(:success t) session))
             (with-current-buffer buffer
               (should (string-match-p
-                       "?/100" (pichat-chat--mode-line-status)))))
+                       (regexp-quote "Context unknown ?/100")
+                       (pichat-chat--header-text session (selected-window))))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
 (ert-deftest pichat-chat-successful-compaction-covers-settlement-stats ()

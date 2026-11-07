@@ -74,7 +74,7 @@
           (set-marker (cdr entry) nil))
         (when (buffer-live-p buffer) (kill-buffer buffer)))))))
 
-(ert-deftest pichat-chat-state-change-refreshes-only-header-title ()
+(ert-deftest pichat-chat-state-change-refreshes-header-without-transcript-edits ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
           buffer before-rest)
@@ -83,7 +83,8 @@
             (setq buffer (pichat-chat-open session))
             (with-current-buffer buffer
               (goto-char (point-min))
-              (should (looking-at "PiChat — "))
+              (should header-line-format)
+              (should (looking-at "^$"))
               (forward-line 1)
               (should (looking-at "^$"))
               (should-not (string-match-p "Keys: RET send" (buffer-string)))
@@ -93,26 +94,22 @@
               (goto-char (point-max))
               (insert "stable draft")
               (undo-boundary)
-              (goto-char (point-min))
-              (forward-line 1)
-              (setq before-rest
-                    (buffer-substring (point) (point-max)))
+              (setq before-rest (buffer-substring (point-min) (point-max)))
               (set-buffer-modified-p t))
-            (setf (pichat-session-cwd session) "/changed/project")
+            (pichat-session-set-working-directories
+             session "/host/project" "/changed/project")
             (cl-letf (((symbol-function 'pichat-chat--refresh-stats)
                        #'ignore))
               (with-current-buffer buffer
                 (pichat-chat--on-state-changed session nil nil)))
             (with-current-buffer buffer
               (goto-char (point-min))
-              (should (equal "PiChat — /changed/project"
-                             (buffer-substring-no-properties
-                              (line-beginning-position)
-                              (line-end-position))))
+              (should (string-match-p
+                       "/changed/project"
+                       (pichat-chat--header-text session (selected-window))))
               (should (get-text-property (point-min) 'read-only))
-              (forward-line 1)
               (should (equal before-rest
-                             (buffer-substring (point) (point-max))))
+                             (buffer-substring (point-min) (point-max))))
               (should (buffer-modified-p))
               (let ((inhibit-message t))
                 (undo 1))

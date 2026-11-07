@@ -38,6 +38,31 @@
 (defvar pichat-current-session)
 (defvar pichat--sessions-by-scope)
 
+(defcustom pichat-chat-header-show-directory t
+  "Whether the fixed header shows the runtime working directory.
+The directory is shortened or omitted when context usage needs the space."
+  :type 'boolean
+  :group 'pichat)
+
+(defcustom pichat-chat-header-show-percentage t
+  "Whether to add context percentage when the window has room."
+  :type 'boolean
+  :group 'pichat)
+
+(defcustom pichat-chat-header-functions nil
+  "Functions supplying optional cached information for the fixed header.
+Each receives the runtime SESSION and displayed WINDOW, and returns nil or
+a plist with :id (symbol), :text (string), optional :compact (string), and
+:priority (number, default 0).  Higher priority is admitted first; ties
+preserve list order.  Each string must be a single line of at most 256
+characters.  Faces and help-echo are preserved.  Errors or invalid results
+omit only that segment.  Context usage always takes precedence.
+May be set globally or buffer-locally.  Functions run during redisplay:
+use cached data only, never network, RPC, file access, or buffer edits.
+Integrations own their caches; see the README for lifetime and refresh rules."
+  :type '(repeat function)
+  :group 'pichat)
+
 (defcustom pichat-chat-show-lifecycle-events nil
   "When non-nil, show normal Pi lifecycle events in chat transcripts."
   :type 'boolean
@@ -571,6 +596,8 @@ user messages, activity groups, and tool blocks."
   (setq-local pichat-chat--extension-title nil)
   (setq-local pichat-chat--widget-start (make-marker))
   (setq-local pichat-chat--widget-end (make-marker))
+  (setq-local header-line-format
+              '(:eval (pichat-chat--header-line)))
   (setq-local mode-line-format
               '(" " mode-line-buffer-identification
                 "  " (:eval (pichat-chat--mode-line-status))))
@@ -1041,17 +1068,12 @@ length change even though the internal edit itself must not become undoable."
        rear-nonsticky t
        pichat-transcript t))))
 
-(defun pichat-chat--header-title (session)
-  "Return the dynamic first-line title for SESSION."
-  (format "PiChat — %s" (or (pichat-session-cwd session)
-                              default-directory)))
-
-(defun pichat-chat--insert-header (session)
-  "Insert the initial chat header shell for SESSION."
+(defun pichat-chat--insert-header (_session)
+  "Initialize the protected transcript shell, without a scrolling title."
   (pichat-chat--with-buffer-edit
     (erase-buffer)
-    (insert (pichat-chat--header-title session) "\n")
-    (insert "\n")
+    ;; Retain the protected prefix and region-marker topology.
+    (insert "\n\n")
     ;; Native protection rejects edits before modification hooks run.  An
     ;; error from the fallback guard would make Emacs remove that hook.
     (pichat-chat--protect-region (point-min) (point))
@@ -1066,29 +1088,108 @@ length change even though the internal edit itself must not become undoable."
       (when (markerp marker)
         (set-marker marker (point))))))
 
+(defun pichat-chat-refresh-header (session)
+  "Request cached-header redisplay for SESSION, without transcript edits.
+Call after updating an integration's cache, from outside redisplay.  This
+performs no acquisition and updates inactive windows showing the chat too."
+  (when-let* ((buffer (pichat-session-buffer session))
+              ((buffer-live-p buffer)))
+    (with-current-buffer buffer
+      (force-mode-line-update t))))
+
 (defun pichat-chat--refresh-header (session)
-  "Refresh only the dynamic first header line for SESSION when needed."
-  (when (and session (> (point-max) (point-min)))
-    (let* ((start (point-min))
-           (end (save-excursion
-                  (goto-char start)
-                  (line-end-position)))
-           (title (pichat-chat--header-title session))
-           (old (buffer-substring-no-properties start end)))
-      (unless (equal old title)
-        (let ((delta (- (length title) (- end start)))
-              (modified (buffer-modified-p)))
-          (pichat-chat--preserve-view
-            (pichat-chat--with-buffer-edit
-              (delete-region start end)
-              (goto-char start)
-              (insert title)
-              (pichat-chat--protect-region start (point))))
-          (pichat-chat--adjust-undo-for-prefix-delta end delta)
-          (set-buffer-modified-p modified))))))
+  "Request header redisplay after a cached state change for SESSION."
+  (pichat-chat-refresh-header session))
+
+(defun pichat-chat--header-segments (session window)
+  "Return validated optional cached segments for SESSION and WINDOW."
+  (let (segments ids)
+    (dolist (function pichat-chat-header-functions)
+      (condition-case nil
+          (let* ((segment (funcall function session window))
+                 (id (plist-get segment :id))
+                 (text (plist-get segment :text))
+                 (compact (plist-get segment :compact))
+                 (priority (or (plist-get segment :priority) 0)))
+            (when (and id (symbolp id) (not (memq id ids))
+                       (numberp priority)
+                       (stringp text) (not (string-empty-p text))
+                       (cl-every (lambda (value)
+                                   (or (null value)
+                                       (and (stringp value)
+                                            (<= (length value) 256)
+                                            (not (string-match-p
+                                                  "[[:cntrl:]]" value)))))
+                                 (list text compact)))
+              (push id ids)
+              (push (list :id id :text text :compact compact
+                          :priority priority) segments)))
+        (error nil)))
+    (cl-stable-sort (nreverse segments)
+                    (lambda (a b) (> (plist-get a :priority)
+                                     (plist-get b :priority))))))
+
+(defun pichat-chat--header-text (session window)
+  "Lay out cached header text for SESSION in WINDOW's display-cell width."
+  (let* ((width (max 0 (window-body-width window)))
+         (usage (and session (pichat-session-context-usage session)))
+         (requests (equal (plist-get usage :scope) "accumulatedRequests"))
+         (value (and session (pichat-chat--format-context-usage session)))
+         (context (concat (cond (requests "Requests ")
+                                ((and usage
+                                      (not (numberp (plist-get usage :tokens))))
+                                 "Context unknown ")
+                                (t "Context "))
+                          (or value "unavailable")))
+         (percent (plist-get usage :percent))
+         (full (if (and pichat-chat-header-show-percentage (not requests)
+                        (numberp (plist-get usage :tokens)) (numberp percent))
+                   (concat context (format " · %.0f%%" percent))
+                 context))
+         (right (if (<= (string-width full) width) full context))
+         (remaining (- width (string-width right)))
+         (segments (and session
+                        (pichat-chat--header-segments session window)))
+         extras left)
+    (dolist (segment segments)
+      (let* ((text (plist-get segment :text))
+             (compact (plist-get segment :compact))
+             (chosen (cond ((<= (+ 2 (string-width text)) remaining) text)
+                           ((and compact (not (string-empty-p compact))
+                                 (<= (+ 2 (string-width compact)) remaining))
+                            compact))))
+        (when chosen
+          (push chosen extras)
+          (cl-decf remaining (+ 2 (string-width chosen))))))
+    (when (and session pichat-chat-header-show-directory (> remaining 10))
+      (let* ((path (or (pichat-session-runtime-cwd session)
+                       (pichat-session-cwd session) "?"))
+             ;; Paths are presentation only: no file handlers during redisplay.
+             (path (replace-regexp-in-string "[[:cntrl:]]" "?" path))
+             (budget (- remaining 2))
+             (label (if (> budget 18) "PiChat — " ""))
+             (path-width (- budget (string-width label)))
+             (short-path
+              (if (<= (string-width path) path-width) path
+                (concat "…" (truncate-string-to-width
+                             path (string-width path)
+                             (max 0 (- (string-width path)
+                                       (1- path-width))))))))
+        (setq left (propertize (concat label short-path) 'help-echo path))))
+    (let* ((prefix (string-join (delq nil (cons left (nreverse extras))) "  "))
+           (gap (max 0 (- width (string-width prefix) (string-width right)))))
+      (truncate-string-to-width
+       (concat prefix (make-string gap ?\s) right) width))))
+
+(defun pichat-chat--header-line ()
+  "Return the native header construct for the window being redisplayed."
+  ;; Emacs selects each window temporarily while evaluating its header line.
+  ;; Escape literal percent signs because :eval results are mode-line constructs.
+  (replace-regexp-in-string
+   "%" "%%" (pichat-chat--header-text pichat-chat-session (selected-window)) t t))
 
 (defun pichat-chat--format-token-count (count)
-  "Format token COUNT compactly for the PiChat mode line."
+  "Format token COUNT compactly for the PiChat header."
   (cond
    ((not (numberp count)) "?")
    ((< count 1000) (number-to-string count))
@@ -1402,7 +1503,6 @@ straightforward to exercise without synthesizing mouse input."
              (thinking-control (pichat-chat--mode-line-thinking-control s))
              (model-thinking (concat model-control (or thinking-control "")))
              (name (pichat-session-name s))
-             (context-usage (pichat-chat--format-context-usage s))
              (q-steer (car pichat-chat--queue-counts))
              (q-follow (cdr pichat-chat--queue-counts))
              (ui pichat-chat--pending-ui-count)
@@ -1419,7 +1519,6 @@ straightforward to exercise without synthesizing mouse input."
                      (when (and (stringp pichat-chat--extension-title)
                                 (not (string-empty-p pichat-chat--extension-title)))
                        (truncate-string-to-width pichat-chat--extension-title 32 nil nil "…"))
-                     context-usage
                      (unless (and (zerop q-steer) (zerop q-follow))
                        (format "Q:%d/%d" q-steer q-follow))
                      (unless (zerop ui)

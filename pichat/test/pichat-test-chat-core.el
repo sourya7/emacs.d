@@ -256,6 +256,16 @@
                   '(:tokens 40 :contextWindow 100 :percent 40))
             (setq buffer (pichat-chat-open session))
             (with-current-buffer buffer
+              (let ((source (pichat-chat-draft-capture)))
+                (setq-local pichat-chat-header-functions
+                            (list (lambda (_s _w)
+                                    (when (pichat-chat-draft-current-p source)
+                                      '(:id source :text "Source cached")))
+                                  (lambda (_s _w)
+                                    '(:id account :text "Plan left 62%")))))
+              (should (string-match-p
+                       "Source cached"
+                       (pichat-chat--header-text session (selected-window))))
               (pichat-chat--refresh-stats session 'state)
               (setq old-token pichat-chat--stats-in-flight
                     old-callback
@@ -272,7 +282,11 @@
             (should-not (pichat-session-context-usage session))
             (with-current-buffer buffer
               (should-not pichat-chat--stats-in-flight)
-              (should-not pichat-chat--stats-pending))
+              (should-not pichat-chat--stats-pending)
+              (let ((text (pichat-chat--header-text session (selected-window))))
+                (should (string-match-p "Context unavailable" text))
+                (should-not (string-match-p "Source cached" text))
+                (should (string-match-p "Plan left 62%" text))))
             (let ((state-id (pichat-rpc-get-state session nil)))
               (pichat-rpc--process-filter
                proc
@@ -283,7 +297,10 @@
               (should-not (eq old-token pichat-chat--stats-in-flight))
               (let ((new-token pichat-chat--stats-in-flight))
                 (funcall old-callback '(:success t) session)
-                (should (eq new-token pichat-chat--stats-in-flight)))))
+                (should (eq new-token pichat-chat--stats-in-flight))
+                (should-not (string-match-p
+                             "Context 40/100"
+                             (pichat-chat--header-text session (selected-window)))))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
 (ert-deftest pichat-default-model-parser-requires-header-and-parses-rows ()

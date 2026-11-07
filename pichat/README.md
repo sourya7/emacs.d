@@ -94,6 +94,77 @@ before canonical synchronization and are explicitly reported as unavailable
 afterward. Compatibility diagnostics are deduplicated and displayed as bounded
 status entries.
 
+## Persistent chat header
+
+The fixed header stays visible while scrolling or composing. It shows the
+**runtime working directory** (not necessarily the Emacs-visible path; see
+`GLOSSARY.md`) on the left and **context-window occupancy** on the right.
+Each displayed window adapts independently: paths shorten, optional information
+is omitted, and percentage yields to token counts. Only exceptionally small
+windows clip context itself. This works in desktop splits and tablet/phone-sized
+windows without a wrapping dashboard, at the cost of one fixed display row.
+Unknown/unavailable usage is explicit; accumulated request totals are labelled
+**Requests**, never context occupancy. Warning/error faces apply above 70%/90%.
+
+There is no duplicate scrolling title or mode-line context segment. The mode
+line retains model/thinking controls, runtime state, names and queue/UI indicators.
+Usage still updates at existing state/settlement/compaction boundaries, not by
+polling or on every streamed token. The header does not change context accounting.
+
+Two boolean options control the built-in presentation:
+
+```elisp
+(setq pichat-chat-header-show-directory t
+      pichat-chat-header-show-percentage t)
+```
+
+Set either to nil to hide it even when space is available. Set them globally
+or buffer-locally; width fallback is automatic, with no device breakpoints.
+The header is a normal `header-line-format`, which a mode hook may override.
+
+### Optional cached information
+
+`pichat-chat-header-functions` is a global or buffer-local ordered list of
+functions taking `(SESSION WINDOW)`. Each returns nil when unavailable or a
+plist: `:id` (unique symbol), `:text` (full string), optional `:compact` (short
+string), and `:priority` (number, default 0). Higher priorities appear/admit first;
+ties retain list order. Strings must be single-line, at most 256 characters.
+Faces and tooltips are preserved; errors or invalid records omit only that
+segment. Optional segments can never displace context, regardless of priority.
+
+Example with a **mock account-wide cache**, not a provider/quota integration:
+
+```elisp
+(defvar my-pichat-plan-left nil) ; nil = unavailable; e.g. set to 62
+(defun my-pichat-plan-header (_session _window)
+  (when (numberp my-pichat-plan-left)
+    (list :id 'plan-left
+          :text (format "Plan left %d%%" my-pichat-plan-left)
+          :compact (format "Plan %d%%" my-pichat-plan-left)
+          :priority 10)))
+(add-hook 'pichat-chat-header-functions #'my-pichat-plan-header)
+;; After updating the cache asynchronously, request redisplay for each affected
+;; runtime (SESSION is its existing pichat-session object):
+;; (pichat-chat-refresh-header session)
+```
+
+Callbacks run during redisplay against cached data only: **no network, RPC,
+file access, or buffer edits**. Acquisition, async cancellation and stale-result
+rejection belong to the integration, not the header. `pichat-chat-refresh-header`
+requests redisplay without editing transcripts or fetching anything.
+
+Cache ownership must match the data: account-wide allowances can survive source
+changes (key by account/provider if there are several); runtime-specific values
+must be keyed by the supplied runtime, not the selected chat. Source-specific
+values must be invalidated on every source rebinding, including A → B → A.
+An integration can capture the existing public source guard with
+`pichat-chat-draft-capture` in the owning chat, and return nil / reject async
+results unless `pichat-chat-draft-current-p` still holds. Using that guard for
+cached presentation does not edit or submit a draft. Buffer-local configuration
+alone does **not** make a cache source-scoped. Subscription allowance must stay
+labelled separately from context-window occupancy. No quota backend, timers,
+cache registry, or general widget framework is supplied.
+
 ## Markdown source and rendered responses
 
 The interactive chat buffer keeps assistant Markdown as exact visible source.

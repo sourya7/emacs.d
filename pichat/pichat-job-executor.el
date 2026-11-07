@@ -1,4 +1,4 @@
-;;; pichat-job-executor.el --- Independent job execution -*- lexical-binding: t; -*-
+;;; pichat-job-executor.el --- Owned and borrowed job execution -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 ;; Native timers submit through ordinary durable admission; no plan adapter.
@@ -11,8 +11,9 @@
 (require 'pichat-job-launch)
 (require 'pichat-chat)
 (require 'pichat-process-lifetime)
+(require 'pichat-job-conversation)
 
-(defgroup pichat-jobs nil "Independent background jobs." :group 'pichat)
+(defgroup pichat-jobs nil "Reviewed background and existing-conversation jobs." :group 'pichat)
 (defcustom pichat-jobs-max-concurrency 3
   "Maximum admitted job attempts, including uncertain executions."
   :type 'natnum :group 'pichat-jobs)
@@ -25,10 +26,13 @@ Running work and user interaction have no implicit timeout."
   :type 'number :group 'pichat-jobs)
 
 (cl-defstruct (pichat-job-executor (:constructor pichat-job-executor--create))
-  store contexts pumping schedules schedule-error schedules-closed)
+  store contexts pumping schedules schedule-error schedules-closed
+  (conversations (make-hash-table :test #'equal)))
 (cl-defstruct (pichat-job-execution (:constructor pichat-job-execution--create))
   executor id token session process generation source handlers timer watch
-  submitted accepted started settled settlement cancelling cleanup retired failure)
+  submitted accepted started settled settlement cancelling cleanup retired failure
+  borrowed previous-guard guard previous-buffer-execution)
+(defvar-local pichat-job-executor--buffer-execution nil)
 (defvar pichat-job-executor--input-owner nil
   "Dynamic execution ownership; never supplied by stored instructions.")
 (defvar pichat-job-executor-changed-hook nil
@@ -72,6 +76,10 @@ Retain identical timers: refreshing a late timer must not skip its due work."
         (let ((schedule (plist-get job :schedule)))
           (when (eq (plist-get schedule :enabled) t)
             (puthash (plist-get job :id) schedule wanted))))
+      (seq-doseq (run (pichat-job-records (pichat-job-executor-store executor) 'runs))
+        (when (and (pichat-job-conversation-p run) (equal (plist-get run :state) "scheduled"))
+          (puthash (plist-get run :id)
+                   (list :conversation run :next (plist-get (plist-get run :trigger) :due)) wanted)))
       (maphash (lambda (id entry)
                  (unless (equal (car entry) (gethash id wanted))
                    (cancel-timer (cdr entry))
@@ -89,9 +97,19 @@ Retain identical timers: refreshing a late timer must not skip its due work."
                           (remhash id timers)
                           (condition-case err
                               (progn
-                                (pichat-job-schedule-dispatch
-                                 (pichat-job-executor-store executor) id schedule
-                                 (float-time) pichat-jobs-queue-limit)
+                                (if-let* ((run (plist-get schedule :conversation)))
+                                    (let ((capture (gethash id (pichat-job-executor-conversations executor))))
+                                      (pichat-job-conversation-dispatch
+                                       (pichat-job-executor-store executor) id run (float-time)
+                                       pichat-jobs-queue-limit
+                                       (unless (and capture (pichat-job-conversation-current-p capture))
+                                         "Captured conversation unavailable, changed or busy; prompt not sent"))
+                                      (when (equal "finished" (plist-get (pichat-job-record
+                                                                        (pichat-job-executor-store executor) 'runs id) :state))
+                                        (pichat-job-executor--conversation-forget executor id)))
+                                  (pichat-job-schedule-dispatch
+                                   (pichat-job-executor-store executor) id schedule
+                                   (float-time) pichat-jobs-queue-limit))
                                 ;; Rearm before runtime startup can process nested events.
                                 (pichat-job-executor-schedule-refresh executor)
                                 (pichat-job-executor--changed executor)
@@ -155,22 +173,44 @@ Retain identical timers: refreshing a late timer must not skip its due work."
   (let ((session (pichat-job-execution-session execution)))
     (and (pichat-job-executor--owned-p execution)
          (equal (pichat-job-execution-source execution)
-                (list (pichat-session-id session) (pichat-session-session-file session))))))
+                (list (pichat-session-id session) (pichat-session-session-file session)))
+         (or (not (pichat-job-execution-borrowed execution))
+             (and (pichat-job-conversation-source-p (pichat-job-execution-borrowed execution))
+                  (eq (pichat-job-execution-guard execution) (pichat-session-input-guard session)))))))
 
 (defun pichat-job-executor--clear-timer (execution)
   "Cancel EXECUTION's bounded control timer."
   (when-let* ((timer (pichat-job-execution-timer execution))) (cancel-timer timer))
   (setf (pichat-job-execution-timer execution) nil))
 
-(defun pichat-job-executor--retire (execution)
-  "Retire EXECUTION's callbacks, preserving its readable transcript."
+(defun pichat-job-executor--retire (execution &optional release)
+  "Retire EXECUTION's callbacks, preserving its readable transcript.
+Restore borrowed uncertain ownership only on explicit RELEASE after
+inspection."
   (pichat-job-executor--clear-timer execution)
   (when-let* ((cancel (pichat-job-execution-watch execution))) (funcall cancel))
   (setf (pichat-job-execution-watch execution) nil
         (pichat-job-execution-retired execution) t)
   (dolist (pair (pichat-job-execution-handlers execution))
     (pichat-off (car pair) (cdr pair) (pichat-job-execution-session execution)))
-  (setf (pichat-job-execution-handlers execution) nil))
+  (setf (pichat-job-execution-handlers execution) nil)
+  (when (pichat-job-execution-borrowed execution)
+    (pichat-job-executor--conversation-forget
+     (pichat-job-execution-executor execution) (pichat-job-execution-id execution))
+    (when (or release
+              (not (equal (condition-case nil (plist-get (pichat-job-executor--run execution) :state)
+                            (pichat-job-error nil))
+                          "uncertain")))
+      (let* ((session (pichat-job-execution-session execution))
+             (buffer (plist-get (pichat-job-execution-borrowed execution) :buffer)))
+        (when (eq (pichat-session-input-guard session) (pichat-job-execution-guard execution))
+          (setf (pichat-session-input-guard session) (pichat-job-execution-previous-guard execution)))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer
+            (when (eq pichat-job-executor--buffer-execution execution)
+              (setq pichat-job-executor--buffer-execution (pichat-job-execution-previous-buffer-execution execution))
+              (unless pichat-job-executor--buffer-execution
+                (remove-hook 'kill-buffer-query-functions #'pichat-job-executor--guard-kill t)))))))))
 
 (defun pichat-job-executor--advance (execution state &optional details)
   "Durably advance EXECUTION to STATE with DETAILS."
@@ -194,7 +234,8 @@ Retain identical timers: refreshing a late timer must not skip its due work."
   (when (pichat-job-executor--owned-p execution)
     (let* ((session (pichat-job-execution-session execution))
            (store (pichat-job-executor-store (pichat-job-execution-executor execution)))
-           (cache (and session (pichat-chat-canonical-entry-cache session)))
+           (cache (and session (not (pichat-job-execution-borrowed execution))
+                       (pichat-chat-canonical-entry-cache session)))
            (digest (or (plist-get (pichat-job-executor--run execution) :evidence)
                        (and cache
                             (condition-case nil
@@ -213,7 +254,10 @@ Retain identical timers: refreshing a late timer must not skip its due work."
         (run-at-time pichat-jobs-control-timeout nil
                      (lambda ()
                        (when (pichat-job-executor--owned-p execution)
-                         (pichat-job-executor--uncertain execution reason))))))
+                         (if (and (pichat-job-execution-borrowed execution)
+                                  (not (pichat-job-execution-submitted execution)))
+                             (pichat-job-executor--failed execution reason)
+                           (pichat-job-executor--uncertain execution reason)))))))
 
 (defun pichat-job-executor--failed (execution reason)
   "Handle a control failure with REASON, not as successful completion."
@@ -227,8 +271,13 @@ Retain identical timers: refreshing a late timer must not skip its due work."
 RESULT and REASON describe startup failure, cancellation or captured completion.
 CAPTURED is already durable synchronized evidence for a settled run.
 SSH reuses the verified-lifetime observer, never the local endpoint's sentinel."
-  (let* ((session (pichat-job-execution-session execution))
-         (process (pichat-session-process session)))
+  (if (pichat-job-execution-borrowed execution)
+      ;; Borrowing never invokes a worker's stop/read-only cleanup policy.
+      (pichat-job-executor--advance
+       execution "finished" (append (list :result (if captured result "cancelled")
+                                          :safe-to-release t :reason reason) captured))
+    (let* ((session (pichat-job-execution-session execution))
+           (process (pichat-session-process session)))
     ;; Suppress sentinel/control failure handling while the stop barrier owns it.
     (setf (pichat-job-execution-cancelling execution) t
           (pichat-job-execution-cleanup execution) (and captured t))
@@ -267,7 +316,7 @@ SSH reuses the verified-lifetime observer, never the local endpoint's sentinel."
         (pichat-backend-stop-session session)
         (if (pichat-session-alive-p session)
             (pichat-job-executor--uncertain execution "Local process did not stop")
-          (finish))))))
+          (finish)))))))
 
 (defun pichat-job-executor--guard (execution command)
   "Permit owned input or read-only COMMAND for EXECUTION's inspection chat."
@@ -283,8 +332,6 @@ SSH reuses the verified-lifetime observer, never the local endpoint's sentinel."
       (if (pichat-job-execution-retired execution) t
         (message "Active job owns this chat; cancel it through Jobs before killing") nil)
     t))
-
-(defvar-local pichat-job-executor--buffer-execution nil)
 
 (defun pichat-job-executor--call (execution type payload continuation)
   "Send owned control TYPE/PAYLOAD for EXECUTION; invoke CONTINUATION on success."
@@ -343,21 +390,6 @@ SSH reuses the verified-lifetime observer, never the local endpoint's sentinel."
                (unless (pichat-job-execution-cancelling execution)
                  (pichat-job-executor--failed execution "Job submission failed or was ambiguous")))))))))))
 
-(defun pichat-job-executor--evidence-value (value)
-  "Convert RPC plist/list VALUE to explicit JSON arrays for evidence.
-Unlike json-encode's alist heuristic, a list of content plists is an array,
-not an object.  Keep RPC false values distinct from null."
-  (cond
-   ((consp value)
-    (if (and (keywordp (car value))
-             (not (memq (car value) '(:json-false :false))))
-        (cl-loop for (key item) on value by #'cddr
-                 append (list key (pichat-job-executor--evidence-value item)))
-      (vconcat (mapcar #'pichat-job-executor--evidence-value value))))
-   ((vectorp value) (vconcat (mapcar #'pichat-job-executor--evidence-value value)))
-   ((eq value :json-false) :false)
-   (t value)))
-
 (defun pichat-job-executor--cache-result (cache)
   "Extract final response and run-bounded transcript from authoritative CACHE.
 Use active-branch order, not hash order or accumulated commentary.  An empty
@@ -386,7 +418,7 @@ last response stays empty.  No domain success is inferred from prose."
                            ;; RPC uses plist/list JSON.  Evidence uses vectors for
                            ;; arrays so json-serialize cannot mistake content or
                            ;; tool arguments for object property lists.
-                           :entries (pichat-job-executor--evidence-value
+                           :entries (pichat-job-evidence-value
                                      (vconcat entries)))))))
 
 (defun pichat-job-executor--synchronized (execution payload)
@@ -400,15 +432,30 @@ last response stays empty.  No domain success is inferred from prose."
                   (pichat-job-execution-generation execution))
              (equal (list (plist-get payload :session-id) (plist-get payload :session-file))
                     (pichat-job-execution-source execution)))
-    (let ((outcome (pichat-job-executor--cache-result (plist-get payload :cache))))
+    (let* ((qualified (when (pichat-job-execution-borrowed execution)
+                        (pichat-job-conversation-outcome
+                         (pichat-job-execution-borrowed execution) (plist-get payload :cache)
+                         (pichat-job-prompt (pichat-job-executor--run execution)))))
+           (outcome (pichat-job-executor--cache-result (plist-get payload :cache))))
+      (when qualified
+        (setf (plist-get outcome :result) (plist-get qualified :result)
+              (plist-get outcome :reason) (plist-get qualified :reason)
+              (plist-get (plist-get outcome :capture) :boundary) (plist-get qualified :boundary)
+              (plist-get (plist-get outcome :capture) :prompt-entry) (plist-get qualified :prompt-entry)))
       (pichat-job-executor--call
        execution "get_state" nil
-       (lambda (_response)
+       (lambda (response)
         ;; Several qualified sync notifications can race their idle-state replies.
         ;; The first completion owns cleanup; later replies must not start a
         ;; second stop observer or turn the stopping runtime into a sync failure.
         (unless (pichat-job-execution-cleanup execution)
          (unless (and (pichat-job-executor--source-p execution)
+                      (or (not (pichat-job-execution-borrowed execution))
+                          (and (pichat-job-execution-accepted execution)
+                               (pichat-job-conversation-state-p
+                                (pichat-job-execution-borrowed execution) (plist-get response :data))
+                               (eq (plist-get payload :cache)
+                                   (pichat-chat-canonical-entry-cache (pichat-job-execution-session execution)))))
                       (eq (pichat-session-state (pichat-job-execution-session execution)) 'idle))
            (error "Settled job source/state changed before completion"))
          (when (> (pichat-chat-pending-user-input-count
@@ -470,6 +517,187 @@ last response stays empty.  No domain success is inferred from prose."
              (pichat-job-executor--failed execution "Job runtime ended before verified completion"))))
       (error (pichat-job-executor--uncertain execution (error-message-string err))))))
 
+(defun pichat-job-executor--conversation-forget (executor id)
+  "Retire live authority for ID, without stopping or changing its runtime."
+  (when-let* ((capture (gethash id (pichat-job-executor-conversations executor))))
+    (setf (plist-get capture :invalidated) t)
+    (remhash id (pichat-job-executor-conversations executor))
+    (dolist (pair (plist-get capture :handlers))
+      (pichat-off (car pair) (cdr pair) (plist-get capture :session)))
+    (when (buffer-live-p (plist-get capture :buffer))
+      (with-current-buffer (plist-get capture :buffer)
+        (remove-hook 'kill-buffer-hook (plist-get capture :kill-hook) t)))))
+
+(defun pichat-job-executor--conversation-invalidated (executor id reason)
+  "Persist ID's loss of authority before allowing any later callback to send."
+  (let* ((capture (gethash id (pichat-job-executor-conversations executor)))
+         (store (pichat-job-executor-store executor))
+         (run (pichat-job-record store 'runs id))
+         (execution (gethash id (pichat-job-executor-contexts executor))))
+    (when capture (setf (plist-get capture :invalidated) t))
+    (when (pichat-job-conversation-p run)
+      (condition-case err
+          (progn
+            (cond
+             ((member (plist-get run :state) '("scheduled" "queued"))
+              (pichat-job-cancel-queued store id nil reason))
+             ((member (plist-get run :state) '("starting" "running" "settling"))
+              (pichat-job-advance
+               store id (plist-get run :attempt)
+               (if (and execution (not (pichat-job-execution-submitted execution))) "finished" "uncertain")
+               (list :reason reason :result "cancelled" :safe-to-release t))))
+            (if execution (pichat-job-executor--retire execution)
+              (pichat-job-executor--conversation-forget executor id))
+            (pichat-job-executor-schedule-refresh executor)
+            (pichat-job-executor--changed executor)
+            (pichat-job-executor-pump executor))
+        (error
+         ;; In-memory invalidation is final even if storage cannot record it.
+         (pichat-job-executor-schedule-stop executor)
+         (setf (pichat-job-executor-schedule-error executor)
+               (format "Conversation scheduling stopped (%s); inspect storage" (car err)))
+         (pichat-job-executor--changed executor))))))
+
+(defun pichat-job-executor--conversation-observe (executor id capture)
+  "Observe changes to CAPTURE while pending, without locking ordinary chat use."
+  (let* ((session (plist-get capture :session))
+         (handler
+          (lambda (_session event payload)
+            (let* ((execution (gethash id (pichat-job-executor-contexts executor)))
+                   (submitted (and execution (pichat-job-execution-submitted execution)))
+                   (own (and execution (eq pichat-job-executor--input-owner execution))))
+              (when (and (eq capture (gethash id (pichat-job-executor-conversations executor)))
+                         (or (memq event '(session-rebinding session-ended))
+                             (and (eq event 'rpc-input-sending) (not own)
+                                  (not (and submitted (equal (plist-get payload :command) "extension_ui_response"))))
+                             (and (eq event 'rpc-event) (not submitted)
+                                  (memq (plist-get payload :normalized-event)
+                                        '(agent-start compaction-start retry-start queue-update)))
+                             (not (if submitted (pichat-job-conversation-source-p capture)
+                                    (pichat-job-conversation-unchanged-p capture)))))
+                (pichat-job-executor--conversation-invalidated
+                 executor id (if submitted "Conversation ownership lost after possible submission; inspect before release"
+                               "Conversation changed before dispatch; scheduled prompt not sent"))))))
+         (kill (lambda () (pichat-job-executor--conversation-invalidated
+                           executor id "Originating chat closed; scheduled prompt not sent or completion uncertain"))))
+    (setf (plist-get capture :handlers) nil (plist-get capture :kill-hook) kill)
+    (dolist (event '(rpc-input-sending rpc-event session-rebinding session-ended
+                    session-state-changed transcript-synchronized))
+      (push (cons event handler) (plist-get capture :handlers))
+      (pichat-on event handler session))
+    (with-current-buffer (plist-get capture :buffer) (add-hook 'kill-buffer-hook kill nil t))))
+
+(defun pichat-job-executor-conversation-schedule (executor capture prompt due replace accepted failure &optional current)
+  "Verify and schedule reviewed CAPTURE/PROMPT/DUE in EXECUTOR.
+REPLACE is an explicitly confirmed exact pending record.  ACCEPTED gets the
+committed ID; FAILURE receives a bounded reason.  CURRENT guards a UI
+invocation.
+Nothing is sent and no runtime is acquired while preparing the schedule."
+  (when (or (pichat-job-executor-schedules-closed executor)
+            (pichat-job-executor-schedule-error executor))
+    (user-error "Scheduling is stopped; inspect storage and restart Emacs"))
+  (unless (pichat-job--text-p prompt) (user-error "Enter a continuation prompt first"))
+  (let ((session (plist-get capture :session)))
+    (pichat-job-conversation-verify
+     capture
+     (lambda (type success failed)
+       (let ((pichat-rpc-request-timeout pichat-jobs-control-timeout))
+         (pichat-rpc-send session type nil (lambda (response _session) (funcall success response))
+                          (lambda (_response _session) (funcall failed "Cannot verify conversation; prompt not sent")))))
+     (lambda ()
+       (condition-case err
+           (progn
+             (unless (and (or (not current) (funcall current))
+                          (pichat-job-conversation-current-p capture))
+               (user-error "Composer or conversation changed; reopen scheduling"))
+             (let ((id (pichat-job-conversation-schedule
+                        (pichat-job-executor-store executor)
+                        (pichat-job-conversation-spec capture prompt)
+                        (plist-get capture :destination) due replace)))
+               ;; Durable authorization precedes observers/timers; any missed
+               ;; mutation still invalidates the captured input generation.
+               (when replace (pichat-job-executor--conversation-forget executor (plist-get replace :id)))
+               (puthash id capture (pichat-job-executor-conversations executor))
+               (unwind-protect (funcall accepted id)
+                 (if (pichat-job-conversation-current-p capture)
+                     (progn
+                       (pichat-job-executor--conversation-observe executor id capture)
+                       (pichat-job-executor-schedule-refresh executor)
+                       (pichat-job-executor--changed executor))
+                   (pichat-job-executor--conversation-invalidated
+                    executor id "Conversation changed after authorization; scheduled prompt not sent")))))
+         (error (funcall failure (pichat-chat-diagnostics-safe-summary-text (error-message-string err))))))
+     failure)))
+
+(defun pichat-job-executor--conversation-start (executor run)
+  "Borrow RUN's captured runtime only after durable ordinary admission."
+  (let* ((id (plist-get run :id))
+         (capture (gethash id (pichat-job-executor-conversations executor)))
+         (session (plist-get capture :session))
+         (execution (pichat-job-execution--create
+                     :executor executor :id id :token (plist-get run :attempt)
+                     :borrowed capture :session session :process (plist-get capture :process)
+                     :generation (plist-get (plist-get run :destination) :process-generation)
+                     :source (list (plist-get (plist-get run :destination) :session-id)
+                                   (plist-get (plist-get run :destination) :session-file)))))
+    (if (not (and capture (pichat-job-conversation-current-p capture)))
+        (progn
+          (pichat-job-advance (pichat-job-executor-store executor) id (plist-get run :attempt)
+                              "finished" '(:result "cancelled" :safe-to-release t
+                                           :reason "Captured conversation changed or unavailable; prompt not sent"))
+          (pichat-job-executor--conversation-forget executor id)
+          (pichat-job-executor--changed executor))
+      (puthash id execution (pichat-job-executor-contexts executor))
+      (setf (pichat-job-execution-previous-guard execution) (pichat-session-input-guard session)
+            (pichat-job-execution-guard execution)
+            (lambda (command)
+              (unless (or (eq pichat-job-executor--input-owner execution)
+                          (and (stringp command) (string-prefix-p "get_" command))
+                          (equal command "extension_ui_response"))
+                (user-error "A scheduled attempt owns this chat; use Jobs to cancel or inspect it")))
+            (pichat-session-input-guard session) (pichat-job-execution-guard execution))
+      (with-current-buffer (plist-get capture :buffer)
+        (setf (pichat-job-execution-previous-buffer-execution execution) pichat-job-executor--buffer-execution)
+        (setq pichat-job-executor--buffer-execution execution)
+        (add-hook 'kill-buffer-query-functions #'pichat-job-executor--guard-kill nil t))
+      (pichat-job-executor--listen execution)
+      (pichat-job-executor--deadline execution "Scheduled attempt could not verify current conversation")
+      (pichat-job-conversation-verify
+       capture (lambda (type success _failure) (pichat-job-executor--call execution type nil success))
+       (lambda ()
+         (when (and (pichat-job-executor--owned-p execution)
+                    (pichat-job-executor--advance
+                     execution "running" (list :runtime-id (pichat-session-runtime-id session)
+                                               :session-file (pichat-session-session-file session))))
+           (if (not (pichat-job-conversation-current-p capture (pichat-job-execution-guard execution)))
+               (pichat-job-executor--failed execution "Conversation changed before submission")
+             (pichat-job-executor--clear-timer execution)
+             (setf (pichat-job-execution-submitted execution) t)
+             (let ((pichat-job-executor--input-owner execution)
+                   (pichat-rpc-request-timeout pichat-jobs-control-timeout))
+               (condition-case nil
+                   (pichat-backend-submit-prompt
+                    session (pichat-job-prompt run) nil nil
+                    (lambda (response _session)
+                      (when (pichat-job-executor--owned-p execution)
+                        (if (equal (plist-get (plist-get response :data) :disposition) "started")
+                            (setf (pichat-job-execution-accepted execution) t)
+                          (pichat-job-executor--uncertain execution "Scheduled prompt was handled or queued, not attributable agent work"))))
+                    (lambda (_response _session)
+                      (pichat-job-executor--uncertain execution "Scheduled prompt submission failed or was ambiguous")))
+                 (error (pichat-job-executor--uncertain execution "Scheduled prompt submission failed or was ambiguous")))))))
+       (lambda (reason) (pichat-job-executor--failed execution reason))
+       (pichat-job-execution-guard execution)))
+    execution))
+
+(defun pichat-job-executor--listen (execution)
+  "Subscribe EXECUTION before any prompt can produce fast events."
+  (dolist (event '(rpc-event transcript-synchronized transcript-sync-failed
+                  session-rebinding session-ended user-input-pending-changed))
+    (let ((handler (lambda (_session event payload) (pichat-job-executor--event execution event payload))))
+      (push (cons event handler) (pichat-job-execution-handlers execution))
+      (pichat-on event handler (pichat-job-execution-session execution)))))
+
 (defun pichat-job-executor--start (executor run)
   "Start admitted RUN through EXECUTOR without displaying or selecting a chat."
   (let* ((non-essential t)
@@ -487,12 +715,7 @@ last response stays empty.  No domain success is inferred from prose."
               (setq-local pichat-chat-stop-session-on-kill nil)
               (setq-local pichat-job-executor--buffer-execution execution)
               (add-hook 'kill-buffer-query-functions #'pichat-job-executor--guard-kill nil t)))
-          (dolist (event '(rpc-event transcript-synchronized transcript-sync-failed
-                          session-rebinding session-ended user-input-pending-changed))
-            (let ((handler (lambda (_session event payload)
-                             (pichat-job-executor--event execution event payload))))
-              (push (cons event handler) (pichat-job-execution-handlers execution))
-              (pichat-on event handler session)))
+          (pichat-job-executor--listen execution)
           (pichat-start-prepared-session session t command)
           (setf (pichat-job-execution-process execution) (pichat-session-process session)
                 (pichat-job-execution-generation execution) (pichat-session-process-generation session))
@@ -522,13 +745,23 @@ last response stays empty.  No domain success is inferred from prose."
             (setq progress nil)
             (seq-doseq (run (pichat-job-records (pichat-job-executor-store executor) 'runs))
               (when (equal (plist-get run :state) "queued")
+                ;; A busy/invalid destination is not polled until it becomes idle,
+                ;; even when shared capacity would otherwise delay admission.
+                (when (and (pichat-job-conversation-p run)
+                           (not (pichat-job-conversation-current-p
+                                 (gethash (plist-get run :id) (pichat-job-executor-conversations executor)))))
+                  (pichat-job-executor--conversation-invalidated
+                   executor (plist-get run :id) "Conversation changed while queued; prompt not sent"))
                 (let* ((store (pichat-job-executor-store executor))
                        (id (plist-get run :id))
                        (admission (pichat-job-admission store id pichat-jobs-max-concurrency)))
                   (when (eq (plist-get admission :ready) t)
                     (setq progress t)
-                    (pichat-job-executor--start
-                     executor (pichat-job-claim store id pichat-jobs-max-concurrency))))))))
+                    (if (pichat-job-conversation-p run)
+                        (pichat-job-executor--conversation-start
+                         executor (pichat-job-claim store id pichat-jobs-max-concurrency))
+                      (pichat-job-executor--start
+                       executor (pichat-job-claim store id pichat-jobs-max-concurrency)))))))))
       (setf (pichat-job-executor-pumping executor) nil))))
 
 (defun pichat-job-executor-submit (executor spec &optional job-id repeat-of continue-of guidance capture accepted)
@@ -565,14 +798,19 @@ Return the new run ID without selecting its runtime or displaying a chat."
   (let* ((run (pichat-job-record (pichat-job-executor-store executor) 'runs id))
          (execution (gethash id (pichat-job-executor-contexts executor))))
     (cond
-     ((equal (plist-get run :state) "queued")
+     ((member (plist-get run :state) '("scheduled" "queued"))
       (pichat-job-cancel-queued (pichat-job-executor-store executor) id pichat-jobs-queue-limit)
+      (pichat-job-executor--conversation-forget executor id)
+      (pichat-job-executor-schedule-refresh executor)
       (pichat-job-executor--changed executor)
       (pichat-job-executor-pump executor))
      ((and execution (pichat-job-execution-cleanup execution)
            (pichat-job-executor--owned-p execution))
       (user-error "Completion captured; runtime cleanup is in progress"))
      ((and execution (pichat-job-executor--owned-p execution))
+      (when (and (pichat-job-execution-borrowed execution)
+                 (not (pichat-job-executor--source-p execution)))
+        (user-error "Captured conversation changed; abort will not target another source"))
       (if (not (pichat-job-execution-submitted execution))
           (pichat-job-executor--stop-before-prompt execution "cancelled" "Cancelled before prompt")
         (setf (pichat-job-execution-cancelling execution) t)
@@ -608,6 +846,8 @@ Do not stop or resume remote work; preserve that this is not verified shutdown."
   (when-let* ((execution (gethash id (pichat-job-executor-contexts executor))))
     (pichat-job-executor--retire execution))
   (pichat-job-resolve-uncertain (pichat-job-executor-store executor) id acknowledgement)
+  (when-let* ((execution (gethash id (pichat-job-executor-contexts executor))))
+    (pichat-job-executor--retire execution t))
   (pichat-job-executor--changed executor)
   (pichat-job-executor-pump executor))
 

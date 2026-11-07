@@ -7,7 +7,10 @@
 ;;; Code:
 (require 'pichat-job-executor)
 (require 'transient)
+(require 'org)
 (require 'subr-x)
+(defvar org-time-was-given)
+(defvar org-end-time-was-given)
 (declare-function pichat-jobs--button "pichat-jobs")
 (declare-function pichat-jobs--show-detail "pichat-jobs")
 (declare-function pichat-jobs--display "pichat-jobs")
@@ -84,6 +87,34 @@ Reject nonexistent dates/times.  Preserve both DST-fold choices."
           (cl-pushnew (float-time time) candidates :test #'=))))
     (or (sort candidates #'<) (user-error "That local date/time does not exist"))))
 
+(defun pichat-job-schedule-ui-read-time (&optional instant)
+  "Pick a local date/time with Org's calendar and short date input.
+INSTANT supplies the default; otherwise suggest about five minutes ahead.
+Accept a time such as 15:30 or Org relative input such as +1d 09:00.
+Repeated DST times require an explicit offset choice; nonexistent local
+times are rejected.  Returning a time stages it, never schedules work."
+  (let* ((default (seconds-to-time
+                   (or instant (* 60 (ceiling (+ (float-time) 300) 60)))))
+         (org-overriding-default-time nil)
+         (org-read-date-final-answer nil)
+         (org-time-was-given nil)
+         (org-end-time-was-given nil)
+         (_ (org-read-date t nil nil
+                           (format "Local time (%s)" (format-time-string "%Z (%z)"))
+                           default))
+         ;; Org's returned timestamp has already normalized invalid dates and
+         ;; DST gaps.  Validate the requested wall time, not that round-trip.
+         (decoded (org-read-date-analyze org-read-date-final-answer default (decode-time default)))
+         (text (format "%04d-%02d-%02d %02d:%02d"
+                       (nth 5 decoded) (nth 4 decoded) (nth 3 decoded)
+                       (nth 2 decoded) (nth 1 decoded)))
+         (candidates (pichat-job-schedule-ui--local-candidates text)))
+    (when org-end-time-was-given (user-error "Choose a single time, not a range"))
+    (if (= (length candidates) 1) (car candidates)
+      (let* ((choices (mapcar (lambda (time) (cons (pichat-job-schedule-ui-time time) time)) candidates))
+             (choice (completing-read "Repeated local time; choose offset: " choices nil t)))
+        (cdr (assoc choice choices))))))
+
 (defun pichat-job-schedule-ui--edit (field)
   "Edit FIELD in a detached timing draft, never the saved definition."
   (let* ((scope (transient-scope))
@@ -102,19 +133,7 @@ Reject nonexistent dates/times.  Preserve both DST-fold choices."
                  (setq rule (plist-put rule :seconds (or seconds 3600))))))
             ('start
              (unless rule (user-error "Choose Timing first"))
-             (let* ((text (read-string
-                           (format "Local date/time (%s), YYYY-MM-DD HH:MM: "
-                                   (format-time-string "%Z (%z)"))
-                           (format-time-string "%Y-%m-%d %H:%M"
-                                               (seconds-to-time (plist-get rule :start)))))
-                    (candidates (pichat-job-schedule-ui--local-candidates text))
-                    (instant
-                     (if (= (length candidates) 1) (car candidates)
-                       (let* ((choices (mapcar (lambda (time)
-                                                (cons (pichat-job-schedule-ui-time time) time)) candidates))
-                              (choice (completing-read "Repeated local time; choose offset: " choices nil t)))
-                         (cdr (assoc choice choices))))))
-               (setf (plist-get rule :start) instant)))
+             (setf (plist-get rule :start) (pichat-job-schedule-ui-read-time (plist-get rule :start))))
             ('interval
              (unless (equal (plist-get rule :kind) "interval") (user-error "Choose Every first"))
              (let* ((unit (completing-read "Interval unit (elapsed): " '("minutes" "hours" "days") nil t))
@@ -146,7 +165,10 @@ Reject nonexistent dates/times.  Preserve both DST-fold choices."
 (transient-define-suffix pichat-job-schedule-kind ()
   "Choose Once or Every." (interactive) (pichat-job-schedule-ui--edit 'kind))
 (transient-define-suffix pichat-job-schedule-start ()
-  "Set the local date/time." (interactive) (pichat-job-schedule-ui--edit 'start))
+  "Pick the local date/time with Org's calendar.
+Enter just a time such as 15:30, or +1d 09:00 for tomorrow morning.
+The current selection is the default.  This stages timing only."
+  (interactive) (pichat-job-schedule-ui--edit 'start))
 (transient-define-suffix pichat-job-schedule-interval ()
   "Set an elapsed interval." (interactive) (pichat-job-schedule-ui--edit 'interval))
 (transient-define-suffix pichat-job-schedule-remove ()

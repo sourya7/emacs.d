@@ -46,6 +46,19 @@
                      :object-type 'plist :array-type 'array
                      :null-object nil :false-object :false))
 
+(defun pichat-job-evidence-value (value)
+  "Normalize plist/list VALUE to explicit JSON arrays for evidence/digests.
+Keep RPC false values distinct from null; do not guess alist encodings."
+  (cond
+   ((consp value)
+    (if (and (keywordp (car value)) (not (memq (car value) '(:json-false :false))))
+        (cl-loop for (key item) on value by #'cddr
+                 append (list key (pichat-job-evidence-value item)))
+      (vconcat (mapcar #'pichat-job-evidence-value value))))
+   ((vectorp value) (vconcat (mapcar #'pichat-job-evidence-value value)))
+   ((eq value :json-false) :false)
+   (t value)))
+
 (defun pichat-job-data-digest (value)
   "Hash plist/vector JSON VALUE, ignoring object-key order, not array order."
   (cl-labels ((canonical (data)
@@ -177,6 +190,40 @@ it from the store vector rather than update the stored record."
                    (not (plist-get (plist-get run :spec) :after-job-id)))
         (pichat-job--fail "Invalid lifecycle provenance or recursive follow-up")))))
 
+(defun pichat-job-conversation-p (run)
+  "Whether RUN explicitly targets a captured existing conversation."
+  (equal (plist-get (plist-get run :destination) :kind) "conversation"))
+
+(defun pichat-job--validate-destination (record kind)
+  "Validate RECORD's optional versioned destination for store KIND."
+  (let ((destination (plist-get record :destination))
+        (mode (plist-get (plist-get (plist-get record :spec) :configuration) :mode)))
+    (when (or destination mode
+              (equal (plist-get (plist-get record :trigger) :kind) "conversation-once"))
+      (unless (and (eq kind :runs) (equal mode "conversation")
+                   (eql (plist-get destination :version) 1)
+                   (pichat-job-conversation-p record)
+                   (cl-every (lambda (key) (pichat-job--text-p (plist-get destination key)))
+                             '(:runtime-id :session-id :model))
+                   (cl-every (lambda (key)
+                               (let ((value (plist-get destination key)))
+                                 (and (integerp value) (>= value 0))))
+                             '(:process-generation :source-generation :input-generation))
+                   (cl-every (lambda (key)
+                               (or (null (plist-get destination key))
+                                   (pichat-job--text-p (plist-get destination key))))
+                             '(:session-file :leaf :last-entry))
+                   (let ((digest (plist-get destination :entries-digest)))
+                     (and (stringp digest) (string-match-p "\\`[a-f0-9]\\{64\\}\\'" digest)))
+                   (equal (plist-get (plist-get record :trigger) :kind) "conversation-once")
+                   (pichat-job-schedule-instant-p (plist-get (plist-get record :trigger) :due))
+                   (pichat-job--text-p (plist-get (plist-get record :trigger) :schedule-token))
+                   (not (plist-get record :job-id))
+                   (not (plist-get record :continuation))
+                   (not (plist-get record :after-job))
+                   (not (plist-get (plist-get record :spec) :after-job-id)))
+        (pichat-job--fail "Invalid existing-conversation destination or provenance")))))
+
 (defun pichat-job--validate (data)
   "Validate versioned store DATA.  Reject corrupt/future records, never reset."
   (unless (and (listp data) (eql (plist-get data :version) 1)
@@ -193,6 +240,7 @@ it from the store vector rather than update the stored record."
             (pichat-job--fail "Invalid or duplicate job/run identity"))
           (push id ids))
         (pichat-job--validate-spec (plist-get record :spec))
+        (pichat-job--validate-destination record kind)
         (when (eq kind :jobs)
           (pichat-job-schedule-validate (plist-get record :schedule))
           (when-let* ((source (pichat-job--validate-source (plist-get record :source))))
@@ -213,7 +261,7 @@ it from the store vector rather than update the stored record."
           (when-let* ((digest (plist-get record :evidence)))
             (unless (and (stringp digest) (string-match-p "\\`[a-f0-9]\\{64\\}\\'" digest))
               (pichat-job--fail "Invalid run evidence reference")))
-          (dolist (key '(:started-at :finished-at :resolved-at))
+          (dolist (key '(:queued-at :started-at :finished-at :resolved-at))
             (when (and (plist-get record key)
                        (not (pichat-job--text-p (plist-get record key))))
               (pichat-job--fail "Invalid run timestamp")))
@@ -230,7 +278,9 @@ it from the store vector rather than update the stored record."
                 (pichat-job--fail "Invalid continuation capture"))))
           (let ((state (plist-get record :state))
                 (result (plist-get record :result)))
-            (unless (and (member state (append '("queued" "finished")
+            (unless (and (member state (append (if (pichat-job-conversation-p record)
+                                                   '("scheduled" "queued" "finished")
+                                                 '("queued" "finished"))
                                                pichat-job--active-states))
                          (if (equal state "finished")
                              (member result pichat-job--results)
@@ -238,7 +288,7 @@ it from the store vector rather than update the stored record."
                          (or (null (plist-get record :job-id))
                              (pichat-job--text-p (plist-get record :job-id)))
                          (member (plist-get (plist-get record :trigger) :kind)
-                                 '("manual" "lifecycle" "once" "interval"))
+                                 '("manual" "lifecycle" "once" "interval" "conversation-once"))
                          (or (not (member state pichat-job--active-states))
                              (pichat-job--text-p (plist-get record :attempt))))
               (pichat-job--fail "Invalid job run lifecycle record")))))))
@@ -434,6 +484,8 @@ an unreferenced private file, never a reference to uncommitted evidence."
 With ID, edit that definition.  Existing run snapshots are never changed.
 Non-nil SOURCE atomically sets validated authored linkage.  Omitting it
 preserves existing linkage, including on native edits; timing is preserved."
+  (when (plist-get (plist-get spec :configuration) :mode)
+    (pichat-job--fail "Existing-conversation captures cannot be saved as jobs"))
   (let* ((data (pichat-job--copy (pichat-job-store-data store)))
          (spec (pichat-job--validate-spec (pichat-job--copy spec)))
          (now (pichat-job--now))
@@ -587,7 +639,8 @@ any process here."
 
 (defun pichat-job-continuable-p (run)
   "Whether RUN has stopped with work the user may explicitly continue."
-  (and (equal (plist-get run :state) "finished")
+  (and (not (pichat-job-conversation-p run))
+       (equal (plist-get run :state) "finished")
        (member (plist-get run :result) '("failed" "cancelled" "needs-review"))))
 
 (defun pichat-job-context (store run)
@@ -674,6 +727,8 @@ OPTIONS accepts :spec, :job-id, :repeat-of, :continue-of, :guidance, :capture
 and :queue-limit, with the semantics of `pichat-job-enqueue'.
 Legacy manual submission delegates here; lifecycle dispatch uses the same data
 constructor inside its originating transition's atomic transaction."
+  (when (or (plist-get options :destination) (plist-get options :scheduled))
+    (pichat-job--fail "Conversation captures require explicit one-off scheduling"))
   (when (plist-get options :event)
     (pichat-job--fail "Lifecycle events must originate in a recorded stop transition"))
   (when (plist-get options :schedule-trigger)
@@ -697,8 +752,9 @@ constructor inside its originating transition's atomic transaction."
          (limit (or (plist-get options :queue-limit) 20)))
     (unless (and (integerp limit) (> limit 0))
       (pichat-job--fail "Queue limit must be positive"))
-    (when (>= (seq-count (lambda (run) (equal (plist-get run :state) "queued"))
-                        runs) limit)
+    (when (and (not (plist-get options :scheduled))
+               (>= (seq-count (lambda (run) (equal (plist-get run :state) "queued"))
+                              runs) limit))
       (pichat-job--fail "Job queue is full"))
     (when (and repeat-of continue-of)
       (pichat-job--fail "Choose repeat or continuation, not both"))
@@ -706,6 +762,8 @@ constructor inside its originating transition's atomic transaction."
       (when job-id (pichat-job--fail "Choose a saved job or historical attempt"))
       (let* ((origin (pichat-job--find data :runs (or repeat-of continue-of)))
              (original (plist-get origin :spec)))
+        (when (pichat-job-conversation-p origin)
+          (pichat-job--fail "Existing-conversation attempts require fresh chat authorization"))
         (unless (equal (plist-get origin :state) "finished")
           (pichat-job--fail "Previous run must stop and uncertainty must be resolved first"))
         (setq job-id (plist-get origin :job-id)
@@ -729,6 +787,9 @@ constructor inside its originating transition's atomic transaction."
                              (and (equal job-id (plist-get run :job-id))
                                   (not (equal (plist-get run :state) "finished")))) runs))
         (pichat-job--fail "This job already has a queued or active attempt")))
+    (unless (equal (plist-get (plist-get spec :configuration) :mode)
+                   (and (plist-get options :destination) "conversation"))
+      (pichat-job--fail "Unknown or mismatched execution destination"))
     (let* ((now (pichat-job--now))
            (run (list :id (pichat-job--id "run") :job-id job-id
                       :created-at now :updated-at now
@@ -742,8 +803,10 @@ constructor inside its originating transition's atomic transaction."
                                 (t (append '(:kind "manual")
                                            (when repeat-of (list :repeat-of repeat-of))
                                            (when continue-of (list :continue-of continue-of)))))
-                      :state "queued" :result nil
+                      :state (if (plist-get options :scheduled) "scheduled" "queued") :result nil
                       :attempt nil :reason nil :summary nil :runtime-id nil :session-file nil)))
+      (when (plist-get options :destination)
+        (setf (plist-get run :destination) (pichat-job--copy (plist-get options :destination))))
       (when lifecycle
         (setf (plist-get run :event) (pichat-job--copy event)))
       (when (and (not lifecycle) (plist-get spec :after-job-id))
@@ -765,6 +828,57 @@ constructor inside its originating transition's atomic transaction."
                                              (car err))))))))
       (setf (plist-get data :runs) (vconcat runs (vector run)))
       (copy-sequence (plist-get run :id)))))
+
+(defun pichat-job-conversation-schedule (store spec destination due &optional replace now)
+  "Persist one scheduled conversation attempt, not a reusable definition.
+DESTINATION is data-only provenance, never authority to reconnect.  DUE must be
+future at explicit NOW.  REPLACE must exactly match the pending record reviewed
+by the user; replacement and cancellation commit in one transaction."
+  (unless (and (pichat-job-schedule-instant-p due) (> due (or now (float-time))))
+    (pichat-job--fail "Choose a future time for this one-shot"))
+  (let* ((data (pichat-job--copy (pichat-job-store-data store)))
+         (pending (seq-find
+                   (lambda (run)
+                     (and (pichat-job-conversation-p run)
+                          (equal (plist-get destination :runtime-id)
+                                 (plist-get (plist-get run :destination) :runtime-id))
+                          (not (equal (plist-get run :state) "finished"))))
+                   (plist-get data :runs))))
+    (when (or pending replace)
+      (unless (and pending (equal pending replace)
+                   (member (plist-get pending :state) '("scheduled" "queued")))
+        (pichat-job--fail "Review the pending attempt; active or uncertain work cannot be replaced"))
+      (setf (plist-get pending :state) "finished"
+            (plist-get pending :result) "cancelled"
+            (plist-get pending :reason) "Replaced by explicitly authorized schedule"
+            (plist-get pending :updated-at) (pichat-job--now))
+      (pichat-job--stamp pending :finished-at (plist-get pending :updated-at)))
+    (let ((id (pichat-job--enqueue-data
+               store data (list :spec spec :destination destination :scheduled t
+                                :schedule-trigger (list :kind "conversation-once" :due due
+                                                        :schedule-token (pichat-job--id "schedule"))))))
+      (pichat-job--commit store data)
+      id)))
+
+(defun pichat-job-conversation-dispatch (store id expected now &optional queue-limit reason)
+  "Consume exact EXPECTED scheduled ID at NOW, without launching a process.
+A late live callback is eligible once.  REASON or a full queue records not-sent
+cancellation; persistence failure leaves the entire occurrence unchanged."
+  (let* ((data (pichat-job--copy (pichat-job-store-data store)))
+         (run (seq-find (lambda (item) (equal id (plist-get item :id))) (plist-get data :runs))))
+    (when (and (equal run expected) (pichat-job-conversation-p run)
+               (equal (plist-get run :state) "scheduled")
+               (<= (plist-get (plist-get run :trigger) :due) now))
+      (when (>= (seq-count (lambda (item) (equal (plist-get item :state) "queued"))
+                           (plist-get data :runs)) (or queue-limit 20))
+        (setq reason (or reason "Job queue is full; scheduled prompt not sent")))
+      (setf (plist-get run :state) (if reason "finished" "queued")
+            (plist-get run :result) (and reason "cancelled")
+            (plist-get run :reason) reason
+            (plist-get run :updated-at) (pichat-job--now))
+      (pichat-job--stamp run (if reason :finished-at :queued-at) (plist-get run :updated-at))
+      (pichat-job--commit store data)
+      (unless reason id))))
 
 (defun pichat-job--observe-stop (store data run queue-limit)
   "Record RUN's first stop and bounded dispatch atomically in transaction DATA.
@@ -892,16 +1006,16 @@ QUEUE-LIMIT bounds follow-up enqueueing in this same transaction (default 20)."
       (pichat-job--commit store data)
       (pichat-job--copy run))))
 
-(defun pichat-job-cancel-queued (store id &optional queue-limit)
+(defun pichat-job-cancel-queued (store id &optional queue-limit reason)
   "Cancel queued ID in STORE without claiming that a running process stopped.
 QUEUE-LIMIT bounds follow-up enqueueing in this same transaction (default 20)."
   (let* ((data (pichat-job--copy (pichat-job-store-data store)))
          (run (pichat-job--find data :runs id)))
-    (unless (equal (plist-get run :state) "queued")
-      (pichat-job--fail "Only queued attempts can be cancelled without an executor"))
+    (unless (member (plist-get run :state) '("scheduled" "queued"))
+      (pichat-job--fail "Only pending attempts can be cancelled without an executor"))
     (setf (plist-get run :state) "finished"
           (plist-get run :result) "cancelled"
-          (plist-get run :reason) "Cancelled before dispatch"
+          (plist-get run :reason) (or reason "Cancelled before dispatch")
           (plist-get run :updated-at) (pichat-job--now))
     (pichat-job--stamp run :finished-at (plist-get run :updated-at))
     (pichat-job--observe-stop store data run queue-limit)
@@ -930,11 +1044,11 @@ This deliberately cannot infer remote survival or safe release from Emacs exit."
                            "Follow-up interrupted; delivery uncertain, not replayed"))))))
     (seq-doseq (run (plist-get data :runs))
       (let ((state (plist-get run :state)))
-        (when (member state '("queued" "starting" "running" "settling"))
+        (when (member state '("scheduled" "queued" "starting" "running" "settling"))
           (setq changed t)
-          (setf (plist-get run :state) (if (equal state "queued") "finished" "uncertain")
-                (plist-get run :result) (and (equal state "queued") "cancelled")
-                (plist-get run :reason) (if (equal state "queued")
+          (setf (plist-get run :state) (if (member state '("scheduled" "queued")) "finished" "uncertain")
+                (plist-get run :result) (and (member state '("scheduled" "queued")) "cancelled")
+                (plist-get run :reason) (if (member state '("scheduled" "queued"))
                                             "Not dispatched; queue not replayed after restart"
                                           "Execution interrupted; inspect before releasing its slot")
                 (plist-get run :updated-at) (pichat-job--now))
@@ -943,7 +1057,7 @@ This deliberately cannot infer remote survival or safe release from Emacs exit."
                      (not (plist-get run :dispatch)))
             (pichat-job--stamp run :dispatch
                                '(:state "interrupted" :reason "Interrupted before follow-up dispatch; not replayed")))
-          (when (equal state "queued")
+          (when (member state '("scheduled" "queued"))
             (pichat-job--stamp run :finished-at (plist-get run :updated-at))))))
     (let ((now (float-time)))
       (seq-doseq (job (plist-get data :jobs))

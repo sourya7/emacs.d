@@ -97,7 +97,12 @@ COMMAND lets an execution owner distinguish inspection from mutation."
   (when-let* ((operation (pichat-session-restart-operation session)))
     (unless (and (plist-get operation :token)
                  (eq pichat-rpc--operation-token (plist-get operation :token)))
-      (user-error "PiChat runtime is restarting; RPC input is temporarily unavailable"))))
+      (user-error "PiChat runtime is restarting; RPC input is temporarily unavailable")))
+  (when (and (stringp command) (not (string-prefix-p "get_" command)))
+    ;; Record intent before any asynchronous send.  Going away and back, or a
+    ;; rejected/handled prompt, cannot silently restore a scheduled intent.
+    (cl-incf (pichat-session-input-generation session))
+    (pichat-emit session 'rpc-input-sending :command command)))
 
 (defcustom pichat-rpc-request-timeout nil
   "Optional timeout in seconds for Pi RPC command responses.

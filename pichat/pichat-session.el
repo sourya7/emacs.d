@@ -35,6 +35,8 @@
   process-generation
   restart-operation
   input-guard
+  ;; Monotonic local mutation intent; read-only RPC requests do not advance it.
+  (input-generation 0)
   buffer
   stderr-buffer
   stop-requested-p

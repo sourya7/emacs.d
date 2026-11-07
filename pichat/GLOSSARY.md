@@ -24,9 +24,10 @@ Shared terms for discussing PiChat. **Runtime**, **Pi session**, **saved session
 | **Runtime manager** | PiChat's global view of retained runtimes, including live, stopped, and failed ones. It is not a browser of saved session files. |
 | **Job** | A reusable instruction and captured execution settings. Ordinary jobs do not require a managed plan. |
 | **Authored job definition** | A global or project JSON source file explicitly reviewed and imported into a saved job. It is not the runtime metadata store; editing or discovering it does not update a saved job or start a job run. |
-| **Job run** | One attempt to execute job instructions, with durable identity, outcome and captured run-end evidence distinct from its runtime and Pi session. A one-off job run need not have a saved job definition. **Continue work** creates a linked new job run in a fresh Pi session; **Continue in chat** extends the saved conversation without changing the original run's report. |
+| **Job run** | One attempt to execute job instructions, with durable identity, outcome and captured run-end evidence distinct from its runtime and Pi session. A one-off job run need not have a saved job definition. Ordinary runs start independent work; a scheduled continuation borrows its explicitly captured live conversation. **Continue work** creates a linked new job run in a fresh Pi session; **Continue in chat** extends the saved conversation without changing the original run's report. |
 | **Follow-up job** | An independently configured job triggered after an originating job run stops or first becomes uncertain. It creates a new job run, not a follow-up message in the worker's Pi session. |
-| **Job schedule** | Optional saved timing that submits ordinary job runs while Emacs is running: once at an instant or at an anchored elapsed interval. Disabling timing does not cancel runs already submitted. |
+| **Job schedule** | Authorized timing owned by Jobs while Emacs is running. Saved jobs support once or anchored elapsed intervals; scheduled continuation supports one explicitly captured attempt. Disabling saved-job timing does not cancel runs already submitted. |
+| **Scheduled continuation** | A one-shot Jobs attempt to send a reviewed prompt in the exact captured live runtime and Pi session. It is not independent Continue work, a Pi follow-up message, or a follow-up job. |
 | **Jobs view** | The definitions and job-run history view, distinct from the runtime manager, Session History, and saved-session browser. |
 
 ## Launch and ownership

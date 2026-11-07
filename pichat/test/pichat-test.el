@@ -15,6 +15,7 @@
 (require 'pichat-test-backend-contract)
 (require 'pichat-test-job-core)
 (require 'pichat-test-jobs)
+(require 'pichat-test-job-conversation)
 (require 'pichat-test-rpc)
 (require 'pichat-test-transport)
 (require 'pichat-test-process-lifetime)

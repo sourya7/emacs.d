@@ -400,7 +400,11 @@ core consumes an occurrence and creates its ordinary run in one transaction.
 `pichat-jobs.el` owns the shared composer: explicit origin/record identity,
 detached staging, per-picker/final-action ownership and nested-editor return.
 Capture and admission remain separate from that presentation lifecycle.
-`pichat-job-schedule-ui.el` supplies the compact saved-job timing Transient.
+`pichat-job-schedule-ui.el` supplies the compact saved-job timing Transient and
+shared absolute-time picker. `pichat-job-conversation.el` validates exact live
+conversation captures and attributable outcomes without acquiring or stopping a
+runtime. The executor retains that live authority only for this Emacs lifetime;
+stored provenance is not authorization to reconnect.
 
 ## Launching runtimes
 
@@ -806,12 +810,14 @@ buffer in a tab lets Bufferlo record normal local membership there.
 ## Jobs
 
 Jobs are optional reusable instructions and captured execution settings. A **job
-run** is one attempt, with its own durable identity and fresh independent Pi
-runtime/Pi session; see `GLOSSARY.md`. Jobs do not require a plan. This initial
-implementation supports **manual prompt jobs, explicit manual continuation,
-optional after-run jobs and native one-shot/interval schedules**. Plan work uses
-ordinary instructions and the installed plans skill, not a special phase adapter.
-Schedules are opt-in per saved job.
+run** is one attempt with its own durable identity. Ordinary runs use a fresh
+independent Pi runtime/Pi session; explicitly scheduled continuation instead
+borrows the exact originating chat's live runtime and Pi session (see
+`GLOSSARY.md`). Jobs do not require a plan. Supported flows are **manual prompt
+jobs, explicit manual continuation, optional after-run jobs, native saved-job
+one-shot/interval schedules, and one-shot continuation in this conversation**.
+Plan work uses ordinary instructions and the installed plans skill, not a special
+phase adapter. Scheduling always requires explicit authorization.
 
 - `M-x pichat-job-new` opens the shared compact Transient composer without
   starting a runtime or opening a setup buffer. Job fields are `n` Name,
@@ -820,9 +826,11 @@ Schedules are opt-in per saved job.
   highlighted. Choose a concrete model before saving/submitting if none is configured.
   `v` inspects complete instructions and settings; `q` there returns to the composer.
   Multiline editing uses `C-c C-c` Apply / `C-c C-k` Cancel. Sub-picker Apply
-  returns to the composer without saving or running.
+  returns to the composer without saving or running. The menu shows actions,
+  current values and context-specific warnings, not usage guidance. Use Transient's
+  standard help or `C-h f pichat-job-edit-menu` for behavior and lifetime caveats.
 - New and Repeat offer explicit `r` **Run once**, `s` **Save job** and `q`
-  **Cancel (discard draft)**. Run once submits without saving a definition;
+  **Cancel**. Run once submits without saving a definition;
   Save requires a nonempty reviewed Name, saves only, and opens the saved job's
   report. A later **Run job** remains a separate explicit action. New has no
   ambiguous `RET` action. Save as job offers Save/Cancel; Continue work offers
@@ -918,7 +926,8 @@ Schedules are opt-in per saved job.
   supported remote-exit inspection, retaining their existing safeguards.
   Commands recheck the exact report/current state; closing the menu does nothing.
   **Set schedule…** / **Change…** opens the existing staged timing Transient;
-  timing remains saved-job-only. **Run now** handles a
+  those timing controls remain saved-job-only. Existing-conversation one-shots
+  are authorized separately from their chat's composer. **Run now** handles a
   missed one-shot, whereas **Run job** is an ordinary manual attempt.
   **Diagnostics** uses the recorded execution note when no runtime is retained.
 - Saved-job **Edit…** and the Jobs row's `e` (Evil `g e`) open the same compact
@@ -946,7 +955,9 @@ Schedules are opt-in per saved job.
   **Repeat…** reviews historical settings and records repeat provenance; it does
   not silently use a changed definition or undo effects. It may repeat file changes
   or external actions and retains the definition's overlap exclusion.
-  **Save as job…** opens the shared composer, not execution.
+  **Save as job…** opens the shared composer, not execution. Existing-conversation
+  attempts omit Repeat, Continue work, Continue in chat and Save as job: start a
+  new schedule from the chat to capture fresh authorization.
 - Reports use the chat's read-only input-bar styling and five-visual-line
   instruction folding at the narrowest displayed width. Run instructions live
   inside **Details**; continuation guidance folds independently. Click or press
@@ -999,8 +1010,9 @@ switching, reconfiguration or preferred designation; use Jobs to repeat/cancel.
 Required interactions show Needs input and retain the concurrency slot until
 answered or cancelled. There is no automatic approval or waiting-input timeout.
 Killing an active owning chat is refused; closing a window or burying Jobs is
-harmless. After synchronized evidence is durably captured, the owning runtime is
-stopped through the existing backend shutdown barrier before completion releases
+harmless. For ordinary independent jobs, after synchronized evidence is durably
+captured, the owning runtime is stopped through the existing backend shutdown
+barrier before completion releases
 its concurrency slot. During that stop barrier the report status says **Answer captured ·
 Stopping runtime**; finished reports show no pending-cleanup message.
 SSH additionally requires verified actual-Pi exit; transport EOF alone is
@@ -1195,10 +1207,13 @@ possible prior side effects before submitting any manual replacement.
 
 Use **Actions → Set schedule…** (`a`, Evil `g a`) in a saved job's details. The timing
 Transient stages **Timing** (`k`, Once/Every), **When/First run** (`s`) and an
-elapsed **Interval** (`i`, whole minutes/hours/days). Enter local dates as
-`YYYY-MM-DD HH:MM`; the host timezone and applicable UTC offset are shown. Invalid
-or nonexistent local times are rejected; repeated DST times require choosing an
-explicit offset. Intervals remain anchored at the first instant, not completion;
+elapsed **Interval** (`i`, whole minutes/hours/days). Date/time selection uses
+Org's calendar reader: select a date in the calendar, enter just `15:30`, or use
+Org shorthand such as `+1d 09:00` for tomorrow morning. The existing selection is
+the default; with none, it suggests about five minutes ahead. Pressing Enter
+accepts the displayed default, without typing a full date/time. The host timezone
+and applicable UTC offset are shown. Invalid or nonexistent local times are
+rejected; repeated DST times require choosing an explicit offset. Intervals remain anchored at the first instant, not completion;
 24 hours is elapsed time, not a calendar-day rule, including across DST.
 
 `RET` **Save disabled** saves changed timing without running or enabling it; `q`
@@ -1247,6 +1262,76 @@ selector or execution while Emacs is closed is provided. Timing data is versione
 a future cron replacement requires explicit migration, disabling non-equivalent
 rules for review rather than running two timing engines or silently translating
 arbitrary elapsed intervals into cron field steps.
+
+### Scheduled continuation in this conversation
+
+From an **idle, synchronized Pi chat**, use
+`M-x pichat-job-schedule-continuation`. The shared composer starts with
+`continue`, no selected time, and the exact originating runtime/Pi session.
+This is not **Continue work**, which starts fresh independent work, nor a Pi
+follow-up message queued behind an active run; see `GLOSSARY.md`.
+
+- `i` edits the prompt with the same multiline Apply/Cancel controls. The chat's
+  unsent draft and attachments stay untouched; this attempt has no attachments.
+- `w` **When** opens the same Org calendar/date-time reader as saved-job timing,
+  defaulting to the selected time or about five minutes ahead. Short inputs such
+  as `15:30` and `+1d 09:00` avoid typing a full date. The resolved local time and
+  UTC offset remain visible, and repeated DST times require choosing an offset.
+  Choose a future time; opening the composer alone still selects no time.
+- `v` inspects full prompt, provenance and inherited settings read-only.
+  Workspace, model, preset, Tools and target are not editable in this mode;
+  reusable Save, Run once and after-run actions are absent.
+- `s` **Schedule** explicitly authorizes the reviewed one-shot and opens its
+  Jobs Run report. Scheduling sends no prompt and starts no runtime. `q` or
+  Transient quit discards staging only. Ordinary New job still creates
+  independent work, even when invoked from this chat.
+
+The pending attempt appears in **Runs**, not as a reusable definition. Its
+report prominently shows the due time, destination and cancellation. At most
+one unfinished scheduled attempt targets a runtime. Replacing a pending
+scheduled/queued attempt requires confirmation; active or uncertain work must
+be inspected rather than silently replaced. Cancel before submission sends
+nothing. Finished unreferenced attempts can be deleted with ordinary run deletion.
+
+While waiting, normal chat use is not locked. Intervening input, model/source
+changes (including switching away and back), process replacement or loss of chat
+ownership invalidates the intent. A due attempt that is busy, changed or cannot
+be verified becomes visibly **Not sent**; it does not poll until the chat is idle.
+An unchanged due attempt uses ordinary queue/concurrency limits and is checked
+again after any capacity wait and immediately before submission. A full queue
+records not sent, without a hidden backlog or retry. There is no preferred-runtime,
+saved-file, fresh-conversation or local-target fallback.
+
+Emacs, the captured chat and its runtime **must remain alive**. A late timer,
+including after sleep, attempts delivery once when it wakes; the chosen time is
+not a delivery deadline. Scheduling does not detect quota/reset times or establish
+that provider capacity will be available. Closing a pending chat cancels the
+intent and retains that chat's ordinary close/stop policy. On Emacs restart,
+pending scheduled/queued attempts are cancelled; possibly dispatched attempts
+remain uncertain. Live bindings are never restored or reconnected from metadata.
+
+During dispatch/execution a temporary guard blocks competing prompts, source
+changes and reconfiguration. Extension UI responses remain available. A valid
+attempt sends one normal prompt, not a steering/follow-up message. Existing
+automatic retry/compaction settings remain in force: one submission is not a
+promise of one provider call. Completion requires an attributable new result,
+settlement, canonical synchronization and fresh idle/empty-queue verification.
+Earlier answers/errors cannot stand in for this attempt. Handled/queued prompts,
+transformed input that cannot be attributed, process loss or ambiguous dispatch
+remain uncertain and are never automatically retried.
+
+Successful completion restores prior guards/hooks and leaves the runtime and
+ordinary writable chat alive, with its settings and preferred designation
+unchanged. Due-time execution does not select the chat. Active cancellation
+requires the report's confirmation and source-qualified abort; its acknowledgment
+is not proof that tools stopped. Uncertain attempts retain capacity and guarded
+ownership until explicit inspection and **Release reservation**. Release restores
+input only after durable acknowledgment, without stopping or resuming the runtime.
+There are no recurring schedules, after-run chains, automatic reconnect/replay,
+or authored/reusable definitions targeting a live conversation. Local Pi is
+covered by offline real-Pi and live-UI checks; SSH uses the same exact live RPC
+endpoint and has deterministic coverage. Real-SSH acceptance for this mode
+remains separately opt-in; do not infer it from local or inert-endpoint fixtures.
 
 ### Plan work is an ordinary prompt job
 
@@ -1310,7 +1395,8 @@ data-only JSON, atomically replaced with 0600 permissions, and may contain
 sensitive prompts/arguments. Use one owning
 Emacs per metadata file; changed-file/foreign-lock checks fail rather than
 silently overwrite history. Opening Jobs first initializes restart reconciliation:
-queued work is cancelled, potentially dispatched work remains uncertain, and
+queued work and pending existing-conversation schedules are cancelled,
+potentially dispatched work remains uncertain, and
 old runs are not replayed. Reconciliation never generates new follow-up runs;
 interrupted follow-up dispatch remains visible for inspection. Enabled schedules
 restore future timers under the missed-start policy above. Subsequent browsing/
@@ -1319,7 +1405,10 @@ has a 16 MiB limit. New run evidence is stored in content-addressed JSON beside
 that file, in `<pichat-jobs-file>.evidence/` (0700 directory, 0600 files), with an
 8 MiB UTF-8 JSON limit per run. Version-2 evidence includes the exact response,
 response entry/source identity, run-end leaf and structured active-branch entries,
-including tool output/thinking; it can be sensitive. Version-1 Markdown-only
+including tool output/thinking; it can be sensitive. Existing-conversation
+captures additionally retain their pre-submit boundary and prompt entry, and
+can include earlier conversation history. Data-only destination provenance does
+not authorize reconnecting after restart. Version-1 Markdown-only
 captures remain readable without migration. Overflow or publication failure retains
 uncertainty and its slot instead of silently truncating a report or declaring completion.
 Evidence is published before the metadata reference; interrupted commits may leave

@@ -101,7 +101,9 @@ HELP optionally describes the action without adding inline prose."
   (let* ((execution (gethash (plist-get run :id) (pichat-job-executor-contexts owner)))
          (session (and execution (pichat-job-execution-session execution)))
          (state (plist-get run :state)))
-    (cond ((equal state "queued") "Waiting")
+    (cond ((equal state "scheduled")
+           (format-time-string "Due %m-%d %H:%M" (seconds-to-time (plist-get (plist-get run :trigger) :due))))
+          ((equal state "queued") "Waiting")
           ((equal state "uncertain") "Needs inspection")
           ((equal state "finished") "Finished")
           ((and execution (pichat-job-execution-cleanup execution)) "Finishing")
@@ -153,9 +155,10 @@ every definition row."
 
 (defun pichat-jobs--queued-less-p (a b)
   "Compare run rows A and B by stored instants, not local clock strings."
-  (time-less-p
-   (date-to-time (get-text-property 0 'pichat-job-queued-at (aref (cadr a) 1)))
-   (date-to-time (get-text-property 0 'pichat-job-queued-at (aref (cadr b) 1)))))
+  (let ((left (get-text-property 0 'pichat-job-queued-at (aref (cadr a) 1)))
+        (right (get-text-property 0 'pichat-job-queued-at (aref (cadr b) 1))))
+    (cond ((null left) (and right t)) ((null right) nil)
+          (t (time-less-p (date-to-time left) (date-to-time right))))))
 
 (defun pichat-jobs-refresh ()
   "Redraw Jobs/Runs using cached records; never dispatch or contact Pi."
@@ -213,12 +216,13 @@ every definition row."
                            (vconcat
                             (list (concat (pichat-jobs--display (plist-get (plist-get run :spec) :title))
                                           (unless (plist-get run :job-id) " [unsaved]"))
-                                  (propertize
-                                   (pichat-jobs--local-time
-                                    (plist-get run :created-at)
-                                    (if narrow "%Y-%m-%d %H:%M" "%Y-%m-%d %H:%M:%S"))
-                                   'pichat-job-queued-at (plist-get run :created-at)
-                                   'help-echo (pichat-jobs--local-time (plist-get run :created-at))))
+                                  (let ((queued (if (pichat-job-conversation-p run)
+                                                    (plist-get run :queued-at) (plist-get run :created-at))))
+                                    (propertize
+                                     (if queued (pichat-jobs--local-time queued
+                                                  (if narrow "%Y-%m-%d %H:%M" "%Y-%m-%d %H:%M:%S")) "—")
+                                     'pichat-job-queued-at queued
+                                     'help-echo (if queued (pichat-jobs--local-time queued) "Not queued"))))
                             (if narrow (list (pichat-jobs--status pichat-jobs--owner run))
                               (list (pichat-jobs--state pichat-jobs--owner run)
                                     (pichat-jobs--result run)
@@ -404,8 +408,10 @@ reservation after inspection and confirmation.  With Evil, use g R."
   "Open exact run ID's retained chat, never select an unrelated runtime."
   (let* ((execution (gethash id (pichat-job-executor-contexts owner)))
          (session (and execution (pichat-job-execution-session execution))))
-    (unless (and session (buffer-live-p (pichat-session-buffer session)))
-      (user-error "Owning chat unavailable; use the captured saved-session reference"))
+    (unless (and session (buffer-live-p (pichat-session-buffer session))
+                 (or (not (pichat-job-execution-borrowed execution))
+                     (pichat-job-conversation-source-p (pichat-job-execution-borrowed execution) t)))
+      (user-error "Owning chat/source unavailable; this report cannot open another conversation"))
     (pichat-chat-open session)))
 
 (defun pichat-jobs--cancel (owner id)
@@ -438,6 +444,8 @@ reservation after inspection and confirmation.  With Evil, use g R."
 (defun pichat-jobs--repeat (owner id)
   "Review historical OWNER/ID settings without rerunning automatically."
   (let ((run (pichat-job-record (pichat-job-executor-store owner) 'runs id)))
+    (when (pichat-job-conversation-p run)
+      (user-error "Reschedule from the chat with a fresh conversation capture"))
     (unless (equal (plist-get run :state) "finished")
       (user-error "Previous run must stop and uncertainty must be resolved first"))
     (pichat-job--compose owner 'repeat (plist-get run :spec) run)))
@@ -453,7 +461,10 @@ reservation after inspection and confirmation.  With Evil, use g R."
   "Show exact OWNER/ID's cached runtime diagnostics."
   (let* ((execution (gethash id (pichat-job-executor-contexts owner)))
          (session (and execution (pichat-job-execution-session execution))))
-    (if session (pichat-show-diagnostics session)
+    (if (and session
+             (or (not (pichat-job-execution-borrowed execution))
+                 (pichat-job-conversation-source-p (pichat-job-execution-borrowed execution) t)))
+        (pichat-show-diagnostics session)
       (pichat-jobs--show-detail owner 'runs id 'diagnostics))))
 
 (defun pichat-jobs--tools-summary (config)
@@ -485,8 +496,11 @@ reservation after inspection and confirmation.  With Evil, use g R."
 (defun pichat-jobs--insert-run-times (record)
   "Insert RECORD's local timeline without inventing unknown finish times."
   (insert "Times (local):\n")
-  (dolist (field '((:created-at . "Queued") (:started-at . "Started")
-                   (:finished-at . "Finished") (:resolved-at . "Manually resolved")))
+  (dolist (field (append (if (pichat-job-conversation-p record)
+                            '((:created-at . "Scheduled") (:queued-at . "Queued"))
+                          '((:created-at . "Queued")))
+                        '((:started-at . "Started") (:finished-at . "Finished")
+                          (:resolved-at . "Manually resolved"))))
     (when (or (not (eq (car field) :resolved-at)) (plist-get record :resolved-at))
       (let* ((value (plist-get record (car field)))
              (display (if value
@@ -741,6 +755,7 @@ narrowest displaying window."
 (defun pichat-jobs--trigger-label (run)
   "Describe RUN's trigger without conflating timing and outcome."
   (pcase (plist-get (plist-get run :trigger) :kind)
+    ("conversation-once" "This conversation · Once")
     ("lifecycle" "After run") ("once" "Once") ("interval" "Interval") (_ "Manual")))
 
 (defun pichat-jobs--cancellable-p (owner record)
@@ -754,6 +769,8 @@ narrowest displaying window."
   (let* ((execution (gethash (plist-get record :id) (pichat-job-executor-contexts owner)))
          (session (and execution (pichat-job-execution-session execution))))
     (and session (buffer-live-p (pichat-chat-owned-buffer session))
+         (or (not (pichat-job-execution-borrowed execution))
+             (pichat-job-conversation-source-p (pichat-job-execution-borrowed execution) t))
          (or (not (plist-get record :evidence))
              (not (equal (plist-get record :state) "finished"))))))
 
@@ -795,13 +812,14 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
          '((inspect "I" "Inspect raw settings…" raw)))
       (append
        (when (pichat-job-continuable-p record) '((work "c" "Continue work…" continue)))
-       (when finished '((work "r" "Repeat…" repeat) (work "D" "Delete run…" delete-run)))
-       (when (and finished (plist-get record :session-file))
+       (when (and finished (not (pichat-job-conversation-p record))) '((work "r" "Repeat…" repeat)))
+       (when finished '((work "D" "Delete run…" delete-run)))
+       (when (and finished (not (pichat-job-conversation-p record)) (plist-get record :session-file))
          '((work "i" "Continue in chat…" open-saved)))
        (when (pichat-jobs--cancellable-p owner record) '((work "k" "Cancel run…" cancel)))
        (when (equal (plist-get record :state) "uncertain")
          '((work "R" "Release reservation…" release)))
-       '((work "s" "Save as job…" save))
+       (unless (pichat-job-conversation-p record) '((work "s" "Save as job…" save)))
        (when (plist-get record :evidence)
          '((inspect "p" "Preview conversation" preview)))
        (when (pichat-jobs--chat-p owner record) '((inspect "o" "View chat" chat)))
@@ -942,6 +960,16 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
                            "Answer captured · Stopping runtime")
                           (t (pichat-jobs--state owner record)))
                     (pichat-jobs--summary-time record)))
+    (when (pichat-job-conversation-p record)
+      (let ((destination (plist-get record :destination)))
+        (insert "This conversation · Pi session: " (plist-get destination :session-id)
+                " · Runtime: " (plist-get destination :runtime-id) "\n"
+                "Scheduled for: " (pichat-job-schedule-ui-time (plist-get (plist-get record :trigger) :due)) "\n")
+        (when (equal state "scheduled")
+          (insert "Emacs and this chat/runtime must remain alive. Sleep may delay delivery.\n"))
+        (when (and (equal state "finished") (equal (plist-get record :result) "cancelled"))
+          (insert "Not sent: " (or (plist-get record :reason) "Cancelled before dispatch") "\n"))
+        (insert "\n")))
     (when (equal (plist-get (plist-get record :event) :completeness) "partial")
       (insert "Previous run context is partial or unavailable.\n"))
 
@@ -1156,7 +1184,7 @@ With Evil Normal state, use g a."
   (when-let* ((discovery (plist-get scope :tool-discovery)))
     (pichat-tool-discovery-draft-reset discovery nil)))
 
-(defun pichat-job--compose (owner kind &optional spec run)
+(defun pichat-job--compose (owner kind &optional spec run capture)
   "Compose detached work for OWNER and KIND over the current view.
 SPEC and RUN are captured values, never an instruction to dispatch.  The scope
 object itself is the unique ownership token; no chat state is borrowed."
@@ -1166,7 +1194,8 @@ object itself is the unique ownership token; no chat state is borrowed."
                       :context (pichat-job--edit-context)
                       :draft draft :run (and run (pichat-job--copy run))
                       :menu 'pichat-job-edit-menu :closed nil :pending nil
-                      :submitted-run-id nil :tool-discovery nil)))
+                      :submitted-run-id nil :tool-discovery nil
+                      :conversation capture :due nil)))
     (pcase kind
       ('repeat (setf (plist-get draft :repeat-of) (plist-get run :id)))
       ('continue (setf (plist-get draft :continue-of) (plist-get run :id)
@@ -1181,12 +1210,21 @@ object itself is the unique ownership token; no chat state is borrowed."
 
 (defun pichat-job--composer-runnable-p ()
   "Whether this invocation offers independent execution."
-  (not (memq (plist-get (transient-scope) :kind) '(edit save-as))))
+  (not (memq (plist-get (transient-scope) :kind) '(edit save-as schedule))))
 
 (defun pichat-job--composer-savable-p ()
   "Whether this composer offers saving a new reusable definition."
   (and (not (pichat-job--composer-edit-p))
+       (not (pichat-job--composer-conversation-p))
        (not (pichat-job--settings-continuation-p))))
+
+(defun pichat-job--composer-conversation-p ()
+  "Whether this invocation schedules in its exact originating conversation."
+  (eq (plist-get (transient-scope) :kind) 'schedule))
+
+(defun pichat-job--composer-fixed-source-p ()
+  "Whether workspace/name/target changes would change the captured source."
+  (or (pichat-job--composer-conversation-p) (pichat-job--settings-continuation-p)))
 
 (defun pichat-job--composer-check (scope)
   "Require current SCOPE with no pending picker or prior final action."
@@ -1201,6 +1239,8 @@ SAVE creates a definition only.  Failures retain a recoverable detached draft."
     (condition-case err
         (progn
           (pichat-job--composer-check scope)
+          (when (eq (plist-get scope :kind) 'schedule)
+            (user-error "Use explicit Schedule for this conversation"))
           (when (plist-get scope :job) (user-error "Use Save in the saved-job editor"))
           (when (and (not save) (eq (plist-get scope :kind) 'save-as))
             (user-error "Save as job does not execute work"))
@@ -1305,6 +1345,9 @@ SAVE creates a definition only.  Failures retain a recoverable detached draft."
                               (pichat-job-executor-store (plist-get scope :owner)) run)
                              :context)
                   "\n\n"))
+        (when-let* ((capture (plist-get scope :conversation)))
+          (insert "This conversation (provenance, not restart authorization):\n"
+                  (pp-to-string (plist-get capture :destination)) "\n"))
         (insert (if (plist-get draft :spec) "Captured execution (may be sensitive):\n"
                   "Staged execution profile (not yet captured):\n")
                 (pp-to-string (or (plist-get (plist-get draft :spec) :configuration)
@@ -1313,7 +1356,7 @@ SAVE creates a definition only.  Failures retain a recoverable detached draft."
     (pichat-view-display buffer origin 'kill)))
 
 (defun pichat-job--composer-heading ()
-  "Describe this invocation and any captured-setting or repeat warnings."
+  "Describe this invocation and context-specific warnings, not usage help."
   (let* ((scope (transient-scope)) (draft (plist-get scope :draft))
          (preset (plist-get (plist-get (plist-get draft :spec) :configuration) :preset)))
     (mapconcat
@@ -1326,10 +1369,10 @@ SAVE creates a definition only.  Failures retain a recoverable detached draft."
      (split-string
       (concat (pcase (plist-get scope :kind)
                 ('edit "Edit job") ('repeat "Repeat run")
-                ('continue "Continue work · fresh Pi session")
-                ('save-as "Save as job") (_ "New job"))
-              (when (plist-get draft :repeat-of)
-                "\nRepeating may repeat changes or external actions; previous effects are not undone.")
+                ('continue "Continue work")
+                ('save-as "Save as job")
+                ('schedule "Schedule · This conversation")
+                (_ "New job"))
               (when (and preset
                          (condition-case nil
                              (not (equal preset (pichat-job-launch--preset
@@ -1363,6 +1406,87 @@ SAVE creates a definition only.  Failures retain a recoverable detached draft."
   "Compose one-off work or save a reusable job; no runtime is launched yet."
   (interactive)
   (pichat-job--compose (pichat-jobs--engine) 'new))
+
+;;;###autoload
+(defun pichat-job-schedule-continuation ()
+  "Schedule a one-shot prompt in this exact live Pi conversation.
+The shared composer starts with `continue' and no selected time.  Edit the
+instructions and choose When, then explicitly Schedule.  Opening or
+cancelling the composer sends nothing and preserves the chat draft.
+
+Execution settings are inherited read-only; inspect full settings and
+conversation provenance with the composer's inspection action.
+Emacs and the captured chat/runtime must remain alive.  Intervening work
+invalidates the attempt; no other conversation or runtime is substituted.
+Sleep may delay delivery, and quota availability is not checked.
+Review or cancel the pending attempt in Jobs Runs."
+  (interactive)
+  (unless (derived-mode-p 'pichat-chat-mode) (user-error "Invoke scheduling from its owning Pi chat"))
+  (let* ((capture (pichat-job-conversation-capture pichat-chat-session))
+         (spec (pichat-job-conversation-spec capture "continue")))
+    (pichat-job--compose (pichat-jobs--engine) 'schedule spec nil capture)))
+
+(transient-define-suffix pichat-job-composer-when ()
+  "Choose a future local date/time using Org's calendar.
+Enter just a time such as 15:30, or +1d 09:00 for tomorrow morning.
+The default is the current selection or about five minutes ahead.
+This stages the time only; Schedule remains a separate explicit action."
+  (interactive)
+  (let ((scope (transient-scope)) (token (list 'time)))
+    (pichat-job--composer-check scope)
+    (unless (plist-get scope :conversation) (user-error "Not an existing-conversation composer"))
+    (setf (plist-get scope :pending) token)
+    (unwind-protect
+        (let ((due (pichat-job-schedule-ui-read-time (plist-get scope :due))))
+          (unless (and (pichat-job--settings-current-p scope) (eq token (plist-get scope :pending)))
+            (user-error "Conversation or composer changed; reopen scheduling"))
+          (unless (> due (float-time)) (user-error "Choose a future time"))
+          (setf (plist-get scope :due) due))
+      (when (eq token (plist-get scope :pending)) (setf (plist-get scope :pending) nil))
+      (pichat-job--settings-show scope))))
+
+(transient-define-suffix pichat-job-composer-schedule ()
+  "Authorize exactly this reviewed one-shot; save no reusable definition."
+  (interactive)
+  (let* ((scope (transient-scope)) (capture (plist-get scope :conversation))
+         (owner (plist-get scope :owner)) (token (list 'schedule))
+         (due (plist-get scope :due)) (draft (plist-get scope :draft))
+         (failed (lambda (reason)
+                   (if (plist-get scope :closed)
+                       (message "Scheduled %s before error; inspect Jobs: %s" (plist-get scope :submitted-run-id) reason)
+                     (when (eq token (plist-get scope :pending))
+                       (setf (plist-get scope :pending) nil)
+                       (pichat-job--settings-show scope)
+                       (message "%s" reason))))))
+    (pichat-job--composer-check scope)
+    (unless (and capture (pichat-job-schedule-instant-p due) (> due (float-time)))
+      (user-error "Choose a future When before Schedule"))
+    (setf (plist-get scope :pending) token)
+    (condition-case err
+        (let ((pending (seq-find
+                        (lambda (run)
+                          (and (pichat-job-conversation-p run)
+                               (equal (plist-get (plist-get run :destination) :runtime-id)
+                                      (plist-get (plist-get capture :destination) :runtime-id))
+                               (not (equal (plist-get run :state) "finished"))))
+                        (pichat-job-records (pichat-job-executor-store owner) 'runs))))
+          (when pending
+            (unless (member (plist-get pending :state) '("scheduled" "queued"))
+              (user-error "Active/uncertain work cannot be replaced; inspect Jobs"))
+            (unless (yes-or-no-p "Replace the pending scheduled attempt in this runtime? ")
+              (user-error "Pending attempt retained")))
+          (pichat-job-executor-conversation-schedule
+           owner capture (plist-get draft :instructions) due pending
+           (lambda (id)
+             (setf (plist-get scope :submitted-run-id) id)
+             (pichat-job--close-context scope)
+             (pichat-jobs--show-detail owner 'runs id)
+             (message "Scheduled once; nothing sent. Inspect or cancel in Jobs → Runs"))
+           failed
+           (lambda () (and (pichat-job--settings-current-p scope) (eq token (plist-get scope :pending))))))
+      ((error quit)
+       (funcall failed (error-message-string err))
+       (signal (car err) (cdr err))))))
 
 (defun pichat-job--instructions-finish (apply-text)
   "Close this editor, applying plain text only to its unchanged owning draft."
@@ -1476,6 +1600,8 @@ SAVE creates a definition only.  Failures retain a recoverable detached draft."
                                              :origin-owner :owner))))
                 (or (not (plist-get scope :composer))
                     (equal (plist-get scope :context) (pichat-job--edit-context)))
+                (or (not (plist-get scope :conversation))
+                    (pichat-job-conversation-current-p (plist-get scope :conversation)))
                 (or (not (plist-get scope :run))
                     (equal (plist-get scope :run)
                            (seq-find
@@ -1570,6 +1696,7 @@ its prefix while waiting for the model-list process."
     (unless (pichat-job--settings-current-p scope)
       (user-error "Job draft changed; reopen Execution settings"))
     (when (plist-get scope :pending) (user-error "Finish the pending picker first"))
+    (when (plist-get scope :conversation) (user-error "This conversation's settings are inherited read-only"))
     (when (and (plist-get (plist-get scope :draft) :continue-of)
                (equal choice "Target"))
       (user-error "Continuation keeps the original target"))
@@ -1780,16 +1907,34 @@ its prefix while waiting for the model-list process."
        (signal (car err) (cdr err))))))
 
 (transient-define-prefix pichat-job-edit-menu ()
-  "Compose independent work; only explicit final actions save or submit it."
+  "Compose a job, repeat, continuation, or scheduled prompt.
+Only explicit final actions save, run or schedule work.  Inspection shows
+full instructions and captured execution settings.  Cancel discards the
+composer draft, not the originating chat draft or attachments.
+
+Repeat uses captured settings and may repeat changes or external actions;
+previous effects are not undone.  Continue work starts a fresh Pi session
+with captured previous-run context, not the original conversation.
+Context-specific capture or incomplete-context warnings appear in the menu.
+
+Schedule targets only the captured live conversation, with inherited,
+read-only execution settings.  Emacs and that chat/runtime must stay alive;
+intervening work invalidates the attempt.  Sleep may delay delivery, and
+quota availability is not checked.  See `pichat-job-schedule-continuation'."
   [:description pichat-job--composer-heading
    ["Job"
     ("n" pichat-job-edit-name :description (lambda () (pichat-job--edit-description 'name))
-     :if-not pichat-job--settings-continuation-p)
+     :if-not pichat-job--composer-fixed-source-p)
     ("i" pichat-job-edit-text :description (lambda () (pichat-job--edit-description 'instructions)))
     ("d" pichat-job-edit-workspace :description (lambda () (pichat-job--edit-description 'workspace))
-     :if-not pichat-job--settings-continuation-p)
-    ("a" pichat-job-edit-after :description (lambda () (pichat-job--edit-description 'after)))]
-   ["Execution"
+     :if-not pichat-job--composer-fixed-source-p)
+    ("a" pichat-job-edit-after :description (lambda () (pichat-job--edit-description 'after))
+     :if-not pichat-job--composer-conversation-p)]
+   ["Timing" :if pichat-job--composer-conversation-p
+    ("w" pichat-job-composer-when
+     :description (lambda () (concat "When: " (if-let* ((due (plist-get (transient-scope) :due)))
+                                                   (pichat-job-schedule-ui-time due) "Choose a time"))))]
+   ["Execution" :if-not pichat-job--composer-conversation-p
     ("p" pichat-job-settings-preset
      :description (lambda () (pichat-job--edit-execution-description 'preset)))
     ("m" pichat-job-settings-model
@@ -1799,12 +1944,13 @@ its prefix while waiting for the model-list process."
     ("t" pichat-job-settings-target
      :description (lambda () (pichat-job--edit-execution-description 'target))
      :if-not pichat-job--settings-continuation-p)]]
-  [["Inspect" ("v" "Instructions / captured settings" pichat-job-composer-inspect)]
+  [["Inspect" ("v" "Details" pichat-job-composer-inspect)]
    ["Action"
     ("RET" "Save" pichat-job-edit-save :if pichat-job--composer-edit-p)
     ("r" "Run once" pichat-job-composer-run :if pichat-job--composer-runnable-p)
     ("s" "Save job" pichat-job-composer-save :if pichat-job--composer-savable-p)
-    ("q" "Cancel (discard draft)" pichat-job-settings-cancel)]]
+    ("s" "Schedule" pichat-job-composer-schedule :if pichat-job--composer-conversation-p)
+    ("q" "Cancel" pichat-job-settings-cancel)]]
   [:hide (lambda () t)
    ("<return>" pichat-job-edit-save :if pichat-job--composer-edit-p)])
 

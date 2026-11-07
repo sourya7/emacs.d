@@ -135,8 +135,12 @@ serialized scripts before writing, including Unicode context cases. Evidence fil
 temporary metadata root, never normal user storage.
 Schedule calculation/transactions use explicit-clock fixtures in the core suite;
 owned timer, staged timing/confirmation and local DST picker checks live in the
-Jobs suite. Full mode also runs a real native timer through the ordinary offline
-Pi executor. All use temporary metadata and retire owned timers during teardown;
+Jobs suite. Existing-conversation execution has focused tests in
+`pichat-test-job-conversation.el`, reusing the same shared fixtures rather than
+importing another test suite. Full mode exercises real native timers through
+both independent and borrowed offline Pi execution, including preserved retry,
+overflow-compaction recovery and active cancellation. All use temporary metadata
+and retire owned timers during teardown;
 never enable a test schedule in the user's store or adjust the system clock.
 The SSH runner includes captured-target background work, fresh-session manual
 continuation carrying captured context, and an interval-triggered worker with an
@@ -203,6 +207,13 @@ result/exit wrapper above and selector:
 ```elisp
 '(and "^pichat-integration-jobs-live-ui-" (not "graphical-resize$"))
 ```
+
+The `pichat-integration-jobs-live-ui-conversation-schedule` scenario drives the
+chat-originated M-x command, read-only inherited configuration, multiline
+Apply/Cancel, absolute-time picking, explicit Schedule, report cancellation and
+real timer execution in the same live Pi conversation. It supports native and
+Evil terminal runs with private storage and the offline provider. It does not
+establish real-SSH or human visual acceptance for this execution mode.
 
 The manual-flow scenario covers shared-composer New, multiline Apply, explicit
 Name/Save, the saved report, independent one-off/saved submission, reports and

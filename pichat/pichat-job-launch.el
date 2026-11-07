@@ -158,6 +158,8 @@ submission.  Complete wrappers and conversation-loading flags are unsupported."
   "Prepare captured SPEC's exact runtime without spawning or changing focus.
 Return (SESSION COMMAND).  This does not consult preset or target registries."
   (pichat-job--validate-spec spec)
+  (when (plist-get (plist-get spec :configuration) :mode)
+    (user-error "Existing-conversation evidence is not an independent launch configuration"))
   (let* ((config (plist-get spec :configuration))
          (transport (pichat-job-launch--untransport (plist-get config :transport)))
          (preset (pichat-job-launch--unpreset (plist-get config :preset)))

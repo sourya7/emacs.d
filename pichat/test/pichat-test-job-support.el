@@ -50,6 +50,8 @@ until BODY submits work.  Fixture teardown retires handlers before stopping."
                           'utf-8))))
              (unwind-protect (save-window-excursion ,@body)
                (pichat-job-executor-schedule-stop executor)
+               (dolist (id (hash-table-keys (pichat-job-executor-conversations executor)))
+                 (pichat-job-executor--conversation-forget executor id))
                (maphash (lambda (_id execution) (pichat-job-executor--retire execution))
                         (pichat-job-executor-contexts executor))
                (dolist (runtime (pichat-session-list))
@@ -64,6 +66,90 @@ until BODY submits work.  Fixture teardown retires handlers before stopping."
                                     (derived-mode-p 'pichat-job-definition-ui-mode
                                                      'pichat-job-definitions-mode))))
                      (kill-buffer buffer)))))))))))
+
+(defmacro pichat-test-with-conversation-job (&rest body)
+  "Run BODY with an inert, synchronized chat and data-only capture fixture."
+  (declare (indent 0) (debug t))
+  `(pichat-test-with-job-executor ()
+     (let* ((session (pichat-session-make
+                      :cwd project-dir :id "conversation-source" :process-generation 1 :state 'idle
+                      :model '(:provider "pichat-fake" :id "pichat-fake")
+                      :preset-spec (pichat-presets-resolve 'review)))
+            (process (pichat-test--make-unit-process session))
+            (transport-buffer (process-buffer process))
+            (buffer (pichat-chat-ensure session))
+            (entries '((:type "message" :id "old" :parentId nil
+                        :message (:role "assistant" :stopReason "error" :errorMessage "Earlier quota error"
+                                  :content ((:type "text" :text "Old response")))))))
+       (with-current-buffer buffer
+         (setq pichat-chat--source-bound-p t
+               pichat-chat--source-session-id "conversation-source"
+               pichat-chat--source-session-file nil
+               pichat-chat--entry-cache (pichat-pi-entry-cache-full "conversation-source" nil entries "old")))
+       (unwind-protect (progn ,@body)
+         (when (process-live-p process) (delete-process process))
+         (when (buffer-live-p transport-buffer) (kill-buffer transport-buffer))
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer (setq pichat-job-executor--buffer-execution nil))
+           (kill-buffer buffer))))))
+
+(defmacro pichat-test-with-conversation-rpc (&rest body)
+  "Run BODY with synchronous state/prompt replies and a COMMANDS log."
+  (declare (indent 0) (debug t))
+  `(let (commands)
+     (cl-letf (((symbol-function 'pichat-rpc-send)
+                (lambda (session type _payload &optional success _failure)
+                  (pichat-rpc--require-operation-ownership session type)
+                  (push type commands)
+                  (when success
+                    (funcall success
+                             (if (equal type "prompt") '(:success t :data (:disposition "started"))
+                               (pichat-test-job-conversation-reply session type)) session)))))
+       ,@body)))
+
+(defun pichat-test-job-conversation-schedule (executor session &optional due)
+  "Schedule SESSION with synchronous fixture RPC; return the accepted ID."
+  (let (id)
+    (pichat-job-executor-conversation-schedule
+     executor (pichat-job-conversation-capture session) "continue" (or due (+ (float-time) 3600)) nil
+     (lambda (value) (setq id value)) (lambda (reason) (ert-fail reason)))
+    (or id (ert-fail "No accepted schedule"))))
+
+(defun pichat-test-job-conversation-due (executor id)
+  "Consume ID at its explicit fixture clock and pump ordinary admission."
+  (let* ((store (pichat-job-executor-store executor)) (run (pichat-job-record store 'runs id)))
+    (pichat-job-conversation-dispatch store id run (plist-get (plist-get run :trigger) :due))
+    (pichat-job-executor-schedule-refresh executor)
+    (pichat-job-executor-pump executor)))
+
+(defun pichat-test-job-conversation-start (directory)
+  "Start an ordinary real offline Pi chat in isolated fixture DIRECTORY."
+  (let ((session (pichat-prepare-session directory nil '(:preset review :model "pichat-fake/pichat-fake"))))
+    (pichat-chat-ensure session)
+    (pichat-start-prepared-session session t)
+    (pichat-test-rpc-call session "get_state")
+    (pichat-test-rpc-call session "set_auto_retry" '(:enabled :json-false))
+    (pichat-test-rpc-call session "set_auto_compaction" '(:enabled :json-false))
+    (pichat-test-job-conversation-ready session)
+    session))
+
+(defun pichat-test-job-conversation-ready (session)
+  "Wait for SESSION's exact idle canonical capture, not just prompt ack."
+  (pichat-test-wait-until
+   (lambda () (condition-case nil (pichat-job-conversation-capture session) (user-error nil)))
+   10 "ordinary conversation synchronization"))
+
+(defun pichat-test-job-conversation-reply (session type)
+  "Return a fresh inert conversation fixture reply for TYPE."
+  (list :success t :data
+        (pcase type
+          ("get_entries" (let ((cache (pichat-chat-canonical-entry-cache session)))
+                           (list :entries (pichat-job-conversation--entries cache)
+                                 :leafId (pichat-entry-cache-leaf-id cache))))
+          ("get_state" (list :sessionId (pichat-session-id session)
+                              :sessionFile (pichat-session-session-file session)
+                              :model (pichat-session-model session) :isStreaming nil
+                              :isCompacting nil :pendingMessageCount 0)))))
 
 (defun pichat-test-job-spec (directory &optional access)
   "Capture work in DIRECTORY; optional ACCESS adds inert legacy metadata."

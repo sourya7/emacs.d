@@ -1442,5 +1442,109 @@
       (should (equal before (pichat-job--read-bytes file)))
       (should (equal data (pichat-job-store-data store))))))
 
+(defun pichat-test-job--conversation ()
+  "Return data-only live-conversation provenance, not execution authority."
+  '(:version 1 :kind "conversation" :runtime-id "runtime-example"
+    :session-id "pi-example" :session-file nil :process-generation 1
+    :source-generation 2 :input-generation 3 :leaf "leaf" :last-entry "leaf"
+    :entries-digest "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    :model "test/model"))
+
+(defun pichat-test-job--conversation-spec ()
+  "Return a read-only configuration snapshot for one existing conversation."
+  (let ((spec (pichat-test-job--spec)))
+    (setf (plist-get (plist-get spec :configuration) :mode) "conversation")
+    spec))
+
+(ert-deftest pichat-job-conversation-waits-without-queue-or-capacity-use ()
+  (pichat-test-job--with-store
+    (let* ((ordinary (pichat-test-job--enqueue store))
+           (id (pichat-job-conversation-schedule
+                store (pichat-test-job--conversation-spec)
+                (pichat-test-job--conversation) 100 nil 90))
+           (pending (pichat-job-record store 'runs id)))
+      (should (equal "scheduled" (plist-get pending :state)))
+      (should-not (eq t (plist-get (pichat-job-admission store id 1) :ready)))
+      (should (eq t (plist-get (pichat-job-admission store ordinary 1) :ready)))
+      (should-not (pichat-job-conversation-dispatch store id pending 99 1))
+      ;; Queue full consumes the occurrence with a visible not-sent reason.
+      (pichat-job-conversation-dispatch store id pending 100 1)
+      (let ((run (pichat-job-record store 'runs id)))
+        (should (equal "finished" (plist-get run :state)))
+        (should (equal "cancelled" (plist-get run :result)))
+        (should (string-match-p "queue is full" (plist-get run :reason))))
+      (should (equal [] (pichat-job-records store 'jobs))))))
+
+(ert-deftest pichat-job-conversation-due-is-atomic-idempotent-and-keeps-provenance ()
+  (pichat-test-job--with-store
+    (let* ((id (pichat-job-conversation-schedule
+                store (pichat-test-job--conversation-spec)
+                (pichat-test-job--conversation) 100 nil 90))
+           (pending (pichat-job-record store 'runs id)))
+      (should (equal id (pichat-job-conversation-dispatch store id pending 123 1)))
+      (should-not (pichat-job-conversation-dispatch store id pending 123 1))
+      (let ((run (pichat-job-record (pichat-job-store-open file) 'runs id)))
+        (should (equal "queued" (plist-get run :state)))
+        (should (equal (plist-get pending :destination) (plist-get run :destination)))
+        (should (= 100 (plist-get (plist-get run :trigger) :due)))))))
+
+(ert-deftest pichat-job-conversation-replacement-is-exact-and-never-active ()
+  (pichat-test-job--with-store
+    (let* ((spec (pichat-test-job--conversation-spec))
+           (destination (pichat-test-job--conversation))
+           (id (pichat-job-conversation-schedule store spec destination 100 nil 90))
+           (pending (pichat-job-record store 'runs id)))
+      (should-error (pichat-job-conversation-schedule store spec destination 110 nil 90))
+      (let ((replacement (pichat-job-conversation-schedule store spec destination 110 pending 90)))
+        (should (equal "cancelled" (plist-get (pichat-job-record store 'runs id) :result)))
+        (should-error (pichat-job-conversation-schedule store spec destination 120 pending 90))
+        (let ((expected (pichat-job-record store 'runs replacement)))
+          (pichat-job-conversation-dispatch store replacement expected 110)
+          (pichat-job-claim store replacement)
+          (should-error (pichat-job-conversation-schedule
+                         store spec destination 120 (pichat-job-record store 'runs replacement) 111)))))))
+
+(ert-deftest pichat-job-conversation-cancel-and-restart-never-replay ()
+  (pichat-test-job--with-store
+    (let* ((spec (pichat-test-job--conversation-spec))
+           (destination (pichat-test-job--conversation))
+           (id (pichat-job-conversation-schedule store spec destination 100 nil 90)))
+      (pichat-job-cancel-queued store id)
+      (should (equal "cancelled" (plist-get (pichat-job-record store 'runs id) :result)))
+      (setq id (pichat-job-conversation-schedule store spec destination 100 nil 90))
+      (pichat-job-reconcile store)
+      (should (equal "cancelled" (plist-get (pichat-job-record store 'runs id) :result)))
+      (should (string-match-p "restart" (plist-get (pichat-job-record store 'runs id) :reason)))
+      (setq id (pichat-job-conversation-schedule store spec destination 100 nil 90))
+      (pichat-job-conversation-dispatch store id (pichat-job-record store 'runs id) 100)
+      (pichat-job-claim store id)
+      (pichat-job-reconcile store)
+      (should (equal "uncertain" (plist-get (pichat-job-record store 'runs id) :state))))))
+
+(ert-deftest pichat-job-conversation-binding-cannot-be-saved-repeated-or-defaulted ()
+  (pichat-test-job--with-store
+    (let* ((spec (pichat-test-job--conversation-spec))
+           (destination (pichat-test-job--conversation)))
+      (should-error (pichat-job-save store spec))
+      (should-error (pichat-job-enqueue store spec))
+      (should-error (pichat-job-conversation-schedule
+                     store spec (plist-put (copy-sequence destination) :kind "unknown") 100 nil 90))
+      (let ((id (pichat-job-conversation-schedule store spec destination 100 nil 90)))
+        (pichat-job-cancel-queued store id)
+        (should-not (pichat-job-continuable-p (pichat-job-record store 'runs id)))
+        (should-error (pichat-job-enqueue store nil nil nil id))
+        (should-error (pichat-job-enqueue store nil nil nil nil id))))))
+
+(ert-deftest pichat-job-conversation-storage-failure-never-consumes-occurrence ()
+  (pichat-test-job--with-store
+    (let* ((id (pichat-job-conversation-schedule
+                store (pichat-test-job--conversation-spec)
+                (pichat-test-job--conversation) 100 nil 90))
+           (before (pichat-job-record store 'runs id)))
+      (cl-letf (((symbol-function 'rename-file) (lambda (&rest _) (error "Write failed"))))
+        (should-error (pichat-job-conversation-dispatch store id before 100)))
+      (should (equal before (pichat-job-record store 'runs id)))
+      (should (equal before (pichat-job-record (pichat-job-store-open file) 'runs id))))))
+
 (provide 'pichat-test-job-core)
 ;;; pichat-test-job-core.el ends here

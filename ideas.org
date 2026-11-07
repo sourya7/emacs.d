@@ -1,3 +1,22 @@
 * Ideas
 ** scheduled jobs should be able to run elisp.
 the goal is to be able to run things like compact before sending a follow up
+** add menu for going to session asdociated with an existing session
+**  do research into the available actions and move them to the actions transient when available
+** can we use a numeric id rather than our current hash. it maked the title too long and not very easy to relate
+** review and make sure all pichat buffers have the same consistent header
+** add thinking level to pichat launch
+** command to screenshot emacs visible frame
+** is there a easy way to browse json in emacs
+want to see it work with the plans command and its json output rather than having to build a custom interface here
+** easy way to navigate pochat buffers with consult
+** can i do mitm on the vm?
+** being able to use drone
+*** maybe security wise no access kubectl
+*** that would require drone jobs for frequently necessary operations
+*** easy to toggle or revoke the access to drone
+** automate openwrt configuration. something like git based.
+** automate install and nix equivalent git based config for various maches. think whether we can have a secure way to automate with drone jobs
+** can we combine the continuation within the follow up? kind of seems like related functionalitkes
+** make dd delete the draft
+** add a run now option for the scheduked jobs

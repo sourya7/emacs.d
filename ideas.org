@@ -1,17 +1,25 @@
-#+TODO: IDEA QUEUED NEEDS-INPUT | PLANNED DECLINED
+#+TODO: IDEA QUEUED NEEDS-INPUT | PLANNED DONE DECLINED
 
 * Ideas
 ** scheduled jobs should be able to run elisp.
 the goal is to be able to run things like compact before sending a follow up
+- Review: Draft plan =deliver-queued-follow-ups-after-manual-compaction= covers typed compact-before-send preparation, not arbitrary scheduled Elisp. Keep this broader idea open.
 ** add menu for going to session associated with an existing session (eg: job continuation)
-** do research into the available actions and move them to the actions transient when available
-** can we use a numeric id rather than our current hash. it maked the title too long and not very easy to relate
+- Review: Related saved-session browsing and previous/triggering job-run links exist; a unified associated-session menu remains unverified. The Session History navigation draft concerns entries within one Pi session, not relations between sessions.
+** PLANNED do research into the available actions and move them to the actions transient when available
+- Existing plan: =pichat-maintainability=, unfinished W21 — Evaluate one thin chat-actions Transient. Planned evaluation, not an implemented consolidation.
+** DONE can we use a numeric id rather than our current hash. it maked the title too long and not very easy to relate
+- Review: Chat buffer names now use short runtime numbers (for example, =*pi:project:7*=); the runtime manager shows matching IDs. These identify runtimes, not Pi sessions; see =pichat/GLOSSARY.md=.
 ** review and make sure all pichat buffers have the same consistent header
+- Review: Persistent chat headers are implemented (completed plan =pichat-persistent-context-header=). Jobs and other views still have distinct presentations; an all-buffer consistency audit remains open.
 ** add thinking level to pichat launch
 ** command to screenshot emacs visible frame
+- Review: PiChat supports screenshot attachment capture, but no dedicated visible-Emacs-frame command was found.
 ** is there a easy way to browse json in emacs
 want to see it work with the plans command and its json output rather than having to build a custom interface here
+- Review: =json-mode= is configured in =user/programming.el=; a structured JSON browser and plans-output workflow remain open.
 ** easy way to navigate pochat buffers with consult
+- Review: Ordinary Consult buffer switching and PiChat archive-backed saved-session browsing exist. No dedicated live-PiChat-buffer picker was found; saved-session browsing is distinct from opening live runtimes.
 ** can i do mitm on the vm?
 ** being able to use drone
 *** maybe security wise no access kubectl
@@ -19,9 +27,10 @@ want to see it work with the plans command and its json output rather than havin
 *** easy to toggle or revoke the access to drone
 ** automate openwrt configuration. something like git based.
 ** automate install and nix equivalent git based config for various maches. think whether we can have a secure way to automate with drone jobs
-** can we combine the continuation within the follow up? kind of seems like related functionalitkes
+** PLANNED can we combine the continuation within the follow up? kind of seems like related functionalitkes
+- Existing draft: =deliver-queued-follow-ups-after-manual-compaction= explicitly unifies conversational follow-up composition and timed continuation. Not implemented; execution requires separate authorization.
 ** make dd delete the draft
-** PLANNED add a run now option for the scheduked jobs
+** DONE add a run now option for the scheduked jobs
 :PROPERTIES:
 :ID: 4bb821c8-e9df-4aa6-9b4d-2ca1f30e9d36
 :IDEA_PROJECT: /home/dev/.emacs.d
@@ -31,5 +40,8 @@ want to see it work with the plans command and its json output rather than havin
 - Planning [2026-11-08T00:52:14+00:00]: Validated draft handoff: /home/dev/Dev/plans/projects/emacs-d/plans/run-a-pending-scheduled-continuation-now/plan.org; implementation requires separate approval.
 - Planning [2026-11-08T07:05:14+00:00]: User-authorized path migration to run-a-pending-scheduled-continuation-now; updated reservation and handoff paths, preserving source identity and state.
 - Planning [2026-11-08T16:35:18+00:00]: Migrated to plan-ID references; resolve current location through plans, including archive.
+- Review: Linked plan is completed and archived; Run now is implemented for pending scheduled continuations. Saved-job schedules also support Run now.
 ** make it possible to have a 'custom' preset which can be emacs instance level
-** move the idea to plan outside of emacs.d since its global skill
+- Review: Programmable named presets and run-local Tools customization exist. A dedicated interactive Emacs-instance custom-preset editor remains open.
+** DONE move the idea to plan outside of emacs.d since its global skill
+- Review: The =idea-to-plan= skill is installed globally from the shared skills repository; no project-local copy remains.

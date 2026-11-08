@@ -154,6 +154,39 @@
                     (should (car result)))))
             (when cancel (funcall cancel))))))))
 
+(ert-deftest pichat-process-lifetime-exit-during-stat-read-is-confirmed ()
+  (pichat-test-with-unit-session (session process)
+    (pichat-test-with-temp-dir dir
+      (let* ((identity (pichat-test-lifetime--identity process))
+             (transport (pichat-transport--create :id 'fixture :kind 'ssh))
+             (make-local (symbol-function 'pichat-transport-make-process))
+             (flag (expand-file-name "exit-during-read" dir))
+             ;; Kill only this fixture's process, after the observer has
+             ;; checked its directory but before cat reads its stat file.
+             (prefix (format "cat() { if [ -f %s ] && [ \"$1\" = /proc/%d/stat ]; then kill -KILL %d; sleep 0.1; fi; command cat \"$@\"; }\n"
+                             (shell-quote-argument flag)
+                             (process-id process) (process-id process)))
+             ready result cancel)
+        (process-put process 'pichat-lifetime identity)
+        (unwind-protect
+            (cl-letf (((symbol-function 'pichat-transport-make-process)
+                       (lambda (_transport cwd &rest args)
+                         (let* ((command (plist-get args :command))
+                                (script (car (last command))))
+                           (apply make-local pichat-transport-local cwd
+                                  (plist-put args :command
+                                             (list "sh" "-c" (concat prefix script))))))))
+              (setq cancel
+                    (pichat-process-lifetime-watch
+                     transport default-directory process 2 t
+                     (lambda () (setq ready t))
+                     (lambda (success reason) (setq result (list success reason)))))
+              (pichat-test-wait-until (lambda () ready) 2 "baseline before exit race")
+              (write-region "exit" nil flag nil 'silent)
+              (pichat-test-wait-until (lambda () result) 2 "exit during stat read")
+              (should (equal result '(t nil))))
+          (when cancel (funcall cancel)))))))
+
 (ert-deftest pichat-process-lifetime-procfs-read-failure-after-ready-is-not-exit ()
   (dolist (fault '(boot-change boot self-stat writer-stat))
     (pichat-test-with-unit-session (session process)

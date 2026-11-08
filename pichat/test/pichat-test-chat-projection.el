@@ -84,9 +84,8 @@
             (with-current-buffer buffer
               (goto-char (point-min))
               (should header-line-format)
-              (should (looking-at "^$"))
-              (forward-line 1)
-              (should (looking-at "^$"))
+              (should (= (point-min)
+                         (marker-position pichat-chat--prompt-start)))
               (should-not (string-match-p "Keys: RET send" (buffer-string)))
               (pichat-chat--set-status 'phase-2 "[stable status]")
               (buffer-enable-undo)

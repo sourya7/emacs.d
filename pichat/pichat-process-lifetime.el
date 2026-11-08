@@ -62,7 +62,10 @@ check() {
   [ \"$b\" = \"$boot\" ] || exit 2
   cat /proc/self/stat >/dev/null || exit 2
   if [ -d /proc/$pid ]; then
-    s=$(cat /proc/$pid/stat) || exit 2
+    s=$(cat /proc/$pid/stat 2>/dev/null) || {
+      [ ! -d /proc/$pid ] && return 1
+      exit 2
+    }
     rest=${s##*) }
     [ \"$rest\" != \"$s\" ] || exit 2
     set -- $rest

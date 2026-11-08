@@ -14,7 +14,6 @@
   :defer t)
 
 (use-package pichat
-  :demand t
   :ensure `(:type file
             :main ,(my/emacs-main-dir "pichat/pichat.el")
             :files ("*.el"
@@ -25,6 +24,7 @@
   :custom
   (pichat-jobs-file (my/emacs-local-dir "pichat/jobs.json"))
   :commands (pichat pichat-global pichat-launch pichat-session-manager
+                    pichat-jobs
                     pichat-sessions-browse-files pichat-sessions-switch-files
                     pichat-status
                     pichat-select-model pichat-stop-session
@@ -35,14 +35,17 @@
 Prefer bullets unless a table materially helps comparison.
 Keep tables narrow and pad columns for monospace readability.")
 
-;; Use Pi's absolute path because non-interactive SSH lacks the mise PATH.
-(setf (alist-get 'agent-dev pichat-targets)
-      '(:kind ssh
-        :tramp-prefix "/ssh:agent-dev:"
-        :pi-executable "/home/dev/.local/share/mise/installs/pi/latest/pi/pi"
-        :remote-path (tramp-own-remote-path)
-        :runtime-home "/home/dev"
-        :path-mappings (("/ssh:agent-dev:/" . "/"))))
+;; Updating an alist reads its current value: wait for its defining module,
+;; not Elpaca activation or a particular entry command to load PiChat.
+(with-eval-after-load 'pichat-transport
+  ;; Use Pi's absolute path because non-interactive SSH lacks the mise PATH.
+  (setf (alist-get 'agent-dev pichat-targets)
+        '(:kind ssh
+          :tramp-prefix "/ssh:agent-dev:"
+          :pi-executable "/home/dev/.local/share/mise/installs/pi/latest/pi/pi"
+          :remote-path (tramp-own-remote-path)
+          :runtime-home "/home/dev"
+          :path-mappings (("/ssh:agent-dev:/" . "/")))))
 
 ;; (setq pichat-targets
 ;;       '((lima-devbox

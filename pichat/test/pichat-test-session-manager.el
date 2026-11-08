@@ -8,6 +8,33 @@
 
 (require 'pichat-test-support)
 
+(ert-deftest pichat-manager-autoloads-before-main-entry-point ()
+  ;; The normal suite has already loaded pichat.el.  Exercise a genuinely cold
+  ;; command in a child Emacs, preserving dependency paths but no loaded state.
+  (with-temp-buffer
+    (let ((status
+           (apply #'call-process
+                  (expand-file-name invocation-name invocation-directory)
+                  nil (current-buffer) nil "-Q" "--batch"
+                  (append
+                   (cl-loop for directory in load-path
+                            when (and directory (file-directory-p directory))
+                            append (list "-L" directory))
+                   (list
+                    "--eval"
+                    (prin1-to-string
+                     '(progn
+                        (autoload 'pichat-session-manager
+                          "pichat-session-manager" nil t)
+                        (when (featurep 'pichat)
+                          (error "PiChat loaded before command invocation"))
+                        (call-interactively #'pichat-session-manager)
+                        (unless (and (featurep 'pichat)
+                                     (derived-mode-p 'pichat-session-manager-mode))
+                          (error "Manager did not initialize from autoload")))))))))
+      (ert-info ((buffer-string))
+        (should (equal status 0))))))
+
 (ert-deftest pichat-manager-open-reuses-owned-chat-after-source-id-change ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)

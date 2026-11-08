@@ -1084,6 +1084,9 @@ C-o) stays usable in this buffer."
 (defun pichat-session-manager ()
   "Open the single global PiChat runtime-session manager."
   (interactive)
+  ;; The manager can be autoloaded before the lifecycle/registry entry point.
+  ;; Require it here rather than introducing a top-level circular dependency.
+  (require 'pichat)
   (let ((buffer (get-buffer-create pichat-session-manager-buffer-name)))
     (with-current-buffer buffer
       (unless (derived-mode-p 'pichat-session-manager-mode)

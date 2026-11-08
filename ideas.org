@@ -26,11 +26,10 @@ want to see it work with the plans command and its json output rather than havin
 :ID: 4bb821c8-e9df-4aa6-9b4d-2ca1f30e9d36
 :IDEA_PROJECT: /home/dev/.emacs.d
 :IDEA_PLAN_ID: run-a-pending-scheduled-continuation-now
-:IDEA_PLAN_STORE: /home/dev/Dev/plans/projects/emacs-d/plans
-:IDEA_PLAN_FILE: /home/dev/Dev/plans/projects/emacs-d/plans/run-a-pending-scheduled-continuation-now/plan.org
 :END:
 - Planning [2026-11-08T00:51:19+00:00]: Provisional draft created; research, draft and validate it before publication. /home/dev/Dev/plans/projects/emacs-d/plans/run-a-pending-scheduled-continuation-now/plan.org
 - Planning [2026-11-08T00:52:14+00:00]: Validated draft handoff: /home/dev/Dev/plans/projects/emacs-d/plans/run-a-pending-scheduled-continuation-now/plan.org; implementation requires separate approval.
 - Planning [2026-11-08T07:05:14+00:00]: User-authorized path migration to run-a-pending-scheduled-continuation-now; updated reservation and handoff paths, preserving source identity and state.
+- Planning [2026-11-08T16:35:18+00:00]: Migrated to plan-ID references; resolve current location through plans, including archive.
 ** make it possible to have a 'custom' preset which can be emacs instance level
 ** move the idea to plan outside of emacs.d since its global skill

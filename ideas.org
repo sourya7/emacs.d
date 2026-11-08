@@ -33,3 +33,4 @@ want to see it work with the plans command and its json output rather than havin
 - Planning [2026-11-08T00:52:14+00:00]: Validated draft handoff: /home/dev/Dev/plans/projects/emacs-d/plans/run-a-pending-scheduled-continuation-now/plan.org; implementation requires separate approval.
 - Planning [2026-11-08T07:05:14+00:00]: User-authorized path migration to run-a-pending-scheduled-continuation-now; updated reservation and handoff paths, preserving source identity and state.
 ** make it possible to have a 'custom' preset which can be emacs instance level
+** move the idea to plan outside of emacs.d since its global skill

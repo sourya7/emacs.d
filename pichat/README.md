@@ -140,8 +140,10 @@ The header is a normal `header-line-format`, which a mode hook may override.
 `pichat-chat-header-functions` is a global or buffer-local ordered list of
 functions taking `(SESSION WINDOW)`. Each returns nil when unavailable or a
 plist: `:id` (unique symbol), `:text` (full string), optional `:compact` (short
-string), and `:priority` (number, default 0). Higher priorities appear/admit first;
-ties retain list order. Strings must be single-line, at most 256 characters.
+string), `:side` (`left`, the default, or `right`), and `:priority` (number,
+default 0). Right-side segments appear beside context with the same middle-dot
+separator as extension usage. Higher priorities appear/admit first; ties retain
+list order. Strings must be single-line, at most 256 characters.
 Faces and tooltips are preserved; errors or invalid records omit only that
 segment. Optional segments can never displace context, regardless of priority.
 

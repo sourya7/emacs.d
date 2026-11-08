@@ -52,11 +52,13 @@ The directory is shortened or omitted when context usage needs the space."
 (defcustom pichat-chat-header-functions nil
   "Functions supplying optional cached information for the fixed header.
 Each receives the runtime SESSION and displayed WINDOW, and returns nil or
-a plist with :id (symbol), :text (string), optional :compact (string), and
-:priority (number, default 0).  Higher priority is admitted first; ties
-preserve list order.  Each string must be a single line of at most 256
-characters.  Faces and help-echo are preserved.  Errors or invalid results
-omit only that segment.  Context usage always takes precedence.
+a plist with :id (symbol), :text (string), optional :compact (string),
+:side (`left', the default, or `right'), and :priority (number, default 0).
+Right-side segments appear beside context, separated by middle dots like
+extension usage.  Higher priority is admitted first; ties preserve list order.
+Each string must be a single line of at most 256 characters.
+Faces and help-echo are preserved.  Errors or invalid results omit only that
+segment.  Context usage always takes precedence.
 May be set globally or buffer-locally.  Functions run during redisplay:
 use cached data only, never network, RPC, file access, or buffer edits.
 Integrations own their caches; see the README for lifetime and refresh rules."
@@ -1101,9 +1103,10 @@ performs no acquisition and updates inactive windows showing the chat too."
                  (id (plist-get segment :id))
                  (text (plist-get segment :text))
                  (compact (plist-get segment :compact))
+                 (side (or (plist-get segment :side) 'left))
                  (priority (or (plist-get segment :priority) 0)))
             (when (and id (symbolp id) (not (memq id ids))
-                       (numberp priority)
+                       (memq side '(left right)) (numberp priority)
                        (stringp text) (not (string-empty-p text))
                        (cl-every (lambda (value)
                                    (or (null value)
@@ -1114,7 +1117,7 @@ performs no acquisition and updates inactive windows showing the chat too."
                                  (list text compact)))
               (push id ids)
               (push (list :id id :text text :compact compact
-                          :priority priority) segments)))
+                          :side side :priority priority) segments)))
         (error nil)))
     (cl-stable-sort (nreverse segments)
                     (lambda (a b) (> (plist-get a :priority)
@@ -1150,17 +1153,23 @@ performs no acquisition and updates inactive windows showing the chat too."
          (remaining (- width (string-width right)))
          (segments (and session
                         (pichat-chat--header-segments session window)))
-         extras left)
+         extras right-extras left)
     (dolist (segment segments)
       (let* ((text (plist-get segment :text))
              (compact (plist-get segment :compact))
-             (chosen (cond ((<= (+ 2 (string-width text)) remaining) text)
+             (right-side (eq (plist-get segment :side) 'right))
+             (separator-width (if right-side 3 2))
+             (chosen (cond ((<= (+ separator-width (string-width text)) remaining)
+                            text)
                            ((and compact (not (string-empty-p compact))
-                                 (<= (+ 2 (string-width compact)) remaining))
+                                 (<= (+ separator-width (string-width compact))
+                                     remaining))
                             compact))))
         (when chosen
-          (push chosen extras)
-          (cl-decf remaining (+ 2 (string-width chosen))))))
+          (if right-side (push chosen right-extras) (push chosen extras))
+          (cl-decf remaining (+ separator-width (string-width chosen))))))
+    (when right-extras
+      (setq right (string-join (append (nreverse right-extras) (list right)) " · ")))
     (when (and session pichat-chat-header-show-directory (> remaining 10))
       (let* ((path (or (pichat-session-runtime-cwd session)
                        (pichat-session-cwd session) "?"))

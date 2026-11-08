@@ -18,6 +18,58 @@
 (defvar my/cliproxy-usage--generation 0
   "Generation of the most recent quota request.")
 
+(defvar my/cliproxy-usage--snapshot nil
+  "Last valid account-wide quota snapshot, or nil before a successful fetch.")
+
+(defvar my/cliproxy-usage-updated-hook nil
+  "Hook run after publishing a valid snapshot; no arguments.
+Consumers may read `my/cliproxy-usage-snapshot'.  Loading or reading the cache
+never accesses auth-source or the network.")
+
+(defvar-local my/cliproxy-usage-display-policy 'report
+  "Presentation for manually fetched quota: `report' or `header-only'.
+The command captures this policy before starting asynchronous requests.")
+
+(defun my/cliproxy-usage-snapshot ()
+  "Return a copy of the last successfully fetched account-wide quota.
+The plist contains :updated-at (Emacs time) and :windows (a list of plists).
+Each window has :label, :used, :remaining, optional :reset-at (Unix seconds)
+and :seconds (duration).  No credentials or account identifiers are retained.
+This is last-fetched allowance, not live usage or runtime/model consumption."
+  (copy-tree my/cliproxy-usage--snapshot))
+
+(defun my/cliproxy-usage--normalize-window (label window)
+  "Validate and normalize a reported WINDOW with fallback LABEL.
+Absent windows return nil; malformed present windows reject the response."
+  (when window
+    (let ((used (alist-get 'used_percent window))
+          (reset (alist-get 'reset_at window))
+          (seconds (alist-get 'limit_window_seconds window)))
+      (unless (and (numberp used) (<= 0 used 100)
+                   (or (null reset)
+                       (and (integerp reset) (<= 0 reset 253402300799)))
+                   (or (null seconds)
+                       (and (integerp seconds) (< 0 seconds 253402300799))))
+        (error "Invalid quota window"))
+      (list :label (cond ((equal seconds 18000) "5-hour")
+                         ((equal seconds 604800) "Weekly")
+                         (t label))
+            :used used :remaining (- 100 used)
+            :reset-at reset :seconds seconds))))
+
+(defun my/cliproxy-usage--publish (payload)
+  "Validate PAYLOAD and atomically publish only normalized quota data."
+  (let* ((limits (alist-get 'rate_limit payload))
+         (windows (delq nil
+                        (list (my/cliproxy-usage--normalize-window
+                               "Primary" (alist-get 'primary_window limits))
+                              (my/cliproxy-usage--normalize-window
+                               "Secondary" (alist-get 'secondary_window limits))))))
+    (unless windows (error "No Codex quota windows returned"))
+    (setq my/cliproxy-usage--snapshot
+          (list :updated-at (current-time) :windows windows))
+    (run-hooks 'my/cliproxy-usage-updated-hook)))
+
 (defun my/cliproxy-usage--connection ()
   "Return (BASE-URL . KEY) from the unique auth-source login mankey.
 Derive the HTTPS destination solely from the entry's host and optional
@@ -67,7 +119,9 @@ include response bodies in errors, since they may contain account data."
                (cond
                 ((not (equal url-http-response-status 200))
                  (message "CLIProxyAPI: management request failed (HTTP %s)"
-                          (or url-http-response-status "unavailable")))
+                          (if (and (integerp url-http-response-status)
+                                   (<= 100 url-http-response-status 599))
+                              url-http-response-status "unavailable")))
                 ((plist-get status :error)
                  (message "CLIProxyAPI: network request failed"))
                 (t
@@ -81,42 +135,34 @@ include response bodies in errors, since they may contain account data."
          (kill-buffer (current-buffer))))
      nil t t)))
 
-(defun my/cliproxy-usage--window (label window)
-  "Format quota WINDOW with LABEL, or return nil when absent."
-  (let ((used (alist-get 'used_percent window))
-        (reset (alist-get 'reset_at window))
-        (seconds (alist-get 'limit_window_seconds window)))
-    (when (numberp used)
-      (format "%-18s %6.1f%% used   %6.1f%% remaining\n  Resets: %s%s\n\n"
-              (cond ((equal seconds 18000) "5-hour")
-                    ((equal seconds 604800) "Weekly")
-                    (t label))
-              used (max 0 (- 100 used))
-              (if (numberp reset)
-                  (format-time-string "%Y-%m-%d %H:%M %Z"
-                                      (seconds-to-time reset))
-                "not reported")
-              (if (numberp seconds)
-                  (format "  (%.1f-hour window)" (/ seconds 3600.0))
-                "")))))
+(defun my/cliproxy-usage--window (window)
+  "Format a normalized quota WINDOW."
+  (let ((reset (plist-get window :reset-at))
+        (seconds (plist-get window :seconds)))
+    (format "%-18s %6.1f%% used   %6.1f%% remaining\n  Resets: %s%s\n\n"
+            (plist-get window :label)
+            (plist-get window :used) (plist-get window :remaining)
+            (if reset
+                (format-time-string "%Y-%m-%d %H:%M %Z"
+                                    (seconds-to-time reset))
+              "not reported")
+            (if seconds
+                (format "  (%.1f-hour window)" (/ seconds 3600.0))
+              ""))))
 
-(defun my/cliproxy-usage--display (payload)
-  "Display Codex quota PAYLOAD in a read-only buffer."
-  (let* ((limits (alist-get 'rate_limit payload))
-         (primary (my/cliproxy-usage--window
-                   "Primary" (alist-get 'primary_window limits)))
-         (secondary (my/cliproxy-usage--window
-                     "Secondary" (alist-get 'secondary_window limits))))
-    (unless (or primary secondary)
-      (user-error "No Codex quota windows returned"))
+(defun my/cliproxy-usage--display ()
+  "Display the last successful Codex quota snapshot in a read-only buffer."
+  (let ((snapshot (my/cliproxy-usage-snapshot)))
     (with-current-buffer (get-buffer-create "*CLIProxyAPI Usage*")
       (let ((inhibit-read-only t))
         (erase-buffer)
-        (insert "Codex subscription quota\n\n"
-                "Updated: " (format-time-string "%Y-%m-%d %H:%M %Z") "\n"
-                "Plan: " (format "%s" (or (alist-get 'plan_type payload)
-                                           "not reported"))
-                "\n\n" (or primary "") (or secondary "")
+        (insert "Codex subscription quota (account-wide, last fetched)\n\n"
+                "Updated: " (format-time-string
+                             "%Y-%m-%d %H:%M %Z"
+                             (plist-get snapshot :updated-at))
+                "\n\n"
+                (mapconcat #'my/cliproxy-usage--window
+                           (plist-get snapshot :windows) "")
                 "g: refresh    q: quit\n")
         (goto-char (point-min)))
       (special-mode)
@@ -124,16 +170,19 @@ include response bodies in errors, since they may contain account data."
       (local-set-key (kbd "g") #'my/cliproxy-usage)
       (display-buffer (current-buffer)))))
 
-(defun my/cliproxy-usage ()
-  "Show the single Codex account's quota through CLIProxyAPI.
+(defun my/cliproxy-usage (&optional display-policy)
+  "Fetch the single Codex account's quota through CLIProxyAPI.
 Derive the HTTPS host and management key from the unique auth-source
 entry with login mankey.  Provider OAuth credentials stay on the proxy server.
-Requests run asynchronously; invoking again supersedes older results."
+Requests run asynchronously; invoking again supersedes older results.
+DISPLAY-POLICY defaults to `my/cliproxy-usage-display-policy': `report'
+shows the usage buffer, while `header-only' only publishes the shared cache."
   (interactive)
-  (let* ((connection (my/cliproxy-usage--connection))
+  (let* ((generation (cl-incf my/cliproxy-usage--generation))
+         (policy (or display-policy my/cliproxy-usage-display-policy))
+         (connection (my/cliproxy-usage--connection))
          (base-url (car connection))
-         (key (cdr connection))
-         (generation (cl-incf my/cliproxy-usage--generation)))
+         (key (cdr connection)))
     (message "Fetching Codex quota…")
     (my/cliproxy-usage--request
      base-url "/credentials" key nil
@@ -173,16 +222,25 @@ Requests run asynchronously; invoking again supersedes older results."
                   (when (= generation my/cliproxy-usage--generation)
                     (let ((status (alist-get 'status_code result))
                           (body (alist-get 'body result)))
-                      (if (and (numberp status) (<= 200 status) (< status 300))
-                          (my/cliproxy-usage--display
-                           (if (stringp body)
-                               (json-parse-string body :object-type 'alist
-                                                  :array-type 'list
-                                                  :null-object nil
-                                                  :false-object nil)
-                             body))
+                      (if (and (integerp status) (<= 200 status 299))
+                          (condition-case nil
+                              (progn
+                                (my/cliproxy-usage--publish
+                                 (if (stringp body)
+                                     (json-parse-string body :object-type 'alist
+                                                        :array-type 'list
+                                                        :null-object nil
+                                                        :false-object nil)
+                                   body))
+                                ;; An update hook may itself start a new request.
+                                (when (= generation my/cliproxy-usage--generation)
+                                  (if (eq policy 'header-only)
+                                      (message "Codex quota updated (account-wide, last fetched)")
+                                    (my/cliproxy-usage--display))))
+                            (error (message "CLIProxyAPI: could not process quota response")))
                         (message "CLIProxyAPI: Codex quota request failed (HTTP %s)"
-                                 status))))))))))))))
+                                 (if (and (integerp status) (<= 100 status 599))
+                                     status "unavailable")))))))))))))))
 
 (provide 'user/cliproxy-usage)
 ;;; cliproxy-usage.el ends here

@@ -432,6 +432,37 @@
                                    (string-match "Plan" text) 'face text)))
               (should (string-prefix-p "Plan left 62%  Low" text)))))))))
 
+(ert-deftest pichat-chat-header-right-segments-share-usage-layout-and-width-budget ()
+  (pichat-test-with-unit-session (session)
+    (setf (pichat-session-context-usage session)
+          '(:tokens 84000 :contextWindow 272000 :percent 31))
+    (let ((pichat-chat-header-show-directory nil)
+          (pichat-chat-header-functions
+           (list (lambda (_s _w) '(:id left :text "Left"))
+                 (lambda (_s _w)
+                   (list :id 'right :side 'right :priority 10
+                         :text (propertize "82% 5h 59% wk" 'help-echo "Cached quota")
+                         :compact (propertize "82% 5h" 'help-echo "Cached quota")))
+                 (lambda (_s _w) '(:id invalid :side elsewhere :text "Bad")))))
+      (dolist (spec '((40 "82% 5h 59% wk" t)
+                      (20 "82% 5h" nil)
+                      (8 nil nil)))
+        (cl-letf (((symbol-function 'window-body-width)
+                   (lambda (&rest _) (car spec))))
+          (let ((text (pichat-chat--header-text session (selected-window))))
+            (should (<= (string-width text) (car spec)))
+            (should (string-suffix-p "84k/272k" text))
+            (should-not (string-match-p "Bad" text))
+            (if (cadr spec)
+                (progn
+                  (should (string-suffix-p (concat (cadr spec) " · 84k/272k") text))
+                  (should (equal "Cached quota"
+                                 (get-text-property (string-match "82%" text)
+                                                    'help-echo text))))
+              (should-not (string-match-p "82%" text)))
+            (should (eq (not (null (nth 2 spec)))
+                        (not (null (string-match-p "Left" text)))))))))))
+
 (ert-deftest pichat-chat-header-custom-configuration-is-buffer-local ()
   (pichat-test-with-unit-session (session)
     (let ((pichat-chat-header-functions

@@ -11,6 +11,7 @@ tramp
 .local
 
 # Org-mode
+.*.idea-to-plan.lock
 .org-id-locations
 *_archive
 

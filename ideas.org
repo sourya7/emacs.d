@@ -1,3 +1,5 @@
+#+TODO: IDEA QUEUED NEEDS-INPUT | PLANNED DECLINED
+
 * Ideas
 ** scheduled jobs should be able to run elisp.
 the goal is to be able to run things like compact before sending a follow up

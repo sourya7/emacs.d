@@ -287,14 +287,20 @@ every definition row."
   (interactive nil pichat-jobs-mode)
   (unless (and (derived-mode-p 'pichat-jobs-mode) (eq pichat-jobs--kind 'jobs))
     (user-error "Select a job in Jobs first"))
-  (let* ((store (pichat-jobs--store))
-         (id (or (tabulated-list-get-id) (user-error "No job selected")))
+  (pichat-jobs--delete-job pichat-jobs--owner
+                           (or (tabulated-list-get-id) (user-error "No job selected"))))
+
+(defun pichat-jobs--delete-job (owner id)
+  "Confirm deletion of exact saved job ID in OWNER, preserving run history."
+  (let* ((store (pichat-job-executor-store owner))
          (job (pichat-job-record store 'jobs id))
          (title (pichat-jobs--display (plist-get (plist-get job :spec) :title))))
     (when (y-or-n-p (format "Delete job ‘%s’? " title))
+      (unless (equal job (pichat-job-record store 'jobs id))
+        (user-error "Job changed; review it again before deleting"))
       (pichat-job-delete store id)
-      (pichat-job-executor-schedule-refresh pichat-jobs--owner)
-      (pichat-jobs--changed pichat-jobs--owner)
+      (pichat-job-executor-schedule-refresh owner)
+      (pichat-jobs--changed owner)
       (message "Job deleted; run history preserved"))))
 
 (defun pichat-jobs-delete-run ()
@@ -789,17 +795,22 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
          (job-id (plist-get record :job-id))
          (schedule (plist-get record :schedule))
          (rule (plist-get schedule :rule))
-         (finished (equal (plist-get record :state) "finished")))
+         (finished (equal (plist-get record :state) "finished"))
+         (runs (and (eq kind 'jobs) (pichat-job-records store 'runs)))
+         (unfinished
+          (and (eq kind 'jobs)
+               (seq-some (lambda (run)
+                           (and (equal (plist-get record :id) (plist-get run :job-id))
+                                (not (equal (plist-get run :state) "finished"))))
+                         runs))))
     (if (eq kind 'jobs)
         (append
-         (let ((runs (pichat-job-records store 'runs)))
-           (when (and (< (seq-count (lambda (run) (equal (plist-get run :state) "queued")) runs)
-                         pichat-jobs-queue-limit)
-                      (not (seq-some (lambda (run)
-                                       (and (equal (plist-get record :id) (plist-get run :job-id))
-                                            (not (equal (plist-get run :state) "finished")))) runs)))
-             '((work "r" "Run job" run))))
+         (when (and (< (seq-count (lambda (run) (equal (plist-get run :state) "queued")) runs)
+                       pichat-jobs-queue-limit)
+                    (not unfinished))
+           '((work "r" "Run job" run)))
          '((work "e" "Edit…" edit) (navigate "h" "Run history" history))
+         (unless unfinished '((work "D" "Delete job…" delete-job)))
          (list (list 'schedule "s" (cond ((pichat-job-schedule-ui-missed-p schedule) "Reschedule…")
                                               (schedule "Change…") (t "Set schedule…")) 'schedule))
          (cond ((eq (plist-get schedule :enabled) t)
@@ -807,10 +818,24 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
                ((and schedule (or (equal (plist-get rule :kind) "interval")
                                   (> (plist-get rule :start) (float-time))))
                 '((schedule "t" "Enable…" enable))))
+         (when (and (pichat-job-schedule-run-now-p schedule)
+                    (not (pichat-job-executor-schedules-closed owner))
+                    (not (pichat-job-executor-schedule-error owner)))
+           '((schedule "n" "Run now" run-now)))
          (when (pichat-job-schedule-ui-missed-p schedule)
-           '((schedule "n" "Run now" run-now) (schedule "x" "Dismiss" dismiss)))
+           '((schedule "x" "Dismiss" dismiss)))
          '((inspect "I" "Inspect raw settings…" raw)))
       (append
+       (when (and (pichat-job-conversation-p record)
+                  (equal (plist-get record :state) "scheduled")
+                  (not (pichat-job-executor-schedules-closed owner))
+                  (not (pichat-job-executor-schedule-error owner))
+                  (gethash (plist-get record :id) (pichat-job-executor-conversations owner)))
+         '((work "n" "Run now" conversation-run-now)))
+       (when (and (not (pichat-job-executor-schedules-closed owner))
+                  (not (pichat-job-executor-schedule-error owner))
+                  (pichat-jobs--reschedule-source owner record))
+         '((work "s" "Reschedule…" conversation-reschedule)))
        (when (pichat-job-continuable-p record) '((work "c" "Continue work…" continue)))
        (when (and finished (not (pichat-job-conversation-p record))) '((work "r" "Repeat…" repeat)))
        (when finished '((work "D" "Delete run…" delete-run)))
@@ -870,12 +895,22 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
     (pcase action
       ('run (pichat-job-executor-submit owner nil id))
       ('edit (pichat-job--edit-saved owner id))
+      ('delete-job (pichat-jobs--delete-job owner id))
       ('history (pichat-jobs--show-history owner (if (eq kind 'jobs) id (plist-get record :job-id))))
       ('definition (pichat-jobs--show-detail owner 'jobs (plist-get record :job-id)))
       ('schedule (pichat-job-schedule-ui-open owner id))
       ('enable (pichat-job-schedule-ui--enable owner id record))
       ('disable (pichat-job-executor-schedule-enable owner id nil))
       ('run-now (pichat-job-executor-schedule-run-now owner id (plist-get record :schedule)))
+      ('conversation-run-now
+       (unless (equal record (plist-get scope :original))
+         (user-error "Scheduled continuation changed; reopen Actions"))
+       (pichat-job-executor-conversation-run-now owner id record))
+      ('conversation-reschedule
+       (unless (equal record (plist-get scope :original))
+         (user-error "Scheduled continuation changed; reopen Actions"))
+       (pichat-jobs--compose-reschedule owner record
+                                        (pichat-jobs--reschedule-source owner record)))
       ('dismiss
        (pichat-job-schedule-dismiss (pichat-job-executor-store owner) id (plist-get record :schedule))
        (pichat-job-executor--changed owner))
@@ -967,11 +1002,18 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
                 "Scheduled for: " (pichat-job-schedule-ui-time (plist-get (plist-get record :trigger) :due)) "\n")
         (when (equal state "scheduled")
           (insert "Emacs and this chat/runtime must remain alive. Sleep may delay delivery.\n"))
+        (when-let* ((instant (plist-get (plist-get record :trigger) :dispatched-at)))
+          (insert "Run now requested: " (pichat-job-schedule-ui-time instant) "\n"))
         (when (and (equal state "finished") (equal (plist-get record :result) "cancelled"))
           (insert "Not sent: " (or (plist-get record :reason) "Cancelled before dispatch") "\n"))
         (when-let* ((model (plist-get record :execution-model)))
           (insert "Verified dispatch model: " model "\n"))
         (insert "\n")))
+    (when (and (not (pichat-job-conversation-p record))
+               (plist-get (plist-get record :trigger) :dispatched-at))
+      (let ((trigger (plist-get record :trigger)))
+        (insert "Scheduled for: " (pichat-job-schedule-ui-time (plist-get trigger :due)) "\n"
+                "Run now requested: " (pichat-job-schedule-ui-time (plist-get trigger :dispatched-at)) "\n\n")))
     (when (equal (plist-get (plist-get record :event) :completeness) "partial")
       (insert "Previous run context is partial or unavailable.\n"))
 
@@ -1429,15 +1471,51 @@ SAVE creates a definition only.  Failures retain a recoverable detached draft."
   (pcase-let ((`(,owner ,id ,_capture) (pichat-job--continuation-notice-context)))
     (pichat-jobs--show-detail owner 'runs id)))
 
+(defun pichat-jobs--reschedule-source (owner run)
+  "Return RUN's retained source in OWNER for explicit renewed review.
+Use only live captures or exact chat notices, never resolve stored runtime IDs.
+Finished work without a not-sent notice is not a rescheduling authority.
+Check availability only; capture and verify history when opening the composer."
+  (when (pichat-job-conversation-p run)
+    (let* ((id (plist-get run :id))
+           (capture
+            (cond
+             ((member (plist-get run :state) '("scheduled" "queued"))
+              (gethash id (pichat-job-executor-conversations owner)))
+             ((and (equal (plist-get run :state) "finished")
+                   (equal (plist-get run :result) "cancelled"))
+              (seq-some
+               (lambda (buffer)
+                 (let ((notice (buffer-local-value 'pichat-job-executor--continuation-notice buffer)))
+                   (when (and (eq owner (car notice)) (equal id (cadr notice))
+                              (eq buffer (plist-get (nth 2 notice) :buffer)))
+                     (nth 2 notice))))
+               (buffer-list))))))
+      (when (and capture
+                 (equal (plist-get run :destination) (plist-get capture :destination))
+                 (pichat-job-conversation-notice-p capture)
+                 (let ((session (plist-get capture :session)))
+                   (and (pichat-job-conversation-available-p session)
+                        (pichat-job-conversation--model session)
+                        (pichat-chat-canonical-entry-cache session))))
+        capture))))
+
+(defun pichat-jobs--compose-reschedule (owner run source)
+  "Review RUN's prompt in a fresh capture of exact live SOURCE for OWNER.
+Opening or cancelling this composer never changes the original attempt."
+  (unless (and source (pichat-job-conversation-notice-p source))
+    (user-error "Originating conversation unavailable; schedule from its chat"))
+  (let* ((capture (pichat-job-conversation-capture (plist-get source :session)))
+         (spec (pichat-job-conversation-spec capture (plist-get (plist-get run :spec) :instructions))))
+    (pichat-job--compose owner 'schedule spec nil capture)))
+
 (defun pichat-job-reschedule-continuation ()
   "Review a fresh capture and the cancelled prompt; never reschedule silently.
 No time is selected.  Choose When and explicitly Schedule to authorize it."
   (interactive)
-  (pcase-let* ((`(,owner ,id ,_capture) (pichat-job--continuation-notice-context))
-               (run (pichat-job-record (pichat-job-executor-store owner) 'runs id))
-               (capture (pichat-job-conversation-capture pichat-chat-session))
-               (spec (pichat-job-conversation-spec capture (plist-get (plist-get run :spec) :instructions))))
-    (pichat-job--compose owner 'schedule spec nil capture)))
+  (pcase-let* ((`(,owner ,id ,source) (pichat-job--continuation-notice-context))
+               (run (pichat-job-record (pichat-job-executor-store owner) 'runs id)))
+    (pichat-jobs--compose-reschedule owner run source)))
 
 ;;;###autoload
 (defun pichat-job-schedule-continuation ()

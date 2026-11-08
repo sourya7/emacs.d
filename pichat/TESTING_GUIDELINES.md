@@ -191,6 +191,12 @@ exact test for a terminal run. The
 `pichat-integration-jobs-live-ui-schedule` scenario likewise supports terminal
 Emacs: it drives actual timing Transient keys, staged Cancel/Save, separate
 Enable/Disable and a real timer-triggered offline Pi run without focus changes.
+The `pichat-integration-jobs-live-ui-saved-schedule-run-now` scenario drives
+Set schedule, Save disabled, Enable and Run now for a future saved-job one-shot,
+then follows the last-occurrence link to its attributable early result. It supports
+isolated native/Evil terminal runs. Batch cases additionally cover atomic early
+consumption, manual-run timing preservation, stale/disabled/interval rejection,
+capacity/queue bounds, reentrant old callbacks and persistence failure.
 The interval scenario checks one real elapsed-interval occurrence, anchored future
 rearming and Disable; the cached attention/uncertainty scenario also works without
 graphics and checks global capacity without workspace blocking. The selected-phase scenario uses
@@ -214,9 +220,14 @@ Apply/Cancel, absolute-time picking, explicit Schedule, report cancellation and
 real timer execution in the same live Pi conversation. It supports native and
 Evil terminal runs with private storage and the offline provider. It does not
 establish real-SSH or human visual acceptance for this execution mode.
+The `pichat-integration-jobs-live-ui-conversation-run-now` scenario drives actual
+Actions/Run now keys for a future scheduled continuation, verifies early
+completion in the same runtime/Pi session, timer retirement and draft preservation.
+It supports the same isolated native/Evil terminal setup.
 The separate `pichat-integration-jobs-live-ui-continuation-invalidation-feedback`
-scenario drives cancellation feedback, repaint, exact report return and explicit
-rescheduling with no preselected time, then verifies native timer delivery after
+scenario drives cancellation feedback, repaint, exact report return and both
+chat-command and report-Actions rescheduling with no preselected time. Cancelling
+the report-side composer returns to the unchanged report. It then verifies native timer delivery after
 rename/model selection. It supports isolated native/Evil terminal runs using the
 same private offline-provider fixture.
 

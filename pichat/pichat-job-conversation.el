@@ -164,20 +164,27 @@ Unlike live authority, this remains valid after the captured process stops."
 (defun pichat-job-conversation-current-p (capture &optional guard)
   "Whether CAPTURE can be sent now, optionally under exact owned GUARD."
   (and (pichat-job-conversation-unchanged-p capture)
-       (let ((session (plist-get capture :session)))
-         (and (eq guard (pichat-session-input-guard session))
-              (not (pichat-session-restart-operation session))
-              (eq (pichat-session-state session) 'idle)
-              (not (pichat-session-streaming-p session))
-              (not (pichat-session-compacting-p session))
-              (not (pichat-session-retrying-p session))
-              (with-current-buffer (plist-get capture :buffer)
-                (and (not pichat-chat--sync-in-flight) (not pichat-chat--sync-pending)
-                     (= 0 pichat-chat--pending-ui-count)
-                     (= 0 (or (car pichat-chat--queue-counts) 0))
-                     (= 0 (or (cdr pichat-chat--queue-counts) 0))
-                     (= 0 (hash-table-count pichat-chat--pending-submissions))
-                     (= 0 (hash-table-count pichat-chat--in-flight-attachments))))))))
+       (pichat-job-conversation-available-p (plist-get capture :session) guard)))
+
+(defun pichat-job-conversation-available-p (session &optional guard)
+  "Whether SESSION is idle and synchronized under optional owned GUARD.
+This lightweight availability check does not capture or verify history."
+  (let ((buffer (pichat-chat-owned-buffer session)))
+    (and (buffer-live-p buffer)
+         (pichat-session-alive-p session)
+         (eq guard (pichat-session-input-guard session))
+         (not (pichat-session-restart-operation session))
+         (eq (pichat-session-state session) 'idle)
+         (not (pichat-session-streaming-p session))
+         (not (pichat-session-compacting-p session))
+         (not (pichat-session-retrying-p session))
+         (with-current-buffer buffer
+           (and (not pichat-chat--sync-in-flight) (not pichat-chat--sync-pending)
+                (= 0 pichat-chat--pending-ui-count)
+                (= 0 (or (car pichat-chat--queue-counts) 0))
+                (= 0 (or (cdr pichat-chat--queue-counts) 0))
+                (= 0 (hash-table-count pichat-chat--pending-submissions))
+                (= 0 (hash-table-count pichat-chat--in-flight-attachments)))))))
 
 (defun pichat-job-conversation-capture (session)
   "Capture synchronized SESSION for review, with no RPC or runtime mutation."

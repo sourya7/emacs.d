@@ -98,16 +98,7 @@ Retain identical timers: refreshing a late timer must not skip its due work."
                           (condition-case err
                               (progn
                                 (if-let* ((run (plist-get schedule :conversation)))
-                                    (let ((capture (gethash id (pichat-job-executor-conversations executor))))
-                                      (if (not (and capture (pichat-job-conversation-current-p capture)))
-                                          (pichat-job-executor--conversation-invalidated executor id nil)
-                                        (pichat-job-conversation-dispatch
-                                         (pichat-job-executor-store executor) id run (float-time)
-                                         pichat-jobs-queue-limit))
-                                      (when (equal "finished" (plist-get (pichat-job-record
-                                                                        (pichat-job-executor-store executor) 'runs id) :state))
-                                        (pichat-job-executor--conversation-notice executor id capture)
-                                        (pichat-job-executor--conversation-forget executor id)))
+                                    (pichat-job-executor--conversation-dispatch executor id run)
                                   (pichat-job-schedule-dispatch
                                    (pichat-job-executor-store executor) id schedule
                                    (float-time) pichat-jobs-queue-limit))
@@ -141,13 +132,76 @@ Retain identical timers: refreshing a late timer must not skip its due work."
   (pichat-job-executor--changed executor))
 
 (defun pichat-job-executor-schedule-run-now (executor id expected)
-  "Explicitly submit ID's missed one-shot owned by EXPECTED in EXECUTOR."
-  (let ((run (pichat-job-schedule-dispatch
+  "Explicitly consume ID's authorized one-shot owned by EXPECTED in EXECUTOR.
+Retire its original timer before hooks or startup can process nested events."
+  (when (or (pichat-job-executor-schedules-closed executor)
+            (pichat-job-executor-schedule-error executor))
+    (user-error "Scheduling is stopped; inspect storage and restart Emacs"))
+  (unless (and (equal expected (plist-get (pichat-job-record (pichat-job-executor-store executor) 'jobs id)
+                                        :schedule))
+               (pichat-job-schedule-run-now-p expected))
+    (user-error "Schedule changed; reopen its report"))
+  (let ((run
+         (condition-case err
+             (pichat-job-schedule-dispatch
               (pichat-job-executor-store executor) id expected
-              (float-time) pichat-jobs-queue-limit t)))
+              (float-time) pichat-jobs-queue-limit t)
+           (error
+            ;; Never let the original timer send later after a failed write.
+            (pichat-job-executor-schedule-stop executor)
+            (setf (pichat-job-executor-schedule-error executor)
+                  (format "Scheduling stopped (%s); inspect storage and restart Emacs" (car err)))
+            (pichat-job-executor--changed executor)
+            (signal (car err) (cdr err))))))
+    (pichat-job-executor-schedule-refresh executor)
     (pichat-job-executor--changed executor)
     (when run (pichat-job-executor-pump executor))
     (unless run (user-error "Not submitted; inspect the schedule's current reason"))
+    run))
+
+(defun pichat-job-executor--conversation-dispatch (executor id expected &optional run-now)
+  "Consume EXPECTED conversation ID using live authority in EXECUTOR.
+RUN-NOW authorizes early consumption, not a new attempt or conversation."
+  (let* ((store (pichat-job-executor-store executor))
+         (run (pichat-job-record store 'runs id))
+         (capture (gethash id (pichat-job-executor-conversations executor))))
+    (when (and (equal run expected) (pichat-job-conversation-p run)
+               (equal (plist-get run :state) "scheduled"))
+      (prog1
+          (if (not (and capture (pichat-job-conversation-current-p capture)))
+              (progn (pichat-job-executor--conversation-invalidated executor id nil) nil)
+            (pichat-job-conversation-dispatch
+             store id expected (float-time) pichat-jobs-queue-limit nil run-now))
+        (when (equal "finished" (plist-get (pichat-job-record store 'runs id) :state))
+          (pichat-job-executor--conversation-notice executor id capture)
+          (pichat-job-executor--conversation-forget executor id))))))
+
+(defun pichat-job-executor-conversation-run-now (executor id expected)
+  "Explicitly consume pending conversation ID early in EXECUTOR.
+EXPECTED must be the exact run reviewed by the caller.  Existing live authority,
+queue limits and fresh pre-submission verification remain mandatory."
+  (when (or (pichat-job-executor-schedules-closed executor)
+            (pichat-job-executor-schedule-error executor))
+    (user-error "Scheduling is stopped; inspect storage and restart Emacs"))
+  (unless (and (equal expected (pichat-job-record (pichat-job-executor-store executor) 'runs id))
+               (pichat-job-conversation-p expected)
+               (equal (plist-get expected :state) "scheduled"))
+    (user-error "Scheduled continuation changed; reopen its report"))
+  (let ((run
+         (condition-case err
+             (pichat-job-executor--conversation-dispatch executor id expected t)
+           (error
+            ;; A failed commit must not leave the old timer able to send later.
+            (pichat-job-executor-schedule-stop executor)
+            (setf (pichat-job-executor-schedule-error executor)
+                  (format "Scheduling stopped (%s); inspect storage and restart Emacs" (car err)))
+            (pichat-job-executor--changed executor)
+            (signal (car err) (cdr err))))))
+    ;; Remove the original callback before hooks or startup can process events.
+    (pichat-job-executor-schedule-refresh executor)
+    (pichat-job-executor--changed executor)
+    (when run (pichat-job-executor-pump executor))
+    (unless run (user-error "Not sent; inspect the continuation's current reason"))
     run))
 
 (defun pichat-job-executor--run (execution)

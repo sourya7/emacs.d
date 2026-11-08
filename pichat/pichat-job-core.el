@@ -277,6 +277,13 @@ it from the store vector rather than update the stored record."
         (when (eq kind :runs)
           (pichat-job--validate-followup record)
           (pichat-job--validate-invalidation (plist-get record :invalidation))
+          (when (pichat-job-conversation-p record)
+            (let ((trigger (plist-get record :trigger)))
+              (when (or (plist-member trigger :run-now) (plist-member trigger :dispatched-at))
+                (unless (and (eq (plist-get trigger :run-now) t)
+                             (pichat-job-schedule-instant-p (plist-get trigger :dispatched-at))
+                             (not (equal (plist-get record :state) "scheduled")))
+                  (pichat-job--fail "Invalid immediate conversation dispatch provenance")))))
           (when-let* ((model (plist-get record :execution-model)))
             (unless (and (pichat-job-conversation-p record)
                          (pichat-job--text-p model) (<= (length model) 1024))
@@ -288,7 +295,13 @@ it from the store vector rather than update the stored record."
                            (pichat-job-schedule-instant-p (plist-get trigger :due))
                            (not (plist-get trigger :repeat-of))
                            (not (plist-get trigger :continue-of)))
-                (pichat-job--fail "Invalid scheduled run provenance"))))
+                (pichat-job--fail "Invalid scheduled run provenance"))
+              ;; Legacy Run now records have no dispatch instant.
+              (when (plist-member trigger :dispatched-at)
+                (unless (and (equal (plist-get trigger :kind) "once")
+                             (eq (plist-get trigger :run-now) t)
+                             (pichat-job-schedule-instant-p (plist-get trigger :dispatched-at)))
+                  (pichat-job--fail "Invalid immediate scheduled dispatch provenance")))))
           (when-let* ((digest (plist-get record :evidence)))
             (unless (and (stringp digest) (string-match-p "\\`[a-f0-9]\\{64\\}\\'" digest))
               (pichat-job--fail "Invalid run evidence reference")))
@@ -605,23 +618,31 @@ NOW is an optional explicit Unix instant.  Past one-shots cannot be enabled."
           (plist-get job :updated-at) (pichat-job--now))
     (pichat-job--commit store data)))
 
+(defun pichat-job-schedule-run-now-p (schedule)
+  "Whether SCHEDULE authorizes explicit consumption of a one-shot now.
+Enabled one-shots may be consumed early or late.  Disabled timing requires
+an explicitly recoverable missed/skipped occurrence, not merely a saved rule."
+  (and (equal (plist-get (plist-get schedule :rule) :kind) "once")
+       (or (eq (plist-get schedule :enabled) t)
+           (member (plist-get (plist-get schedule :last) :state) '("missed" "skipped")))))
+
 (defun pichat-job-schedule-dispatch (store id expected now &optional queue-limit run-now)
   "Consume job ID's EXPECTED occurrence at explicit NOW in STORE atomically.
 Use the ordinary run constructor and queue limit.  Busy/full/preparation
 failures record one bounded disposition, not a failed worker run.
-Stale/early callbacks do nothing.  RUN-NOW explicitly handles a disabled
-missed/skipped one-shot.  Return the submitted run ID, or nil; never launch
-any process here."
+Stale/early callbacks do nothing.  RUN-NOW explicitly consumes an enabled
+one-shot early or late, or a disabled missed/skipped one-shot.
+Return the submitted run ID, or nil; never launch any process here."
   (let* ((data (pichat-job--copy (pichat-job-store-data store)))
          (job (seq-find (lambda (item) (equal (plist-get item :id) id)) (plist-get data :jobs)))
          (schedule (plist-get job :schedule))
          (once (equal (plist-get (plist-get schedule :rule) :kind) "once"))
-         (due (if run-now (plist-get (plist-get schedule :last) :due)
+         (due (if (and run-now (not (eq (plist-get schedule :enabled) t)))
+                  (plist-get (plist-get schedule :last) :due)
                 (plist-get schedule :next))))
     (when (and schedule (equal schedule expected)
                (if run-now
-                   (and once (not (eq (plist-get schedule :enabled) t))
-                        (member (plist-get (plist-get schedule :last) :state) '("missed" "skipped")))
+                   (pichat-job-schedule-run-now-p schedule)
                  (and (eq (plist-get schedule :enabled) t) (<= due now))))
       (let (run-id reason)
         ;; The shared constructor owns queue bounds and definition exclusion.
@@ -631,9 +652,10 @@ any process here."
                   (pichat-job--enqueue-data
                    store data (list :job-id id :queue-limit queue-limit
                                     :schedule-trigger
-                                    (list :kind (plist-get (plist-get schedule :rule) :kind)
-                                          :schedule-token (plist-get schedule :token)
-                                          :due due :run-now (if run-now t :false)))))
+                                    (append (list :kind (plist-get (plist-get schedule :rule) :kind)
+                                                  :schedule-token (plist-get schedule :token)
+                                                  :due due :run-now (if run-now t :false))
+                                            (when run-now (list :dispatched-at now))))))
           (error
            (setq reason
                  (pcase (and (eq (car err) 'pichat-job-error) (cadr err))
@@ -891,15 +913,17 @@ by the user; replacement and cancellation commit in one transaction."
       (pichat-job--commit store data)
       id)))
 
-(defun pichat-job-conversation-dispatch (store id expected now &optional queue-limit reason)
+(defun pichat-job-conversation-dispatch (store id expected now &optional queue-limit reason run-now)
   "Consume exact EXPECTED scheduled ID at NOW, without launching a process.
 A late live callback is eligible once.  REASON or a full queue records not-sent
-cancellation; persistence failure leaves the entire occurrence unchanged."
+cancellation; persistence failure leaves the entire occurrence unchanged.
+RUN-NOW explicitly consumes the same attempt before its due time, retaining
+that due time and recording the actual dispatch instant."
   (let* ((data (pichat-job--copy (pichat-job-store-data store)))
          (run (seq-find (lambda (item) (equal id (plist-get item :id))) (plist-get data :runs))))
     (when (and (equal run expected) (pichat-job-conversation-p run)
                (equal (plist-get run :state) "scheduled")
-               (<= (plist-get (plist-get run :trigger) :due) now))
+               (or run-now (<= (plist-get (plist-get run :trigger) :due) now)))
       (when (>= (seq-count (lambda (item) (equal (plist-get item :state) "queued"))
                            (plist-get data :runs)) (or queue-limit 20))
         (unless reason
@@ -910,6 +934,11 @@ cancellation; persistence failure leaves the entire occurrence unchanged."
             (plist-get run :result) (and reason "cancelled")
             (plist-get run :reason) reason
             (plist-get run :updated-at) (pichat-job--now))
+      (when run-now
+        (let ((trigger (plist-get run :trigger)))
+          (setf (plist-get trigger :run-now) t
+                (plist-get trigger :dispatched-at) now
+                (plist-get run :trigger) trigger)))
       (pichat-job--stamp run (if reason :finished-at :queued-at) (plist-get run :updated-at))
       (pichat-job--commit store data)
       (unless reason id))))

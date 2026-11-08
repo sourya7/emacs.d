@@ -1004,7 +1004,9 @@ phase adapter. Scheduling always requires explicit authorization.
   `q` still returns without a permanent Back hint.
 - Native `a`, or Evil Normal `g a` in detail buffers, opens the context-sensitive
   **Actions** Transient. There is no permanent Actions label/button in reports. Saved jobs offer **Run job**, **Edit…**, **Run history**
-  and schedule commands. **Run job** is omitted while this job has unfinished
+  and schedule commands. **Delete job…** (`D`) confirms deletion of that exact
+  definition, preserving run history and retiring its schedule timer; it is
+  omitted while the job has unfinished work. **Run job** is omitted while this job has unfinished
   work or the shared queue is full, and rechecked when invoked. Run reports offer
   conversation preview, diagnostics,
   response copy/source, repeat, chat continuation, saving and related navigation
@@ -1014,8 +1016,10 @@ phase adapter. Scheduling always requires explicit authorization.
   Commands recheck the exact report/current state; closing the menu does nothing.
   **Set schedule…** / **Change…** opens the existing staged timing Transient;
   those timing controls remain saved-job-only. Existing-conversation one-shots
-  are authorized separately from their chat's composer. **Run now** handles a
-  missed one-shot, whereas **Run job** is an ordinary manual attempt.
+  are authorized separately from their chat's composer. **Run now** consumes an
+  authorized one-shot occurrence (including a pending scheduled continuation or
+  a missed saved-job one-shot), whereas **Run job** is an additional manual
+  attempt that leaves saved-job timing unchanged.
   **Diagnostics** uses the recorded execution note when no runtime is retained.
 - Saved-job **Edit…** and the Jobs row's `e` (Evil `g e`) open the same compact
   staged Transient over the originating view, without a setup buffer. Job fields
@@ -1043,8 +1047,9 @@ phase adapter. Scheduling always requires explicit authorization.
   not silently use a changed definition or undo effects. It may repeat file changes
   or external actions and retains the definition's overlap exclusion.
   **Save as job…** opens the shared composer, not execution. Existing-conversation
-  attempts omit Repeat, Continue work, Continue in chat and Save as job: start a
-  new schedule from the chat to capture fresh authorization.
+  attempts omit Repeat, Continue work, Continue in chat and Save as job. Use
+  **Reschedule…** when available, or start a new schedule from the chat, to
+  capture fresh authorization.
 - Reports use the chat's read-only input-bar styling and five-visual-line
   instruction folding at the narrowest displayed width. Run instructions live
   inside **Details**; continuation guidance folds independently. Click or press
@@ -1309,7 +1314,20 @@ no-op and preserves an enabled schedule. **Enable…** in the saved job's Action
 separately confirms future submission. Changing timing disables it until enabled
 again. Ordinary job edits retain timing; each future submission captures the then-
 current saved instructions/settings and after-run default. Already submitted runs
-remain immutable. **Run job** runs now without altering timing. **Disable** prevents
+remain immutable. On an enabled one-shot, **Actions → Run now** (`n`) consumes
+that occurrence early (or immediately if its timer is late). The original due
+time is preserved and the run report records **Run now requested**; the original
+timer is retired before execution, so it cannot submit that occurrence again.
+Ordinary queue bounds, same-job overlap exclusion and concurrency limits still
+apply. A full queue, unfinished attempt or preparation failure records a skipped
+occurrence with its reason; nothing runs secretly later. Persistence failure stops
+timing rather than allowing the old timer to submit later.
+
+**Run job** creates an additional manual attempt without altering timing: if that
+attempt finishes before the scheduled time, the scheduled occurrence can still
+run. Disabled future timing must be enabled before it offers Run now. Interval
+schedules offer only Run job for additional manual work; their anchor and next
+occurrence remain unchanged. **Disable** prevents
 future submissions but does not cancel queued or active work. Remove schedule and
 delete job invalidate the old timer ownership; deletion retains its existing
 unfinished-run guard. The wide Jobs table separates Schedule from Latest run;
@@ -1374,7 +1392,14 @@ follow-up message queued behind an active run; see `GLOSSARY.md`.
   independent work, even when invoked from this chat.
 
 The pending attempt appears in **Runs**, not as a reusable definition. Its
-report prominently shows the due time, destination and cancellation. At most
+report prominently shows the due time, destination and cancellation. While the
+attempt is still scheduled, use **Actions → Run now** (`n`) to consume that same
+attempt immediately instead of waiting. This preserves the original due time
+and records when Run now was requested; it retires the original timer rather
+than creating another run. Ordinary queue/concurrency limits and fresh
+conversation verification still apply, so Run now does not guarantee immediate
+delivery to a busy or changed conversation. It cannot retry a finished/not-sent
+attempt or reconnect a lost runtime. At most
 one unfinished scheduled attempt targets a runtime. Replacing a pending
 scheduled/queued attempt requires confirmation; active or uncertain work must
 be inspected rather than silently replaced. Cancel before submission sends
@@ -1402,8 +1427,15 @@ it survives repaint but is cleared with the source. Use
 `M-x pichat-job-review-continuation` there to inspect the exact attempt, or
 `M-x pichat-job-reschedule-continuation` to review its prompt with a fresh capture
 and **no selected time**. Choose When and explicitly Schedule again; neither
-command sends automatically. Stale notices cannot act on a rebound source.
-Legacy reports without cause/dispatch-model evidence remain readable.
+command sends automatically. The run report also offers **Actions → Reschedule…**
+(`s`) for pending scheduled/queued attempts and not-sent attempts with a matching
+notice still retained by the originating chat. The exact source must still be
+live, idle and synchronized; reports never reconnect or find a runtime from stored
+IDs. This opens the same composer with a fresh capture, the previous prompt and
+**no selected time**. Cancel leaves the original attempt unchanged; explicitly
+scheduling a replacement of pending work retains the existing confirmation.
+Stale notices cannot act on a rebound source. Legacy reports without
+cause/dispatch-model evidence remain readable.
 
 Emacs, the captured chat and its runtime **must remain alive**. A late timer,
 including after sleep, attempts delivery once when it wakes; the chosen time is

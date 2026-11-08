@@ -53,7 +53,10 @@
   (with-temp-buffer
     (insert-file-contents (expand-file-name "app.py" directory))
     (should (equal (buffer-string) "def greet():\n    return \"hello\"\n")))
-  (should (= 1 (length (directory-files (expand-file-name ".plans" directory) nil "^idea-"))))
+  (should (equal (directory-files (expand-file-name ".plans" directory) nil "^[^.]")
+                 '("add-optional-greeting-name")))
+  (should (file-exists-p
+           (expand-file-name ".plans/add-optional-greeting-name/plan.org" directory)))
   (pichat-test-assert-provider-script-consumed status-file))
 
 (ert-deftest intake-real-pi-chat-discovery-and-handoff ()

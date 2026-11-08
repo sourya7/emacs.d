@@ -3,7 +3,7 @@
 * Ideas
 ** scheduled jobs should be able to run elisp.
 the goal is to be able to run things like compact before sending a follow up
-** add menu for going to session asdociated with an existing session
+** add menu for going to session associated with an existing session (eg: job continuation)
 ** do research into the available actions and move them to the actions transient when available
 ** can we use a numeric id rather than our current hash. it maked the title too long and not very easy to relate
 ** review and make sure all pichat buffers have the same consistent header
@@ -21,4 +21,15 @@ want to see it work with the plans command and its json output rather than havin
 ** automate install and nix equivalent git based config for various maches. think whether we can have a secure way to automate with drone jobs
 ** can we combine the continuation within the follow up? kind of seems like related functionalitkes
 ** make dd delete the draft
-** add a run now option for the scheduked jobs
+** PLANNED add a run now option for the scheduked jobs
+:PROPERTIES:
+:ID: 4bb821c8-e9df-4aa6-9b4d-2ca1f30e9d36
+:IDEA_PROJECT: /home/dev/.emacs.d
+:IDEA_PLAN_ID: run-a-pending-scheduled-continuation-now
+:IDEA_PLAN_STORE: /home/dev/Dev/plans/projects/emacs-d/plans
+:IDEA_PLAN_FILE: /home/dev/Dev/plans/projects/emacs-d/plans/run-a-pending-scheduled-continuation-now/plan.org
+:END:
+- Planning [2026-11-08T00:51:19+00:00]: Provisional draft created; research, draft and validate it before publication. /home/dev/Dev/plans/projects/emacs-d/plans/run-a-pending-scheduled-continuation-now/plan.org
+- Planning [2026-11-08T00:52:14+00:00]: Validated draft handoff: /home/dev/Dev/plans/projects/emacs-d/plans/run-a-pending-scheduled-continuation-now/plan.org; implementation requires separate approval.
+- Planning [2026-11-08T07:05:14+00:00]: User-authorized path migration to run-a-pending-scheduled-continuation-now; updated reservation and handoff paths, preserving source identity and state.
+** make it possible to have a 'custom' preset which can be emacs instance level

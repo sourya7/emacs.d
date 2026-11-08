@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import uuid
 
 STATES = {'IDEA', 'QUEUED', 'NEEDS-INPUT', 'PLANNED', 'DECLINED'}
@@ -299,16 +300,51 @@ def matching(args, entry):
     return found[0] if found else None
 
 
+def reserve_plan_id(args, text, entry):
+    """Pick a readable ID once; persisted reservations remain authoritative."""
+    reserved = entry['props'].get('IDEA_PLAN_ID')
+    requested = getattr(args, 'plan_id', None)
+    if requested is not None and not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', requested):
+        raise ValueError('--plan-id must be lowercase kebab-case')
+    if reserved:
+        if requested is not None and requested != reserved:
+            raise ValueError('--plan-id conflicts with the existing reservation; no implicit rename')
+        return reserved
+    store = Path(selected_store(args, entry))
+    # Include reservations without records, plus incomplete directories/symlinks
+    # which are deliberately not discoverable through plans list.
+    reservations = {e['props'].get('IDEA_PLAN_ID') for e in inventory(text)
+                    if e['id'] != entry['id'] and e['props'].get('IDEA_PLAN_STORE') == str(store)}
+
+    def occupied(candidate):
+        return candidate == 'archive' or candidate in reservations or any(
+            os.path.lexists(store / relative / candidate) for relative in ('', 'archive'))
+
+    if requested is not None:
+        if occupied(requested):
+            raise ValueError('Requested --plan-id is already occupied; choose another name')
+        return requested
+    title = unicodedata.normalize('NFKD', entry['title']).encode('ascii', 'ignore').decode()
+    slug = re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')
+    # Keep paths manageable; cut at a word boundary rather than mid-word.
+    if len(slug) > 80:
+        slug = slug[:81].rsplit('-', 1)[0]
+    slug = slug[:80].rstrip('-') or 'plan'
+    if not occupied(slug):
+        return slug
+    suffix = hashlib.sha256(entry['id'].encode('utf-8')).hexdigest()
+    for length in range(8, len(suffix) + 1, 4):
+        candidate = slug + '-' + suffix[:length]
+        if not occupied(candidate):
+            return candidate
+    raise ValueError('Unable to reserve a unique plan ID; choose an explicit --plan-id')
+
+
 def handoff(args, source, text, entry):
     if entry['state'] == 'DECLINED':
         raise ValueError('DECLINED idea requires explicit user requeue before conversion')
     ident = entry['id'] or str(uuid.uuid4())
-    # Validate IDs before using them in a deterministic plan ID or identity marker.
-    try:
-        canonical = str(uuid.UUID(ident))
-    except ValueError:
-        # Existing standard Org IDs may be arbitrary strings. Do not rewrite them.
-        canonical = str(uuid.uuid5(uuid.NAMESPACE_URL, ident))
+    # Existing standard Org IDs may be arbitrary strings. Preserve their identity.
     if not ident or any(c in ident for c in '\n\r[]'):
         raise ValueError('Unsupported Org ID syntax')
     root = str(args.root) if args.root else entry['props'].get('IDEA_PROJECT')
@@ -327,13 +363,18 @@ def handoff(args, source, text, entry):
         raise ValueError('Conflicting execution project; resolve explicitly')
     # Read inventory before any creation, including archived records.
     entry = dict(entry, id=ident)
+    requested = getattr(args, 'plan_id', None)
+    if requested is not None and entry['props'].get('IDEA_PLAN_ID') not in (None, requested):
+        raise ValueError('--plan-id conflicts with the existing reservation; no implicit rename')
     record = matching(args, entry)
     if record:
+        if requested is not None and requested != record['id']:
+            raise ValueError('--plan-id conflicts with the existing plan; no implicit rename')
         return outcome('existing', source, text, entry, record,
                        next_action='Inspect/reconcile this existing handoff; do not create another plan.')
     if args.command == 'reconcile':
         raise ValueError('No matching plan exists; retained reservation is provisional. Explicit convert is required to create it.')
-    reserved = entry['props'].get('IDEA_PLAN_ID') or 'idea-' + canonical
+    reserved = reserve_plan_id(args, text, entry)
     changed = mutate(text, entry, {'ID': ident, 'IDEA_PROJECT': str(args.root),
                                    'IDEA_PLAN_ID': reserved,
                                    'IDEA_PLAN_STORE': selected_store(args, entry)})
@@ -417,6 +458,8 @@ def main(argv=None):
     for command in ('convert', 'publish', 'reconcile', 'needs-input'):
         cmd = sub.add_parser(command)
         cmd.add_argument('selector')
+        if command == 'convert':
+            cmd.add_argument('--plan-id', help='optional readable kebab-case ID for a new reservation')
         if command in {'publish', 'needs-input'}:
             cmd.add_argument('--expect', required=True, help='source_sha256 from inventory/prepare')
         if command == 'reconcile':

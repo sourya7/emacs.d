@@ -72,6 +72,81 @@ class IntakeTests(unittest.TestCase):
         self.assertEqual(created['outcome'], 'created')
         self.assertIn('#+SOURCE_IDEA_ID: ' + created['idea_id'], Path(created['plan_path']).read_text())
 
+    def test_readable_name_and_title_changes(self):
+        created = self.prepared()
+        self.assertEqual(Path(created['plan_path']).parent.name, 'a-small-idea')
+        self.source.write_text(self.source.read_text().replace('** A small idea\n', '** Renamed idea\n'))
+        self.assertEqual(self.invoke('convert', created['idea_id'])['plan_path'], created['plan_path'])
+        self.invoke('convert', created['idea_id'], '--plan-id', 'different', success=False)
+
+    def test_explicit_name_and_invalid_names(self):
+        for name in ('../escape', 'Uppercase', 'two--hyphens', ''):
+            self.invoke('convert', 'A small idea', '--plan-id', name, success=False)
+        created = self.invoke('convert', 'A small idea', '--plan-id', 'concise-name')
+        self.assertEqual(Path(created['plan_path']).parent.name, 'concise-name')
+        self.assertEqual(self.invoke('convert', created['idea_id'], '--plan-id', 'concise-name')['outcome'], 'existing')
+        self.invoke('convert', 'Another idea', '--plan-id', 'concise-name', success=False)
+
+    def test_title_collision_with_active_archived_and_partial_paths(self):
+        for location in ('active', 'archive', 'partial'):
+            with self.subTest(location=location):
+                first = self.prepared()
+                path = Path(first['plan_path'])
+                if location == 'archive':
+                    target = path.parent.parent / 'archive' / path.parent.name
+                    target.parent.mkdir()
+                    path.parent.rename(target)
+                elif location == 'partial':
+                    path.write_text('')
+                # A different idea whose punctuation normalizes to the same slug.
+                self.source.write_text('* Ideas\n** A small idea!\n')
+                second = self.invoke('convert', 'A small idea!')
+                name = Path(second['plan_path']).parent.name
+                suffix = ideas.hashlib.sha256(second['idea_id'].encode()).hexdigest()[:8]
+                self.assertEqual(name, 'a-small-idea-' + suffix)
+                self.assertEqual(self.invoke('convert', second['idea_id'])['plan_path'], second['plan_path'])
+                shutil.rmtree(self.root / '.plans')
+                self.source.write_text('* Ideas\n** A small idea\n** Another idea\n')
+
+    def test_archive_namespace_and_suffix_collision(self):
+        self.invoke('convert', 'A small idea', '--plan-id', 'archive', success=False)
+        self.source.write_text('* Ideas\n** Archive\n:PROPERTIES:\n:ID: fixed-source\n:END:\n')
+        suffix = ideas.hashlib.sha256(b'fixed-source').hexdigest()
+        occupied = self.root / '.plans' / ('archive-' + suffix[:8])
+        occupied.mkdir(parents=True)  # Incomplete directory, no record yet.
+        created = self.invoke('convert', 'fixed-source')
+        self.assertEqual(Path(created['plan_path']).parent.name, 'archive-' + suffix[:12])
+
+    def test_reservation_survives_title_change_and_other_idea_collision(self):
+        real_plans = ideas.plans
+        def interrupt(args, *command):
+            if command[0] == 'new':
+                raise OSError('injected creation failure')
+            return real_plans(args, *command)
+        with patch.object(ideas, 'plans', side_effect=interrupt):
+            self.invoke('convert', 'A small idea', success=False)
+        entry = ideas.inventory(self.source.read_text())[0]
+        self.source.write_text(self.source.read_text().replace('** A small idea\n', '** Changed title\n') + '** A small idea!\n')
+        other = self.invoke('convert', 'A small idea!')
+        self.assertNotEqual(Path(other['plan_path']).parent.name, 'a-small-idea')
+        created = self.invoke('convert', entry['id'])
+        self.assertEqual(Path(created['plan_path']).parent.name, 'a-small-idea')
+
+    def test_legacy_uuid_reservation_and_existing_record(self):
+        legacy = 'idea-12345678-1234-4234-8234-123456789abc'
+        self.source.write_text('* Ideas\n** Legacy\n:PROPERTIES:\n:ID: old-source-id\n:IDEA_PLAN_ID: ' + legacy + '\n:END:\n')
+        created = self.invoke('convert', 'Legacy')
+        self.assertEqual(Path(created['plan_path']).parent.name, legacy)
+        self.assertEqual(self.invoke('convert', 'old-source-id')['plan_path'], created['plan_path'])
+
+    def test_slug_normalization_length_and_empty_fallback(self):
+        for title, expected in (('Café / title!', 'cafe-title'), ('🦊', 'plan'),
+                                ('word ' * 30, '-'.join(['word'] * 16))):
+            with self.subTest(title=title):
+                self.source.write_text('* Ideas\n** ' + title.strip() + '\n')
+                created = self.invoke('convert', title.strip())
+                self.assertEqual(Path(created['plan_path']).parent.name, expected)
+
     def test_blocks_and_drawers_are_not_headings(self):
         self.source.write_text('* Ideas\n** Actual\n#+begin_src org\n** Fake\n#+end_src\n:LOGBOOK:\nplain\n:END:\n*** Nested\n')
         entries = self.invoke('list')['ideas']

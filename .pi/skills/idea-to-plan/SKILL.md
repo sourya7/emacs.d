@@ -39,6 +39,11 @@ Global helper options precede its command. Output is JSON; check exit status.
   not implementation. Read source notes, inspect project instructions/code, ask
   about material ambiguity **before creation** where possible. Run helper
   `convert SELECTOR` with resolved source/root/store options. Stable ID preferred.
+  New plan paths use readable title-derived kebab-case names, not UUIDs. For a
+  long or vague title, use `convert SELECTOR --plan-id concise-name` to choose
+  the initial name explicitly. Existing reservations/paths never change on retry;
+  collisions add a short identity suffix only when needed. Rename/migration of
+  existing plans requires separate explicit authorization.
 - `next --unattended`: run the helper's `next --unattended` exactly once. It
   selects at most one explicitly QUEUED direct child, by priority then file order.
   Stop on `no-op`. Do not loop to another idea after finishing or blocking one.

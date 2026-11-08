@@ -38,14 +38,30 @@ Properties owned by the helper:
 :PROPERTIES:
 :ID: standard-org-id
 :IDEA_PROJECT: /absolute/execution-checkout
-:IDEA_PLAN_ID: idea-derived-uuid
+:IDEA_PLAN_ID: readable-plan-name
 :IDEA_PLAN_STORE: /absolute/authoritative/plan-directory
-:IDEA_PLAN_FILE: /absolute/authoritative/plan-directory/idea-derived-uuid/plan.org
+:IDEA_PLAN_FILE: /absolute/authoritative/plan-directory/readable-plan-name/plan.org
 :END:
 ```
 
-New IDs are UUID4; existing Org IDs are preserved. Plan IDs use the UUID itself,
-or UUID5 for an existing non-UUID ID. Plans have exact `SOURCE_IDEA_ID` and
+New Org IDs are UUID4; existing Org IDs are preserved. New plan IDs are readable
+lowercase kebab-case slugs derived from the idea title (ASCII normalization,
+base slug capped at 80 characters, preferring whole words; `plan` if no usable
+text remains).
+An optional `convert SELECTOR --plan-id concise-name` overrides the initial name.
+Explicit names must be available and lowercase kebab-case; `archive` is reserved
+for the archive directory. Automatic names gain
+a deterministic short identity hash suffix only on collision, extending it if
+necessary. Check active/archive directories (including partial records) and other
+reservations in this source/store. Concurrent creation from different sources
+can still race; creation fails visibly rather than overwriting or picking a new
+name after reservation.
+
+Reserve the name before creation and reuse it on every retry, even after title
+changes. Existing reservations, including legacy `idea-UUID` names, stay unchanged;
+a conflicting `--plan-id` fails rather than renaming anything. Path migration is a
+separate explicitly authorized operation. UUIDs remain source identity metadata,
+not the default directory name. Plans have exact `SOURCE_IDEA_ID` and
 `SOURCE_IDEA_FILE` keyword fields plus an Org `id:` source link. The idea's
 IDEA_PLAN_FILE and dated handoff note provide the reverse reference. Paths are
 runtime-local metadata; they can be private. Review before publishing records.
@@ -103,7 +119,7 @@ in the agent report so provisional paths remain visible after a later failure.
 2. Parse/revalidate source state; inventory **active and archived** plans through
    the selected store. Reject multiple claimants, missing references, changed
    stores/project, and a reserved ID claimed by a different identity.
-3. Atomically save idea ID, project, reserved deterministic plan ID and resolved
+3. Atomically save idea ID, project, reserved readable plan ID and resolved
    store **before** creating the plan. If interrupted, explicit convert can retry
    that same reservation. Reconcile alone never creates a missing record.
 4. Use plans `new --id RESERVED --title 'Title [idea:ID]'`. Identity is present

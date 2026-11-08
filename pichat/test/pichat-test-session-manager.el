@@ -311,10 +311,39 @@
         (setq buffer (pichat-session-manager)))
       (unwind-protect
           (with-current-buffer buffer
-            (should (equal '("" "Name" "Status" "Project")
-                           (seq-take (mapcar #'car (append tabulated-list-format nil)) 4)))
+            (should (equal '("" "ID" "Name" "Status" "Project")
+                           (seq-take (mapcar #'car (append tabulated-list-format nil)) 5)))
             (should (equal "Project" (car pichat-session-manager--logical-sort))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-session-manager-runtime-id-links-chat-and-survives-source-changes ()
+  (pichat-test-with-clean-state
+    (let* ((pichat-session--runtime-counter 98)
+           (session (pichat-session-make :owner-scope-key "global"))
+           (next (pichat-session-make :owner-scope-key "global")))
+      (pichat-register-session session)
+      (pichat-register-session next)
+      (should (equal "*pi:99*" (pichat-chat-buffer-name session)))
+      (dolist (state '((:sessionId "source-a" :sessionName "First")
+                       (:sessionId "source-b" :sessionName "Renamed")))
+        (pichat-session-apply-rpc-state session state)
+        (should (equal "99" (pichat-session-manager--field session "ID")))
+        (should (equal (plist-get state :sessionId)
+                       (pichat-session-manager--field session "Pi source ID"))))
+      (with-temp-buffer
+        (pichat-session-manager-mode)
+        (cl-letf (((symbol-function 'pichat-session-manager--display-width)
+                   (lambda () 12)))
+          (setq pichat-session-manager--logical-sort '("ID"))
+          (pichat-session-manager-refresh)
+          (should (equal '("" "ID" "Name")
+                         (mapcar #'car (append tabulated-list-format nil))))
+          (should (= 3 (cadr (assoc "ID" (append tabulated-list-format nil)))))
+          (should (equal '("99" "100")
+                         (mapcar (lambda (entry)
+                                   (pichat-session-manager--sort-value entry "ID"))
+                                 tabulated-list-entries)))
+          (should (string-match-p "99" (buffer-string))))))))
 
 (ert-deftest pichat-session-manager-compact-row-handles-global-unnamed-source ()
   (let* ((session (pichat-session-make
@@ -399,7 +428,7 @@
                    (pichat-session-manager-refresh)
                    (should (= 1 (count-lines (point-min) (point-max))))
                    (should (<= (string-width (string-trim-right (buffer-string))) width))
-                   (should (equal "Name"
+                   (should (equal "ID"
                                   (car (seq-find (lambda (c) (not (equal "" (car c))))
                                                  tabulated-list-format))))))))))
 
@@ -438,9 +467,10 @@
                (should (equal names (seq-take (mapcar #'car pichat-session-manager--columns)
                                             (length names))))
                (should (>= (length names) last-count))
-               (when (> (length names) 1)
+               (when (> (length names) 2)
                  (should (>= (cadr (assoc "Name" layout)) 16)))
-               (should (<= (cadr (assoc "Name" layout)) 40))
+               (when-let* ((name (assoc "Name" layout)))
+                 (should (<= (cadr name) 40)))
                (setq last-count (length names))))))
 
 (ert-deftest pichat-session-manager-hidden-sort-and-native-sort-use-full-values ()
@@ -469,9 +499,9 @@
             (pichat-session-manager-refresh)
             (should (equal '("Project") tabulated-list-sort-key)))
           ;; Native header/keyboard sorting remains usable, including direction.
-          (tabulated-list-sort 1)
+          (tabulated-list-sort 2)
           (should (equal (pichat-session-runtime-id b) (tabulated-list-get-id (point-min))))
-          (tabulated-list-sort 1)
+          (tabulated-list-sort 2)
           (setq width 8)
           (pichat-session-manager-refresh)
           (should (equal '("Name" . t) pichat-session-manager--logical-sort))

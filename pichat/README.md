@@ -810,10 +810,12 @@ Emacs-side process/session object; the persisted Pi source loaded into it may
 change after new-session, switch, fork, or clone operations. Manager rows use an
 immutable Emacs runtime identity, so such source changes do not replace or
 misidentify a row. The responsive table starts with an unlabeled `★` gutter for the preferred
-runtime and **Name**, then progressively admits Status, Project, Preset, Target,
-Model, Pi source ID, Backend and Store as space permits. Name receives spare
-width up to 40 display cells. Very small windows show only Name (and the gutter
-when it fits). The narrowest visible manager window across frames determines
+runtime, **ID**, and **Name**, then progressively admits Status, Project, Preset,
+Target, Model, Pi source ID, Backend and Store as space permits. ID is the same
+runtime number used in chat buffer names, not the loaded Pi session ID; it sorts
+numerically and stays visible in narrow layouts. Name receives spare width up
+to 40 display cells. Exceptionally small windows show only ID (clipped if needed);
+the preferred-runtime gutter appears when it fits. The narrowest visible manager window across frames determines
 the shared layout; resizing and preview splits update it without querying Pi.
 Full cell values are available as help text. Project sorting is the default;
 a chosen sort and its direction remain effective even while the column is hidden.

@@ -212,8 +212,8 @@ or Bufferlo dependency."
           (pichat-session-id session) (pichat-session-runtime-id session) "—"))))
 
 (defconst pichat-session-manager--columns
-  '(("Name" 16) ("Status" 11) ("Project" 14) ("Preset" 10)
-    ("Target" 12) ("Model" 24) ("ID" 9) ("Backend" 7) ("Store" 6))
+  '(("ID" 2) ("Name" 16) ("Status" 11) ("Project" 14) ("Preset" 10)
+    ("Target" 12) ("Model" 24) ("Pi source ID" 12) ("Backend" 7) ("Store" 6))
   "Column priority and minimum widths, independent of row content.")
 
 (defvar-local pichat-session-manager--logical-sort '("Project")
@@ -232,18 +232,27 @@ or Bufferlo dependency."
 (defun pichat-session-manager--layout (width)
   "Return deterministic columns fitting WIDTH display cells."
   (let* ((width (max 1 width))
-         (gutter (if (>= width 6) 2 0))
-         (remaining (- width gutter))
-         (name-width (min 16 remaining))
-         (columns (list (list "Name" name-width)))
-         (rest (cdr pichat-session-manager--columns)))
-    (cl-decf remaining name-width)
+         (id-width (min width
+                        (apply #'max 2
+                               (mapcar (lambda (session)
+                                         (string-width
+                                          (pichat-session-manager--field session "ID")))
+                                       (pichat-session-list)))))
+         (gutter (if (>= width (+ id-width 4)) 2 0))
+         (remaining (- width gutter id-width))
+         (name-width (min 16 (max 0 (1- remaining))))
+         (columns (list (list "ID" id-width)))
+         (rest (cddr pichat-session-manager--columns)))
+    (when (> name-width 0)
+      (push (list "Name" name-width) columns)
+      (cl-decf remaining (1+ name-width)))
     (while (and rest (>= remaining (1+ (cadar rest))))
       (push (copy-sequence (car rest)) columns)
       (cl-decf remaining (1+ (cadar rest)))
       (setq rest (cdr rest)))
     (setq columns (nreverse columns))
-    (cl-incf (cadar columns) (min remaining (- 40 name-width)))
+    (when-let* ((name (assoc "Name" columns)))
+      (cl-incf (cadr name) (min remaining (- 40 name-width))))
     (when (> gutter 0) (push '("" 1) columns))
     (vconcat
      (mapcar
@@ -252,8 +261,7 @@ or Bufferlo dependency."
           (list name (cadr column)
                 (unless (equal name "")
                   (lambda (a b)
-                    (string< (pichat-session-manager--sort-value a name)
-                             (pichat-session-manager--sort-value b name)))))))
+                    (pichat-session-manager--less-p a b name))))))
       columns))))
 
 (defun pichat-session-manager--field (session column)
@@ -267,7 +275,9 @@ or Bufferlo dependency."
                   (symbol-name (pichat-session-preset-name session)) "legacy"))
     ("Target" (pichat-session-manager--target-label session))
     ("Model" (pichat-session-manager--model-name session))
-    ("ID" (or (pichat-session-id session) "—"))
+    ("ID" (string-remove-prefix "pichat-runtime-"
+                                (pichat-session-runtime-id session)))
+    ("Pi source ID" (or (pichat-session-id session) "—"))
     ("Backend" (symbol-name (pichat-session-backend-id session)))
     ("Store" (pichat-session-manager--persistence-label session))))
 
@@ -275,6 +285,14 @@ or Bufferlo dependency."
   "Return ENTRY's full value for COLUMN, even if that column is hidden."
   (or (cdr (assoc column (get-text-property 0 'pichat-manager-fields
                                           (aref (cadr entry) 0)))) ""))
+
+(defun pichat-session-manager--less-p (a b column)
+  "Compare entries A and B by COLUMN, sorting runtime numbers numerically."
+  (let ((a-value (pichat-session-manager--sort-value a column))
+        (b-value (pichat-session-manager--sort-value b column)))
+    (if (equal column "ID")
+        (< (string-to-number a-value) (string-to-number b-value))
+      (string< a-value b-value))))
 
 (defun pichat-session-manager--persistence-label (session)
   "Return compact persistence label for SESSION from launch metadata."
@@ -315,7 +333,7 @@ or Bufferlo dependency."
             (lambda (column)
               (let* ((name (car column))
                      (full (cdr (assoc name fields)))
-                     (display (if (equal name "ID")
+                     (display (if (equal name "Pi source ID")
                                   (pichat-session-manager--short-id full) full))
                      (width (cadr column))
                      (cell (if (and (equal name "Status") (string-suffix-p "!" display))
@@ -358,9 +376,8 @@ or Bufferlo dependency."
         (setq tabulated-list-entries
               (cl-stable-sort tabulated-list-entries
                               (lambda (a b)
-                                (string<
-                                 (pichat-session-manager--sort-value (if flip b a) column)
-                                 (pichat-session-manager--sort-value (if flip a b) column)))))))
+                                (pichat-session-manager--less-p
+                                 (if flip b a) (if flip a b) column))))))
     (tabulated-list-init-header)
     (tabulated-list-print t)))
 

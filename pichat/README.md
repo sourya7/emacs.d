@@ -108,8 +108,8 @@ The fixed header stays visible while scrolling or composing. It shows the
 **runtime working directory** (not necessarily the Emacs-visible path; see
 `GLOSSARY.md`) on the left and **context-window occupancy** on the right.
 Each displayed window adapts independently: paths shorten, optional information
-is omitted, and percentage yields to token counts. Only exceptionally small
-windows clip context itself. This works in desktop splits and tablet/phone-sized
+is omitted, and token counts take precedence over optional information. Only
+exceptionally small windows clip context itself. This works in desktop splits and tablet/phone-sized
 windows without a wrapping dashboard, at the cost of one fixed display row.
 Unknown/unavailable usage is explicit; accumulated request totals are labelled
 **Requests**, never context occupancy. Warning/error faces apply above 70%/90%.
@@ -123,10 +123,15 @@ Two boolean options control the built-in presentation:
 
 ```elisp
 (setq pichat-chat-header-show-directory t
-      pichat-chat-header-show-percentage t)
+      pichat-chat-header-show-percentage nil)
 ```
 
-Set either to nil to hide it even when space is available. Set them globally
+Context counts omit the `Context` prefix and percentage by default. The latest
+extension `usage` status appears beside them when it fits, instead of in the
+buffer body. A leading `codex ` is omitted; the tooltip retains the original
+status text. Other extension statuses remain in the body.
+
+Set either option to nil to hide it even when space is available. Set them globally
 or buffer-locally; width fallback is automatic, with no device breakpoints.
 The header is a normal `header-line-format`, which a mode hook may override.
 

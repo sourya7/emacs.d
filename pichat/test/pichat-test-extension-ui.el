@@ -84,6 +84,45 @@
                                           (pichat-test-buffer-text buffer)))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+(ert-deftest pichat-extension-usage-updates-header-without-body-edits ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (setf (pichat-session-context-usage session)
+                  '(:tokens 0 :contextWindow 500000 :percent 0))
+            (with-current-buffer buffer
+              (setq-local pichat-chat-header-show-directory nil)
+              (let ((before (buffer-string)))
+                (dolist (status '("checking" "codex 82% 5h 59% wk"
+                                  "other 42%" nil))
+                  (pichat-chat--on-extension-ui-request
+                   session 'extension-ui-request
+                   (list :raw (list :method "setStatus" :statusKey "usage"
+                                    :statusText status)))
+                  (should (equal before (buffer-string)))
+                  (cl-letf (((symbol-function 'window-body-width)
+                             (lambda (&rest _) 80)))
+                    (let ((text (string-trim
+                                 (pichat-chat--header-text
+                                  session (selected-window)))))
+                      (should (equal text
+                                     (if status
+                                         (concat (string-remove-prefix "codex " status)
+                                                 " · 0/500k")
+                                       "0/500k")))
+                      (when status
+                        (should (equal status (get-text-property 0 'help-echo text))))))
+                  (cl-letf (((symbol-function 'window-body-width)
+                             (lambda (&rest _) 8)))
+                    (should (equal "0/500k"
+                                   (string-trim
+                                    (pichat-chat--header-text
+                                     session (selected-window))))))))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
 (ert-deftest pichat-extension-status-burst-coalesces-reprojection ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
@@ -105,11 +144,11 @@
                   (pichat-chat--on-extension-ui-request
                    session 'extension-ui-request
                    (list :raw (list :method "setStatus"
-                                    :statusKey "usage"
+                                    :statusKey "build"
                                     :statusText text))))
                 (should (= 1 projections))
                 (should (equal "usage 3"
-                               (gethash "usage"
+                               (gethash "build"
                                         pichat-chat--extension-statuses))))
               (apply callback callback-args)
               (should (= 2 projections))))

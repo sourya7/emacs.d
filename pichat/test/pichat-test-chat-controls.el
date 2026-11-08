@@ -335,8 +335,7 @@
             (should-not (string-match-p "/host/" text))
             (when (>= width 16)
               (should (string-suffix-p
-                       (if (>= width 22) "Context 84k/272k · 31%"
-                         "Context 84k/272k") text)))
+                       "84k/272k" text)))
             (when (= width 160)
               (should (string-match-p "PiChat — /runtime/" text)))
             (when (= width 60)
@@ -347,6 +346,7 @@
     (with-temp-buffer
       (pichat-chat-mode)
       (setq-local pichat-chat-session session)
+      (setq-local pichat-chat-header-show-percentage t)
       (setf (pichat-session-runtime-cwd session) "/runtime/project/"
             (pichat-session-context-usage session)
             '(:tokens 84000 :contextWindow 272000 :percent 31))
@@ -354,17 +354,17 @@
         (delete-other-windows)
         (switch-to-buffer (current-buffer))
         (let* ((wide (selected-window))
-               (narrow (split-window wide -18 t)))
+               (narrow (split-window wide -12 t)))
           (set-window-buffer narrow (current-buffer))
           (let ((a (pichat-chat--header-text session wide))
                 (b (pichat-chat--header-text session narrow)))
             (should (> (string-width a) (string-width b)))
             (should (string-match-p "31%" a))
             (should-not (string-match-p "31%" b))
-            (should (string-match-p "Context 84k/272k" b)))
+            (should (string-match-p "84k/272k" b)))
           (setq-local pichat-chat-header-show-directory nil)
           (setq-local pichat-chat-header-show-percentage nil)
-          (should (equal "Context 84k/272k"
+          (should (equal "84k/272k"
                          (string-trim (pichat-chat--header-text session wide))))
           (should-not (string-match-p "84k/272k"
                                       (pichat-chat--mode-line-status))))))))
@@ -414,11 +414,11 @@
                     (should (window-live-p window))
                     (list :id 'quota :text quota :compact "P:62%"
                           :priority 999)))))
-      (dolist (spec '((80 "Plan left 62%" t) (24 "P:62%" nil) (16 nil nil)))
+      (dolist (spec '((80 "Plan left 62%" t) (18 "P:62%" nil) (9 nil nil)))
         (cl-letf (((symbol-function 'window-body-width)
                    (lambda (&rest _) (car spec))))
           (let ((text (pichat-chat--header-text session (selected-window))))
-            (should (string-suffix-p "Context 84k/272k" text))
+            (should (string-suffix-p "84k/272k" text))
             (should (eq 'error (get-text-property
                                (string-match "84k" text) 'face text)))
             (if (cadr spec)
@@ -452,6 +452,7 @@
     (with-temp-buffer
       (pichat-chat-mode)
       (setq-local pichat-chat-session session)
+      (setq-local pichat-chat-header-show-percentage t)
       (setq-local pichat-chat-header-functions
                   (list (lambda (_s _w) '(:id quota :text "Plan left 62%"))))
       (setf (pichat-session-runtime-cwd session) "/runtime/100%/project/"

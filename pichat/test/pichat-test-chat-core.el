@@ -8,6 +8,24 @@
 
 (require 'pichat-test-chat-support)
 
+(ert-deftest pichat-chat-header-and-extension-status-have-no-blank-padding ()
+  (pichat-test-with-unit-session (session proc)
+    (pichat-test-with-chat-buffer (chat session)
+      (should (= (point-min) (marker-position pichat-chat--prompt-start)))
+      (pichat-chat--set-input-text "keep draft")
+      (puthash "build" "working" pichat-chat--extension-statuses)
+      (pichat-chat--project-extension-statuses)
+      (should (equal "[status:build] working\n"
+                     (buffer-substring-no-properties
+                      (point-min) pichat-chat--prompt-start)))
+      (should (equal "keep draft" (pichat-chat--input-text)))
+      (should (get-text-property (point-min) 'read-only))
+      (clrhash pichat-chat--extension-statuses)
+      (pichat-chat--project-extension-statuses)
+      (should (= (point-min) (marker-position pichat-chat--prompt-start)))
+      (should (equal "keep draft" (pichat-chat--input-text)))
+      (should (get-text-property (point-min) 'read-only)))))
+
 (ert-deftest pichat-chat-draft-boundary-invalidates-path-availability-and-source-round-trip ()
   (pichat-test-with-unit-session (session proc)
     (setf (pichat-session-id session) "same"
@@ -299,7 +317,7 @@
                 (funcall old-callback '(:success t) session)
                 (should (eq new-token pichat-chat--stats-in-flight))
                 (should-not (string-match-p
-                             "Context 40/100"
+                             "40/100"
                              (pichat-chat--header-text session (selected-window)))))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 

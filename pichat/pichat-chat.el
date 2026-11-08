@@ -44,7 +44,7 @@ The directory is shortened or omitted when context usage needs the space."
   :type 'boolean
   :group 'pichat)
 
-(defcustom pichat-chat-header-show-percentage t
+(defcustom pichat-chat-header-show-percentage nil
   "Whether to add context percentage when the window has room."
   :type 'boolean
   :group 'pichat)
@@ -1067,11 +1067,7 @@ length change even though the internal edit itself must not become undoable."
   "Initialize the protected transcript shell, without a scrolling title."
   (pichat-chat--with-buffer-edit
     (erase-buffer)
-    ;; Retain the protected prefix and region-marker topology.
-    (insert "\n\n")
-    ;; Native protection rejects edits before modification hooks run.  An
-    ;; error from the fallback guard would make Emacs remove that hook.
-    (pichat-chat--protect-region (point-min) (point))
+    ;; Start regions directly below the fixed header, without a blank prefix.
     (dolist (marker (list pichat-chat--extension-status-start
                           pichat-chat--extension-status-end
                           pichat-chat--canonical-start
@@ -1134,7 +1130,8 @@ performs no acquisition and updates inactive windows showing the chat too."
                                 ((and usage
                                       (not (numberp (plist-get usage :tokens))))
                                  "Context unknown ")
-                                (t "Context "))
+                                ((null usage) "Context ")
+                                (t ""))
                           (or value "unavailable")))
          (percent (plist-get usage :percent))
          (full (if (and pichat-chat-header-show-percentage (not requests)
@@ -1142,6 +1139,14 @@ performs no acquisition and updates inactive windows showing the chat too."
                    (concat context (format " · %.0f%%" percent))
                  context))
          (right (if (<= (string-width full) width) full context))
+         (status (and (hash-table-p pichat-chat--extension-statuses)
+                      (gethash "usage" pichat-chat--extension-statuses)))
+         (allowance (and status
+                         (propertize (string-remove-prefix "codex " status)
+                                     'help-echo status)))
+         (combined (and allowance (concat allowance " · " right)))
+         (right (if (and combined (<= (string-width combined) width))
+                    combined right))
          (remaining (- width (string-width right)))
          (segments (and session
                         (pichat-chat--header-segments session window)))
@@ -4439,10 +4444,11 @@ This acknowledges all active notices, not the draft, attachments or runtime."
   (let (lines)
     (maphash
      (lambda (key text)
-       (push (format "[status:%s] %s" key text) lines))
+       (unless (equal key "usage")
+         (push (format "[status:%s] %s" key text) lines)))
      pichat-chat--extension-statuses)
     (when lines
-      (concat (string-join (sort lines #'string<) "\n") "\n\n"))))
+      (concat (string-join (sort lines #'string<) "\n") "\n"))))
 
 (defun pichat-chat--insert-extension-statuses ()
   "Insert persistent extension statuses at point and set their markers."
@@ -4570,6 +4576,8 @@ This acknowledges all active notices, not the draft, attachments or runtime."
               (puthash key value pichat-chat--extension-statuses)
             (remhash key pichat-chat--extension-statuses))
           (cond
+           ((equal key "usage")
+            (pichat-chat-refresh-header session))
            ((null value)
             ;; Removal should not leave a stale status visible.
             (pichat-chat--cancel-extension-status-projection)

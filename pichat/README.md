@@ -1819,6 +1819,28 @@ Consult or Node.js, an unavailable archive, or incompatible status also uses the
 basic picker. A prefix argument bypasses discovery and immediately uses that
 picker.
 
+Capability validation and ordinary archive metadata, preview, and relation
+requests use `pichat-archive-run`. Each helper captures an 8 MiB stdout limit
+(`pichat-archive-output-limit`) and a separate 64 KiB stderr limit
+(`pichat-archive-stderr-limit`) at startup. Exceeding either fails and terminates
+that helper; PiChat never accepts truncated JSON or a truncated helper error as
+a successful result. A zero byte limit permits only an empty stream. These are
+retained-capture bounds, not limits on a single delivered chunk, OS/transport
+buffers, or the helper's own memory.
+
+Status validation defaults to five seconds (`pichat-archive-discovery-timeout`),
+and ordinary queries to fifteen (`pichat-archive-query-timeout`), after process
+startup returns; synchronous TRAMP setup is not timed. Direct callers of the
+helper runner can disable its timer with nil or a nonpositive timeout; this does
+not change the separate RPC command-discovery deadline. Discovery owns
+cancellation of its status helper;
+request callers may cancel the returned process, and `pichat-archive-reset`
+cancels archive-boundary helpers. Capture buffers, pipe endpoints and timers
+are released before terminal callbacks. Endpoint cleanup does not certify remote
+or descendant shutdown. Consult's separate streaming search stage retains its
+existing stdout/timeout checks; the new stderr limit does not apply there.
+These settings never cap or truncate canonical Pi RPC transcript data.
+
 Archive browsing first offers the current project, all projects, and exact
 nonblank cwd groups returned by the archive. An Embark collect/export rerun
 reopens the selected project's search directly, with the prior query restored;

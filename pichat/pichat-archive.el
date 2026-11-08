@@ -45,7 +45,17 @@ authoritative when one exists.  Nil disables standalone discovery."
   :group 'pichat-archive)
 
 (defcustom pichat-archive-output-limit (* 8 1024 1024)
-  "Maximum number of helper stdout bytes accepted by PiChat."
+  "Maximum number of helper stdout bytes accepted by PiChat.
+`pichat-archive-run' captures this limit at startup and rejects overflow
+while capturing, rather than returning a truncated result."
+  :type 'natnum
+  :group 'pichat-archive)
+
+(defcustom pichat-archive-stderr-limit (* 64 1024)
+  "Maximum number of stderr bytes captured by `pichat-archive-run'.
+Captured at startup, independently of the stdout limit.  Overflow terminates
+that helper with a structured error, never a truncated helper diagnostic.
+This does not govern the separate Consult streaming process stage."
   :type 'natnum
   :group 'pichat-archive)
 
@@ -282,64 +292,131 @@ helper remain directly readable."
 (defun pichat-archive-run
     (command callback error-callback &optional timeout transport runtime-cwd)
   "Run helper COMMAND through optional TRANSPORT in RUNTIME-CWD.
-CALLBACK receives stdout and ERROR-CALLBACK receives a structured error."
+Return the owned process, which callers may cancel with `delete-process'.
+CALLBACK receives complete stdout; ERROR-CALLBACK receives a structured error.
+Exactly one terminal callback runs, after capture buffers, processes and timers
+are released.  TIMEOUT bounds the helper after transport startup returns;
+nil or nonpositive TIMEOUT disables it.  Synchronous TRAMP setup is not timed.
+Stdout and stderr byte limits are captured at startup.  Overflow fails the
+operation, never returning truncated output.  Retained capture is bounded;
+a single delivered chunk and transport/OS buffers are not allocation limits."
   (let* ((stdout (generate-new-buffer " *pichat-archive-output*"))
          (stderr (generate-new-buffer " *pichat-archive-error*"))
          (sequence (cl-incf pichat-archive--request-sequence))
-         process timer done)
+         (stdout-limit pichat-archive-output-limit)
+         (stderr-limit pichat-archive-stderr-limit)
+         process stderr-process timer overflow-timer failure done)
     (cl-labels
         ((finish (ok value)
            (unless done
+             ;; Claim settlement before deleting processes: sentinels can run
+             ;; synchronously, and callbacks can reenter archive discovery.
              (setq done t)
-             (when (timerp timer) (cancel-timer timer))
+             (dolist (owned-timer (list timer overflow-timer))
+               (when (timerp owned-timer) (cancel-timer owned-timer)))
              (setq pichat-archive--processes
                    (delq process pichat-archive--processes))
-             (unwind-protect
-                 (funcall (if ok callback error-callback) value)
-               (when (buffer-live-p stdout) (kill-buffer stdout))
-               (when (buffer-live-p stderr) (kill-buffer stderr)))))
-         (sentinel (proc _event)
-           (unless (process-live-p proc)
-             (if (= 0 (process-exit-status proc))
-                 (let ((text (pichat-archive--buffer-text stdout)))
-                   (if (> (string-bytes text) pichat-archive-output-limit)
-                       (finish nil (list :class 'process :code "OUTPUT_LIMIT"
-                                         :message "Archive helper output was too large"
-                                         :exit-status 1))
-                     (finish t text)))
-               (finish nil
-                       (pichat-archive-decode-error
-                        (pichat-archive--buffer-text stderr)
-                        (process-exit-status proc))))))
+             (dolist (owner (list process (get-buffer-process stderr)))
+               (when (process-live-p owner) (delete-process owner)))
+             (dolist (buffer (list stdout stderr))
+               (when (buffer-live-p buffer) (kill-buffer buffer)))
+             (funcall (if ok callback error-callback) value)))
+         (sentinel (_proc _event)
+           ;; Transport setup may accept output before returning the process.
+           ;; Defer settlement until its resources can be retired together.
+           (when (and process (not done) (not (process-live-p process)))
+             (cond
+              (failure (finish nil failure))
+              ;; Main-process exit need not imply stderr EOF.  Preserve a
+              ;; complete bounded diagnostic, including its final pipe chunk.
+              ((process-live-p stderr-process))
+              ((= 0 (process-exit-status process))
+               (finish t (pichat-archive--buffer-text stdout)))
+              (t (finish nil
+                         (pichat-archive-decode-error
+                          (pichat-archive--buffer-text stderr)
+                          (process-exit-status process)))))))
+         (capture (buffer chunk)
+           (when (and (not done) (buffer-live-p buffer))
+             (with-current-buffer buffer
+               ;; Process output can arrive while unrelated projection code
+               ;; inhibits modification hooks.  Our private bounds still run.
+               (let ((inhibit-modification-hooks nil))
+                 (goto-char (point-max))
+                 (insert chunk)))))
+         (watch (buffer limit code)
+           ;; Buffer hooks work with both native pipes and TRAMP's stderr
+           ;; buffer transport.  Install before spawning, so output accepted
+           ;; during synchronous setup is bounded too.  Private buffers only.
+           (with-current-buffer buffer
+             (setq buffer-undo-list t)
+             (let ((bytes 0))
+               (add-hook
+                'after-change-functions
+                (lambda (beg end _old-length)
+                  (unless done
+                    (cl-incf bytes
+                             (string-bytes
+                              (buffer-substring-no-properties beg end)))
+                    (when (or failure (> bytes limit))
+                      (unless failure
+                        (setq failure
+                              (list :class 'process :code code
+                                    :message (if (equal code "OUTPUT_LIMIT")
+                                                 "Archive helper output was too large"
+                                               "Archive helper stderr was too large")
+                                    :exit-status 1)))
+                      ;; Reject all captured data, not a plausible partial
+                      ;; result.  Do not kill an actively edited buffer or run
+                      ;; consumer code inside an Emacs modification hook.
+                      (let ((inhibit-modification-hooks t)) (erase-buffer))
+                      (when (and process (not overflow-timer))
+                        (setq overflow-timer
+                              (run-at-time 0 nil
+                                           (lambda () (finish nil failure))))))))
+                nil t))))
          (expire ()
-           (when (and (not done) (process-live-p process))
-             (delete-process process)
-             (finish nil (list :class 'availability :code "TIMEOUT"
-                               :message "Archive helper timed out"
-                               :exit-status 1)))))
+           (unless done
+             (finish nil (or failure
+                             (list :class 'availability :code "TIMEOUT"
+                                   :message "Archive helper timed out"
+                                   :exit-status 1))))))
+      (watch stdout stdout-limit "OUTPUT_LIMIT")
+      (watch stderr stderr-limit "STDERR_LIMIT")
+      ;; Catch transport creation only, not consumer callback failures.
       (condition-case condition
-          (progn
+          (let ((inhibit-modification-hooks nil))
             (setq process
                   (pichat-transport-make-process
                    (or transport pichat-transport-local)
                    (or runtime-cwd default-directory)
                    :name (format "pichat-archive-%d" sequence)
                    :buffer stdout :stderr stderr :command command
-                   :sentinel #'sentinel))
-            ;; Stderr is protocol data, not a place for Emacs's pipe-exit notice.
-            (when-let* ((stderr-process (get-buffer-process stderr)))
-              (set-process-sentinel stderr-process #'ignore))
-            (set-process-query-on-exit-flag process nil)
-            (set-process-coding-system process 'utf-8-unix 'utf-8-unix)
-            (push process pichat-archive--processes)
-            (when (and timeout (> timeout 0))
-              (setq timer (run-at-time timeout nil #'expire)))
-            process)
+                   :coding 'utf-8-unix
+                   :filter (lambda (_owner chunk) (capture stdout chunk))
+                   :sentinel #'sentinel)))
         (error
-         (finish nil (list :class 'availability :code "PROCESS_START"
-                           :message (error-message-string condition)
-                           :exit-status 1))
-         nil)))))
+         (setq failure (list :class 'availability :code "PROCESS_START"
+                             :message (error-message-string condition)
+                             :exit-status 1))))
+      (if (not process)
+          (finish nil (or failure
+                          (list :class 'availability :code "PROCESS_START"
+                                :message "Archive helper did not start"
+                                :exit-status 1)))
+        (setq stderr-process (get-buffer-process stderr))
+        (when stderr-process
+          ;; Stderr is protocol data; never append a pipe-exit notice.
+          (set-process-sentinel stderr-process #'sentinel)
+          (set-process-filter stderr-process
+                              (lambda (_owner chunk) (capture stderr chunk))))
+        (push process pichat-archive--processes)
+        (when (and timeout (> timeout 0))
+          (setq timer (run-at-time timeout nil #'expire)))
+        (cond
+         (failure (finish nil failure))
+         ((not (process-live-p process)) (sentinel process "finished"))))
+      process)))
 
 (defun pichat-archive-command (capability operation &rest args)
   "Build argv for CAPABILITY OPERATION followed by validated ARGS."

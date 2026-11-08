@@ -176,6 +176,284 @@
             (should (= (plist-get failure :exit-status) 2)))
         (when (process-live-p helper) (delete-process helper))))))
 
+(defconst pichat-test-archive--capture-script
+  (concat "process.stdin.setEncoding('utf8');let rest='';"
+          "process.stdin.on('data',chunk=>{rest+=chunk;let n;"
+          "while((n=rest.indexOf('\\n'))>=0){"
+          "const command=JSON.parse(rest.slice(0,n));rest=rest.slice(n+1);"
+          "if(command.exit!==undefined){process.exit(command.exit);}"
+          "else process[command.stream].write(command.text);}});")
+  "Offline helper controlled by JSONL commands; it never exits on its own.")
+
+(cl-defmacro pichat-test-archive--with-capture ((process stdout stderr timers) &rest body)
+  "Observe a real helper PROCESS, capture buffers and TIMERS during BODY."
+  (declare (indent 1))
+  `(let ((start (symbol-function 'pichat-transport-make-process))
+         (schedule (symbol-function 'run-at-time))
+         (,process nil) (,stdout nil) (,stderr nil) (,timers nil)
+         (pichat-archive--processes nil))
+     (cl-letf (((symbol-function 'pichat-transport-make-process)
+                (lambda (transport cwd &rest args)
+                  (setq ,stdout (plist-get args :buffer)
+                        ,stderr (plist-get args :stderr)
+                        ,process (apply start transport cwd args))))
+               ((symbol-function 'run-at-time)
+                (lambda (&rest args)
+                  (let ((timer (apply schedule args)))
+                    (push timer ,timers)
+                    timer))))
+       (unwind-protect (progn ,@body)
+         (when (process-live-p ,process) (delete-process ,process))
+         (dolist (buffer (list ,stdout ,stderr))
+           (when (buffer-live-p buffer) (kill-buffer buffer)))
+         (dolist (timer ,timers) (cancel-timer timer))))))
+
+(defun pichat-test-archive--send (process command)
+  "Send JSON COMMAND to the controlled helper PROCESS."
+  (process-send-string process (concat (json-serialize command) "\n")))
+
+(defun pichat-test-archive--released-p (process stdout stderr timers)
+  "Whether PROCESS has released its capture buffers and owned TIMERS."
+  (and (not (process-live-p process))
+       (not (buffer-live-p stdout)) (not (buffer-live-p stderr))
+       (not (memq process pichat-archive--processes))
+       (cl-every (lambda (timer)
+                   (and (not (memq timer timer-list))
+                        (not (memq timer timer-idle-list)))) timers)))
+
+(ert-deftest pichat-archive-capture-bounds-each-stream-before-helper-exit ()
+  (dolist (stream '("stdout" "stderr"))
+    (pichat-test-archive--with-capture (process stdout stderr timers)
+      (let ((pichat-archive-output-limit 6)
+            (pichat-archive-stderr-limit 6)
+            (calls 0) failure)
+        (pichat-archive-run
+         (list (executable-find "node") "-e" pichat-test-archive--capture-script)
+         (lambda (_) (ert-fail "Overflow must never become partial success"))
+         (lambda (value) (cl-incf calls) (setq failure value)) 5)
+        (let ((capture (if (equal stream "stdout") stdout stderr)))
+          (pichat-test-archive--send process (list :stream stream :text "éé"))
+          (pichat-test-wait-until
+           (lambda () (equal "éé" (pichat-archive--buffer-text capture)))
+           2 "initial bounded archive capture")
+          ;; Limits belong to this operation, not later Custom changes.
+          (setq pichat-archive-output-limit 1000 pichat-archive-stderr-limit 1000)
+          (pichat-test-archive--send process (list :stream stream :text "é"))
+          (pichat-test-wait-until
+           (lambda () (equal "ééé" (pichat-archive--buffer-text capture)))
+           2 "exact UTF-8 archive capture limit")
+          (should (process-live-p process))
+          (should-not failure)
+          (pichat-test-archive--send process (list :stream stream :text "é"))
+          (pichat-test-wait-until (lambda () failure) 2 "early archive overflow")
+          (should (eq 'process (plist-get failure :class)))
+          (should (equal (if (equal stream "stdout") "OUTPUT_LIMIT" "STDERR_LIMIT")
+                         (plist-get failure :code)))
+          (should (= calls 1))
+          (should (pichat-test-archive--released-p process stdout stderr timers))
+          ;; A duplicate/late terminal delivery cannot settle again.
+          (funcall (process-sentinel process) process "late exit")
+          (should (= calls 1)))))))
+
+(ert-deftest pichat-archive-capture-rejects-an-oversized-single-chunk ()
+  (dolist (stream '("stdout" "stderr"))
+    (pichat-test-archive--with-capture (process stdout stderr timers)
+      (let ((pichat-archive-output-limit 4)
+            (pichat-archive-stderr-limit 4) failure)
+        (pichat-archive-run
+         (list (executable-find "node") "-e" pichat-test-archive--capture-script)
+         (lambda (_) (ert-fail "Accepted oversized chunk"))
+         (lambda (value) (setq failure value)) 5)
+        (pichat-test-archive--send
+         process (list :stream stream :text (make-string 65536 ?x)))
+        (pichat-test-wait-until (lambda () failure) 2 "single-chunk overflow")
+        (should (equal (if (equal stream "stdout") "OUTPUT_LIMIT" "STDERR_LIMIT")
+                       (plist-get failure :code)))
+        (should (pichat-test-archive--released-p process stdout stderr timers))))))
+
+(ert-deftest pichat-archive-capture-bounds-survive-unrelated-hook-inhibition ()
+  (dolist (stream '("stdout" "stderr"))
+    (pichat-test-archive--with-capture (process stdout stderr timers)
+      (let ((pichat-archive-output-limit 2)
+            (pichat-archive-stderr-limit 2) failure)
+        (pichat-archive-run
+         (list (executable-find "node") "-e" pichat-test-archive--capture-script)
+         (lambda (_) (ert-fail "Accepted overflow with hooks inhibited"))
+         (lambda (value) (setq failure value)) 5)
+        (let ((inhibit-modification-hooks t))
+          (pichat-test-archive--send process (list :stream stream :text "abcd"))
+          (pichat-test-wait-until (lambda () failure) 2 "inhibited-hook overflow"))
+        (should (equal (if (equal stream "stdout") "OUTPUT_LIMIT" "STDERR_LIMIT")
+                       (plist-get failure :code)))
+        (should (pichat-test-archive--released-p process stdout stderr timers))))))
+
+(ert-deftest pichat-archive-capture-bounds-output-during-transport-setup ()
+  (dolist (stream '("stdout" "stderr"))
+    (pichat-test-archive--with-capture (process stdout stderr timers)
+      (let ((create (symbol-function 'pichat-transport-make-process))
+            (pichat-archive-output-limit 4)
+            (pichat-archive-stderr-limit 4)
+            (calls 0) observed failure)
+        (cl-letf (((symbol-function 'pichat-transport-make-process)
+                   (lambda (transport cwd &rest args)
+                     (let ((capture (plist-get args (if (equal stream "stdout")
+                                                       :buffer :stderr))))
+                       (with-current-buffer capture
+                         (add-hook 'after-change-functions
+                                   (lambda (&rest _) (setq observed t)) t t))
+                       (prog1 (apply create transport cwd args)
+                         ;; Simulate transport setup accepting output before
+                         ;; the owning call has received its process object.
+                         (pichat-test-wait-until (lambda () observed) 2
+                                                 "setup-time archive output")
+                         (should (<= (string-bytes (pichat-archive--buffer-text capture)) 4))
+                         (should (= calls 0)))))))
+          (let ((inhibit-modification-hooks t))
+            (pichat-archive-run
+             (list (executable-find "node") "-e"
+                   (format "process.stdin.resume();process.%s.write('overflow');" stream))
+             (lambda (_) (ert-fail "Accepted setup-time overflow"))
+             (lambda (value) (cl-incf calls) (setq failure value)) 5)))
+        (should failure)
+        (should (equal (if (equal stream "stdout") "OUTPUT_LIMIT" "STDERR_LIMIT")
+                       (plist-get failure :code)))
+        (should (= calls 1))
+        (should (pichat-test-archive--released-p process stdout stderr timers))))))
+
+(ert-deftest pichat-archive-capture-start-failure-cleans-before-notifying ()
+  (pichat-test-archive--with-capture (process stdout stderr timers)
+    (let ((calls 0) failure)
+      (cl-letf (((symbol-function 'pichat-transport-make-process)
+                 (lambda (_transport _cwd &rest args)
+                   (setq stdout (plist-get args :buffer)
+                         stderr (plist-get args :stderr))
+                   (signal 'file-error '("fixture launch failure")))))
+        (should-not
+         (pichat-archive-run
+          '("fixture-helper") #'ignore
+          (lambda (value)
+            (cl-incf calls) (setq failure value)
+            (should (pichat-test-archive--released-p process stdout stderr timers)))
+          5)))
+      (should (= calls 1))
+      (should (equal "PROCESS_START" (plist-get failure :code))))))
+
+(ert-deftest pichat-archive-capture-does-not-reclassify-consumer-errors ()
+  (pichat-test-archive--with-capture (process stdout stderr timers)
+    (let ((create (symbol-function 'pichat-transport-make-process))
+          (calls 0) failure)
+      (cl-letf (((symbol-function 'pichat-transport-make-process)
+                 (lambda (transport cwd &rest args)
+                   (let ((helper (apply create transport cwd args)))
+                     (pichat-test-wait-until
+                      (lambda () (and (not (process-live-p helper))
+                                      (not (process-live-p (get-buffer-process stderr)))))
+                      2 "setup-time successful exit")
+                     helper))))
+        (should-error
+         (pichat-archive-run
+          (list (executable-find "node") "-e" "process.stdout.write('complete');")
+          (lambda (text)
+            (cl-incf calls)
+            (should (equal "complete" text))
+            (should (pichat-test-archive--released-p process stdout stderr timers))
+            (user-error "fixture consumer error"))
+          (lambda (value) (setq failure value)) 5)
+         :type 'user-error))
+      (should (= calls 1))
+      (should-not failure)
+      (should (pichat-test-archive--released-p process stdout stderr timers)))))
+
+(ert-deftest pichat-archive-capture-preserves-exact-success-and-zero-limits ()
+  (dolist (text '("ééé" ""))
+    (pichat-test-archive--with-capture (process stdout stderr timers)
+      (let ((pichat-archive-output-limit (string-bytes text))
+            (pichat-archive-stderr-limit 0) (calls 0) result)
+        (pichat-archive-run
+         (list (executable-find "node") "-e"
+               (format "process.stdout.write(%s);" (json-serialize text)))
+         (lambda (value) (cl-incf calls) (setq result value))
+         (lambda (value) (ert-fail value)) 2)
+        (pichat-test-wait-until (lambda () (= calls 1)) 3 "exact archive result")
+        (should (equal text result))
+        (should (pichat-test-archive--released-p process stdout stderr timers))))))
+
+(ert-deftest pichat-archive-capture-timeout-wins-and-cleans-up-once ()
+  (pichat-test-archive--with-capture (process stdout stderr timers)
+    (let ((calls 0) failure)
+      (pichat-archive-run
+       (list (executable-find "node") "-e" pichat-test-archive--capture-script)
+       (lambda (_) (ert-fail "Stalled helper succeeded"))
+       (lambda (value) (cl-incf calls) (setq failure value)) 0.1)
+      (pichat-test-wait-until (lambda () failure) 2 "archive timeout")
+      (should (eq 'availability (plist-get failure :class)))
+      (should (equal "TIMEOUT" (plist-get failure :code)))
+      (should (pichat-test-archive--released-p process stdout stderr timers))
+      (funcall (process-sentinel process) process "late exit")
+      (should (= calls 1)))))
+
+(ert-deftest pichat-archive-capture-owner-cancellation-releases-resources ()
+  (pichat-test-archive--with-capture (process stdout stderr timers)
+    (let ((calls 0) failure)
+      (pichat-archive-run
+       (list (executable-find "node") "-e" pichat-test-archive--capture-script)
+       (lambda (_) (ert-fail "Cancelled helper succeeded"))
+       (lambda (value) (cl-incf calls) (setq failure value)) 5)
+      (delete-process process)
+      (pichat-test-wait-until (lambda () failure) 2 "archive cancellation")
+      (should (pichat-test-archive--released-p process stdout stderr timers))
+      (funcall (process-sentinel process) process "duplicate cancellation")
+      (should (= calls 1)))))
+
+(ert-deftest pichat-archive-capture-waits-for-stderr-eof-within-the-timeout ()
+  ;; Model transports whose stderr endpoint outlives their main endpoint,
+  ;; without leaving a real descendant or connecting to an SSH target.
+  (dolist (expire '(nil t))
+    (pichat-test-archive--with-capture (process stdout stderr timers)
+      (let ((create (symbol-function 'pichat-transport-make-process))
+            (calls 0) pipe failure)
+        (cl-letf (((symbol-function 'pichat-transport-make-process)
+                   (lambda (transport cwd &rest args)
+                     (setq pipe (make-pipe-process
+                                 :name "pichat-archive-test-stderr"
+                                 :buffer (plist-get args :stderr)
+                                 :noquery t :sentinel #'ignore))
+                     (apply create transport cwd (plist-put args :stderr nil)))))
+          ;; The observer helper records the original buffers; restore stderr,
+          ;; which the modeled transport replaces with the independent pipe.
+          (pichat-archive-run
+           (list (executable-find "node") "-e" "process.exit(2);")
+           (lambda (_) (ert-fail "Failed helper succeeded"))
+           (lambda (value) (cl-incf calls) (setq failure value)) 1)
+          (setq stderr (process-buffer pipe)))
+        (pichat-test-wait-until (lambda () (not (process-live-p process)))
+                                2 "main archive endpoint exit")
+        (should-not failure)
+        (if expire
+            (progn
+              (pichat-test-wait-until (lambda () failure) 2 "stderr EOF timeout")
+              (should (equal "TIMEOUT" (plist-get failure :code))))
+          (funcall (process-filter pipe) pipe
+                   "{\"code\":\"INVALID_QUERY\",\"message\":\"final diagnostic\"}")
+          (delete-process pipe)
+          (pichat-test-wait-until (lambda () failure) 2 "final stderr classification")
+          (should (equal "INVALID_QUERY" (plist-get failure :code)))
+          (should (equal "final diagnostic" (plist-get failure :message))))
+        (should (= calls 1))
+        (should-not (process-live-p pipe))
+        (should (pichat-test-archive--released-p process stdout stderr timers))))))
+
+(ert-deftest pichat-archive-capture-reset-releases-all-owned-helpers ()
+  (pichat-test-archive--with-capture (process stdout stderr timers)
+    (let ((calls 0))
+      (pichat-archive-run
+       (list (executable-find "node") "-e" pichat-test-archive--capture-script)
+       (lambda (_) (ert-fail "Reset helper succeeded"))
+       (lambda (_) (cl-incf calls)) 5)
+      (pichat-archive-reset)
+      (pichat-test-wait-until (lambda () (= calls 1)) 2 "archive reset")
+      (should (pichat-test-archive--released-p process stdout stderr timers)))))
+
 (ert-deftest pichat-archive-normalizes-search-and-recent-candidates ()
   (let* ((recent (pichat-archive-normalize-recent
                   (pichat-test-archive--metadata)))

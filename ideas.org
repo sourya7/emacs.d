@@ -1,4 +1,4 @@
-#+TODO: IDEA QUEUED NEEDS-INPUT | PLANNED DONE DECLINED
+#+TODO: IDEA QUEUED NEEDS-INPUT | PLANNED DECLINED
 
 * Ideas
 ** scheduled jobs should be able to run elisp.
@@ -8,7 +8,8 @@ the goal is to be able to run things like compact before sending a follow up
 - Review: Related saved-session browsing and previous/triggering job-run links exist; a unified associated-session menu remains unverified. The Session History navigation draft concerns entries within one Pi session, not relations between sessions.
 ** PLANNED do research into the available actions and move them to the actions transient when available
 - Existing plan: =pichat-maintainability=, unfinished W21 — Evaluate one thin chat-actions Transient. Planned evaluation, not an implemented consolidation.
-** DONE can we use a numeric id rather than our current hash. it maked the title too long and not very easy to relate
+** PLANNED can we use a numeric id rather than our current hash. it maked the title too long and not very easy to relate
+- Completion: Previously marked DONE; normalized to the intake-supported terminal state. Implementation remains complete.
 - Review: Chat buffer names now use short runtime numbers (for example, =*pi:project:7*=); the runtime manager shows matching IDs. These identify runtimes, not Pi sessions; see =pichat/GLOSSARY.md=.
 ** review and make sure all pichat buffers have the same consistent header
 - Review: Persistent chat headers are implemented (completed plan =pichat-persistent-context-header=). Jobs and other views still have distinct presentations; an all-buffer consistency audit remains open.
@@ -30,7 +31,7 @@ want to see it work with the plans command and its json output rather than havin
 ** PLANNED can we combine the continuation within the follow up? kind of seems like related functionalitkes
 - Existing draft: =deliver-queued-follow-ups-after-manual-compaction= explicitly unifies conversational follow-up composition and timed continuation. Not implemented; execution requires separate authorization.
 ** make dd delete the draft
-** DONE add a run now option for the scheduked jobs
+** PLANNED add a run now option for the scheduked jobs
 :PROPERTIES:
 :ID: 4bb821c8-e9df-4aa6-9b4d-2ca1f30e9d36
 :IDEA_PROJECT: /home/dev/.emacs.d
@@ -41,7 +42,16 @@ want to see it work with the plans command and its json output rather than havin
 - Planning [2026-11-08T07:05:14+00:00]: User-authorized path migration to run-a-pending-scheduled-continuation-now; updated reservation and handoff paths, preserving source identity and state.
 - Planning [2026-11-08T16:35:18+00:00]: Migrated to plan-ID references; resolve current location through plans, including archive.
 - Review: Linked plan is completed and archived; Run now is implemented for pending scheduled continuations. Saved-job schedules also support Run now.
-** make it possible to have a 'custom' preset which can be emacs instance level
+- Completion: Previously marked DONE; normalized to the intake-supported terminal state. Implementation remains complete.
+** PLANNED make it possible to have a 'custom' preset which can be emacs instance level
+:PROPERTIES:
+:ID: 098eddb5-0764-4f14-856c-0181a1e03d78
+:IDEA_PROJECT: /home/dev/.emacs.d
+:IDEA_PLAN_ID: pichat-instance-custom-preset
+:END:
 - Review: Programmable named presets and run-local Tools customization exist. A dedicated interactive Emacs-instance custom-preset editor remains open.
-** DONE move the idea to plan outside of emacs.d since its global skill
+- Planning [2026-11-08T19:43:53+00:00]: Provisional draft created; research, draft and validate it before publication. Plan ID: =pichat-instance-custom-preset=.
+- Planning [2026-11-08T19:45:25+00:00]: Validated draft handoff: =pichat-instance-custom-preset=; implementation requires separate approval.
+** PLANNED move the idea to plan outside of emacs.d since its global skill
+- Completion: Previously marked DONE; normalized to the intake-supported terminal state. Implementation remains complete.
 - Review: The =idea-to-plan= skill is installed globally from the shared skills repository; no project-local copy remains.

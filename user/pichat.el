@@ -35,6 +35,15 @@
 Prefer bullets unless a table materially helps comparison.
 Keep tables narrow and pad columns for monospace readability.")
 
+;; Use Pi's absolute path because non-interactive SSH lacks the mise PATH.
+(setf (alist-get 'agent-dev pichat-targets)
+      '(:kind ssh
+        :tramp-prefix "/ssh:agent-dev:"
+        :pi-executable "/home/dev/.local/share/mise/installs/pi/latest/pi/pi"
+        :remote-path (tramp-own-remote-path)
+        :runtime-home "/home/dev"
+        :path-mappings (("/ssh:agent-dev:/" . "/"))))
+
 ;; (setq pichat-targets
 ;;       '((lima-devbox
 ;;          :kind ssh

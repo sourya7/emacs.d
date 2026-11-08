@@ -128,6 +128,43 @@
         (funcall (plist-get prepared :cleanup))
         (should-not (file-exists-p directory))))))
 
+(ert-deftest pichat-tool-discovery-stages-symlinked-helper-and-skill-contents ()
+  (pichat-test-with-temp-dir remote-dir
+    (pichat-test-with-temp-dir assets-dir
+      (let* ((transport (pichat-transport--create :id 'test :kind 'ssh))
+             (helper-link (expand-file-name "helper.ts" assets-dir))
+             (skill-link (expand-file-name "SKILL.md" assets-dir))
+             (skill-source (expand-file-name "skill-source.md" assets-dir))
+             (copy (symbol-function 'copy-file))
+             prepared)
+        (with-temp-file skill-source (insert "Isolated authoring skill\n"))
+        (make-symbolic-link pichat-tool-discovery-helper helper-link)
+        (make-symbolic-link skill-source skill-link)
+        (unwind-protect
+            (let ((pichat-tool-discovery-helper helper-link))
+              (cl-letf (((symbol-function 'pichat-transport-runtime-file-name)
+                         (lambda (_transport _path)
+                           (expand-file-name "staged-" remote-dir)))
+                        ((symbol-function 'copy-file)
+                         (lambda (source destination &rest args)
+                           ;; Model a remote copy that cannot follow local links.
+                           (should-not (file-symlink-p source))
+                           (apply copy source destination args))))
+                (setq prepared
+                      (pichat-tool-discovery-prepare-helper transport skill-link)))
+              (should (equal (with-temp-buffer
+                               (insert-file-contents (plist-get prepared :path))
+                               (buffer-string))
+                             (with-temp-buffer
+                               (insert-file-contents helper-link)
+                               (buffer-string))))
+              (should (equal (with-temp-buffer
+                               (insert-file-contents (plist-get prepared :skill))
+                               (buffer-string))
+                             "Isolated authoring skill\n"))
+              (should (= (file-modes (plist-get prepared :skill)) #o600)))
+          (when prepared (funcall (plist-get prepared :cleanup))))))))
+
 (defun pichat-test-tool-control-call (session operation &optional names)
   "Call the real internal control command in SESSION with OPERATION and NAMES."
   (let ((count (pichat-test-count-raw-events session "extension_ui_request")) response)

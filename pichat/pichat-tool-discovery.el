@@ -39,14 +39,16 @@ The caller must clean up only after Pi has stopped using these resources."
       (condition-case err
           (progn
             (set-file-modes directory #o700)
-            (copy-file pichat-tool-discovery-helper file)
+            ;; Elpaca builds may symlink these assets.  Resolve locally so
+            ;; TRAMP copies their contents, not a host-only symlink target.
+            (copy-file (file-truename pichat-tool-discovery-helper) file)
             (set-file-modes file #o600)
             (let ((skill (when skill-file
                            (expand-file-name "pichat-jobs/SKILL.md" directory))))
               (when skill
                 (make-directory (file-name-directory skill))
                 (set-file-modes (file-name-directory skill) #o700)
-                (copy-file skill-file skill)
+                (copy-file (file-truename skill-file) skill)
                 (set-file-modes skill #o600))
               (list :path (file-local-name file)
                     :skill (and skill (file-local-name skill))

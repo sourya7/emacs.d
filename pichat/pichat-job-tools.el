@@ -33,7 +33,7 @@
 (declare-function pichat-job-record "pichat-job-core")
 (declare-function pichat-job-admission "pichat-job-core")
 (declare-function pichat-job-evidence-read "pichat-job-core")
-(declare-function pichat-session-by-runtime-id "pichat")
+(declare-function pichat-job-executor-run-session "pichat-job-executor")
 (declare-function pichat-job-schedule-instant-p "pichat-job-schedule")
 (declare-function pichat-job-schedule-validate-rule "pichat-job-schedule")
 (declare-function pichat-job-schedule-next "pichat-job-schedule")
@@ -332,6 +332,12 @@ so a job run can never start its own saved job."
         (when waiting (list :waiting_for waiting))
         (list :run (pichat-job-tools--run run)))))))
 
+(defconst pichat-job-tools--uncertain-message
+  (concat "PiChat cannot verify that processes started by its tools have stopped, "
+          "so the run keeps its job slot and blocks its saved job until the user "
+          "releases it in Jobs.")
+  "Explanation of an uncertain run for tool results.")
+
 (defun pichat-job-tools-run-cancel (params)
   "Cancel the job run in PARAMS; return JSON with its recorded state afterwards.
 Scheduled and queued runs are removed; active runs are asked to abort."
@@ -352,12 +358,12 @@ Scheduled and queued runs are removed; active runs are asked to abort."
              (pcase (plist-get run :state)
                ("finished" (if (equal (plist-get run :result) "cancelled") "Cancelled."
                              (format "Finished as %s." (plist-get run :result))))
-               ("uncertain" (concat "Stopping could not be verified; the run is uncertain and "
-                                    "keeps its job slot until the user releases it in Jobs."))
-               (_ (format (concat "Cancellation requested; the runtime was asked to abort. "
-                                  "The run finishes as cancelled, or becomes uncertain if "
-                                  "it does not settle within %s seconds. Inspect it again "
-                                  "to follow it.")
+               ("uncertain" pichat-job-tools--uncertain-message)
+               (_ (format (concat "Abort requested. A run whose prompt was not sent yet "
+                                  "finishes as cancelled. Otherwise, once the agent stops "
+                                  "(or after %s seconds if it does not), the run becomes "
+                                  "uncertain: " pichat-job-tools--uncertain-message
+                                  " Inspect it again to follow it.")
                           pichat-jobs-control-timeout))))))))
 
 (defun pichat-job-tools--response (store run)
@@ -384,7 +390,7 @@ Fall back to the stored summary when evidence is absent or unreadable."
          (owner (pichat-job-tools--owner))
          (store (pichat-job-executor-store owner))
          (run (pichat-job-tools--find-run store id))
-         (runtime (plist-get run :runtime-id))
+         (session (pichat-job-executor-run-session owner run))
          (waiting (pichat-job-tools--waiting-reason store run)))
     (pichat-tools-json
      (append
@@ -398,8 +404,8 @@ Fall back to the stored summary when evidence is absent or unreadable."
             :title (pichat-tools-display-text (plist-get (plist-get run :spec) :title) 200))
       (when waiting (list :waiting_for waiting))
       ;; Only a retained runtime is useful to pichat_chat_read.
-      (when (and runtime (pichat-session-by-runtime-id runtime))
-        (list :runtime_id runtime))
+      (when session
+        (list :runtime_id (pichat-session-runtime-id session)))
       (when (equal (plist-get run :state) "finished")
         (pichat-job-tools--response store run))))))
 
@@ -509,7 +515,7 @@ Registration lists the tools in the Tools picker; it exposes nothing."
     (:group "Jobs" :label "Cancel job run" :mutating t
      :approval-summary #'pichat-job-tools-run-cancel-summary
      :description "Cancel a scheduled, queued or active job run. Scheduled and queued runs are removed; an active run is asked to abort."
-     :instructions "For an active run the result is a request, not proof that it stopped; inspect the run again. Finished and uncertain runs cannot be cancelled, and a job run cannot cancel itself."
+     :instructions "For an active run the result is a request, not proof that it stopped; inspect the run again. Once its prompt was sent, a cancelled run ends uncertain, not cancelled: it keeps its job slot and blocks its saved job until the user releases it in Jobs. Finished and uncertain runs cannot be cancelled, and a job run cannot cancel itself."
      :parameters (:type "object"
                   :properties (:run_id (:type "string"))
                   :required ["run_id"]

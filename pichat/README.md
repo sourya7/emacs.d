@@ -2371,14 +2371,18 @@ approval by default; their prompts name the job, its target and directory.
   once finished, its final response (up to 4000 characters, truncation marked)
   from the captured run-end evidence, so it stays readable after the run's chat
   is closed. If the evidence is missing or changed, the stored 2000-character
-  summary is returned and labelled. While the run's runtime is retained, its
-  `runtime_id` can be passed to `pichat_chat_read`.
+  summary is returned and labelled. While the run's runtime is retained (and
+  still bound to the run's saved session file, since runtime IDs restart with
+  Emacs), its `runtime_id` can be passed to `pichat_chat_read`.
 - `pichat_job_run_cancel` removes a scheduled or queued run. For an active run
-  it asks the runtime to abort and reports the state recorded afterwards; the
-  run finishes as cancelled, or becomes uncertain if it does not settle within
-  `pichat-jobs-control-timeout`. Finished and uncertain runs, and a run whose
-  completion is already being cleaned up, cannot be cancelled. A job run cannot
-  cancel itself.
+  it asks the runtime to abort and reports the state recorded afterwards. A run
+  whose prompt was not sent yet finishes as cancelled. Once the prompt was sent,
+  the run becomes uncertain when the agent stops (or after
+  `pichat-jobs-control-timeout` if it does not), exactly as when cancelling in
+  Jobs: PiChat cannot verify that processes started by its tools have stopped,
+  so the run keeps its job slot and blocks its saved job until you release it
+  in Jobs. Finished and uncertain runs, and a run whose completion is already
+  being cleaned up, cannot be cancelled. A job run cannot cancel itself.
 
 The tools use the same Jobs owner as `M-x pichat-jobs`, starting it if needed
 just as opening Jobs would (which also resumes your other enabled schedules).
@@ -2394,13 +2398,14 @@ Jobs.
 
 - `pichat_chats_list` describes each retained runtime: `runtime_id`, name,
   directory, target, state, whether it is waiting for user input, model,
-  preset, whether its chat buffer is open, the `job_run_id` of a job run it is
-  executing, and `self` for the caller. Runtime IDs are valid only in the
-  current Emacs session.
-- `pichat_chat_read` returns the recent settled user and assistant messages of
-  one runtime (`messages`, default 10, at most 30; each message's text up to
-  1000 characters, truncation marked). Tool calls are named only; thinking,
-  tool arguments and tool results are omitted, as is the in-progress reply. A
+  preset, whether its chat buffer is open, the `job_run_id` of the latest job
+  run it executed, and `self` for the caller. An unnamed job worker is named
+  after its job. Runtime IDs are valid only in the current Emacs session.
+- `pichat_chat_read` returns the recent user and assistant messages of one
+  runtime (`messages`, default 10, at most 30; each message's text up to 1000
+  characters, truncation marked). Settled messages come first, then those of
+  the reply in progress, marked `settled: false`, which may still change. Tool
+  calls are named only; thinking, tool arguments and tool results are omitted. A
   runtime whose chat buffer is closed reports `transcript_available: false`.
 
 ### Orchestrator jobs
@@ -2424,7 +2429,9 @@ chats are doing, starts saved jobs, reads their results and cancels runs.
   without you. That rule is global: the per-runtime Tools selection is what
   keeps other runtimes from using those tools.
 - **Capacity.** The orchestrator is itself a job run and occupies one of
-  `pichat-jobs-max-concurrency` slots while it runs.
+  `pichat-jobs-max-concurrency` slots while it runs. Cancelling a run whose
+  prompt was sent leaves it uncertain, holding a slot and blocking its saved
+  job until you release it in Jobs; the tools cannot release it.
 - **Target.** The orchestrator must run locally, since SSH runtimes have no
   bridge; the jobs it starts may use SSH.
 - **Trust.** Chat messages and job responses come from other agents; the tool

@@ -366,7 +366,10 @@ The execution is registered with EXECUTOR but has no process."
           (should (equal '("abort") calls))
           (should (equal "running" (plist-get result :state)))
           (should (eq nil (plist-get result :result)))
-          (should (string-match-p "Cancellation requested.*uncertain" (plist-get result :message))))))))
+          ;; Once the prompt was sent, a cancelled run ends uncertain, holding
+          ;; its slot until the user releases it; the result says so.
+          (should (string-match-p "\\`Abort requested\\..*becomes uncertain.*releases it in Jobs"
+                                  (plist-get result :message))))))))
 
 (ert-deftest pichat-job-tools-a-job-run-cannot-start-or-cancel-itself ()
   (pichat-test-with-job-tools
@@ -436,6 +439,25 @@ The execution is registered with EXECUTOR but has no process."
       (let ((result (pichat-test-job-tool-ok "pichat_job_run_inspect" (list :run_id run))))
         (should (equal (pichat-session-runtime-id session) (plist-get result :runtime_id)))
         (should-not (plist-member result :response))))))
+
+(ert-deftest pichat-job-tools-run-inspect-ignores-a-reused-runtime-id ()
+  ;; Runtime IDs restart with each Emacs session: a finished run's recorded ID
+  ;; links only while the runtime is still bound to the run's session file.
+  (pichat-test-with-job-tools
+    (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (session (pichat-session-make :cwd project-dir :session-file "/tmp/now.jsonl"))
+           (run (pichat-job-enqueue store nil job))
+           (token (plist-get (pichat-job-claim store run) :attempt))
+           (inspect (lambda ()
+                      (pichat-test-job-tool-ok "pichat_job_run_inspect" (list :run_id run)))))
+      (pichat-register-session session)
+      (pichat-job-advance store run token "running"
+                          (list :runtime-id (pichat-session-runtime-id session)
+                                :session-file "/tmp/earlier-emacs.jsonl"))
+      (should-not (plist-member (funcall inspect) :runtime_id))
+      (setf (pichat-session-session-file session) "/tmp/earlier-emacs.jsonl")
+      (should (equal (pichat-session-runtime-id session)
+                     (plist-get (funcall inspect) :runtime_id))))))
 
 (ert-deftest pichat-job-tools-approval-names-the-job-and-run ()
   (pichat-test-with-job-tools

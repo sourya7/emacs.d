@@ -3,8 +3,8 @@
 ;;; Commentary:
 
 ;; Contracts for the read-only Chats tools: they describe retained runtimes
-;; from cached state and read bounded settled messages from an open chat's
-;; canonical entry cache, without side effects on chats, runtimes or Jobs.
+;; from cached state and read bounded messages from an open chat's canonical
+;; entry cache and live draft, without side effects on chats, runtimes or Jobs.
 
 ;;; Code:
 
@@ -110,15 +110,28 @@ Return (ERRORP . DECODED-OR-TEXT)."
     (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))
            (run (pichat-job-enqueue store nil job))
            (claim (pichat-job-claim store run))
-           (worker (pichat-session-make :cwd project-dir))
-           (pichat-jobs--executor executor))
+           (worker (pichat-session-make :cwd project-dir :session-file "/tmp/worker.jsonl"))
+           (pichat-jobs--executor executor)
+           (chat (lambda ()
+                   (car (plist-get (pichat-test-chat-tool-ok "pichat_chats_list") :chats)))))
       (puthash run (pichat-job-execution--create :executor executor :id run
                                                  :token (plist-get claim :attempt)
                                                  :session worker)
                (pichat-job-executor-contexts executor))
       (pichat-register-session worker)
-      (let ((chat (car (plist-get (pichat-test-chat-tool-ok "pichat_chats_list") :chats))))
-        (should (equal run (plist-get chat :job_run_id)))))))
+      (should (equal run (plist-get (funcall chat) :job_run_id)))
+      ;; An unnamed worker is named after its job.
+      (should (equal "Review files" (plist-get (funcall chat) :name)))
+      ;; After the run retires, its record still links the retained runtime...
+      (pichat-job-advance store run (plist-get claim :attempt) "running"
+                          (list :runtime-id (pichat-session-runtime-id worker)
+                                :session-file "/tmp/worker.jsonl"))
+      (remhash run (pichat-job-executor-contexts executor))
+      (should (equal run (plist-get (funcall chat) :job_run_id)))
+      ;; ...but not a runtime that reuses its ID for another Pi session.
+      (setf (pichat-session-session-file worker) "/tmp/other.jsonl")
+      (should-not (plist-member (funcall chat) :job_run_id))
+      (should-not (plist-get (funcall chat) :name)))))
 
 (ert-deftest pichat-chat-tools-read-returns-bounded-settled-messages ()
   (pichat-test-with-chats
@@ -143,6 +156,37 @@ Return (ERRORP . DECODED-OR-TEXT)."
       (let ((recent (pichat-test-chat-tool-ok "pichat_chat_read" (list :runtime_id id :messages 1))))
         (should (= 1 (length (plist-get recent :messages))))
         (should (= 2 (plist-get recent :earlier_omitted)))))))
+
+(ert-deftest pichat-chat-tools-read-includes-the-reply-in-progress ()
+  (pichat-test-with-chats
+    (let ((id (pichat-session-runtime-id chatty))
+          (draft (with-current-buffer buffer
+                   (pichat-live-draft-empty pichat-chat--source-generation))))
+      (dolist (event '((:type "message_start" :message (:role "user" :content "Next step?"))
+                       (:type "message_end" :message (:role "user" :content "Next step?"))
+                       (:type "message_start"
+                        :message (:role "assistant"
+                                  :content ((:type "text" :text "Working on")
+                                            (:type "toolCall" :id "call-2" :name "grep"
+                                             :arguments (:pattern "x")))))))
+        (pichat-pi-live-draft-apply draft event))
+      (with-current-buffer buffer (setq pichat-chat--live-draft draft))
+      (let* ((result (pichat-test-chat-tool-ok "pichat_chat_read" (list :runtime_id id :messages 3)))
+             (messages (plist-get result :messages)))
+        ;; Settled messages first, then the live tail, marked and never duplicated.
+        (should (= 5 (plist-get result :total_messages)))
+        (should (equal '("assistant" "user" "assistant")
+                       (mapcar (lambda (m) (plist-get m :role)) messages)))
+        (should-not (plist-member (car messages) :settled))
+        (should (equal "Next step?" (plist-get (nth 1 messages) :text)))
+        (should (eq :false (plist-get (nth 1 messages) :settled)))
+        (should (equal "Working on" (plist-get (nth 2 messages) :text)))
+        (should (equal '("grep") (plist-get (nth 2 messages) :tool_calls)))
+        (should (eq :false (plist-get (nth 2 messages) :settled))))
+      ;; A draft from an earlier source generation is not this chat's tail.
+      (with-current-buffer buffer (cl-incf pichat-chat--source-generation))
+      (should (= 3 (plist-get (pichat-test-chat-tool-ok "pichat_chat_read" (list :runtime_id id))
+                              :total_messages))))))
 
 (ert-deftest pichat-chat-tools-read-has-no-side-effects-and-clear-errors ()
   (pichat-test-with-chats

@@ -13,6 +13,8 @@
 (require 'pichat-process-lifetime)
 (require 'pichat-job-conversation)
 
+(declare-function pichat-session-by-runtime-id "pichat" (runtime-id))
+
 (defgroup pichat-jobs nil "Reviewed background and existing-conversation jobs." :group 'pichat)
 (defcustom pichat-jobs-max-concurrency 3
   "Maximum admitted job attempts, including uncertain executions."
@@ -922,6 +924,36 @@ Retired executions (finished or uncertain runs) do not count."
                    (throw 'found id)))
                (pichat-job-executor-contexts executor))
       nil)))
+
+(defun pichat-job-executor-run-session (executor run)
+  "Return the retained runtime session that executed RUN for EXECUTOR, or nil.
+Runtime IDs restart with each Emacs session, so a recorded ID alone may name
+an unrelated runtime.  The session must still be the run's execution session
+or still be bound to the run's recorded session file."
+  (when-let* ((session (pichat-session-by-runtime-id (plist-get run :runtime-id))))
+    (let ((execution (gethash (plist-get run :id) (pichat-job-executor-contexts executor)))
+          (file (plist-get run :session-file)))
+      (and (or (and execution (eq session (pichat-job-execution-session execution)))
+               (and file (equal file (pichat-session-session-file session))))
+           session))))
+
+(defun pichat-job-executor-session-last-run (executor session)
+  "Return the ID of EXECUTOR's latest job run executed in retained SESSION, or nil.
+A run executing in SESSION comes first; otherwise the most recently created
+run for which `pichat-job-executor-run-session' returns SESSION."
+  (when session
+    (or (pichat-job-executor-session-run executor session)
+        (let ((runtime (pichat-session-runtime-id session))
+              latest)
+          (mapc (lambda (run)
+                  (when (and (equal runtime (plist-get run :runtime-id))
+                             (or (null latest)
+                                 (string< (plist-get latest :created-at)
+                                          (plist-get run :created-at)))
+                             (eq session (pichat-job-executor-run-session executor run)))
+                    (setq latest run)))
+                (pichat-job-records (pichat-job-executor-store executor) 'runs))
+          (plist-get latest :id)))))
 
 (defun pichat-job-executor-recheck-exit (executor id callback)
   "Recheck exact SSH Pi exit for uncertain ID; call CALLBACK (SUCCESS REASON).

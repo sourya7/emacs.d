@@ -954,6 +954,20 @@ rebinding and retained restart snapshots.  Otherwise only ownership is checked."
                                    (pichat-session-session-file session)))))
           buffer)))))
 
+(defun pichat-chat-live-transcript (session)
+  "Return SESSION's transient live transcript, or nil.
+It holds what Pi has streamed since the chat last projected its settled entry
+cache, so it follows `pichat-chat-canonical-entry-cache' without overlap and
+may still change.  Callers must treat it as read-only."
+  (when-let* ((buffer (pichat-chat-owned-buffer session)))
+    (with-current-buffer buffer
+      (and (not pichat-chat--restart-staging)
+           (not pichat-chat--source-rebinding-p)
+           (pichat-live-draft-p pichat-chat--live-draft)
+           (eql (pichat-live-draft-generation pichat-chat--live-draft)
+                pichat-chat--source-generation)
+           (pichat-live-draft-as-transcript pichat-chat--live-draft)))))
+
 (defun pichat-chat-canonical-entry-cache (session)
   "Return SESSION's current settled entry cache, or nil.
 The returned cache is authoritative Pi data owned by SESSION's live chat buffer;

@@ -50,6 +50,154 @@
       (cl-incf pichat-chat--source-generation)
       (should-not (pichat-chat-artifacts-valid-bounds (caar items))))))
 
+(ert-deftest pichat-artifacts-point-parses-only-its-complete-settled-prose-run ()
+  (with-temp-buffer
+    (pichat-chat-mode)
+    (let* ((source "```sh\nprintf 'α'\n```\n| h | v |\n| --- | --- |\n| [x](https://example.org) | $x$ |\n")
+           (parser (symbol-function 'pichat-artifacts-parse))
+           start end parsed)
+      (let ((inhibit-read-only t) (pichat-chat--inhibit-edit-guard t))
+        (dotimes (index 20)
+          (insert (propertize "[other](https://elsewhere.org)\n"
+                              'pichat-prose t 'pichat-node-role 'assistant
+                              'pichat-node-key (format "old-%d" index))))
+        (setq start (point))
+        (insert (propertize source 'pichat-prose t
+                            'pichat-node-role 'assistant 'pichat-node-key 'selected))
+        (setq end (point))
+        (insert (propertize "[later](https://elsewhere.org)\n"
+                            'pichat-prose t 'pichat-node-role 'assistant
+                            'pichat-node-key 'later))
+        (set-marker pichat-chat--canonical-start (point-min))
+        (set-marker pichat-chat--canonical-end (point-max)))
+      (let ((all (pichat-chat-artifacts-all)))
+        ;; Check every offset, including fence delimiters, nested link/table
+        ;; specificity, boundaries and non-artifact whitespace, against full
+        ;; enumeration.  Text properties within a run must not split Markdown.
+        (let ((inhibit-read-only t) (pichat-chat--inhibit-edit-guard t))
+          (put-text-property (+ start 8) (+ start 10) 'font-lock-face 'bold))
+        (cl-letf (((symbol-function 'pichat-artifacts-parse)
+                   (lambda (text) (push text parsed) (funcall parser text))))
+          (cl-loop for position from start below end do
+                   (goto-char position)
+                   (let ((expected
+                          (car (sort (cl-remove-if-not
+                                      (lambda (item) (<= (nth 1 item) position
+                                                         (1- (nth 2 item))))
+                                      (copy-sequence all))
+                                     (lambda (a b) (< (- (nth 2 a) (nth 1 a))
+                                                      (- (nth 2 b) (nth 1 b))))))))
+                     (should (equal expected (pichat-chat-artifacts-at-point)))))
+          (should (= (length parsed) (length source)))
+          (should (cl-every (lambda (text) (equal text source)) parsed)))))))
+
+(ert-deftest pichat-artifacts-point-ignores-noncanonical-content-without-parsing ()
+  (with-temp-buffer
+    (pichat-chat-mode)
+    (let (start end)
+      (let ((inhibit-read-only t) (pichat-chat--inhibit-edit-guard t))
+        (insert "[status](https://example.org)\n")
+        (setq start (point))
+        (insert (propertize "[user](https://example.org)\n" 'pichat-prose t
+                            'pichat-node-role 'user 'pichat-node-key 'user))
+        (insert (propertize "[tool](https://example.org)\n"
+                            'pichat-node-role 'assistant 'pichat-node-key 'tool))
+        (setq end (point))
+        (insert (propertize "[live](https://example.org)\n" 'pichat-prose t
+                            'pichat-node-role 'assistant 'pichat-node-key 'live))
+        (set-marker pichat-chat--canonical-start start)
+        (set-marker pichat-chat--canonical-end end))
+      (cl-letf (((symbol-function 'pichat-artifacts-parse)
+                 (lambda (_) (ert-fail "Noncanonical content was parsed"))))
+        (cl-loop for position from (point-min) to (point-max) do
+                 (goto-char position)
+                 (should-not (pichat-chat-artifacts-at-point)))))))
+
+(ert-deftest pichat-artifacts-point-does-not-join-node-role-or-prose-boundaries ()
+  (dolist (boundary '(node role prose))
+    (with-temp-buffer
+      (pichat-chat-mode)
+      (let ((inhibit-read-only t) (pichat-chat--inhibit-edit-guard t))
+        (insert (propertize "```sh\n" 'pichat-prose t
+                            'pichat-node-role 'assistant 'pichat-node-key 'a))
+        (insert (propertize "not a complete fence\n"
+                            'pichat-prose (not (eq boundary 'prose))
+                            'pichat-node-role (if (eq boundary 'role) 'user 'assistant)
+                            'pichat-node-key (if (eq boundary 'node) 'b 'a)))
+        (insert (propertize "```\n" 'pichat-prose t
+                            'pichat-node-role 'assistant 'pichat-node-key 'a))
+        (set-marker pichat-chat--canonical-start (point-min))
+        (set-marker pichat-chat--canonical-end (point-max)))
+      (goto-char (point-min))
+      (should-not (pichat-chat-artifacts-at-point))
+      (goto-char (1- (point-max)))
+      (should-not (pichat-chat-artifacts-at-point)))))
+
+(ert-deftest pichat-artifacts-visible-parses-overlapping-runs-but-keeps-whole-artifacts ()
+  (save-window-excursion
+    (with-temp-buffer
+      (switch-to-buffer (current-buffer))
+      (pichat-chat-mode)
+      (let* ((source "```sh\nfirst\n```\n| h | v |\n| --- | --- |\n| [x](https://example.org) | v |\n")
+             (parser (symbol-function 'pichat-artifacts-parse))
+             start end visible-start visible-end parsed candidates target)
+        (let ((inhibit-read-only t) (pichat-chat--inhibit-edit-guard t))
+          (insert (propertize "[before](https://before.org)\n" 'pichat-prose t
+                              'pichat-node-role 'assistant 'pichat-node-key 'before))
+          (setq start (point))
+          (insert (propertize source 'pichat-prose t
+                              'pichat-node-role 'assistant 'pichat-node-key 'selected))
+          (setq end (point))
+          (insert (propertize "[after](https://after.org)\n" 'pichat-prose t
+                              'pichat-node-role 'assistant 'pichat-node-key 'after))
+          (set-marker pichat-chat--canonical-start (point-min))
+          (set-marker pichat-chat--canonical-end end))
+        ;; View starts inside a fence and ends inside a table.  Parsing just
+        ;; viewport text would invent/lossily truncate artifacts at either edge.
+        (goto-char start)
+        (search-forward "first")
+        (setq visible-start (point))
+        (search-forward "https://")
+        (setq visible-end (point))
+        (let* ((all (pichat-chat-artifacts-all))
+               (expected (cl-loop for item in all
+                                  when (<= visible-start (cadr item) (1- visible-end))
+                                  collect (cadr item)))
+               (original (point))
+               (real-require (symbol-function 'require)))
+          (cl-letf (((symbol-function 'require)
+                     (lambda (feature &rest args)
+                       (if (memq feature '(avy embark)) t
+                         (apply real-require feature args))))
+                    ((symbol-function 'window-start) (lambda (&rest _) visible-start))
+                    ((symbol-function 'window-end) (lambda (&rest _) visible-end))
+                    ((symbol-function 'avy-process)
+                     (lambda (positions &rest _)
+                       (setq candidates positions) (car (last positions))))
+                    ((symbol-function 'embark-act)
+                     (lambda (&rest _) (setq target (pichat-chat-artifacts-at-point))))
+                    ((symbol-function 'pichat-artifacts-parse)
+                     (lambda (text) (push text parsed) (funcall parser text))))
+            (pichat-chat-select-visible-artifact))
+          (should (equal candidates expected))
+          (should (= original (point)))
+          (should (= 2 (length parsed))) ; visible lookup, then Embark point target
+          (should (cl-every (lambda (text) (equal text source)) parsed))
+          (should (eq 'link (pichat-artifact-type (car target))))
+          (should (equal "https://example.org" (pichat-artifact-payload (car target))))
+          (should (equal (cons (cadr target) (caddr target))
+                         (pichat-chat-artifacts-valid-bounds (car target))))
+          (cl-incf pichat-chat--source-generation)
+          (should-not (pichat-chat-artifacts-valid-bounds (car target))))))))
+
+(ert-deftest pichat-artifacts-point-preserves-active-region-precedence ()
+  (with-temp-buffer
+    (pichat-chat-mode)
+    (cl-letf (((symbol-function 'use-region-p) (lambda () t))
+              ((symbol-function 'pichat-artifacts-parse)
+               (lambda (_) (ert-fail "Region targeting parsed artifacts"))))
+      (should-not (pichat-chat-artifacts-at-point)))))
+
 (ert-deftest pichat-artifacts-embark-target-has-flat-highlight-bounds ()
   (with-temp-buffer
     (pichat-chat-mode)

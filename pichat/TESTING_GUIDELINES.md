@@ -342,6 +342,24 @@ scenarios, not to justify deletions or replace behavioral assertions.
 
 Integration tests must isolate Pi state with temporary `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`, project cwd, and session directory. They must not read normal user credentials, packages, settings, trust decisions, or sessions. CI should pin one supported Pi version and include `pi --version` in failure diagnostics.
 
+## Synthetic browsing profiles
+
+Run the isolated transcript/artifact and saved-session browsing benchmark:
+
+```sh
+emacs -Q --batch -L pichat -l pichat/test/benchmark-browsing.el
+```
+
+It creates synthetic canonical assistant runs and temporary JSONL files, times
+rendering, run enumeration, artifact parsing/selection, file scan/sort,
+cold/warm summary choices, completion and annotation separately, then removes
+its files. Configure `pichat-benchmark-browsing-sizes` and
+`pichat-benchmark-browsing-repetitions` before loading to change fixture sizes.
+Cold means an empty PiChat summary cache, not a flushed OS page cache. The
+viewport is modeled; these are neither real redisplay/Avy timings nor SSH/TRAMP
+latency measurements. Use the same Emacs/build, fixture sizes and GC settings
+for comparisons; do not put wall-clock thresholds in ERT.
+
 ## Compatibility verification workflow
 
 [`PI_COMPATIBILITY.md`](./PI_COMPATIBILITY.md) is the authoritative record of

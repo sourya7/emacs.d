@@ -72,8 +72,8 @@ Built-ins cannot be opted into through the extension policy."
         (when (memq key seen)
           (user-error "Duplicate PiChat preset key: %S" key))
         (push key seen)
-        (unless (and rest (memq key '(:description :tools :extensions :system-prompt
-                                     :append-system-prompt)))
+        (unless (and rest (memq key '(:description :tools :extensions :emacs-tools
+                                     :system-prompt :append-system-prompt)))
           (user-error "Invalid PiChat preset key or plist: %S" key))
         (let ((value (pop rest)))
           (pcase key
@@ -83,6 +83,9 @@ Built-ins cannot be opted into through the extension policy."
             (:extensions
              (unless (pichat-presets-extension-names-p value)
                (user-error "Invalid or duplicate preset extension tools")))
+            (:emacs-tools
+             (unless (pichat-presets-extension-names-p value)
+               (user-error "Invalid or duplicate preset Emacs-defined tools")))
             (:tools
              (unless (or (null value) (eq value :default)
                          (and (consp value) (proper-list-p value)
@@ -99,15 +102,26 @@ Built-ins cannot be opted into through the extension policy."
              (or (not (plist-member spec :tools))
                  (eq (plist-get spec :tools) :default)))
     (user-error "Extension baselines require an explicit built-in tool preset"))
+  (when (and (plist-get spec :emacs-tools)
+             (or (not (plist-member spec :tools))
+                 (eq (plist-get spec :tools) :default)))
+    (user-error "Emacs-defined tool baselines require an explicit built-in tool preset"))
+  (when (cl-intersection (plist-get spec :emacs-tools) (plist-get spec :extensions)
+                         :test #'equal)
+    (user-error "Tool selected as both Emacs-defined and extension"))
   spec)
 
 (defun pichat-make-preset (name &rest keys)
   "Register PiChat preset NAME with KEYS.
-Supported keys are :description, :tools, :extensions, :system-prompt and
-:append-system-prompt.  Prompt sources are text, (:file ABSOLUTE-PATH),
-or an ordered list of these.  Nil tools means no built-in tools; omitted
-or :default tools leaves Pi's default selection alone.  :extensions supplies
-an explicit baseline of exact extension tool names; it defaults to none."
+Supported keys are :description, :tools, :extensions, :emacs-tools,
+:system-prompt and :append-system-prompt.  Prompt sources are text,
+(:file ABSOLUTE-PATH), or an ordered list of these.  Nil tools means no
+built-in tools; omitted or :default tools leaves Pi's default selection
+alone.  :extensions supplies an explicit baseline of exact extension tool
+names; it defaults to none.  :emacs-tools likewise lists exact
+Emacs-defined tool names exposed through the PiChat bridge; it defaults to
+none and, like :extensions, requires explicit built-in tools.  Pass-through
+presets expose no Emacs-defined tools."
   (declare (indent 1))
   (pichat-presets--validate name keys)
   (let ((entry (assq name pichat-presets)))
@@ -149,7 +163,8 @@ an explicit baseline of exact extension tool names; it defaults to none."
     (pichat-presets--validate name spec)
     (pichat-presets--validate
      name (list :append-system-prompt pichat-append-system-prompt))
-    (list :name name :description (plist-get spec :description)
+    (append
+     (list :name name :description (plist-get spec :description)
           :tools (if (plist-member spec :tools)
                      (let ((tools (plist-get spec :tools)))
                        (if (eq tools :default) :default
@@ -164,7 +179,10 @@ an explicit baseline of exact extension tool names; it defaults to none."
                                         pichat-append-system-prompt)
                     append (if (pichat-presets--source-p source)
                                (list source)
-                             source))))))
+                             source))))
+     ;; Omitted when empty so existing snapshots remain unchanged.
+     (when-let* ((names (plist-get spec :emacs-tools)))
+       (list :emacs-tools (pichat-presets--copy names))))))
 
 (defun pichat-presets-overrides-p (snapshot)
   "Return non-nil when SNAPSHOT changes Pi tools or prompt."

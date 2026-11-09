@@ -678,9 +678,12 @@ the Tools picker or declare an extension baseline.
 
 In `x Tools`, the preset's built-ins are prechecked and can be deselected.
 **Extension tools** have enabled/disabled checkboxes and descriptions; MCP tools
-remain grouped by server. `RET` applies the draft, `q` cancels it, `d` resets all
-choices to the captured preset, and `r` refreshes discovery. `a` explicitly
-selects all eligible tools; `n` deselects all. `[` and `]` page longer lists.
+remain grouped by server, and **Emacs-defined tools** by their registered group
+(see [Emacs-defined tools](#emacs-defined-tools)). `RET` applies the draft, `q`
+cancels it, `d` resets all choices to the captured preset, and `r` refreshes
+discovery. `a` selects all eligible built-in, extension and MCP tools
+(Emacs-defined tools are chosen per group); `n` deselects all.
+`[` and `]` page longer lists.
 Cancel does not change the launch/reconfiguration draft. Reset restores the
 preset's extension baseline as well as its built-ins, with no MCP tools.
 The picker configures a new independent runtime, or the captured replacement
@@ -1384,6 +1387,9 @@ selector or execution while Emacs is closed is provided. Timing data is versione
 a future cron replacement requires explicit migration, disabling non-equivalent
 rules for review rather than running two timing engines or silently translating
 arbitrary elapsed intervals into cron field steps.
+
+An agent can manage the same saved-job timing through the Jobs tools (see
+[Saved-job schedule tools](#saved-job-schedule-tools)).
 
 ### Scheduled continuation in this conversation
 
@@ -2282,13 +2288,15 @@ is implemented.
 
 ## Emacs-defined tools
 
-The optional PiChat bridge exposes registered Emacs-defined tools to Pi. Use
-`pichat-define-tool` for short, synchronous operations: the body receives
-`params` and returns its final result directly. For example:
+The optional PiChat bridge (`pichat-bridge-extension-file`, local runtimes only)
+exposes Emacs-defined tools to Pi. Use `pichat-define-tool` for short,
+synchronous operations: the body receives `params` and returns its final result
+directly. For example:
 
 ```elisp
 (pichat-define-tool buffer-summary
     (:description "Summarize an Emacs buffer"
+     :group "Buffers"
      :instructions "Prefer this tool when the buffer has unsaved changes"
      :parameters (:type "object"
                   :properties (:name (:type "string"))
@@ -2297,22 +2305,55 @@ The optional PiChat bridge exposes registered Emacs-defined tools to Pi. Use
     (format "Buffer %s has %d characters" (buffer-name) (buffer-size))))
 ```
 
-`:description` describes the tool and supplies its short Pi prompt snippet.
-Nonblank `:instructions` is sent as one Pi `promptGuidelines` entry while the
-tool is active; it guides the model, but does not grant permission or enforce
-behavior. Blank or absent instructions add no guidelines. Pi-native tools have
-their own extension contracts and are unaffected.
+**Registering a tool makes it selectable, not exposed.** Each runtime offers
+only the Emacs-defined tools selected for it; the default is none. Select them
+in `x Tools` under **Emacs-defined tools**: groups show selected/available
+counts (`x1`, `x2`, … open a group), and inside a group `a`/`n` select all or
+none, or toggle individual tools. Or give an explicit-tool preset a baseline:
 
-`:async t` is unsupported and rejected when defining or registering an
-Emacs-defined tool; it is not silently converted into synchronous execution.
-Directly registered tools must also have nil `async-p` and string-or-nil
-`instructions`. Emacs-side callers use `pichat-tools-call` and receive the
-result directly. Loading the tool module registers no demonstration tools;
-define each desired tool explicitly. Do not use a blocking subprocess or
-network wait in a tool body as an async workaround:
-Emacs may be unresponsive until the tool returns. Pi extension UI requests
-already support selecting among choices without adding asynchronous Emacs tool
-execution.
+```elisp
+(pichat-make-preset 'jobs-agent
+  :description "Inspect and schedule saved jobs."
+  :tools '("read" "grep" "find" "ls")
+  :emacs-tools '("pichat_jobs_list" "pichat_job_inspect" "pichat_job_schedule"))
+```
+
+Selections are exact names: tools registered later are listed but never
+selected automatically. If a selected tool isn't loaded, the runtime starts
+without it and says so; the Tools section shows the same note, and also when
+the runtime has no bridge (none configured, or SSH). Calls to unselected tools
+are refused. Change a live runtime's selection with **Reconfigure this
+runtime**. Pass-through presets (`:tools :default`, such as `standard`) offer
+no Emacs-defined tools.
+
+Earlier PiChat versions offered every registered tool to every bridge-enabled
+runtime; now add `:emacs-tools` to your preset or select them in `x Tools`.
+Selecting a tool does not approve it: mutating tools keep their own approval
+policy (see [Permissions](#permissions)).
+
+### Saved-job schedule tools
+
+The **Jobs** group is always registered (and, like any group, offered only when
+selected). It lets an agent inspect saved jobs and manage their timing; it
+cannot create or edit jobs, or run or cancel work.
+
+- `pichat_jobs_list` and `pichat_job_inspect` return job IDs, summaries, timing,
+  whether a timer is running, the next occurrence and recent runs. Times are
+  Unix seconds with UTC and local forms.
+- `pichat_job_schedule` (asks approval) does one of:
+  - `kind` `once`/`interval` with `start` (and `interval_seconds` ≥ 60): save
+    that timing and enable it, unless `enabled` is `false`;
+  - `kind` `none`: remove timing;
+  - only `enabled`: switch existing timing on or off.
+
+  Repeating an identical request changes nothing. Removing or disabling timing
+  never cancels queued or active runs.
+
+The tools use the same Jobs owner as `M-x pichat-jobs`, starting it if needed
+just as opening Jobs would (which also resumes your other enabled schedules).
+Intervals are elapsed time, not calendar recurrence, so local times shift
+across DST. As with all saved-job timing, Emacs must keep running and missed
+occurrences are not replayed.
 
 ## Removed compatibility APIs
 
@@ -2350,7 +2391,9 @@ are not migrated in place.
 
 Pi-native tools should be governed by Pi permission packages such as
 `pi-permission-gate`. PiChat's local approval layer is only for Emacs-defined
-tools, because those execute in Emacs. A mutating Emacs tool whose effective
+tools, because those execute in Emacs. Approval applies after availability: an
+Emacs-defined tool must first be selected for the runtime, and selecting it (or
+its whole group) does not approve it. A mutating Emacs tool whose effective
 policy is `ask` waits for its owning chat to be selected before prompting;
 stored allow/deny decisions and non-mutating tools remain immediate.
 

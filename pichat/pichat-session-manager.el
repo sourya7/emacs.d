@@ -542,7 +542,10 @@ canonical chat cache while an RPC refresh is pending."
                                                pairs)
                                        ", ")
                                     "disabled")
-                                "Pi configuration (availability not checked)"))))
+                                "Pi configuration (availability not checked)")))
+              (insert (format "Emacs-defined tools: %s\n"
+                              (if-let* ((names (plist-get selection :emacs)))
+                                  (string-join names ", ") "none"))))
             (insert (format "System prompt: %s%s\n"
                             (if (plist-get spec :system-prompt)
                                 "replaced" "Pi default")

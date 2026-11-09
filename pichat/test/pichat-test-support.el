@@ -186,6 +186,12 @@ or user configuration are inherited."
     (setf (pichat-session-process session) proc)
     proc))
 
+(defun pichat-test-select-emacs-tools (session &rest names)
+  "Capture exact Emacs-defined tool NAMES as SESSION's startup selection."
+  (setf (pichat-session-tool-selection session)
+        (list :builtins nil :mcp nil :names nil :emacs (sort (copy-sequence names) #'string<)))
+  session)
+
 (cl-defmacro pichat-test-with-unit-session ((session-var &optional process-var) &rest body)
   "Create an isolated SESSION-VAR for unit tests.
 When PROCESS-VAR is non-nil, also create a live inert process."
@@ -354,7 +360,9 @@ have been seen."
     (should (= 0 (or (plist-get status :unexpectedCalls) 0)))))
 
 (cl-defmacro pichat-test-with-integration-session
-    ((session-var &key script no-session extensions settings tools preset selection) &rest body)
+    ((session-var &key script no-session extensions settings tools preset selection
+                  before-start)
+     &rest body)
   "Start real Pi RPC bound to SESSION-VAR and run BODY.
 SCRIPT is a Lisp object encoded as the fake provider script JSON.
 When NO-SESSION is nil, persistent sessions are enabled in an isolated dir.
@@ -362,7 +370,9 @@ EXTENSIONS is a list of additional extension file paths loaded after the fake
 provider.  SETTINGS, when non-nil, is written to the isolated Pi agent dir.
 TOOLS, when non-nil, selects explicit Pi tools instead of disabling built-ins.
 PRESET uses structured startup and optional raw SELECTION, rather than the
-legacy complete-command fixture.  This exercises real preset command building."
+legacy complete-command fixture.  This exercises real preset command building.
+BEFORE-START is evaluated after global reset and before startup, for example
+to register Emacs-defined tools that SELECTION captures."
   (declare (indent 1))
   `(progn
      (pichat-test-require-pi)
@@ -419,6 +429,7 @@ legacy complete-command fixture.  This exercises real preset command building."
                                            :null-object nil))))
                (unwind-protect
                    (let ((default-directory project-dir))
+                     ,before-start
                      (message "PiChat integration using %s" (pichat-test-pi-version))
                      (setq ,session-var
                            (if ,preset

@@ -429,6 +429,9 @@
     (pichat-test-with-integration-session
         (session :no-session t
                  :extensions (list pichat-test-bridge-extension)
+                 ;; The body (re)defines the tool; startup needs it registered.
+                 :preset 'manual :selection '(:builtins nil :emacs ("pichat-test-usage-echo"))
+                 :before-start (pichat-define-tool pichat-test-usage-echo () "placeholder")
                  :script '(:turns
                            [(:toolCall
                              (:id "usage-tool-1"
@@ -989,7 +992,7 @@
             (progn
               (setq buffer (pichat-chat-open session))
               (cl-letf (((symbol-function 'pichat-tool-bridge-definitions-json)
-                         (lambda ()
+                         (lambda (&rest _)
                            "{\"protocolVersion\":1,\"tools\":[{\"name\":\"invalid tool\"}]}")))
                 (pichat-test-prompt-and-wait session "validate tools"))
               (with-current-buffer buffer
@@ -1011,7 +1014,7 @@
               (setq buffer (pichat-chat-open session))
               (dolist (instructions '("42" "\"  \""))
                 (cl-letf (((symbol-function 'pichat-tool-bridge-definitions-json)
-                           (lambda ()
+                           (lambda (&rest _)
                              (format "{\"protocolVersion\":1,\"tools\":[{\"name\":\"pichat-test-guided\",\"instructions\":%s}]}"
                                      instructions))))
                   (pichat-test-prompt-and-wait session "validate instructions"))
@@ -1025,6 +1028,9 @@
     (pichat-test-with-integration-session
         (session :no-session t
                  :extensions (list pichat-test-bridge-extension)
+                 ;; The body (re)defines the tool; startup needs it registered.
+                 :preset 'manual :selection '(:builtins nil :emacs ("pichat-test-guided"))
+                 :before-start (pichat-define-tool pichat-test-guided () "placeholder")
                  :script '(:turns
                            [(:expectTool (:name "pichat-test-guided")
                              :expectContextIncludes "Prefer unsaved Emacs buffers"
@@ -1055,6 +1061,9 @@
     (pichat-test-with-integration-session
         (session :no-session t
                  :extensions (list pichat-test-bridge-extension)
+                 ;; The body (re)defines the tool; startup needs it registered.
+                 :preset 'manual :selection '(:builtins nil :emacs ("pichat-test-changing"))
+                 :before-start (pichat-define-tool pichat-test-changing () "placeholder")
                  :script '(:turns
                            [(:expectTool
                              (:name "pichat-test-changing"
@@ -1146,6 +1155,9 @@
     (pichat-test-with-integration-session
         (session :no-session t
                  :extensions (list pichat-test-bridge-extension)
+                 ;; The body (re)defines the tool; startup needs it registered.
+                 :preset 'manual :selection '(:builtins nil :emacs ("pichat-test-schema"))
+                 :before-start (pichat-define-tool pichat-test-schema () "placeholder")
                  :script '(:turns [(:expectTool
                                     (:name "pichat-test-schema"
                                      :parameters
@@ -1177,6 +1189,9 @@
     (pichat-test-with-integration-session
         (session :no-session t
                  :extensions (list pichat-test-bridge-extension)
+                 ;; The body (re)defines the tool; startup needs it registered.
+                 :preset 'manual :selection '(:builtins nil :emacs ("pichat-test-stale"))
+                 :before-start (pichat-define-tool pichat-test-stale () "placeholder")
                  :script '(:turns [(:expectTool (:name "pichat-test-stale")
                                     :text "tool active")
                                    (:expectToolAbsent "pichat-test-stale"
@@ -1203,6 +1218,9 @@
     (pichat-test-with-integration-session
         (session :no-session t
                  :extensions (list pichat-test-bridge-extension)
+                 ;; The body (re)defines the tool; startup needs it registered.
+                 :preset 'manual :selection '(:builtins nil :emacs ("pichat-test-error"))
+                 :before-start (pichat-define-tool pichat-test-error () "placeholder")
                  :script '(:turns [(:toolCall (:id "error-1"
                                                :name "pichat-test-error"
                                                :arguments ()))
@@ -1235,6 +1253,13 @@
     (pichat-test-with-integration-session
         (session :no-session t
                  :extensions (list pichat-test-bridge-extension)
+                 :preset 'manual :selection '(:builtins nil :emacs ("pichat-test-echo"))
+                 :before-start
+                 (pichat-define-tool pichat-test-echo
+                     (:label "Test Echo"
+                      :description "Echo a value from Emacs for PiChat integration tests"
+                      :parameters (:type "object" :properties (:value (:type "string")) :required ["value"]))
+                   (format "echoed: %s" (plist-get params :value)))
                  :script '(:turns [(:toolCall (:id "tool-1"
                                                :name "pichat-test-echo"
                                                :arguments (:value "bridge")))
@@ -1243,11 +1268,6 @@
       (let ((pichat-chat-render-markdown nil)
             (pichat-chat-stop-session-on-kill nil)
             buffer)
-        (pichat-define-tool pichat-test-echo
-            (:label "Test Echo"
-             :description "Echo a value from Emacs for PiChat integration tests"
-             :parameters (:type "object" :properties (:value (:type "string")) :required ["value"]))
-          (format "echoed: %s" (plist-get params :value)))
         (unwind-protect
             (progn
               (setq buffer (pichat-chat-open session))
@@ -1271,10 +1291,89 @@
           (when (buffer-live-p buffer)
             (kill-buffer buffer))))))
 
+  (ert-deftest pichat-integration-bridge-exposes-only-each-runtimes-selected-emacs-tools ()
+    ;; Two live runtimes select different members of one group; a pass-through
+    ;; runtime selects none.  Calls to unselected tools never reach Emacs.
+    (let ((executions nil))
+      (pichat-test-with-integration-session
+          (session :no-session t
+                   :extensions (list pichat-test-bridge-extension)
+                   :preset 'manual :selection '(:builtins nil :emacs ("pichat_test_alpha"))
+                   :before-start
+                   (progn
+                     (pichat-define-tool pichat_test_alpha (:group "Isolation" :description "Alpha")
+                       (push "alpha" executions) "alpha ran")
+                     (pichat-define-tool pichat_test_beta (:group "Isolation" :description "Beta")
+                       (push "beta" executions) "beta ran"))
+                   :script '(:turns [(:expectTool (:name "pichat_test_alpha")
+                                      :expectToolAbsent "pichat_test_beta"
+                                      :toolCall (:id "crafted-beta" :name "pichat_test_beta"
+                                                 :arguments ()))
+                                     (:expectToolResultError "pichat_test_beta"
+                                      :text "beta rejected")]))
+        (let ((pichat-chat-stop-session-on-kill nil)
+              (other-status (expand-file-name "other-status.json" project-dir))
+              (plain-status (expand-file-name "plain-status.json" project-dir))
+              other plain)
+          (unwind-protect
+              (progn
+                (let ((process-environment
+                       (append
+                        (list (concat "PICHAT_FAKE_PROVIDER_STATUS=" other-status)
+                              (concat "PICHAT_FAKE_PROVIDER_SCRIPT_JSON="
+                                      (json-serialize
+                                       '(:turns [(:expectTool (:name "pichat_test_beta")
+                                                  :expectToolAbsent "pichat_test_alpha"
+                                                  :text "beta only")]))))
+                        process-environment)))
+                  (setq other (pichat-start-session
+                               project-dir nil
+                               '(:preset manual :tools (:builtins nil :emacs ("pichat_test_beta"))))))
+                (let ((process-environment
+                       (append
+                        (list (concat "PICHAT_FAKE_PROVIDER_STATUS=" plain-status)
+                              (concat "PICHAT_FAKE_PROVIDER_SCRIPT_JSON="
+                                      (json-serialize
+                                       '(:turns [(:expectToolAbsent "pichat_test_alpha"
+                                                  :text "pass-through none")]))))
+                        process-environment)))
+                  (setq plain (pichat-start-session project-dir nil '(:preset standard))))
+                (dolist (runtime (list other plain))
+                  (pichat-test-rpc-call runtime "get_state")
+                  (pichat-test-rpc-call runtime "set_auto_retry" (list :enabled :json-false))
+                  (pichat-test-rpc-call runtime "set_auto_compaction" (list :enabled :json-false)))
+                (pichat-chat-open session)
+                (pichat-chat-open other)
+                (pichat-chat-open plain)
+                (pichat-test-prompt-and-wait session "alpha runtime")
+                (pichat-test-prompt-and-wait other "beta runtime")
+                (pichat-test-prompt-and-wait plain "pass-through runtime")
+                ;; Registering another group member later broadens nothing.
+                (pichat-define-tool pichat_test_gamma (:group "Isolation") "gamma")
+                (should (equal '("pichat_test_alpha")
+                               (mapcar (lambda (tool) (plist-get tool :name))
+                                       (plist-get (json-parse-string
+                                                   (pichat-tool-bridge-definitions-json session)
+                                                   :object-type 'plist :array-type 'list)
+                                                  :tools))))
+                (should-not executions)
+                (pichat-test-assert-provider-script-consumed other-status)
+                (pichat-test-assert-provider-script-consumed plain-status))
+            (dolist (runtime (list other plain))
+              (when runtime
+                (ignore-errors (pichat-rpc-stop runtime))
+                (when-let* ((buffer (pichat-session-buffer runtime)))
+                  (when (buffer-live-p buffer) (kill-buffer buffer)))))
+            (when-let* ((buffer (pichat-session-buffer session)))
+              (when (buffer-live-p buffer) (kill-buffer buffer))))))))
+
   (ert-deftest pichat-integration-bridge-denied-mutating-tool-does-not-execute ()
     (pichat-test-with-integration-session
         (session :no-session t
                  :extensions (list pichat-test-bridge-extension)
+                 ;; The body (re)defines the tool; startup needs it registered.
+                 :preset 'manual :selection '(:builtins nil :emacs ("pichat-test-mutate"))
+                 :before-start (pichat-define-tool pichat-test-mutate () "placeholder")
                  :script '(:turns [(:toolCall (:id "mutate-1"
                                                :name "pichat-test-mutate"
                                                :arguments (:value "blocked")))
@@ -2117,6 +2216,57 @@
                                         "bridge restart result")
                 (should (car result))
                 (pichat-test-prompt-and-wait session "after bridge restart")))
+          (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+  (ert-deftest pichat-integration-reconfigure-replaces-emacs-tool-selection ()
+    ;; Confirmed reconfiguration is the only way to change a live runtime's
+    ;; Emacs-defined exposure; the replacement declares exactly the new set.
+    (pichat-test-with-integration-session
+        (session :extensions (list pichat-test-bridge-extension)
+                 :preset 'manual :selection '(:builtins nil :emacs ("pichat_test_before"))
+                 :before-start
+                 (progn
+                   (pichat-define-tool pichat_test_before (:group "Restart") "before")
+                   (pichat-define-tool pichat_test_after (:group "Restart") "after"))
+                 :script '(:turns [(:expectTool (:name "pichat_test_before")
+                                    :expectToolAbsent "pichat_test_after"
+                                    :text "before restart")]))
+      (let ((pichat-chat-stop-session-on-kill nil)
+            buffer result)
+        (unwind-protect
+            (progn
+              (setq buffer (pichat-chat-open session))
+              (pichat-test-chat-send-and-wait session buffer "before restart")
+              (pichat-test-assert-provider-script-consumed status-file)
+              (pichat-test-wait-until
+               (lambda () (pichat-chat-canonical-entry-cache session)) 4
+               "conversation synchronized before restart")
+              ;; The replacement process reads a fresh provider script.
+              (with-temp-file script-file
+                (insert (json-serialize
+                         '(:turns [(:expectTool (:name "pichat_test_after")
+                                    :expectToolAbsent "pichat_test_before"
+                                    :text "after restart")]))))
+              (let ((requested (pichat-reconfigure-select-tools
+                                (pichat-reconfigure-captured-configuration session)
+                                '(:builtins nil :emacs ("pichat_test_after")))))
+                (should (pichat-reconfigure-effective-change-p
+                         (pichat-reconfigure-captured-configuration session) requested))
+                (pichat-reconfigure-restart
+                 (pichat-reconfigure-capture-origin session) requested
+                 (lambda (success reason) (setq result (list success reason)))))
+              (pichat-test-wait-until (lambda () result) 15 "Emacs-tool restart result")
+              (should (car result))
+              (should (equal '("pichat_test_after")
+                             (plist-get (pichat-session-tool-selection session) :emacs)))
+              (pichat-test-prompt-and-wait session "after restart")
+              (let ((call (lambda (name)
+                            (json-parse-string
+                             (pichat-tool-bridge-execute-json
+                              (format "{\"name\":\"%s\",\"params\":{}}" name) session)
+                             :object-type 'plist :false-object nil))))
+                (should (plist-get (funcall call "pichat_test_before") :isError))
+                (should-not (plist-get (funcall call "pichat_test_after") :isError))))
           (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
   (ert-deftest pichat-integration-selected-saved-launch-respects-owner-and-preset ()

@@ -52,9 +52,9 @@ a missing registry preset can only be retained, never selected anew."
 
 (defun pichat-reconfigure-select-tools (configuration selection)
   "Return CONFIGURATION with validated raw Tools SELECTION.
-SELECTION is a plist containing :builtins and :mcp as accepted by the launch
-Tools picker.  Reuse the captured preset specification rather than looking
-up a mutable registry definition."
+SELECTION is a plist containing :builtins, :mcp, :extensions and :emacs as
+accepted by the launch Tools picker.  Reuse the captured preset
+specification rather than looking up a mutable registry definition."
   (let ((spec (plist-get configuration :preset-spec)))
     (unless spec (user-error "No captured PiChat preset configuration"))
     (list :preset-spec (pichat-presets--copy spec)
@@ -68,16 +68,18 @@ preset name or description is not a reason to restart the process."
         (after (plist-get requested :preset-spec)))
     (unless (and before after)
       (user-error "Both PiChat preset configurations must be resolved"))
-    (or (not (equal (plist-get before :system-prompt)
-                    (plist-get after :system-prompt)))
-        (not (equal (plist-get before :append-system-prompt)
-                    (plist-get after :append-system-prompt)))
-        (not (equal (pichat-tool-selection-args
-                     (pichat-tool-selection-resolve
-                      before (plist-get previous :tool-selection)))
-                    (pichat-tool-selection-args
-                     (pichat-tool-selection-resolve
-                      after (plist-get requested :tool-selection))))))))
+    (let ((tools-before (pichat-tool-selection-resolve
+                         before (plist-get previous :tool-selection)))
+          (tools-after (pichat-tool-selection-resolve
+                        after (plist-get requested :tool-selection))))
+      (or (not (equal (plist-get before :system-prompt)
+                      (plist-get after :system-prompt)))
+          (not (equal (plist-get before :append-system-prompt)
+                      (plist-get after :append-system-prompt)))
+          (not (equal (pichat-tool-selection-args tools-before)
+                      (pichat-tool-selection-args tools-after)))
+          (not (equal (plist-get tools-before :emacs)
+                      (plist-get tools-after :emacs)))))))
 
 (defun pichat-reconfigure-capture-origin (session)
   "Capture the exact runtime, process lifetime, source and chat for SESSION."

@@ -258,6 +258,8 @@ opens the job store, resolves execution settings or initializes the executor."
                            (plist-get preset :tools))))
           (cons "Extension tools" (if tools (plist-get tools :extensions)
                                    (plist-get preset :extensions)))
+          (cons "Emacs-defined tools" (if tools (plist-get tools :emacs)
+                                       (plist-get preset :emacs-tools)))
           (cons "System prompt" (plist-get preset :system-prompt))
           (cons "Appended prompt" (plist-get preset :append-system-prompt)))))
 

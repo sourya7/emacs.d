@@ -14,7 +14,9 @@ import {
 
 type FakeTurn = {
   text?: string | string[];
-  toolCall?: { id?: string; name: string; arguments?: Record<string, unknown> };
+  // argumentsFile is read when the turn runs, for arguments (such as opaque
+  // state tokens) that the test only learns after earlier tool results.
+  toolCall?: { id?: string; name: string; arguments?: Record<string, unknown>; argumentsFile?: string };
   error?: string;
   delayMs?: number;
   usage?: {
@@ -225,7 +227,9 @@ function streamFake(model: Model<any>, context: Context, options?: SimpleStreamO
           type: "toolCall",
           id: turn.toolCall.id ?? `pichat-fake-tool-${turnIndex}`,
           name: turn.toolCall.name,
-          arguments: turn.toolCall.arguments ?? {},
+          arguments: turn.toolCall.argumentsFile
+            ? JSON.parse(readFileSync(turn.toolCall.argumentsFile, "utf8"))
+            : turn.toolCall.arguments ?? {},
         };
         output.content.push(toolCall);
         output.stopReason = "toolUse";

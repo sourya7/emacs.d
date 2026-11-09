@@ -9,6 +9,7 @@
 (require 'pichat-mcp-discovery)
 (require 'pichat-tool-discovery)
 (require 'pichat-path)
+(require 'pichat-tools)
 
 (defvar pichat-tool-picker--state nil
   "Draft of the currently open Tools picker.")
@@ -18,18 +19,20 @@
   (mapcar #'char-to-string (string-to-list "ABCDEFGHIJKLMNOPQRSTUVWXYZ")))
 (defconst pichat-tool-picker--page-size 20)
 
+(defconst pichat-tool-picker--prefixes
+  '(pichat-tool-picker pichat-tool-picker-server pichat-tool-picker-emacs-group)
+  "Transient prefixes owned by the Tools picker.")
+
 (defun pichat-tool-picker--refresh-display ()
   "Redisplay the current picker."
   (when (and transient--prefix
-             (memq (oref transient--prefix command)
-                   '(pichat-tool-picker pichat-tool-picker-server)))
+             (memq (oref transient--prefix command) pichat-tool-picker--prefixes))
     (transient--redisplay)))
 
 (defun pichat-tool-picker--refresh-children ()
   "Rebuild visible dynamic choices."
   (when (and transient--prefix
-             (memq (oref transient--prefix command)
-                   '(pichat-tool-picker pichat-tool-picker-server)))
+             (memq (oref transient--prefix command) pichat-tool-picker--prefixes))
     (transient-setup (oref transient--prefix command) nil nil
                      :scope (oref transient--prefix scope))))
 
@@ -165,8 +168,127 @@ servers may consequently appear here rather than in the shell MCP listing."
                                          (unless eligible (format " (%s)" (or (plist-get tool :exposure) "unavailable")))))
                       :transient t))))))
 
+;;; Emacs-defined tool groups
+
+(defun pichat-tool-picker--emacs-groups ()
+  "Return ordered (GROUP . TOOLS) from the picker's Emacs tool catalogue."
+  (let (groups)
+    (dolist (tool (plist-get pichat-tool-picker--state :emacs-catalogue))
+      (let* ((group (plist-get tool :group))
+             (entry (assoc group groups)))
+        (if entry (setcdr entry (append (cdr entry) (list tool)))
+          (setq groups (append groups (list (list group tool)))))))
+    groups))
+
+(defun pichat-tool-picker--emacs-group-tools (group)
+  "Return catalogue tools in GROUP."
+  (cdr (assoc group (pichat-tool-picker--emacs-groups))))
+
+(defun pichat-tool-picker--emacs-missing ()
+  "Return selected Emacs tool names absent from the picker catalogue."
+  (let ((names (mapcar (lambda (tool) (plist-get tool :name))
+                       (plist-get pichat-tool-picker--state :emacs-catalogue))))
+    (cl-remove-if (lambda (name) (member name names))
+                  (plist-get (pichat-tool-picker--selection) :emacs))))
+
+(defun pichat-tool-picker--emacs-count (tools)
+  "Return how many of TOOLS the draft selects."
+  (cl-count-if (lambda (tool) (member (plist-get tool :name)
+                                      (plist-get (pichat-tool-picker--selection) :emacs)))
+               tools))
+
+(defun pichat-tool-picker--emacs-group-entries (_)
+  "Build Emacs-defined tool group shortcuts with selected/available counts."
+  (transient-parse-suffixes
+   'pichat-tool-picker
+   (cl-loop for (group . tools) in (pichat-tool-picker--emacs-groups)
+            for key in pichat-tool-picker--keys
+            collect
+            (let ((group group))
+              (list (concat "x" key) group
+                    (lambda () (interactive)
+                      (setf (plist-get pichat-tool-picker--state :emacs-group) group
+                            (plist-get pichat-tool-picker--state :page) 0)
+                      (transient-setup 'pichat-tool-picker-emacs-group))
+                    :description
+                    (lambda ()
+                      (let ((tools (pichat-tool-picker--emacs-group-tools group)))
+                        (format "%s (%d/%d) →" group
+                                (pichat-tool-picker--emacs-count tools) (length tools))))
+                    :transient t)))))
+
+(defun pichat-tool-picker--emacs-tool-entries (_)
+  "Build checkboxes for the selected Emacs tool group."
+  (let ((group (plist-get pichat-tool-picker--state :emacs-group)))
+    (transient-parse-suffixes
+     'pichat-tool-picker-emacs-group
+     (cl-loop for tool in (pichat-tool-picker--page-items
+                           (pichat-tool-picker--emacs-group-tools group))
+              for key in pichat-tool-picker--keys
+              collect
+              (let ((name (plist-get tool :name))
+                    (description (truncate-string-to-width
+                                  (replace-regexp-in-string
+                                   "[[:cntrl:]]" " " (plist-get tool :description))
+                                  60 nil nil "…"))
+                    (mutating (plist-get tool :mutating)))
+                (list key name
+                      (lambda () (interactive) (pichat-tool-picker--toggle :emacs name))
+                      :description
+                      (lambda ()
+                        (format "%s — %s%s"
+                                (pichat-tool-picker--description
+                                 (member name (plist-get (pichat-tool-picker--selection) :emacs))
+                                 name)
+                                description (if mutating " (asks approval)" "")))
+                      :transient t))))))
+
+(defun pichat-tool-picker--emacs-group-set (selected)
+  "Select all current members of the open group when SELECTED, else none.
+Only that group's current catalogue members change; this is a convenience
+over exact names, not a grant to tools registered later."
+  (let* ((group (plist-get pichat-tool-picker--state :emacs-group))
+         (members (mapcar (lambda (tool) (plist-get tool :name))
+                          (pichat-tool-picker--emacs-group-tools group)))
+         (selection (copy-tree (pichat-tool-picker--selection)))
+         (others (cl-remove-if (lambda (name) (member name members))
+                               (plist-get selection :emacs))))
+    (pichat-tool-picker--set-selection
+     (plist-put selection :emacs (if selected (append others members) others)))))
+
+(transient-define-suffix pichat-tool-picker-emacs-group-all ()
+  "Select this group's current Emacs-defined tools." :transient t
+  (interactive) (pichat-tool-picker--emacs-group-set t))
+(transient-define-suffix pichat-tool-picker-emacs-group-none ()
+  "Deselect this group's Emacs-defined tools." :transient t
+  (interactive) (pichat-tool-picker--emacs-group-set nil))
+
+(defun pichat-tool-picker--emacs-heading ()
+  "Head the Emacs-defined tools section, noting why tools are unavailable."
+  (let ((missing (pichat-tool-picker--emacs-missing))
+        (transport (plist-get pichat-tool-picker--state :transport)))
+    (concat
+     "Emacs-defined tools"
+     (cond
+      ((not (pichat-rpc-bridge-p transport))
+       (propertize (if (and transport (eq (pichat-transport-kind transport) 'ssh))
+                       " — not available over SSH"
+                     " — inactive: no PiChat bridge (pichat-bridge-extension-file)")
+                   'face 'warning))
+      (missing
+       (propertize (format " — not loaded, will be skipped: %s" (string-join missing ", "))
+                   'face 'warning))))))
+
+(defun pichat-tool-picker--group-description ()
+  "Describe the open Emacs tool group."
+  (let* ((group (plist-get pichat-tool-picker--state :emacs-group))
+         (tools (pichat-tool-picker--emacs-group-tools group)))
+    (format "%s: %d/%d selected · selection exposes tools; it does not approve them"
+            group (pichat-tool-picker--emacs-count tools) (length tools))))
+
 (defun pichat-tool-picker--all (&optional only-server)
-  "Explicitly select all eligible tools, or just ONLY-SERVER."
+  "Explicitly select all eligible tools, or just ONLY-SERVER.
+Emacs-defined tools remain explicit per-group or per-tool choices."
   (unless (plist-get pichat-tool-picker--state :loaded) (user-error "MCP discovery is incomplete"))
   (let* ((selection (copy-tree (pichat-tool-picker--selection)))
          (servers (if only-server (list (pichat-tool-picker--current-server))
@@ -197,7 +319,9 @@ servers may consequently appear here rather than in the shell MCP listing."
   (interactive) (pichat-tool-picker--all (plist-get pichat-tool-picker--state :server)))
 (transient-define-suffix pichat-tool-picker-none ()
   "Deselect all tools." :transient t
-  (interactive) (pichat-tool-picker--set-selection '(:builtins nil :mcp nil :extensions nil)))
+  (interactive)
+  (pichat-tool-picker--set-selection
+   (list :builtins nil :mcp nil :extensions nil :emacs nil)))
 (transient-define-suffix pichat-tool-picker-server-none ()
   "Deselect this server's tools." :transient t
   (interactive)
@@ -211,14 +335,19 @@ servers may consequently appear here rather than in the shell MCP listing."
   (interactive)
   (pichat-tool-picker--set-selection
    (list :builtins (copy-sequence (plist-get pichat-tool-picker--state :baseline)) :mcp nil
-         :extensions (copy-sequence (plist-get (plist-get pichat-tool-picker--state :preset) :extensions)))))
+         :extensions (copy-sequence (plist-get (plist-get pichat-tool-picker--state :preset) :extensions))
+         :emacs (copy-sequence (plist-get (plist-get pichat-tool-picker--state :preset) :emacs-tools)))))
 
 (defun pichat-tool-picker--page (delta prefix)
   "Move DELTA pages in PREFIX."
-  (let* ((count (if (eq prefix 'pichat-tool-picker-server)
-                    (length (plist-get (pichat-tool-picker--current-server) :tools))
-                  (max (length (plist-get pichat-tool-picker--state :servers))
-                       (length (pichat-tool-picker--extension-tools)))))
+  (let* ((count (pcase prefix
+                  ('pichat-tool-picker-server
+                   (length (plist-get (pichat-tool-picker--current-server) :tools)))
+                  ('pichat-tool-picker-emacs-group
+                   (length (pichat-tool-picker--emacs-group-tools
+                            (plist-get pichat-tool-picker--state :emacs-group))))
+                  (_ (max (length (plist-get pichat-tool-picker--state :servers))
+                          (length (pichat-tool-picker--extension-tools))))))
          (last (max 0 (1- (ceiling count pichat-tool-picker--page-size)))))
     (setf (plist-get pichat-tool-picker--state :page)
           (min last (max 0 (+ delta (or (plist-get pichat-tool-picker--state :page) 0)))))
@@ -294,8 +423,11 @@ servers may consequently appear here rather than in the shell MCP listing."
   "Show extension discovery status." :transient t
   (interactive) (message "%s" (pichat-tool-picker--extension-status)))
 (transient-define-suffix pichat-tool-picker-refresh ()
-  "Refresh both catalogues." :transient t
-  (interactive) (pichat-tool-picker--discover) (pichat-tool-picker--discover-extensions t))
+  "Refresh all catalogues, retaining exact selections." :transient t
+  (interactive)
+  ;; Newly registered Emacs tools become listed, never selected.
+  (setf (plist-get pichat-tool-picker--state :emacs-catalogue) (pichat-tools-catalogue))
+  (pichat-tool-picker--discover) (pichat-tool-picker--discover-extensions t))
 
 (defun pichat-tool-picker--return (selection)
   "Return SELECTION or :cancel to the owner."
@@ -330,6 +462,8 @@ servers may consequently appear here rather than in the shell MCP listing."
   ["Built-in tools" :class transient-column :setup-children pichat-tool-picker--builtins]
   ["Extension tools" :class transient-column :setup-children pichat-tool-picker--extensions]
   ["MCP servers" :class transient-column :setup-children pichat-tool-picker--servers]
+  [:description pichat-tool-picker--emacs-heading :class transient-column
+   :setup-children pichat-tool-picker--emacs-group-entries]
   [["Selection"
     ("a" "Select all eligible tools" pichat-tool-picker-all)
     ("n" "Select none" pichat-tool-picker-none)
@@ -340,6 +474,15 @@ servers may consequently appear here rather than in the shell MCP listing."
     ("[" "Previous page" pichat-tool-picker-prev) ("]" "Next page" pichat-tool-picker-next)]
    ["Action" ("RET" "Apply" pichat-tool-picker-apply) ("q" "Cancel" pichat-tool-picker-cancel)]]
   (interactive) (transient-setup 'pichat-tool-picker))
+(transient-define-prefix pichat-tool-picker-emacs-group ()
+  "Select Emacs-defined tools in one group."
+  [:description pichat-tool-picker--group-description
+   :class transient-column :setup-children pichat-tool-picker--emacs-tool-entries]
+  [["Selection" ("a" "Select all in group" pichat-tool-picker-emacs-group-all)
+    ("n" "Select none in group" pichat-tool-picker-emacs-group-none)
+    ("[" "Previous page" pichat-tool-picker-prev) ("]" "Next page" pichat-tool-picker-next)]
+   ["Action" ("RET" "Done" pichat-tool-picker-back) ("q" "Back" pichat-tool-picker-back)]]
+  (interactive) (transient-setup 'pichat-tool-picker-emacs-group))
 (transient-define-prefix pichat-tool-picker-server ()
   "Select MCP server tools."
   ["Server tools" :class transient-column :setup-children pichat-tool-picker--server-tools]
@@ -376,6 +519,7 @@ owner's DISCOVERY cache qualify the probe; no unrelated runtime is queried."
           (list :preset preset :baseline (copy-sequence (plist-get preset :tools))
                 :draft (copy-tree (or selection (pichat-tool-selection-resolve preset)))
                 :discovery discovery :transport transport :runtime-cwd runtime-cwd
+                :emacs-catalogue (pichat-tools-catalogue) :emacs-group nil
                 :executable executable :callback callback :page 0 :cancel nil
                 :servers nil :loaded nil :error nil :version 0))
     (transient-setup 'pichat-tool-picker)

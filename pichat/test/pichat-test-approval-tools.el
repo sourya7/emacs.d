@@ -228,6 +228,7 @@
              :mutating t)
           (cl-incf executions)
           (format "mutated:%s" (plist-get params :value)))
+        (pichat-test-select-emacs-tools session "pichat-test-mutate-wait")
         (unwind-protect
             (progn
               (setq buffer (pichat-chat-open session))
@@ -276,6 +277,7 @@
             (:label "Denied mutation" :description "Never execute"
              :mutating t)
           (ert-fail "Denied tool must not execute"))
+        (pichat-test-select-emacs-tools session "pichat-test-denied-tool")
         (setq pichat-approval-rules '(("pichat-test-denied-tool" . deny)))
         (pichat-approval-save)
         (unwind-protect

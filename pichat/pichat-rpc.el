@@ -68,6 +68,17 @@ variable supplies the complete process command.  A later `--model' in
   :type '(repeat string)
   :group 'pichat)
 
+(defun pichat-rpc-bridge-p (transport)
+  "Return non-nil when a runtime on TRANSPORT loads the PiChat bridge.
+The bridge is local-only; it is loaded by `pichat-bridge-extension-file' or
+by a configured Pi argument naming pichat-bridge."
+  (and (not (and transport (eq (pichat-transport-kind transport) 'ssh)))
+       (or (bound-and-true-p pichat-bridge-extension-file)
+           (cl-some (lambda (arg) (and (stringp arg) (string-match-p "pichat-bridge" arg)))
+                    (append pichat-rpc-command pichat-pi-default-args
+                            (bound-and-true-p pichat-pi-extra-args))))
+       t))
+
 (defcustom pichat-bridge-extension-file nil
   "Optional path to the PiChat bridge extension loaded with `-e'."
   :type '(choice (const :tag "Disabled" nil) file)
@@ -364,6 +375,12 @@ committed configuration).  A local startup failure retains a diagnostic."
             (signal 'file-error '("Empty Pi RPC command")))
           (when (and skill (not (file-readable-p skill)))
             (error "Bundled PiChat job-authoring skill is unreadable: %s" skill))
+          ;; Unavailable Emacs-defined tools are skipped; say so once for
+          ;; interactive starts, but stay quiet for background job runs.
+          (unless non-essential
+            (when-let* ((note (pichat-tool-selection-emacs-note
+                               tool-selection (pichat-rpc-bridge-p transport))))
+              (message "PiChat: %s" note)))
           (when (or (plist-get tool-selection :extensions)
                     (eq (pichat-transport-kind transport) 'ssh))
             (require 'pichat-tool-runtime)

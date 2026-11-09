@@ -478,17 +478,21 @@ reservation after inspection and confirmation.  With Evil, use g R."
   (let* ((preset (plist-get config :preset)) (tools (plist-get config :tools))
          (builtins (plist-get (or tools preset) (if tools :builtins :tools)))
          (extensions (plist-get (or tools preset) :extensions))
+         (emacs (plist-get (or tools preset) (if tools :emacs :emacs-tools)))
          (mcp (plist-get tools :mcp)))
     (if (eq (plist-get preset :inherited) t) "Pi defaults"
-      (format "%s%s%s%s"
+      (format "%s%s%s%s%s"
               (if (or (null tools)
                       (and (equal builtins (plist-get preset :tools))
                            (equal extensions (plist-get preset :extensions))
+                           (equal (append emacs nil)
+                                  (append (plist-get preset :emacs-tools) nil))
                            (seq-empty-p mcp)))
                   "Preset defaults: " "Selected: ")
               (if (seq-empty-p builtins) "no built-ins" (string-join (append builtins nil) ", "))
               (if (seq-empty-p extensions) "" (format " · %d extension tools" (length extensions)))
-              (if (seq-empty-p mcp) "" (format " · %d MCP tools" (length mcp)))))))
+              (if (seq-empty-p mcp) "" (format " · %d MCP tools" (length mcp)))
+              (if (seq-empty-p emacs) "" (format " · %d Emacs-defined tools" (length emacs)))))))
 
 (defun pichat-jobs--insert-settings (spec)
   "Insert compact captured SPEC settings."

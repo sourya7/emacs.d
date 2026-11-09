@@ -25,14 +25,16 @@
        (pichat-tool-bridge-approval-required-p
         (or (plist-get raw :prefill) "{}") session)))
 
-(defun pichat-bridge-transport-startup-reply (raw)
-  "Return a noninteractive startup reply for RAW, or nil.
-Only handshake and definitions are supported here; never execute a tool."
+(defun pichat-bridge-transport-startup-reply (raw &optional session)
+  "Return a noninteractive startup reply for RAW owned by SESSION, or nil.
+Only handshake and definitions are supported here; never execute a tool.
+Definitions contain only SESSION's selected Emacs-defined tools; without a
+runtime (for example a catalogue probe) none are declared."
   (cond
    ((equal (plist-get raw :title) pichat-bridge-transport-handshake-title)
     "{\"protocolVersion\":1,\"capabilities\":[\"tools\",\"tool-errors\",\"dynamic-tool-refresh\"]}")
    ((equal (plist-get raw :title) pichat-bridge-transport-tools-title)
-    (pichat-tool-bridge-definitions-json))))
+    (pichat-tool-bridge-definitions-json session))))
 
 (defun pichat-bridge-transport-handle (session raw)
   "Handle bridge sentinel RAW for SESSION.  Return non-nil if handled."
@@ -40,7 +42,7 @@ Only handshake and definitions are supported here; never execute a tool."
    session 'extension-ui "Pi extension bridge")
   (let* ((id (plist-get raw :id))
          (title (plist-get raw :title))
-         (startup-reply (pichat-bridge-transport-startup-reply raw))
+         (startup-reply (pichat-bridge-transport-startup-reply raw session))
          (operation (pichat-session-restart-operation session))
          (restarting (and operation
                           (memq (plist-get operation :phase)

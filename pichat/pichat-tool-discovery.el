@@ -267,7 +267,8 @@ teardown.  Forced SSH teardown reports uncertain remote cleanup."
                     (send (list :type "extension_ui_response" :id (gethash "id" data) :value "ack"))
                     (setq payload-received t)
                     (maybe-finish))
-                (let ((reply (and (equal (gethash "method" data) "input")
+                ;; A probe has no runtime selection: the bridge declares none.
+                (let ((reply (and (member (gethash "method" data) '("input" "editor"))
                                   (pichat-bridge-transport-startup-reply
                                    (list :title (gethash "title" data))))))
                   (cond

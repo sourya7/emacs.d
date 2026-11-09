@@ -29,14 +29,22 @@
 
 (defun pichat-job-launch--preset (preset)
   "Encode resolved PRESET."
-  (list :name (symbol-name (plist-get preset :name))
-        :description (plist-get preset :description)
-        :inherited (if (eq (plist-get preset :tools) :default) t :false)
-        :tools (vconcat (unless (eq (plist-get preset :tools) :default)
-                          (plist-get preset :tools)))
-        :extensions (vconcat (plist-get preset :extensions))
-        :system-prompt (plist-get preset :system-prompt)
-        :append-system-prompt (plist-get preset :append-system-prompt)))
+  (append
+   (list :name (symbol-name (plist-get preset :name))
+         :description (plist-get preset :description)
+         :inherited (if (eq (plist-get preset :tools) :default) t :false)
+         :tools (vconcat (unless (eq (plist-get preset :tools) :default)
+                           (plist-get preset :tools)))
+         :extensions (vconcat (plist-get preset :extensions))
+         :system-prompt (plist-get preset :system-prompt)
+         :append-system-prompt (plist-get preset :append-system-prompt))
+   ;; Omitted when empty: captures predating Emacs-defined selection match.
+   (when-let* ((names (plist-get preset :emacs-tools)))
+     (list :emacs-tools (vconcat names)))))
+
+(defun pichat-job-launch--optional-strings (values)
+  "Decode optional captured string VALUES; older captures omit them."
+  (and values (pichat-job-launch--strings values)))
 
 (defun pichat-job-launch--unpreset (preset)
   "Decode captured PRESET.  Registry definitions are not consulted."
@@ -49,22 +57,26 @@
                         (pichat-job-launch--strings (plist-get preset :tools)))
                :extensions (pichat-job-launch--strings (plist-get preset :extensions))
                :system-prompt (plist-get preset :system-prompt)
-               :append-system-prompt (plist-get preset :append-system-prompt))))
+               :append-system-prompt (plist-get preset :append-system-prompt)))
+        (emacs (pichat-job-launch--optional-strings (plist-get preset :emacs-tools))))
     (pichat-presets--validate
      (plist-get result :name)
      (list :description (plist-get result :description)
            :tools (plist-get result :tools)
            :extensions (plist-get result :extensions)
+           :emacs-tools emacs
            :system-prompt (plist-get result :system-prompt)
            :append-system-prompt (plist-get result :append-system-prompt)))
-    result))
+    (if emacs (append result (list :emacs-tools emacs)) result)))
 
 (defun pichat-job-launch--tools (tools)
   "Encode resolved TOOLS."
   (when tools
-    (list :builtins (vconcat (plist-get tools :builtins))
-          :mcp (pichat-job-launch--pairs (plist-get tools :mcp))
-          :extensions (vconcat (plist-get tools :extensions)))))
+    (append (list :builtins (vconcat (plist-get tools :builtins))
+                  :mcp (pichat-job-launch--pairs (plist-get tools :mcp))
+                  :extensions (vconcat (plist-get tools :extensions)))
+            (when-let* ((names (plist-get tools :emacs)))
+              (list :emacs (vconcat names))))))
 
 (defun pichat-job-launch--untools (preset tools)
   "Decode TOOLS and validate against captured PRESET."
@@ -72,7 +84,8 @@
    preset (when tools
             (list :builtins (pichat-job-launch--strings (plist-get tools :builtins))
                   :mcp (pichat-job-launch--unpairs (plist-get tools :mcp))
-                  :extensions (pichat-job-launch--strings (plist-get tools :extensions))))))
+                  :extensions (pichat-job-launch--strings (plist-get tools :extensions))
+                  :emacs (pichat-job-launch--optional-strings (plist-get tools :emacs))))))
 
 (defun pichat-job-launch--transport (transport)
   "Encode captured TRANSPORT, preserving private execution context."

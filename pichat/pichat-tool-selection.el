@@ -2,13 +2,16 @@
 
 ;;; Commentary:
 ;; An explicit built-in preset owns its tool policy.  MCP tools are opt-in;
-;; inherited (:default) presets stay entirely Pi-controlled.
+;; inherited (:default) presets stay entirely Pi-controlled.  Emacs-defined
+;; tools are exact opt-in names captured in the snapshot's :emacs list; the
+;; bridge exposes nothing else, and pass-through presets expose none.
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'subr-x)
 (require 'pichat-presets)
+(require 'pichat-tools)
 
 (defun pichat-tool-selection--name (server tool)
   "Return Pi's unambiguous MCP name for SERVER and original TOOL.
@@ -19,9 +22,9 @@ Pi hash-suffixes both members of a collision."
 
 (defun pichat-tool-selection-resolve (preset &optional selection)
   "Resolve PRESET and optional explicit SELECTION into a runtime snapshot.
-SELECTION contains :builtins, :mcp (SERVER . TOOL) pairs and :extensions
-exact names.  Omission means the preset baseline, with MCP disabled.  The
-pass-through preset returns nil and cannot accept a selection."
+SELECTION contains :builtins, :mcp (SERVER . TOOL) pairs, :extensions and
+:emacs exact names.  Omission means the preset baseline, with MCP disabled.
+The pass-through preset returns nil and cannot accept a selection."
   (let ((baseline (plist-get preset :tools)))
     (if (eq baseline :default)
         (progn
@@ -32,9 +35,15 @@ pass-through preset returns nil and cannot accept a selection."
       (let ((builtins (if selection (plist-get selection :builtins) baseline))
             (mcp (and selection (plist-get selection :mcp)))
             (extensions (if selection (plist-get selection :extensions)
-                          (plist-get preset :extensions))))
+                          (plist-get preset :extensions)))
+            (emacs (if selection (plist-get selection :emacs)
+                     (plist-get preset :emacs-tools))))
         (unless (pichat-presets-extension-names-p extensions)
           (user-error "Invalid or duplicate extension tool selection"))
+        (unless (pichat-presets-extension-names-p emacs)
+          (user-error "Invalid or duplicate Emacs-defined tool selection"))
+        (when (cl-intersection emacs extensions :test #'equal)
+          (user-error "Tool selected as both Emacs-defined and extension"))
         (unless (and (listp builtins) (proper-list-p builtins)
                      (cl-every (lambda (name) (member name baseline)) builtins)
                      (= (length builtins)
@@ -57,10 +66,30 @@ pass-through preset returns nil and cannot accept a selection."
             (user-error "Ambiguous normalized MCP tool names"))
           (when (cl-intersection names extensions :test #'equal)
             (user-error "Tool selected as both MCP and extension"))
+          (when (cl-intersection names emacs :test #'equal)
+            (user-error "Tool selected as both MCP and Emacs-defined"))
           (append (list :builtins (pichat-presets--copy builtins)
                         :mcp (pichat-presets--copy mcp) :names names)
                   (when extensions
-                    (list :extensions (sort (pichat-presets--copy extensions) #'string<)))))))))
+                    (list :extensions (sort (pichat-presets--copy extensions) #'string<)))
+                  (when emacs
+                    (list :emacs (sort (pichat-presets--copy emacs) #'string<)))))))))
+
+(defun pichat-tool-selection-emacs-unavailable (snapshot &optional bridge-p)
+  "Return SNAPSHOT's selected Emacs-defined tools a runtime cannot offer.
+Without BRIDGE-P the bridge is absent, so none can be offered; otherwise
+only names missing from the registry.  Such names are skipped, not fatal."
+  (let ((names (plist-get snapshot :emacs)))
+    (if bridge-p
+        (cl-remove-if (lambda (name) (gethash name pichat-tools-registry)) names)
+      names)))
+
+(defun pichat-tool-selection-emacs-note (snapshot &optional bridge-p)
+  "Return a short note about SNAPSHOT Emacs tools unavailable without BRIDGE-P."
+  (when-let* ((names (pichat-tool-selection-emacs-unavailable snapshot bridge-p)))
+    (format "Emacs-defined tools not available%s: %s"
+            (if bridge-p " (not loaded)" " (no PiChat bridge for this runtime)")
+            (string-join names ", "))))
 
 (defun pichat-tool-selection-check-catalogue (snapshot servers)
   "Validate SNAPSHOT MCP choices against discovered SERVERS.
@@ -88,9 +117,14 @@ Fail closed on disconnected, hidden, non-direct, absent, or ambiguous tools."
   "Return Pi startup tool arguments for resolved SNAPSHOT.
 Nil SNAPSHOT means pass-through; a preset with no tools uses --no-tools."
   (when snapshot
-    (let ((names (append (plist-get snapshot :builtins)
-                         (plist-get snapshot :names)
-                         (plist-get snapshot :extensions))))
+    ;; Pi's allowlist also governs tools the bridge registers later, so the
+    ;; selected Emacs-defined names that are registered are allowed here too.
+    (let* ((missing (pichat-tool-selection-emacs-unavailable snapshot t))
+           (names (append (plist-get snapshot :builtins)
+                          (plist-get snapshot :names)
+                          (plist-get snapshot :extensions)
+                          (cl-set-difference (plist-get snapshot :emacs) missing
+                                             :test #'equal))))
       (append (if names
                   (list "--tools" (string-join names ","))
                 (list "--no-tools"))

@@ -420,6 +420,17 @@ Source-qualified integrations should discard presentation and stale actions here
 (defvar-local pichat-chat--ui-schedule-generation 0
   "Generation used to reject stale extension UI activation callbacks.")
 
+(defun pichat-chat--reset-source-presentation ()
+  "Create fresh source-scoped presentation metadata for this chat.
+Used for both mode initialization and source rebinding.  These tables own no
+markers, overlays, requests or timers; those resources have separate disposal
+paths.  Settlement preserves views/enrichments but expires auxiliary details."
+  (setq pichat-chat--tool-view-states (make-hash-table :test #'equal)
+        pichat-chat--activity-view-states (make-hash-table :test #'equal)
+        pichat-chat--skill-view-states (make-hash-table :test #'equal)
+        pichat-chat--tool-auxiliary-details (make-hash-table :test #'equal)
+        pichat-chat--tool-enrichments (make-hash-table :test #'equal)))
+
 (defun pichat-chat-beginning-of-line (&optional arg)
   "Move to beginning of line, stopping after PiChat's read-only input prefix.
 On the live input line, this lands at `pichat-chat--input-start' instead of
@@ -575,19 +586,12 @@ user messages, activity groups, and tool blocks."
               (make-hash-table :test #'equal))
   (setq-local pichat-chat--live-tool-blocks
               (make-hash-table :test #'equal))
-  (setq-local pichat-chat--tool-view-states (make-hash-table :test #'equal))
   (setq-local pichat-chat--activity-blocks (make-hash-table :test #'equal))
   (setq-local pichat-chat--canonical-activity-blocks
               (make-hash-table :test #'equal))
   (setq-local pichat-chat--live-activity-blocks
               (make-hash-table :test #'equal))
-  (setq-local pichat-chat--skill-view-states (make-hash-table :test #'equal))
-  (setq-local pichat-chat--activity-view-states
-              (make-hash-table :test #'equal))
-  (setq-local pichat-chat--tool-auxiliary-details
-              (make-hash-table :test #'equal))
-  (setq-local pichat-chat--tool-enrichments
-              (make-hash-table :test #'equal))
+  (pichat-chat--reset-source-presentation)
   (setq-local pichat-chat--extension-statuses (make-hash-table :test #'equal))
   (setq-local pichat-chat--extension-status-timer nil)
   (setq-local pichat-chat--extension-status-dirty-p nil)
@@ -775,16 +779,10 @@ When DEFER-SYNC is non-nil, wait for a subsequent authoritative state reply."
   (setq pichat-chat--tool-blocks (make-hash-table :test #'equal)
         pichat-chat--canonical-tool-blocks (make-hash-table :test #'equal)
         pichat-chat--live-tool-blocks (make-hash-table :test #'equal)
-        pichat-chat--tool-view-states (make-hash-table :test #'equal)
         pichat-chat--activity-blocks (make-hash-table :test #'equal)
         pichat-chat--canonical-activity-blocks (make-hash-table :test #'equal)
-        pichat-chat--live-activity-blocks (make-hash-table :test #'equal)
-        pichat-chat--activity-view-states (make-hash-table :test #'equal)
-        pichat-chat--skill-view-states (make-hash-table :test #'equal)
-        pichat-chat--tool-auxiliary-details
-        (make-hash-table :test #'equal)
-        pichat-chat--tool-enrichments
-        (make-hash-table :test #'equal))
+        pichat-chat--live-activity-blocks (make-hash-table :test #'equal))
+  (pichat-chat--reset-source-presentation)
   (run-hooks 'pichat-chat-source-reset-hook)
   (unless defer-sync
     (pichat-chat--request-sync t)))
@@ -2358,14 +2356,7 @@ Signal a user error when thinking control is disabled or unavailable."
           :activity-block-markers activity-block-markers
           :live-fragments pichat-chat--live-projection-fragments
           :fragment-markers fragment-markers
-          :view-states (and (hash-table-p pichat-chat--tool-view-states)
-                            (copy-hash-table pichat-chat--tool-view-states))
-          :activity-view-states
-          (and (hash-table-p pichat-chat--activity-view-states)
-               (copy-hash-table pichat-chat--activity-view-states))
-          :auxiliary (and (hash-table-p pichat-chat--tool-auxiliary-details)
-                          (copy-hash-table
-                           pichat-chat--tool-auxiliary-details))
+          :source-presentation (pichat-chat--source-presentation-snapshot)
           :cache pichat-chat--entry-cache
           :transcript pichat-chat--canonical-transcript
           :draft pichat-chat--live-draft
@@ -2406,10 +2397,6 @@ Signal a user error when thinking control is disabled or unavailable."
         (plist-get snapshot :live-activity-blocks)
         pichat-chat--live-projection-fragments
         (plist-get snapshot :live-fragments)
-        pichat-chat--tool-view-states (plist-get snapshot :view-states)
-        pichat-chat--activity-view-states
-        (plist-get snapshot :activity-view-states)
-        pichat-chat--tool-auxiliary-details (plist-get snapshot :auxiliary)
         pichat-chat--entry-cache (plist-get snapshot :cache)
         pichat-chat--canonical-transcript (plist-get snapshot :transcript)
         pichat-chat--live-draft (plist-get snapshot :draft)
@@ -2418,6 +2405,8 @@ Signal a user error when thinking control is disabled or unavailable."
         pichat-chat--status-lines (plist-get snapshot :statuses)
         pichat-chat--extension-notifications
         (plist-get snapshot :notifications))
+  (pichat-chat--restore-source-presentation
+   (plist-get snapshot :source-presentation))
   (pichat-chat-tool-ui-refresh-decorations
    pichat-chat--tool-blocks pichat-chat--tool-enrichments
    pichat-chat--source-generation)
@@ -2440,6 +2429,33 @@ Signal a user error when thinking control is disabled or unavailable."
       (clrhash table)
       (maphash (lambda (key value) (puthash key value table)) contents)
       table)))
+
+(defun pichat-chat--source-presentation-snapshot ()
+  "Capture source presentation tables before either projection transaction.
+Retain table identity and shallow-copy contents: presentation code replaces
+entries rather than mutating captured values.  This is not a source/process
+guard or a snapshot of the canonical model, text, markers or async operations."
+  (list :tool-views (pichat-chat--hash-state-snapshot pichat-chat--tool-view-states)
+        :activity-views
+        (pichat-chat--hash-state-snapshot pichat-chat--activity-view-states)
+        :skill-views (pichat-chat--hash-state-snapshot pichat-chat--skill-view-states)
+        :auxiliary (pichat-chat--hash-state-snapshot pichat-chat--tool-auxiliary-details)
+        :enrichments (pichat-chat--hash-state-snapshot pichat-chat--tool-enrichments)))
+
+(defun pichat-chat--restore-source-presentation (snapshot)
+  "Restore source presentation SNAPSHOT after a failed projection.
+Both rollback paths restore original table identity and contents, even if a
+candidate replaced a buffer-local table.  Never use across source rebinding."
+  (setq pichat-chat--tool-view-states
+        (pichat-chat--restore-hash-state (plist-get snapshot :tool-views))
+        pichat-chat--activity-view-states
+        (pichat-chat--restore-hash-state (plist-get snapshot :activity-views))
+        pichat-chat--skill-view-states
+        (pichat-chat--restore-hash-state (plist-get snapshot :skill-views))
+        pichat-chat--tool-auxiliary-details
+        (pichat-chat--restore-hash-state (plist-get snapshot :auxiliary))
+        pichat-chat--tool-enrichments
+        (pichat-chat--restore-hash-state (plist-get snapshot :enrichments))))
 
 (defun pichat-chat--focused-fragment-snapshot ()
   "Capture current live fragment objects and their marker positions."
@@ -2508,14 +2524,7 @@ No chat-buffer text is copied; the active Emacs change group owns text undo."
    :activity-block-state (pichat-chat--focused-activity-block-snapshot)
    :fragments pichat-chat--live-projection-fragments
    :fragment-state (pichat-chat--focused-fragment-snapshot)
-   :view-states
-   (pichat-chat--hash-state-snapshot pichat-chat--tool-view-states)
-   :activity-view-states
-   (pichat-chat--hash-state-snapshot pichat-chat--activity-view-states)
-   :auxiliary
-   (pichat-chat--hash-state-snapshot pichat-chat--tool-auxiliary-details)
-   :enrichments
-   (pichat-chat--hash-state-snapshot pichat-chat--tool-enrichments)
+   :source-presentation (pichat-chat--source-presentation-snapshot)
    :fingerprint pichat-chat--live-projection-fingerprint
    :statuses (copy-tree pichat-chat--status-lines)))
 
@@ -2543,18 +2552,11 @@ No chat-buffer text is copied; the active Emacs change group owns text undo."
         (plist-get snapshot :live-activity-blocks)
         pichat-chat--live-projection-fragments
         (plist-get snapshot :fragments)
-        pichat-chat--tool-view-states
-        (pichat-chat--restore-hash-state (plist-get snapshot :view-states))
-        pichat-chat--activity-view-states
-        (pichat-chat--restore-hash-state
-         (plist-get snapshot :activity-view-states))
-        pichat-chat--tool-auxiliary-details
-        (pichat-chat--restore-hash-state (plist-get snapshot :auxiliary))
-        pichat-chat--tool-enrichments
-        (pichat-chat--restore-hash-state (plist-get snapshot :enrichments))
         pichat-chat--live-projection-fingerprint
         (plist-get snapshot :fingerprint)
         pichat-chat--status-lines (plist-get snapshot :statuses))
+  (pichat-chat--restore-source-presentation
+   (plist-get snapshot :source-presentation))
   (dolist (entry (plist-get snapshot :fragment-state))
     (let ((fragment (car entry)))
       (set-marker (plist-get fragment :start) (nth 1 entry))

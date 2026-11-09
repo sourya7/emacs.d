@@ -283,5 +283,180 @@
       (should (string-match-p "changed prose"
                               (pichat-test-buffer-text buffer))))))
 
+(defun pichat-test-focused-rollback--source-tables ()
+  "Return source-scoped presentation tables in the current chat."
+  (list pichat-chat--tool-view-states pichat-chat--activity-view-states
+        pichat-chat--skill-view-states pichat-chat--tool-auxiliary-details
+        pichat-chat--tool-enrichments))
+
+(ert-deftest pichat-chat-projection-failure-restores-source-presentation-ownership ()
+  ;; All transaction paths must restore the same source-owned metadata.
+  ;; Text/marker rollback remains path-specific.
+  (dolist (path '(focused full canonical))
+    (dolist (condition '(error quit))
+      (pichat-test-focused-rollback--with-buffer
+        (pichat-chat--set-input-text "unsent draft")
+        (pichat-chat--style-live-input)
+        (pichat-test-focused-rollback--candidate
+         pichat-chat--live-draft "message_update" "candidate prose" "new.el")
+        (dolist (table (pichat-test-focused-rollback--source-tables))
+          (puthash "retained-key" '(:retained t) table))
+        (set-buffer-modified-p nil)
+        (let* ((tables (pichat-test-focused-rollback--source-tables))
+               (contents (mapcar #'pichat-test-focused-rollback--hash-entries tables))
+               (before (pichat-test-focused-rollback--state))
+               (draft pichat-chat--live-draft)
+               (cache pichat-chat--entry-cache)
+               (transcript pichat-chat--canonical-transcript)
+               (target (pichat-chat-draft-capture))
+               (project
+                (lambda ()
+                  (if (eq path 'canonical)
+                      (let* ((model (pichat-transcript-create :nodes nil))
+                             (context (pichat-chat--canonical-render-context model)))
+                        (pichat-chat--project-canonical
+                         nil model (pichat-render-canonical model context) context))
+                    (pichat-chat--project-live-tail)))))
+          (let ((index (symbol-function 'pichat-chat--index-canonical-tools))
+                (status (symbol-function 'pichat-chat--set-status-state))
+                (fail (lambda ()
+                        ;; Exercise replacement as well as in-place mutation.
+                        (setq pichat-chat--skill-view-states
+                              (make-hash-table :test #'equal))
+                        (dolist (table (pichat-test-focused-rollback--source-tables))
+                          (clrhash table)
+                          (puthash "failed-key" '(:candidate t) table))
+                        (signal condition '("injected presentation failure")))))
+            (cl-letf (((symbol-function 'pichat-chat--index-canonical-tools)
+                       (lambda (&rest args)
+                         (prog1 (apply index args)
+                           (unless (eq path 'canonical) (funcall fail)))))
+                      ((symbol-function 'pichat-chat--set-status-state)
+                       (lambda (key value)
+                         (funcall status key value)
+                         ;; Canonical projection has installed its candidate
+                         ;; and expired auxiliary details before this boundary.
+                         (when (and (eq path 'canonical) (eq key 'agent))
+                           (funcall fail)))))
+              (if (eq path 'full)
+                  (cl-letf (((symbol-function 'pichat-chat--focused-live-rollback-safe-p)
+                             (lambda (_) nil)))
+                    (should (eq condition
+                                (condition-case err (funcall project)
+                                  ((error quit) (car err))))))
+                (should (eq condition
+                            (condition-case err (funcall project)
+                              ((error quit) (car err))))))))
+          (should (equal-including-properties
+                   (plist-get before :text) (buffer-string)))
+          (when (eq path 'focused)
+            (should (equal before (pichat-test-focused-rollback--state))))
+          (should (cl-every #'eq tables (pichat-test-focused-rollback--source-tables)))
+          (should (equal contents
+                         (mapcar #'pichat-test-focused-rollback--hash-entries
+                                 (pichat-test-focused-rollback--source-tables))))
+          (should (eq draft pichat-chat--live-draft))
+          (should (eq cache pichat-chat--entry-cache))
+          (should (eq transcript pichat-chat--canonical-transcript))
+          (should (pichat-chat-draft-current-p target))
+          (should (equal "unsent draft" (pichat-chat-draft-text target)))
+          ;; A failed projection never consumes the candidate or poisons retry.
+          (funcall project)
+          (should (equal "unsent draft" (pichat-chat-draft-text target))))))))
+
+(ert-deftest pichat-chat-source-reset-releases-presentation-without-losing-draft ()
+  (pichat-test-focused-rollback--with-buffer
+    (goto-char (point-max))
+    (insert "unsent draft")
+    (let* ((target (pichat-chat-draft-capture))
+           (generation pichat-chat--source-generation)
+           (process-generation (pichat-session-process-generation session))
+           (tables (pichat-test-focused-rollback--source-tables))
+           (block (gethash "rollback-tool" pichat-chat--live-tool-blocks))
+           (start (plist-get block :start))
+           (overlay (plist-get block :overlay))
+           (pending (list 'pending-image))
+           (recovery (list 'recoverable-draft))
+           cancelled)
+      (setq pichat-chat--pending-attachments pending
+            pichat-chat--recoverable-submissions recovery
+            pichat-chat--sync-request-id "old-sync"
+            pichat-chat--stats-request-id "old-stats")
+      (dolist (table tables) (puthash "retained-key" t table))
+      (cl-letf (((symbol-function 'pichat-backend-cancel-owned-request)
+                 (lambda (owner id)
+                   (should (eq session owner))
+                   (push id cancelled))))
+        (pichat-chat--on-session-rebinding session 'session-rebinding nil))
+      (should (equal '("old-stats" "old-sync") cancelled))
+      (should (= (1+ generation) pichat-chat--source-generation))
+      (should (equal process-generation (pichat-session-process-generation session)))
+      (should-not (pichat-chat-draft-current-p target))
+      (should (equal "unsent draft" (pichat-chat--input-text)))
+      (should (eq pending pichat-chat--pending-attachments))
+      (should (eq recovery pichat-chat--recoverable-submissions))
+      (should-not (marker-position start))
+      (should-not (overlay-buffer overlay))
+      (should-not pichat-chat--entry-cache)
+      (should-not pichat-chat--canonical-transcript)
+      (should (= pichat-chat--source-generation
+                 (pichat-live-draft-generation pichat-chat--live-draft)))
+      (should (cl-every (lambda (table) (zerop (hash-table-count table)))
+                        (pichat-test-focused-rollback--source-tables)))
+      (should (cl-every (lambda (old new) (not (eq old new)))
+                        tables (pichat-test-focused-rollback--source-tables)))
+      ;; Returning to the old source cannot revive its captured draft target.
+      (pichat-chat--reset-for-source
+       (pichat-session-id session) (pichat-session-session-file session) t)
+      (should-not (pichat-chat-draft-current-p target))
+      ;; A second chat gets its own empty tables; no shared default hash state.
+      (with-temp-buffer
+        (pichat-chat-mode)
+        (should (cl-every (lambda (table) (zerop (hash-table-count table)))
+                          (pichat-test-focused-rollback--source-tables)))
+        (should (cl-every (lambda (old new) (not (eq old new)))
+                          tables (pichat-test-focused-rollback--source-tables)))))))
+
+(ert-deftest pichat-chat-settlement-keeps-source-views-but-expires-auxiliary-details ()
+  (pichat-test-focused-rollback--with-buffer
+    (puthash "kept-tool" 'args pichat-chat--tool-view-states)
+    (puthash "kept-skill" "original skill text" pichat-chat--skill-view-states)
+    (puthash "rollback-tool" '(:details "nonpersisted")
+             pichat-chat--tool-auxiliary-details)
+    (let* ((enrichment (gethash "rollback-tool" pichat-chat--tool-enrichments))
+           (target (pichat-chat-draft-capture))
+           (generation pichat-chat--source-generation)
+           (model (pichat-transcript-create :nodes nil))
+           (context (pichat-chat--canonical-render-context model)))
+      (pichat-chat--project-canonical
+       nil model (pichat-render-canonical model context) context)
+      (should (= generation pichat-chat--source-generation))
+      (should (pichat-chat-draft-current-p target))
+      (should (eq 'args (gethash "kept-tool" pichat-chat--tool-view-states)))
+      (should (equal "original skill text"
+                     (gethash "kept-skill" pichat-chat--skill-view-states)))
+      (should (eq enrichment (gethash "rollback-tool" pichat-chat--tool-enrichments)))
+      (should (zerop (hash-table-count pichat-chat--tool-auxiliary-details))))))
+
+(ert-deftest pichat-chat-focused-rollback-after-prompt-edits-preserves-private-undo ()
+  (ert-skip "TODO W28: preserve focused change-group undo identity after prompt edits")
+  (pichat-test-focused-rollback--with-buffer
+    (goto-char (point-max))
+    (insert "unsent draft")
+    (pichat-test-focused-rollback--candidate
+     pichat-chat--live-draft "message_update" "candidate prose" "new.el")
+    (set-buffer-modified-p nil)
+    (let ((before (buffer-string))
+          (undo-before (copy-tree buffer-undo-list))
+          caught)
+      (cl-letf (((symbol-function 'pichat-chat--index-canonical-tools)
+                 (lambda (&rest _) (error "injected index failure"))))
+        (condition-case err (pichat-chat--project-live-tail)
+          (error (setq caught err))))
+      (should (equal '(error "injected index failure") caught))
+      (should (equal-including-properties before (buffer-string)))
+      (should (equal undo-before buffer-undo-list))
+      (should (equal "unsent draft" (pichat-chat--input-text))))))
+
 (provide 'pichat-test-chat-projection-focused-rollback)
 ;;; pichat-test-chat-projection-focused-rollback.el ends here

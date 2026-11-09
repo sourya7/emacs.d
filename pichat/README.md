@@ -468,7 +468,10 @@ prompt replacement callback. `pichat-archive.el` owns exact-RPC
 capability discovery, helper provenance, process execution, and protocol
 normalization without depending on Consult or querying SQLite; `pichat-consult.el`
 consumes only normalized archive records. The chat layer owns event orchestration
-and its generation-scoped enrichment table.
+and source-scoped presentation metadata (tool/activity/skill choices, auxiliary
+details and enrichment). A shared reset/snapshot/restore boundary owns those
+tables; full and focused projection transactions retain their distinct text,
+marker and overlay rollback policies. Canonical caches remain chat-owned.
 Canonical transcript and Pi reducer modules remain independent authorities and
 never consume this ephemeral state. `pichat-diagnostic.el` supplies a pure shared
 record vocabulary and formatting helpers. Domain-owned collectors supply cached,

@@ -23,6 +23,7 @@
             :inherit nil)
   :custom
   (pichat-jobs-file (my/emacs-local-dir "pichat/jobs.json"))
+  (pichat-approval-policy-file (my/emacs-local-dir "pichat/approvals.el"))
   :commands (pichat pichat-global pichat-launch pichat-session-manager
                     pichat-jobs
                     pichat-sessions-browse-files pichat-sessions-switch-files

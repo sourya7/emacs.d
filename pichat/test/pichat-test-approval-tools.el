@@ -52,6 +52,28 @@
       (should (= 1 (length content)))
       (should (equal "tool output" (plist-get (car content) :text))))))
 
+(ert-deftest pichat-tools-execute-json-decodes-encoded-utf-8-results ()
+  ;; Tools naturally return `json-serialize' output, which is UTF-8 bytes.
+  (pichat-test-with-clean-state
+    (let ((json (json-serialize '(:title "Résumé — 日本語"))))
+      (should-not (multibyte-string-p json))
+      (pichat-define-tool pichat-test-encoded-string () json)
+      (pichat-define-tool pichat-test-encoded-structure ()
+        (list :content (vector (list :type "text" :text json))))
+      (pichat-define-tool pichat-test-invalid-bytes () (unibyte-string #xff #xfe))
+      (dolist (name '("pichat-test-encoded-string" "pichat-test-encoded-structure"))
+        (let* ((reply (json-parse-string
+                       (pichat-tools-execute-json (json-serialize (list :name name :params '())))
+                       :object-type 'plist :array-type 'list))
+               (text (plist-get (car (plist-get reply :content)) :text)))
+          (should-not (plist-get reply :isError))
+          (should (equal "Résumé — 日本語"
+                         (plist-get (json-parse-string text :object-type 'plist) :title)))))
+      ;; Binary output cannot become text; the bridge turns this into an
+      ;; error reply (`pichat-bridge-result-encoding-error-replies-instead-of-hanging').
+      (should-error (pichat-tools-execute-json
+                     "{\"name\":\"pichat-test-invalid-bytes\",\"params\":{}}")))))
+
 (ert-deftest pichat-tools-rejects-async-before-definition-or-registration ()
   (pichat-test-with-clean-state
     (should-error
@@ -301,6 +323,26 @@
               (should (string-match-p "Denied by user" (cadr response))))
           (when (buffer-live-p buffer) (kill-buffer buffer))
           (when (buffer-live-p other) (kill-buffer other)))))))
+
+(ert-deftest pichat-bridge-result-encoding-error-replies-instead-of-hanging ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((executions 0) response)
+      (pichat-define-tool pichat-test-bad-result ()
+        (cl-incf executions)
+        ;; A malformed structured result used to leave the dialog pending.
+        (list :content (vector (list :type "text" :text (make-symbol "bad")))))
+      (pichat-test-select-emacs-tools session "pichat-test-bad-result")
+      (cl-letf (((symbol-function 'pichat-rpc-extension-ui-value)
+                 (lambda (_session id value) (setq response (list id value)))))
+        (should (pichat-bridge-transport-handle
+                 session '(:id "bad-result" :method "editor" :title "__pichat_tool_call__"
+                           :prefill "{\"name\":\"pichat-test-bad-result\",\"params\":{}}"))))
+      (should (= executions 1))
+      (should (equal "bad-result" (car response)))
+      (let ((reply (json-parse-string (cadr response) :object-type 'plist :array-type 'list)))
+        (should (plist-get reply :isError))
+        (should (string-match-p "Emacs tool reply failed"
+                                (plist-get (car (plist-get reply :content)) :text)))))))
 
 (ert-deftest pichat-approval-policy-save-atomically-replaces-valid-policy ()
   (pichat-test-with-clean-state

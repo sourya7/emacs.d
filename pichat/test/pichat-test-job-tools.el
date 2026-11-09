@@ -72,6 +72,31 @@
                    (pichat-tool-bridge-definitions-json
                     (pichat-session-make :cwd default-directory))))))
 
+(ert-deftest pichat-job-tools-bridge-preserves-unicode-and-truncated-previews ()
+  ;; json-serialize returns UTF-8 bytes.  A tool result must be decoded text
+  ;; before it is embedded in the outer bridge JSON response.
+  (pichat-test-with-job-tools
+    (let* ((spec (pichat-test-job-spec project-dir))
+           (title "Résumé — 日本語")
+           (instructions (concat "Inspect café " (make-string 400 ?x)))
+           (job (pichat-job-save store (plist-put (plist-put spec :title title)
+                                                 :instructions instructions)))
+           (session (apply #'pichat-test-select-emacs-tools
+                           (pichat-session-make :cwd project-dir) pichat-test-job-tools-names)))
+      (dolist (call (list (list :name "pichat_jobs_list" :params '(:limit 5))
+                         (list :name "pichat_job_inspect" :params (list :job_id job))))
+        (let* ((reply (json-parse-string
+                       (pichat-tool-bridge-execute-json (json-serialize call) session)
+                       :object-type 'plist :array-type 'list))
+               (text (plist-get (car (plist-get reply :content)) :text))
+               (data (json-parse-string text :object-type 'plist :array-type 'list))
+               (entry (or (plist-get data :job) (car (plist-get data :jobs)))))
+          (should-not (plist-get reply :isError))
+          (should (equal title (plist-get entry :title)))
+          (when-let* ((preview (plist-get entry :instructions_preview)))
+            (should (string-prefix-p "Inspect café " preview))
+            (should (string-suffix-p "…" preview))))))))
+
 (ert-deftest pichat-job-tools-start-jobs-like-opening-it ()
   ;; With Jobs not yet opened in this Emacs, a tool starts the same owner
   ;; M-x pichat-jobs would, so enabled timing really runs.
@@ -244,7 +269,10 @@
              (pichat-jobs--owned-store nil)
              (pichat-approval-policy-file (expand-file-name "approvals.el" project-dir))
              (pichat-chat-stop-session-on-kill nil)
-             (job (pichat-job-save store (pichat-test-job-spec project-dir)))
+             (job (pichat-job-save
+                   store (plist-put (plist-put (pichat-test-job-spec project-dir)
+                                              :title "Review files — café 日本語")
+                                    :instructions (concat "Review files " (make-string 400 ?x)))))
              (schedule-args (expand-file-name "schedule-args.json" project-dir))
              (chat-status (expand-file-name "chat-status.json" project-dir))
              (write-args (lambda (start)
@@ -258,7 +286,7 @@
                   :toolCall (:id "list" :name "pichat_jobs_list" :arguments (:limit 5)))
                  (:expectContextIncludes ,job
                   :toolCall (:id "inspect" :name "pichat_job_inspect" :arguments (:job_id ,job)))
-                 (:expectContextIncludes "Review files"
+                 (:expectContextIncludes ["Review files — café 日本語" "…"]
                   :toolCall (:id "denied" :name "pichat_job_schedule" :argumentsFile ,schedule-args))
                  (:expectContextIncludes "Denied by user" :text "denied")
                  (:toolCall (:id "schedule" :name "pichat_job_schedule" :argumentsFile ,schedule-args))

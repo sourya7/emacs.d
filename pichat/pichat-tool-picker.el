@@ -273,7 +273,7 @@ over exact names, not a grant to tools registered later."
       ((not (pichat-rpc-bridge-p transport))
        (propertize (if (and transport (eq (pichat-transport-kind transport) 'ssh))
                        " — not available over SSH"
-                     " — inactive: no PiChat bridge (pichat-bridge-extension-file)")
+                     " — inactive: no PiChat bridge")
                    'face 'warning))
       (missing
        (propertize (format " — not loaded, will be skipped: %s" (string-join missing ", "))

@@ -131,7 +131,20 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("pichat-ping", { description: "Check whether the PiChat bridge extension is loaded", handler: async (_args, ctx) => { ctx.ui.notify("PiChat bridge loaded", "info"); } });
 	pi.registerCommand("pichat-sync-tools", { description: "Synchronize Emacs-defined PiChat tools", handler: async (_args, ctx) => { await syncTools(ctx); } });
 
-	pi.on("session_start", async (_event, ctx) => { await handshake(ctx); await syncTools(ctx); });
+	pi.on("session_start", (_event, ctx) => {
+		// RPC installs its stdin reader after awaiting session_start handlers.
+		// Awaiting a dialog here therefore times out even when Emacs replies.
+		// Let startup return before requesting bridge definitions.
+		setTimeout(() => {
+			void syncTools(ctx).catch((err) => {
+				// A session switch may retire this startup context while the
+				// dialog is pending.  Never let that terminate the RPC process.
+				try {
+					ctx.ui.setStatus(STATUS_KEY, `sync-error:${err instanceof Error ? err.message : String(err)}`);
+				} catch { /* The replacement session owns its own synchronization. */ }
+			});
+		}, 0);
+	});
 	pi.on("before_agent_start", async (event, ctx) => {
 		await syncTools(ctx, event.systemPromptOptions);
 		return undefined;

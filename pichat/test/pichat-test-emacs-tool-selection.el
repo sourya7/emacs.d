@@ -168,6 +168,32 @@
           (should-not (plist-get (pichat-job-launch--untools spec legacy) :emacs)))
         (should-not (plist-member (pichat-job-launch--preset spec) :emacs-tools))))))
 
+(ert-deftest pichat-emacs-tools-selection-loads-the-bundled-bridge ()
+  (pichat-test-with-emacs-tools
+    (let* ((spec (pichat-presets-resolve 'manual))
+           (pichat-bridge-extension-file nil)
+           (pichat-rpc-command nil)
+           (pichat-pi-extra-args nil)
+           (session (lambda (emacs)
+                      (pichat-session-make
+                       :cwd default-directory :preset-spec spec
+                       :tool-selection (pichat-tool-selection-resolve
+                                        spec (list :builtins '("read") :emacs emacs)))))
+           (ssh (pichat-transport--create :id "ssh:host" :kind (quote ssh) :label "host")))
+      (should (equal pichat-rpc-bundled-bridge
+                     (cadr (member "-e" (pichat-rpc-build-command
+                                         (funcall session '("pichat_test_list")))))))
+      (should-not (member pichat-rpc-bundled-bridge
+                          (pichat-rpc-build-command (funcall session nil))))
+      (should-not (pichat-rpc-bridge-file ssh '(:emacs ("pichat_test_list"))))
+      ;; A configured bridge wins and is not loaded twice.
+      (let ((pichat-bridge-extension-file "/custom/bridge.ts"))
+        (should (equal "/custom/bridge.ts"
+                       (pichat-rpc-bridge-file nil '(:emacs ("pichat_test_list"))))))
+      (let ((pichat-pi-extra-args '("-e" "/x/pichat-bridge.ts")))
+        (should-not (pichat-rpc-bridge-file nil '(:emacs ("pichat_test_list"))))
+        (should (pichat-rpc-bridge-p nil))))))
+
 (ert-deftest pichat-emacs-tools-missing-selection-starts-without-it-and-says-so ()
   (pichat-test-with-emacs-tools
     (let* ((spec (pichat-presets-resolve 'manual))
@@ -276,8 +302,9 @@
         (let ((pichat-bridge-extension-file "/bridge.ts"))
           (should (string-match-p "will be skipped: pichat_test_list"
                                   (pichat-tool-picker--emacs-heading))))
-        (should (string-match-p "inactive: no PiChat bridge"
-                                (pichat-tool-picker--emacs-heading)))
+        (let ((pichat-rpc-bundled-bridge "/missing/pichat-bridge.ts"))
+          (should (string-match-p "inactive: no PiChat bridge"
+                                  (pichat-tool-picker--emacs-heading))))
         (pichat-tool-picker-apply)
         (should (equal '("pichat_test_list") (plist-get result :emacs)))))))
 

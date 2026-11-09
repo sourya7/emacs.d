@@ -2288,8 +2288,9 @@ is implemented.
 
 ## Emacs-defined tools
 
-The optional PiChat bridge (`pichat-bridge-extension-file`, local runtimes only)
-exposes Emacs-defined tools to Pi. Use `pichat-define-tool` for short,
+The PiChat bridge exposes Emacs-defined tools to Pi. Local runtimes load the
+bundled bridge automatically when Emacs-defined tools are selected
+(`pichat-bridge-extension-file` overrides it); SSH runtimes cannot use it. Use `pichat-define-tool` for short,
 synchronous operations: the body receives `params` and returns its final result
 directly. For example:
 
@@ -2321,7 +2322,7 @@ none, or toggle individual tools. Or give an explicit-tool preset a baseline:
 Selections are exact names: tools registered later are listed but never
 selected automatically. If a selected tool isn't loaded, the runtime starts
 without it and says so; the Tools section shows the same note, and also when
-the runtime has no bridge (none configured, or SSH). Calls to unselected tools
+the runtime has no bridge (SSH). Calls to unselected tools
 are refused. Change a live runtime's selection with **Reconfigure this
 runtime**. Pass-through presets (`:tools :default`, such as `standard`) offer
 no Emacs-defined tools.

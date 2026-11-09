@@ -161,9 +161,22 @@ this function so transports can apply their own asynchronous gate."
     (error
      (list :is-error t :value (error-message-string err)))))
 
+(defun pichat-tools--text (value)
+  "Return VALUE with encoded UTF-8 strings decoded, recursively.
+Tools commonly return `json-serialize' output, which is UTF-8 bytes; the
+bridge reply needs character strings.  Invalid UTF-8 stays undecodable and
+is reported by the bridge as a failed reply."
+  (cond
+   ((and (stringp value) (not (multibyte-string-p value))
+         (string-match-p "[^\0-\177]" value))
+    (decode-coding-string value 'utf-8))
+   ((vectorp value) (vconcat (mapcar #'pichat-tools--text value)))
+   ((consp value) (mapcar #'pichat-tools--text value))
+   (t value)))
+
 (defun pichat-tools-result-wire (result)
   "Convert structured tool RESULT into the existing bridge wire object."
-  (let ((value (plist-get result :value)))
+  (let ((value (pichat-tools--text (plist-get result :value))))
     (append
      (when (plist-get result :is-error) (list :isError t))
      (cond

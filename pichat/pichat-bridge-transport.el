@@ -68,8 +68,17 @@ runtime (for example a catalogue probe) none are declared."
            (json-serialize
             '(:isError t :content [(:type "text"
                                      :text "PiChat runtime is restarting")]))
-         (pichat-tool-bridge-execute-json
-          (or (plist-get raw :prefill) "{}") session)))
+         (condition-case err
+             (pichat-tool-bridge-execute-json
+              (or (plist-get raw :prefill) "{}") session)
+           ;; Even a malformed/unencodable result must resolve Pi's dialog.
+           ;; Do not retry the tool: it may already have changed state.
+           (error
+            (json-serialize
+             (list :isError t
+                   :content (vector (list :type "text"
+                                          :text (format "Emacs tool reply failed: %s"
+                                                        (error-message-string err))))))))))
       t)
      (t nil))))
 

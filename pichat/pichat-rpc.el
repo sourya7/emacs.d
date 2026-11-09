@@ -68,15 +68,34 @@ variable supplies the complete process command.  A later `--model' in
   :type '(repeat string)
   :group 'pichat)
 
+(defconst pichat-rpc-bundled-bridge
+  (expand-file-name "bridge/pichat-bridge.ts"
+                    (file-name-directory (or load-file-name buffer-file-name)))
+  "Bundled PiChat bridge, loaded automatically when Emacs tools are selected.")
+
+(defun pichat-rpc--bridge-configured-p ()
+  "Return non-nil when configured Pi arguments already load a PiChat bridge."
+  (cl-some (lambda (arg) (and (stringp arg) (string-match-p "pichat-bridge" arg)))
+           (append pichat-rpc-command pichat-pi-default-args
+                   (bound-and-true-p pichat-pi-extra-args))))
+
+(defun pichat-rpc-bridge-file (transport &optional snapshot)
+  "Return the bridge file to load for TRANSPORT and tool SNAPSHOT, or nil.
+`pichat-bridge-extension-file' always wins.  Otherwise the bundled bridge is
+loaded when SNAPSHOT selects Emacs-defined tools and no configured Pi
+argument already loads one.  The bridge is local-only."
+  (unless (and transport (eq (pichat-transport-kind transport) 'ssh))
+    (or (bound-and-true-p pichat-bridge-extension-file)
+        (and (plist-get snapshot :emacs)
+             (not (pichat-rpc--bridge-configured-p))
+             (file-exists-p pichat-rpc-bundled-bridge)
+             pichat-rpc-bundled-bridge))))
+
 (defun pichat-rpc-bridge-p (transport)
-  "Return non-nil when a runtime on TRANSPORT loads the PiChat bridge.
-The bridge is local-only; it is loaded by `pichat-bridge-extension-file' or
-by a configured Pi argument naming pichat-bridge."
+  "Return non-nil when a runtime on TRANSPORT can load the PiChat bridge."
   (and (not (and transport (eq (pichat-transport-kind transport) 'ssh)))
-       (or (bound-and-true-p pichat-bridge-extension-file)
-           (cl-some (lambda (arg) (and (stringp arg) (string-match-p "pichat-bridge" arg)))
-                    (append pichat-rpc-command pichat-pi-default-args
-                            (bound-and-true-p pichat-pi-extra-args))))
+       (or (pichat-rpc-bridge-file transport '(:emacs t))
+           (pichat-rpc--bridge-configured-p))
        t))
 
 (defcustom pichat-bridge-extension-file nil
@@ -255,8 +274,8 @@ The session snapshot controls `--no-session', preset flags and the model."
                   (list "--model" pichat-default-model))
                 (when (and (not remote-p) pichat-pi-session-dir)
                   (list "--session-dir" pichat-pi-session-dir))
-                (when (and (not remote-p) pichat-bridge-extension-file)
-                  (list "-e" pichat-bridge-extension-file))
+                (when-let* ((bridge (pichat-rpc-bridge-file transport tool-snapshot)))
+                  (list "-e" bridge))
                 (when (eq persistence 'ephemeral)
                   (list "--no-session"))
                 (unless remote-p pichat-pi-extra-args)
@@ -912,7 +931,15 @@ must not update public state or become conversation/prompt acceptance events."
       (pichat-emit session 'rpc-event
                    :raw event :normalized-event normalized))
     (when (pichat-rpc--dispatch-current-p session)
-      (pichat-emit session normalized :raw event))))
+      ;; Bridge startup must work before a chat buffer exists.  Answer here,
+      ;; not through the view's handler; retain the generic event above, but
+      ;; do not deliver a second, duplicate reply through the view.
+      (unless (and (eq normalized 'extension-ui-request)
+                   (member (plist-get event :method) '("input" "editor"))
+                   (progn (require 'pichat-bridge-transport)
+                          (pichat-bridge-transport-startup-reply event session))
+                   (pichat-bridge-transport-handle session event))
+        (pichat-emit session normalized :raw event)))))
 
 (defun pichat-rpc--write-line (session line)
   "Write LINE respecting transport readiness and initial tool verification."
@@ -964,10 +991,13 @@ CALLBACK and ERROR-CALLBACK receive (RESPONSE SESSION).  Return request id."
     (pichat-rpc--write-line session line)))
 
 (defun pichat-rpc-extension-ui-value (session request-id value)
-  "Respond to extension UI REQUEST-ID with string VALUE."
-  (pichat-rpc-send-notification session (list :type "extension_ui_response"
-                                              :id request-id
-                                              :value value)))
+  "Respond to extension UI REQUEST-ID with string VALUE.
+Serialized JSON may arrive as UTF-8 bytes; decode before embedding VALUE
+in the outer RPC object, whose serializer requires character strings."
+  (pichat-rpc-send-notification
+   session (list :type "extension_ui_response" :id request-id
+                 :value (if (multibyte-string-p value) value
+                          (decode-coding-string value 'utf-8)))))
 
 (defun pichat-rpc-extension-ui-confirm (session request-id confirmed)
   "Respond to extension UI REQUEST-ID with CONFIRMED boolean."

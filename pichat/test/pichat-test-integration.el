@@ -1120,36 +1120,24 @@
           (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
   (ert-deftest pichat-integration-bridge-rejects-incompatible-protocol-version ()
-    (pichat-test-with-integration-session
-        (session :no-session t
-                 :extensions (list pichat-test-bridge-extension)
-                 :script '(:turns []))
-      (let ((pichat-chat-stop-session-on-kill nil)
-            (original (symbol-function 'pichat-bridge-transport-handle))
-            buffer)
-        (unwind-protect
-            (progn
-              (setq buffer (pichat-chat-open session))
-              (cl-letf (((symbol-function 'pichat-bridge-transport-handle)
-                         (lambda (s raw)
-                           (if (equal pichat-bridge-transport-handshake-title
-                                      (plist-get raw :title))
-                               (progn
-                                 (pichat-rpc-extension-ui-value
-                                  s (plist-get raw :id)
-                                  "{\"protocolVersion\":999}")
-                                 t)
-                             (funcall original s raw)))))
-                (pichat-test-rpc-call session "prompt"
-                                      (list :message "/pichat-sync-tools")))
-              (pichat-test-wait-until
-               (lambda ()
-                 (with-current-buffer buffer
-                   (equal "incompatible-protocol"
-                          (gethash "pichat-bridge"
-                                   pichat-chat--extension-statuses))))
-               3 "bridge protocol rejection"))
-          (when (buffer-live-p buffer) (kill-buffer buffer))))))
+    ;; Install the incompatible reply before startup: startup now succeeds
+    ;; without a chat view, rather than timing out until the first prompt.
+    (let ((original (symbol-function 'pichat-bridge-transport-startup-reply)))
+      (cl-letf (((symbol-function 'pichat-bridge-transport-startup-reply)
+                 (lambda (raw &optional session)
+                   (if (equal pichat-bridge-transport-handshake-title (plist-get raw :title))
+                       "{\"protocolVersion\":999}"
+                     (funcall original raw session)))))
+        (pichat-test-with-integration-session
+            (session :no-session t
+                     :extensions (list pichat-test-bridge-extension)
+                     :script '(:turns []))
+          (pichat-test-wait-until
+           (lambda ()
+             (cl-find-if (lambda (event)
+                           (equal "incompatible-protocol" (plist-get event :statusText)))
+                         (pichat-session-event-log session)))
+           3 "bridge protocol rejection")))))
 
   (ert-deftest pichat-integration-bridge-preserves-emacs-tool-schema ()
     (pichat-test-with-integration-session
@@ -2217,6 +2205,27 @@
                 (should (car result))
                 (pichat-test-prompt-and-wait session "after bridge restart")))
           (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+  (ert-deftest pichat-integration-bridge-startup-without-chat-buffer ()
+    ;; Startup replies must not depend on opening the chat view.
+    (pichat-test-with-integration-session
+        (session :preset 'manual
+                 :selection '(:builtins nil :emacs ("pichat_test_headless"))
+                 :before-start
+                 (pichat-define-tool pichat_test_headless () "ready")
+                 :script '(:turns [(:expectTool (:name "pichat_test_headless")
+                                    :text "ready")]))
+      (should-not (buffer-live-p (pichat-session-buffer session)))
+      (pichat-test-wait-until
+       (lambda ()
+         (cl-find-if (lambda (event)
+                       (equal "synchronized:1" (plist-get event :statusText)))
+                     (pichat-session-event-log session)))
+       8 (format "bridge readiness without a chat view: %S" (pichat-session-event-log session)))
+      (should-not (cl-find-if (lambda (event)
+                               (equal "incompatible-protocol" (plist-get event :statusText)))
+                             (pichat-session-event-log session)))
+      (pichat-test-prompt-and-wait session "check tool")))
 
   (ert-deftest pichat-integration-reconfigure-replaces-emacs-tool-selection ()
     ;; Confirmed reconfiguration is the only way to change a live runtime's

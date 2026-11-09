@@ -176,7 +176,8 @@ Derive the HTTPS host and management key from the unique auth-source
 entry with login mankey.  Provider OAuth credentials stay on the proxy server.
 Requests run asynchronously; invoking again supersedes older results.
 DISPLAY-POLICY defaults to `my/cliproxy-usage-display-policy': `report'
-shows the usage buffer, while `header-only' only publishes the shared cache."
+shows the usage buffer, while `header-only' publishes the shared cache
+and messages the next reset times."
   (interactive)
   (let* ((generation (cl-incf my/cliproxy-usage--generation))
          (policy (or display-policy my/cliproxy-usage-display-policy))
@@ -235,7 +236,21 @@ shows the usage buffer, while `header-only' only publishes the shared cache."
                                 ;; An update hook may itself start a new request.
                                 (when (= generation my/cliproxy-usage--generation)
                                   (if (eq policy 'header-only)
-                                      (message "Codex quota updated (account-wide, last fetched)")
+                                      (message
+                                       "Codex resets: %s"
+                                       (mapconcat
+                                        (lambda (window)
+                                          (format
+                                           "%s: %s"
+                                           (plist-get window :label)
+                                           (if-let* ((reset (plist-get window :reset-at)))
+                                               (format-time-string
+                                                "%Y-%m-%d %H:%M %Z"
+                                                (seconds-to-time reset))
+                                             "not reported")))
+                                        (plist-get (my/cliproxy-usage-snapshot)
+                                                   :windows)
+                                        "; "))
                                     (my/cliproxy-usage--display))))
                             (error (message "CLIProxyAPI: could not process quota response")))
                         (message "CLIProxyAPI: Codex quota request failed (HTTP %s)"

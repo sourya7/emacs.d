@@ -126,6 +126,44 @@ REQUESTS are ordered plists containing :path, :data and :callback."
       (cliproxy-test-quota-reply (nth 3 requests) (cliproxy-test-body)))
     (should (= (length displays) 1))))
 
+(ert-deftest cliproxy-chat-completion-messages-each-reset-time ()
+  (cliproxy-test-with-requests
+    (with-temp-buffer
+      (pichat-chat-mode)
+      (call-interactively #'my/cliproxy-usage))
+    (cliproxy-test-reply (car requests) cliproxy-test-credentials)
+    (let ((primary (alist-get 'rate_limit (cliproxy-test-body)))
+          (secondary (alist-get 'rate_limit (cliproxy-test-body 60 t)))
+          messages)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format-string &rest args)
+                   (push (apply #'format format-string args) messages))))
+        ;; Completion runs after the originating chat has died.
+        (cliproxy-test-quota-reply
+         (cadr requests) `((rate_limit . ,(append primary secondary)))))
+      (let ((reset (format-time-string "%Y-%m-%d %H:%M %Z"
+                                       (seconds-to-time 1900000000))))
+        (should (equal messages
+                       (list (format "Codex resets: 5-hour: %s; Weekly: %s"
+                                     reset reset))))))
+    (should-not displays)))
+
+(ert-deftest cliproxy-chat-completion-does-not-invent-missing-reset-times ()
+  (cliproxy-test-with-requests
+    (with-temp-buffer
+      (pichat-chat-mode)
+      (call-interactively #'my/cliproxy-usage))
+    (cliproxy-test-reply (car requests) cliproxy-test-credentials)
+    (let (messages)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format-string &rest args)
+                   (push (apply #'format format-string args) messages))))
+        (cliproxy-test-quota-reply
+         (cadr requests)
+         '((rate_limit . ((secondary_window . ((used_percent . 0))))))))
+      (should (equal messages '("Codex resets: Secondary: not reported"))))
+    (should-not displays)))
+
 (ert-deftest cliproxy-newest-request-alone-may-publish-at-both-stages ()
   (cliproxy-test-with-requests
     (my/cliproxy-usage 'header-only) ; request 0, old credentials

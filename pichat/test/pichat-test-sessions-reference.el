@@ -12,6 +12,70 @@
 
 ;;; Session, scope, reference, and UI fixture tests
 
+(ert-deftest pichat-sessions-basic-entry-points-keep-archive-adapters-unloaded ()
+  (pichat-test-eval-in-fresh-emacs
+   '(progn
+      (require 'pichat-sessions)
+      (let ((file "/sanitized/session.jsonl")
+            (cwd "/sanitized/project/")
+            selected opened switched)
+        (cl-letf (((symbol-function 'pichat-session-current) (lambda () nil))
+                  ((symbol-function 'pichat-sessions--choose-basic-file)
+                   (lambda (&rest _) (list file cwd '(:session-id "saved"))))
+                  ((symbol-function 'pichat-sessions-open-file-independently)
+                   (lambda (file &rest args) (setq opened (cons file args))))
+                  ((symbol-function 'pichat-sessions-switch-file)
+                   (lambda (file cwd &rest _) (setq switched (list file cwd)))))
+          (pichat-sessions-select-file (lambda (value) (setq selected value))
+                                       :basic t)
+          (should (equal file (plist-get selected :file)))
+          (should (equal "saved" (plist-get selected :session-id)))
+          (should (eq 'local (plist-get selected :transport-id)))
+          (pichat-sessions-browse-files t)
+          (should (equal file (car opened)))
+          (should (equal cwd (plist-get (cdr opened) :cwd)))
+          (pichat-sessions-switch-files t)
+          (should (equal (list file cwd) switched)))
+        (should-not (featurep 'pichat-archive))
+        (should-not (featurep 'pichat-consult))))))
+
+(ert-deftest pichat-sessions-archive-discovery-loads-without-consult ()
+  (pichat-test-eval-in-fresh-emacs
+   '(progn
+      (require 'pichat-sessions)
+      (should-not (featurep 'pichat-archive))
+      (let (failure)
+        (pichat-archive-discover
+         nil (current-buffer)
+         (lambda (_) (ert-fail "No archive capability should exist"))
+         (lambda (value) (setq failure value)))
+        (should (eq 'no-live-session (plist-get failure :reason))))
+      (should (featurep 'pichat-archive))
+      (should-not (featurep 'pichat-consult))
+      (should-not (featurep 'consult)))))
+
+(ert-deftest pichat-sessions-first-rich-browse-loads-adapter-and-falls-back-once ()
+  (pichat-test-eval-in-fresh-emacs
+   '(progn
+      (require 'pichat-sessions)
+      (should-not (featurep 'pichat-consult))
+      ;; Missing Node forces the ordinary basic fallback, whether or not this
+      ;; test run has Consult installed.  No provider/helper process is started.
+      (setq pichat-archive-node-program "/missing/pichat-test-node")
+      (let ((choices 0) selected)
+        (cl-letf (((symbol-function 'pichat-session-current) (lambda () nil))
+                  ((symbol-function 'pichat-sessions--choose-basic-file)
+                   (lambda (&rest _)
+                     (cl-incf choices)
+                     '("/sanitized/session.jsonl" "/sanitized/project/"))))
+          (pichat-sessions-select-file (lambda (value) (setq selected value))))
+        (should (= 1 choices))
+        (should (equal "/sanitized/session.jsonl" (plist-get selected :file))))
+      (should (featurep 'pichat-consult))
+      (should (featurep 'pichat-archive))
+      (should-not pichat-archive--processes)
+      (should-not (featurep 'pichat-jobs)))))
+
 (ert-deftest pichat-chat-new-session-cancellation-does-not-refresh-or-claim-success ()
   (let ((session (pichat-session-make))
         callback

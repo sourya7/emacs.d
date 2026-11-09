@@ -36,6 +36,25 @@
   (expand-file-name "fixtures/" pichat-test-directory)
   "Directory containing sanitized PiChat test fixtures.")
 
+(defun pichat-test-eval-in-fresh-emacs (form)
+  "Evaluate FORM in a fresh batch Emacs with this suite's dependency paths.
+Assert successful exit, reporting child output on failure.  No loaded features
+or user configuration are inherited."
+  (with-temp-buffer
+    (let ((status
+           (apply #'call-process
+                  (expand-file-name invocation-name invocation-directory)
+                  nil (current-buffer) nil "-Q" "--batch"
+                  (append
+                   (cl-loop for directory in load-path
+                            when (and directory (file-directory-p directory))
+                            append (list "-L" directory))
+                   (list "--eval"
+                         (prin1-to-string
+                          `(progn (require 'ert) (require 'cl-lib) ,form)))))))
+      (ert-info ((buffer-string))
+        (should (equal status 0))))))
+
 (defun pichat-test-read-json-fixture (name)
   "Read sanitized JSON fixture NAME as plists and lists."
   (with-temp-buffer

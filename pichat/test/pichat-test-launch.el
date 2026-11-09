@@ -8,6 +8,48 @@
 
 (require 'pichat-test-support)
 
+(ert-deftest pichat-launch-and-history-load-without-saved-session-adapters ()
+  ;; The suite itself loads optional adapters, so every entry starts cold.
+  (dolist (entry '(pichat pichat-sessions))
+    (pichat-test-eval-in-fresh-emacs
+     `(progn
+        (require ',entry)
+        (with-temp-buffer (pichat-sessions-mode))
+        ,@(when (eq entry 'pichat)
+            '((with-temp-buffer (pichat-chat-mode))
+              (should (commandp #'pichat))
+              (should (commandp #'pichat-launch))
+              (dolist (command '(pichat-archive-reset
+                                 pichat-consult-load-session
+                                 pichat-consult-switch-session
+                                 pichat-consult-open-session-independently
+                                 pichat-consult-jump-to-match
+                                 pichat-consult-show-relations
+                                 pichat-consult-show-selected-relations
+                                 pichat-consult-select-session))
+                (should (commandp command)))))
+        (dolist (command '(pichat-sessions-list pichat-sessions-browse-files
+                           pichat-sessions-switch-files
+                           pichat-sessions-browse-related))
+          (should (commandp command)))
+        (dolist (feature '(pichat-archive pichat-consult consult
+                          pichat-jobs pichat-job-executor))
+          (should-not (featurep feature)))))))
+
+(ert-deftest pichat-launch-optional-commands-load-their-owning-adapters ()
+  (pichat-test-eval-in-fresh-emacs
+   '(progn
+      (require 'pichat)
+      (should-not (featurep 'pichat-archive))
+      (call-interactively #'pichat-archive-reset)
+      (should (featurep 'pichat-archive))
+      (should-not (featurep 'pichat-consult))
+      ;; An invalid direct action loads its owner, then fails before any work.
+      (should-error (pichat-consult-select-session "") :type 'user-error)
+      (should (featurep 'pichat-consult))
+      (should-not pichat-archive--processes)
+      (should-not (featurep 'pichat-jobs)))))
+
 (ert-deftest pichat-launch-preset-reader-does-not-filter-to-current-preset ()
   (let ((pichat-presets '((standard :description "Default tools")
                           (review :description "Read-only tools"))))

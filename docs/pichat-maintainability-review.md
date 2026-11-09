@@ -700,6 +700,8 @@ This is not proof of a startup performance problem; no load-time benchmark was r
 
 Use Emacs autoloads and `with-eval-after-load` for adapters. Preserve independent entry-point loading. **Pass 3 checked all 51 production modules with separate `emacs -Q --batch -L pichat` require invocations: all loaded successfully.** This narrows the finding to coupling/load footprint, not an existing load-order failure. It does not test interactive commands, compilation, or startup latency. Do not claim that lazy loading alone creates clean APIs: ARCH-01 addresses the cross-module calls that autoloads cannot fix.
 
+**W18 resolution (2026-11-09): optional archive/Consult load boundary separated.** Core no longer requires archive or Consult presentation; Session History/basic completion replace their archive dependency with an independently callable discovery autoload. Rich browsing retains the existing availability check and explicit normalized capability/callback inputs; no private history state was moved into an adapter. Cold-load regressions cover core/chat/history, basic selection/open/switch, discovery without Consult, missing-Node fallback, and late Embark setup in both load orders. Archive/Consult suites now require their subjects explicitly instead of relying on core side effects. Session History and saved-file services still share a module; launch/reconfiguration presentation and lifecycle remain coupled. Those further splits, Jobs initialization and adjacent safety findings are not part of W18. No startup benchmark or speedup is claimed.
+
 ### ARCH-06 — Keep the existing backend/event mechanisms modest
 
 **Priority: medium policy decision. Evidence: inspected implementations.**

@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'pichat-test-support)
+(require 'pichat-archive)
 
 (defun pichat-test-archive--metadata (&rest overrides)
   "Return complete raw session metadata with OVERRIDES."

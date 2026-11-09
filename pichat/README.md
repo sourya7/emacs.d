@@ -467,7 +467,15 @@ chat layer; orchestration supplies source tokens, markers, block tables, and the
 prompt replacement callback. `pichat-archive.el` owns exact-RPC
 capability discovery, helper provenance, process execution, and protocol
 normalization without depending on Consult or querying SQLite; `pichat-consult.el`
-consumes only normalized archive records. The chat layer owns event orchestration
+consumes only normalized archive records. Archive/Consult browsing is loaded on
+demand, not by requiring `pichat` or initializing a chat or Session History.
+Basic saved-session completion bypasses both modules. Rich browsing loads the
+adapter at its availability check; archive discovery is independently autoloaded
+and does not depend on Consult presentation. Embark actions register when both
+packages have loaded, in either order. This is a dependency boundary, not a
+startup-speed claim. Session History and saved-file services still share
+`pichat-sessions.el`; launch/reconfiguration UI remains in `pichat.el`.
+The chat layer owns event orchestration
 and source-scoped presentation metadata (tool/activity/skill choices, auxiliary
 details and enrichment). A shared reset/snapshot/restore boundary owns those
 tables; full and focused projection transactions retain their distinct text,

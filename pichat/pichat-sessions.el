@@ -17,8 +17,11 @@
 (require 'pichat-render)
 (require 'pichat-path)
 (require 'pichat-view)
-(require 'pichat-archive)
 (require 'pichat-chat-diagnostics)
+
+;; Basic completion and Session History do not need archive services.  Keep
+;; discovery callable independently, without relying on Consult to load it.
+(autoload 'pichat-archive-discover "pichat-archive" nil nil)
 
 (declare-function pichat-tool-runtime-verify "pichat-tool-runtime" (session callback))
 (declare-function pichat-start-session "pichat"
@@ -36,7 +39,8 @@
 (declare-function pichat-consult-available-p "pichat-consult")
 (declare-function pichat-consult-sessions
                   "pichat-consult"
-                  (capability &optional initial selection-function))
+                  (capability &optional initial selection-function
+                              selection-only jump-function))
 (declare-function pichat-consult-show-current-relations
                   "pichat-consult" (capability session))
 

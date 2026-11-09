@@ -24,13 +24,21 @@
 (require 'pichat-chat)
 (require 'pichat-reference)
 (require 'pichat-sessions)
-(require 'pichat-archive)
-(require 'pichat-consult)
 (require 'pichat-commands)
 (require 'pichat-approval)
 (require 'pichat-permissions)
 (require 'pichat-tool-bridge)
 (require 'pichat-bridge-transport)
+
+;; Preserve direct command entry without loading saved-session adapters.
+(autoload 'pichat-archive-reset "pichat-archive" nil t)
+(autoload 'pichat-consult-load-session "pichat-consult" nil t)
+(autoload 'pichat-consult-switch-session "pichat-consult" nil t)
+(autoload 'pichat-consult-open-session-independently "pichat-consult" nil t)
+(autoload 'pichat-consult-jump-to-match "pichat-consult" nil t)
+(autoload 'pichat-consult-show-relations "pichat-consult" nil t)
+(autoload 'pichat-consult-show-selected-relations "pichat-consult" nil t)
+(autoload 'pichat-consult-select-session "pichat-consult" nil t)
 
 (defconst pichat-directory
   (file-name-directory (or load-file-name buffer-file-name))

@@ -7,6 +7,34 @@
 ;;; Code:
 
 (require 'pichat-test-support)
+(require 'pichat-consult)
+
+(ert-deftest pichat-consult-on-demand-load-registers-embark-in-either-order ()
+  (skip-unless (and (require 'consult nil t) (require 'embark nil t)))
+  (dolist (embark-first '(nil t))
+    (pichat-test-eval-in-fresh-emacs
+     `(progn
+        (require 'pichat)
+        (should-not (featurep 'pichat-consult))
+        ,@(when embark-first '((require 'embark)))
+        ;; Only availability is tested; never start a helper or discovery probe.
+        (setq pichat-archive-node-program
+              (expand-file-name invocation-name invocation-directory))
+        (should (pichat-sessions--consult-available-p))
+        (require 'embark)
+        (dolist (category '(pichat-session pichat-session-selection
+                            pichat-session-independent pichat-session-switch))
+          (should (keymapp (symbol-value (alist-get category embark-keymap-alist)))))
+        (should (memq #'pichat-consult--embark-session-action
+                      (alist-get 'pichat-consult-load-session
+                                 embark-around-action-hooks)))
+        (should (eq #'pichat-consult-select-session
+                    (lookup-key pichat-consult-session-selection-action-map
+                                (kbd "RET"))))
+        (should-not (lookup-key pichat-consult-session-selection-action-map
+                                (kbd "o")))
+        (should-not pichat-archive--processes)
+        (should-not (featurep 'pichat-jobs))))))
 
 (ert-deftest pichat-consult-translates-fields-to-conservative-fts-argv ()
   (let* ((options (pichat-consult--query-options

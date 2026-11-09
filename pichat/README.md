@@ -128,8 +128,8 @@ Two boolean options control the built-in presentation:
 
 Context counts omit the `Context` prefix and percentage by default. The latest
 extension `usage` status appears beside them when it fits, instead of in the
-buffer body. A leading `codex ` is omitted; the tooltip retains the original
-status text. Other extension statuses remain in the body.
+buffer body. A leading `codex `, `claude `, or `go ` is omitted; the tooltip
+retains the original status text. Other extension statuses remain in the body.
 
 Set either option to nil to hide it even when space is available. Set them globally
 or buffer-locally; width fallback is automatic, with no device breakpoints.

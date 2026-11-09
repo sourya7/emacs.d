@@ -1169,7 +1169,8 @@ performs no acquisition and updates inactive windows showing the chat too."
          (status (and (hash-table-p pichat-chat--extension-statuses)
                       (gethash "usage" pichat-chat--extension-statuses)))
          (allowance (and status
-                         (propertize (string-remove-prefix "codex " status)
+                         (propertize (replace-regexp-in-string
+                                      "\\`\\(?:codex\\|claude\\|go\\) " "" status)
                                      'help-echo status)))
          (combined (and allowance (concat allowance " · " right)))
          (right (if (and combined (<= (string-width combined) width))

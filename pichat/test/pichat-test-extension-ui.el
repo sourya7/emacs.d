@@ -97,6 +97,7 @@
               (setq-local pichat-chat-header-show-directory nil)
               (let ((before (buffer-string)))
                 (dolist (status '("checking" "codex 82% 5h 59% wk"
+                                  "claude 75% 5h · 92% wk" "go 100% roll · 68% mo"
                                   "other 42%" nil))
                   (pichat-chat--on-extension-ui-request
                    session 'extension-ui-request
@@ -110,7 +111,11 @@
                                   session (selected-window)))))
                       (should (equal text
                                      (if status
-                                         (concat (string-remove-prefix "codex " status)
+                                         (concat (cond
+                                                  ((string-prefix-p "codex " status) (substring status 6))
+                                                  ((string-prefix-p "claude " status) (substring status 7))
+                                                  ((string-prefix-p "go " status) (substring status 3))
+                                                  (t status))
                                                  " · 0/500k")
                                        "0/500k")))
                       (when status

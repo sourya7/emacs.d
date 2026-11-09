@@ -22,7 +22,6 @@
    ;ruby
    ;clojure
    tools
-   cliproxy-usage
    consult-atuin
    go-template-mode
    helm-yaml-mode

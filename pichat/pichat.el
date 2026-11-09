@@ -275,6 +275,8 @@ never prevents restoration, but a later choice in SESSION's scope does."
     (when (and (pichat-session-restart-operation session)
                (pichat-session-alive-p session))
       (user-error "Stop the restarting PiChat runtime before forgetting it"))
+    (when (pichat-reconfigure-source-claim session)
+      (user-error "Recover the restart or confirm all Pi writer exits before forgetting it"))
     (pichat-reconfigure-cancel-operation session "Runtime forgotten")
     (pichat-clear-default-session session)
     (let ((runtime-id (pichat-session-runtime-id session)))
@@ -450,21 +452,19 @@ session over the global `pichat-current-session'."
           (or (file-remote-p canonical 'localname) canonical))))
 
 (defun pichat--selected-file-conflict (key)
-  "Return a managed live runtime already writing KEY, if any."
+  "Return a managed runtime claiming KEY, including uncertain restart writers."
   (cl-find-if
    (lambda (session)
-     (let* ((operation (pichat-session-restart-operation session))
-            (restarting (memq (plist-get operation :phase)
-                             '(preflight stopping starting loading synchronizing)))
-            (file (if restarting
-                      (plist-get (plist-get operation :origin) :session-file)
-                    (pichat-session-session-file session))))
-       (and (or restarting (pichat-session-alive-p session))
-            file
-            (condition-case nil
-                (equal key (pichat--selected-file-key
-                            (pichat-session-transport session) file))
-              (error nil)))))
+     (let ((claim (pichat-reconfigure-source-claim session)))
+       (if (plist-get claim :key)
+           (equal key (plist-get claim :key))
+         (and (pichat-session-alive-p session)
+              (pichat-session-session-file session)
+              (condition-case nil
+                  (equal key (pichat--selected-file-key
+                              (pichat-session-transport session)
+                              (pichat-session-session-file session)))
+                (error nil))))))
    (pichat-session-list)))
 
 (defun pichat--selected-file-reserved-p (key)

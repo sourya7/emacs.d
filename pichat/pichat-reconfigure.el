@@ -296,6 +296,25 @@ It must be repeated immediately before a restart transaction stops Pi."
                   (cl-every #'pichat-process-lifetime-confirmed-p
                             (plist-get operation :shutdown-obligations)))))))
 
+(defun pichat-reconfigure-source-claim (session)
+  "Return SESSION's retained restart source claim, or nil.
+The plist contains the captured transport-qualified `:key' and `:uncertain'
+when any SSH writer lacks verified exit evidence.  Active attempts also claim
+that key between confirmed shutdown and replacement commit.  Failed attempts
+release it only after all exits are verified, not when their endpoints die.
+This query performs no file I/O and does not depend on chat/attempt liveness."
+  (when-let* ((operation (pichat-session-restart-operation session)))
+    (let ((uncertain
+           (and (plist-get operation :transport)
+                (eq (pichat-transport-kind (plist-get operation :transport)) 'ssh)
+                (cl-some (lambda (process)
+                           (not (pichat-process-lifetime-confirmed-p process)))
+                         (plist-get operation :shutdown-obligations)))))
+      (when (or uncertain
+                (memq (plist-get operation :phase)
+                      '(preflight stopping starting loading synchronizing)))
+        (list :key (plist-get operation :source-key) :uncertain uncertain)))))
+
 (defun pichat-reconfigure--prepare-shutdown (operation recovery continuation)
   "Prepare exit observers before stopping any process for OPERATION.
 RECOVERY allows already-absent lifetimes, never unknown identities.  Call
@@ -942,6 +961,12 @@ The launcher enters this operation only after explicit confirmation."
                  (not (pichat-session-restart-operation session))
                  (pichat-reconfigure-origin-current-p origin))
       (user-error "Runtime or conversation changed; reopen reconfiguration"))
+    ;; Resolve before installing the operation or stopping Pi.  Admission must
+    ;; not reconnect to an uncertain target just to recover this source key.
+    (when-let* ((transport (plist-get operation :transport))
+                (file (plist-get origin :session-file))
+                ((and (stringp file) (file-name-absolute-p file))))
+      (plist-put operation :source-key (pichat--selected-file-key transport file)))
     (setf (pichat-session-restart-operation session) operation)
     (let ((pichat-rpc--operation-token token))
       (pichat-reconfigure-request-preflight

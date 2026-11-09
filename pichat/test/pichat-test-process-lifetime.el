@@ -94,6 +94,9 @@
                            (plist-get (pichat-session-restart-operation session)
                                       :shutdown-obligations))))
         (pichat-reconfigure--cancel-observers operation)
+        ;; The fixture owns this local child; retire synthetic restart state
+        ;; before teardown so the uncertainty guard cannot leak its chat.
+        (setf (pichat-session-restart-operation session) nil)
         (when (buffer-live-p buffer)
           (let ((pichat-chat-stop-session-on-kill nil)) (kill-buffer buffer)))))))
 

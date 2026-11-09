@@ -586,11 +586,11 @@ menu keeps the choice short and shows the saved title, ID, cwd and resolved
 owner scope in full-width details above the action; loading it does not move
 the process's working directory to that cwd.
 Selected saved sessions require persistent storage and the same target as the
-selected file. Changed target/path context, missing files, and live PiChat
-runtimes already hosting the file block a second writer; concurrent PiChat
-launches reserve the file until synchronization succeeds or fails. This local
-managed-runtime check cannot detect external Pi processes. Canceling the picker
-leaves the prior selection untouched. The ordinary saved-session browser still
+selected file. Changed target/path context, missing files, and PiChat runtimes
+hosting or retaining an uncertain restart writer claim for the file block a
+second writer; concurrent PiChat launches reserve the file until synchronization
+succeeds or fails. This Emacs-local managed-runtime check cannot detect external
+Pi processes. Canceling the picker leaves the prior selection untouched. The ordinary saved-session browser still
 uses its own independent-open ownership and actions.
 
 From an owning chat, `r` opens **Reconfigure this runtime**. The menu captures
@@ -852,9 +852,11 @@ independently opened saved sessions are additional runtimes and do not replace
 that preferred entry unless
 `m` is used in the manager. Stopped, failed, and unexpectedly ended runtimes
 remain inspectable until explicitly forgotten. Killing a chat retains the
-existing `pichat-chat-stop-session-on-kill` behavior and forgets that chat's
-runtime after stopping it; killing or quitting the manager never stops any
-runtime.
+existing `pichat-chat-stop-session-on-kill` behavior and, when configured,
+forgets that chat's runtime after stopping it. An uncertain SSH restart writer
+blocks both chat closure and Forget, preserving its owner and recovery snapshot
+until all writer exits are verified. Killing or quitting the manager never
+stops any runtime.
 
 Manager keys:
 
@@ -2205,8 +2207,17 @@ not synchronous TRAMP connection/file setup or connection prompts. Timeout,
 connection loss and probe failure retain the shutdown obligation and readable
 restart snapshot. Retry/restore must freshly verify every unconfirmed original
 or failed replacement process before starting another writer; Leave stopped
-also requires confirmed exit. A replacement must acquire its own verified
-identity before a saved source can load or an unwritten source can commit.
+also requires confirmed exit. The restart retains its transport-qualified
+saved-file key independently of active-attempt or endpoint liveness, without
+reconnecting during claim lookup. The launcher's selected-session admission and
+Jobs **Continue in chat** honor that claim, including after failed retry/restore
+or an explicit Stop. Forget and chat closure refuse to discard an uncertain
+writer's owner/snapshot; there is no acknowledgment bypass. Unknown writer
+identities remain blocked when automatic recovery cannot verify them. Ordinary
+verified local stopped-runtime behavior is unchanged. This does not extend the
+duplicate-writer policy of other saved-session open/switch entry points.
+A replacement must acquire its own verified identity before a saved source can
+load or an unwritten source can commit.
 Private helpers can remain on the target while shutdown is uncertain; their
 housekeeping is separate from exit confirmation. These actions never delete the
 saved session file.

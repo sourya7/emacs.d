@@ -524,6 +524,8 @@ user messages, activity groups, and tool blocks."
   (setq-local truncate-lines nil truncate-partial-width-windows nil)
   (visual-line-mode 1)
   (pichat-chat-user-ui-reset)
+  (add-hook 'kill-buffer-query-functions
+            #'pichat-chat--restart-safe-to-kill-p nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat-user-ui-reset nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--cancel-pending-ui-requests nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--cancel-live-projection nil t)
@@ -630,6 +632,19 @@ user messages, activity groups, and tool blocks."
     (setf (pichat-session-buffer pichat-chat-session) nil)
     (when (fboundp 'pichat-note-session-updated)
       (pichat-note-session-updated pichat-chat-session))))
+
+(declare-function pichat-reconfigure-source-claim "pichat-reconfigure" (session))
+
+(defun pichat-chat--restart-safe-to-kill-p ()
+  "Keep this chat and recovery snapshot while a restart writer is uncertain."
+  (if (and pichat-chat-session
+           (fboundp 'pichat-reconfigure-source-claim)
+           (plist-get (pichat-reconfigure-source-claim pichat-chat-session)
+                      :uncertain))
+      (progn
+        (message "PiChat: recover or verify all Pi writer exits before closing this chat")
+        nil)
+    t))
 
 (defun pichat-chat--cancel-restart-on-kill ()
   "Cancel a restart and stop its process when this owning chat is killed."

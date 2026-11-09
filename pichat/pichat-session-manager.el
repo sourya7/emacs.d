@@ -984,12 +984,13 @@ working directory determines the new runtime's project and display routing."
   (let ((session (pichat-session-manager--session-at-point)))
     (when (pichat-session-alive-p session)
       (user-error "Stop the PiChat runtime before forgetting it"))
+    ;; Refuse uncertain restart claims before dismantling their recovery chat.
+    (pichat-forget-session session)
     (when-let* ((buffer (pichat-session-buffer session)))
       (when (buffer-live-p buffer)
         (setf (pichat-session-buffer session) nil)
         (let ((pichat-chat-stop-session-on-kill nil))
           (kill-buffer buffer))))
-    (pichat-forget-session session)
     (pichat-session-manager-refresh)))
 
 (defun pichat-session-manager-make-default ()

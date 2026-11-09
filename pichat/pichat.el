@@ -30,6 +30,7 @@
 (require 'pichat-tool-bridge)
 (require 'pichat-bridge-transport)
 (require 'pichat-job-tools)
+(require 'pichat-chat-tools)
 
 ;; Preserve direct command entry without loading saved-session adapters.
 (autoload 'pichat-archive-reset "pichat-archive" nil t)

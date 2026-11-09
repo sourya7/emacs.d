@@ -161,6 +161,20 @@ Callers supply owned snapshots; this function does not resolve registry values."
         (pichat-session-runtime-cwd session) runtime-cwd)
   session)
 
+(defun pichat-session-model-label (session)
+  "Return SESSION's cached model as \"provider/id\", \"id\" or \"—\"."
+  (let ((model (pichat-session-model session)))
+    (if (listp model)
+        (let ((provider (plist-get model :provider))
+              (id (or (plist-get model :id)
+                      (plist-get model :modelId)
+                      (plist-get model :name))))
+          (cond
+           ((and provider id) (format "%s/%s" provider id))
+           (id (format "%s" id))
+           (t "—")))
+      (format "%s" (or model "—")))))
+
 (defun pichat-session-alive-p (session)
   "Return non-nil when SESSION is alive according to its backend."
   (pichat-backend-session-alive-p session))

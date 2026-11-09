@@ -112,20 +112,6 @@ or Bufferlo dependency."
   "Return compact display form of Pi source ID."
   (if (and (stringp id) (> (length id) 8)) (substring id 0 8) (or id "—")))
 
-(defun pichat-session-manager--model-name (session)
-  "Return full cached model name for SESSION."
-  (let ((model (pichat-session-model session)))
-    (if (listp model)
-        (let ((provider (plist-get model :provider))
-              (id (or (plist-get model :id)
-                      (plist-get model :modelId)
-                      (plist-get model :name))))
-          (cond
-           ((and provider id) (format "%s/%s" provider id))
-           (id id)
-           (t "—")))
-      (or model "—"))))
-
 (defun pichat-session-manager--owner-label (session)
   "Return immutable owner-scope label for SESSION."
   (or (pichat-session-owner-scope-label session)
@@ -274,7 +260,7 @@ or Bufferlo dependency."
     ("Preset" (if (pichat-session-preset-name session)
                   (symbol-name (pichat-session-preset-name session)) "legacy"))
     ("Target" (pichat-session-manager--target-label session))
-    ("Model" (pichat-session-manager--model-name session))
+    ("Model" (pichat-session-model-label session))
     ("ID" (string-remove-prefix "pichat-runtime-"
                                 (pichat-session-runtime-id session)))
     ("Pi source ID" (or (pichat-session-id session) "—"))
@@ -471,20 +457,6 @@ canonical chat cache while an RPC refresh is pending."
       (puthash token snapshot pichat-session-manager--preview-cache))
     snapshot))
 
-(defun pichat-session-manager--preview-model-name (session)
-  "Return the untruncated cached model label for SESSION."
-  (let ((model (pichat-session-model session)))
-    (if (listp model)
-        (let ((provider (plist-get model :provider))
-              (id (or (plist-get model :id)
-                      (plist-get model :modelId)
-                      (plist-get model :name))))
-          (cond
-           ((and provider id) (format "%s/%s" provider id))
-           (id (format "%s" id))
-           (t "—")))
-      (format "%s" (or model "—")))))
-
 (defun pichat-session-manager--render-preview (session snapshot &optional note)
   "Render SESSION and optional active-branch SNAPSHOT with NOTE."
   (let ((buffer (get-buffer-create
@@ -553,7 +525,7 @@ canonical chat cache while an RPC refresh is pending."
                                 ", appended instructions" "")))
             (insert "Tools shown are startup selections, not connection status.\n")))
         (insert (format "Model: %s\n"
-                        (pichat-session-manager--preview-model-name session)))
+                        (pichat-session-model-label session)))
         (insert (format "Scope: %s\n"
                         (pichat-session-manager--owner-label session)))
         (insert (format "Target: %s (%s)\n"

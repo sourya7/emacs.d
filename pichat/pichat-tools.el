@@ -11,10 +11,21 @@
 
 (cl-defstruct (pichat-tool (:constructor pichat-tool-create))
   name label description parameters function instructions mutating-p async-p
-  native-only-p group)
+  native-only-p group approval-summary)
 
 (defconst pichat-tools-default-group "Other"
   "Picker group for Emacs-defined tools registered without a group.")
+
+(defconst pichat-tools-text-limit 300
+  "Default maximum characters of one free-text field in a tool result.")
+
+(defconst pichat-tools-approval-summary-limit 240
+  "Maximum characters of a tool's approval summary.")
+
+(defvar pichat-tools-calling-session nil
+  "Runtime session whose Pi bridge called the running Emacs-defined tool.
+Bound by `pichat-tools-call' (and while computing an approval summary); nil
+outside bridge calls.  Tools read it to refuse acting on their own runtime.")
 
 (defvar pichat-tools-registry (make-hash-table :test #'equal)
   "Registered Emacs tools keyed by tool name.")
@@ -35,14 +46,23 @@
                    (not (string-blank-p (pichat-tool-group tool)))))
     (error "Emacs tool group must be a nonblank string: %s"
            (pichat-tool-name tool)))
+  (unless (or (null (pichat-tool-approval-summary tool))
+              (functionp (pichat-tool-approval-summary tool)))
+    (error "Emacs tool approval summary must be a function: %s"
+           (pichat-tool-name tool)))
   (puthash (pichat-tool-name tool) tool pichat-tools-registry)
   tool)
 
 (defmacro pichat-define-tool (name args &rest body)
   "Define a PiChat Emacs tool NAME.
 ARGS is a plist accepting :label, :description, :parameters, :instructions,
-:mutating, :async, :native-only and :group.  :group names the Tools picker
-group; it affects presentation and selection convenience, never approval."
+:mutating, :async, :native-only, :group and :approval-summary.  :group names
+the Tools picker group; it affects presentation and selection convenience,
+never approval.  :approval-summary is evaluated to a function (for example
+#\='my-summary) called with the call's params; it returns a short human
+description shown in the approval prompt beside the raw arguments, or nil.
+The body receives `params'; the calling runtime is
+`pichat-tools-calling-session'."
   (declare (indent 2))
   (when (plist-get args :async)
     (error "Asynchronous Emacs-defined tools are unsupported: %s" name))
@@ -61,7 +81,8 @@ group; it affects presentation and selection convenience, never approval."
          :mutating-p ,(if (plist-get args :mutating) t nil)
          :async-p ,(if (plist-get args :async) t nil)
          :native-only-p ,(if (plist-get args :native-only) t nil)
-         :group ,(plist-get args :group))))))
+         :group ,(plist-get args :group)
+         :approval-summary ,(plist-get args :approval-summary))))))
 
 (defun pichat-tools-bridge-tool (name)
   "Return registered bridge-exposable tool NAME, or nil."
@@ -155,11 +176,85 @@ this function so transports can apply their own asynchronous gate."
              (or (and session
                       (fboundp 'pichat-session-emacs-cwd)
                       (pichat-session-emacs-cwd session))
-                 default-directory)))
+                 default-directory))
+            (pichat-tools-calling-session session))
         (list :is-error nil
               :value (funcall (pichat-tool-function tool) params)))
     (error
      (list :is-error t :value (error-message-string err)))))
+
+(defun pichat-tools-approval-summary (tool params &optional session)
+  "Return TOOL's bounded one-line approval summary for PARAMS, or nil.
+SESSION is bound as `pichat-tools-calling-session'.  A failing summary
+function yields nil, so the prompt still shows the raw arguments."
+  (when-let* ((function (pichat-tool-approval-summary tool)))
+    (condition-case nil
+        (let ((pichat-tools-calling-session session))
+          (pichat-tools-display-text (funcall function params)
+                                     pichat-tools-approval-summary-limit))
+      (error nil))))
+
+;;; Helpers for tool authors
+
+(defun pichat-tools-check-params (params allowed &optional required)
+  "Validate PARAMS keys against ALLOWED and REQUIRED keywords; return PARAMS.
+Enforce this in Emacs, not only through the advertised JSON schema."
+  (unless (and (listp params) (cl-evenp (length params))
+               (cl-loop for (key) on params by #'cddr always (keywordp key)))
+    (user-error "Arguments must be a JSON object"))
+  (cl-loop for (key) on params by #'cddr
+           unless (memq key allowed)
+           do (user-error "Unknown argument: %s" (substring (symbol-name key) 1)))
+  (dolist (key required)
+    (unless (plist-member params key)
+      (user-error "Missing required argument: %s" (substring (symbol-name key) 1))))
+  params)
+
+(defun pichat-tools-count-param (params key default maximum &optional minimum)
+  "Return integer PARAMS KEY in [MINIMUM, MAXIMUM], or DEFAULT when absent.
+MINIMUM defaults to 0."
+  (let ((value (if (plist-member params key) (plist-get params key) default))
+        (minimum (or minimum 0)))
+    (unless (and (integerp value) (<= minimum value maximum))
+      (user-error "%s must be an integer from %d to %d"
+                  (substring (symbol-name key) 1) minimum maximum))
+    value))
+
+(defun pichat-tools-boolean-param (params key)
+  "Return t, nil or `absent' for boolean PARAMS KEY.
+The bridge decodes JSON false and null as nil, so both mean false here."
+  (if (not (plist-member params key)) 'absent
+    (pcase (plist-get params key)
+      ('t t)
+      ((or 'nil :false :json-false) nil)
+      (_ (user-error "%s must be true or false" (substring (symbol-name key) 1))))))
+
+(defun pichat-tools-id-param (params key what)
+  "Return PARAMS KEY as a validated record ID string described as WHAT."
+  (let ((id (plist-get params key)))
+    (unless (and (stringp id) (string-match-p "\\`[A-Za-z0-9_-]\\{1,128\\}\\'" id))
+      (user-error "%s must be %s string" (substring (symbol-name key) 1) what))
+    id))
+
+(defun pichat-tools-display-text (value &optional limit)
+  "Return string VALUE on one line, truncated to LIMIT columns, or nil.
+LIMIT defaults to `pichat-tools-text-limit'.  Truncation ends with an ellipsis."
+  (when (stringp value)
+    (truncate-string-to-width
+     (replace-regexp-in-string "[[:cntrl:]]+" " " value)
+     (or limit pichat-tools-text-limit) nil nil "…")))
+
+(defun pichat-tools-truncate (text limit)
+  "Return string TEXT cut to at most LIMIT characters, keeping line breaks.
+A cut text ends with an ellipsis; callers report truncation separately."
+  (if (> (length text) limit)
+      (concat (substring text 0 (max 0 (1- limit))) "…")
+    text))
+
+(defun pichat-tools-json (value)
+  "Encode tool result VALUE as compact JSON text.
+Use :null and :false for JSON null and false."
+  (json-serialize value :null-object :null :false-object :false))
 
 (defun pichat-tools--text (value)
   "Return VALUE with encoded UTF-8 strings decoded, recursively.
@@ -210,7 +305,8 @@ outside it is rejected before approval or execution."
       (error "Emacs tool is unavailable through the Pi bridge: %s" name))
     (json-serialize
      (if (pichat-approval-approve-p
-          name (pichat-tool-mutating-p tool) params session)
+          name (pichat-tool-mutating-p tool) params session
+          (lambda () (pichat-tools-approval-summary tool params session)))
          (pichat-tools-result-wire (pichat-tools-call tool params session))
        (list :isError t
              :content (vector (list :type "text" :text "Denied by user"))))

@@ -87,12 +87,15 @@ Return `allow', `deny', or `ask'.  An unruled non-mutating tool resolves to
     ('deny 'deny)
     (_ (if mutating-p 'ask 'allow))))
 
-(defun pichat-approval-prompt (tool-name params &optional session)
-  "Prompt for mutating TOOL-NAME with PARAMS in optional SESSION."
-  (let ((choice
+(defun pichat-approval-prompt (tool-name params &optional session summary)
+  "Prompt for mutating TOOL-NAME with PARAMS in optional SESSION.
+Optional SUMMARY is the tool's one-line description of this call, or a
+function returning it; the raw arguments are always shown too."
+  (let* ((summary (if (functionp summary) (funcall summary) summary))
+         (choice
          (completing-read
-          (format "Allow mutating Emacs tool %s with arguments %S? "
-                  tool-name params)
+          (format "Allow mutating Emacs tool %s%s with arguments %S? "
+                  tool-name (if summary (format " (%s)" summary) "") params)
           '("Allow once" "Allow for session" "Always allow"
             "Deny once" "Deny for session" "Always deny")
           nil t nil nil "Deny once")))
@@ -106,14 +109,15 @@ Return `allow', `deny', or `ask'.  An unruled non-mutating tool resolves to
       ("Always deny" (pichat-approval-set tool-name 'deny) nil)
       (_ nil))))
 
-(defun pichat-approval-approve-p (tool-name mutating-p &optional params session)
+(defun pichat-approval-approve-p (tool-name mutating-p &optional params session summary)
   "Return non-nil if Emacs TOOL-NAME with PARAMS should run in SESSION.
 Non-mutating tools are allowed unless explicitly denied.  Mutating prompts show
-arguments and support one-shot, session, and durable exact-tool decisions."
+SUMMARY (when non-nil) and arguments, and support one-shot, session, and
+durable exact-tool decisions."
   (pcase (pichat-approval-resolve tool-name mutating-p session)
     ('allow t)
     ('deny nil)
-    (_ (pichat-approval-prompt tool-name params session))))
+    (_ (pichat-approval-prompt tool-name params session summary))))
 
 (provide 'pichat-approval)
 ;;; pichat-approval.el ends here

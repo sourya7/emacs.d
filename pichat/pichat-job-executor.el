@@ -911,6 +911,18 @@ Return the new run ID without selecting its runtime or displaying a chat."
         (pichat-job-executor--changed executor)))
      (t (user-error "This run is not cancellable; inspect its recorded state")))))
 
+(defun pichat-job-executor-session-run (executor session)
+  "Return the ID of EXECUTOR's job run now executing in SESSION, or nil.
+Retired executions (finished or uncertain runs) do not count."
+  (when session
+    (catch 'found
+      (maphash (lambda (id execution)
+                 (when (and (eq session (pichat-job-execution-session execution))
+                            (not (pichat-job-execution-retired execution)))
+                   (throw 'found id)))
+               (pichat-job-executor-contexts executor))
+      nil)))
+
 (defun pichat-job-executor-recheck-exit (executor id callback)
   "Recheck exact SSH Pi exit for uncertain ID; call CALLBACK (SUCCESS REASON).
 Never releases the slot: Pi exit does not prove tool descendants stopped."

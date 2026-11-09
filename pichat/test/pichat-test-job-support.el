@@ -168,6 +168,24 @@ until BODY submits work.  Fixture teardown retires handlers before stopping."
           (pichat-jobs--owner (plist-get scope :owner)))
       (pichat-job--submission-spec))))
 
+(defun pichat-test-start-bridge-chat (directory script status emacs-tools)
+  "Start and open a real offline chat in DIRECTORY with inline provider SCRIPT.
+STATUS records script consumption; EMACS-TOOLS are the selected Emacs-defined
+tools, loaded through the repository bridge.  Return the runtime session."
+  (let* ((pichat-bridge-extension-file pichat-test-bridge-extension)
+         (process-environment
+          (append (list (concat "PICHAT_FAKE_PROVIDER_STATUS=" status)
+                        (concat "PICHAT_FAKE_PROVIDER_SCRIPT_JSON=" (json-serialize script)))
+                  process-environment))
+         (chat (pichat-start-session
+                directory nil
+                `(:preset review :tools (:builtins nil :emacs ,emacs-tools)))))
+    (pichat-test-rpc-call chat "get_state")
+    (pichat-test-rpc-call chat "set_auto_retry" (list :enabled :json-false))
+    (pichat-test-rpc-call chat "set_auto_compaction" (list :enabled :json-false))
+    (pichat-chat-open chat)
+    chat))
+
 (defun pichat-test-job-wait (store id state)
   "Wait for run ID to reach STATE in STORE with failure diagnostics."
   (pichat-test-wait-until

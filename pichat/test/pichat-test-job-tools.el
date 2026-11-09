@@ -13,8 +13,13 @@
 (require 'pichat-tool-bridge)
 
 (defconst pichat-test-job-tools-names
-  '("pichat_job_inspect" "pichat_job_schedule" "pichat_jobs_list")
+  '("pichat_job_inspect" "pichat_job_run_cancel" "pichat_job_run_inspect"
+    "pichat_job_run_now" "pichat_job_schedule" "pichat_jobs_list")
   "The Jobs group, sorted.")
+
+(defconst pichat-test-job-tools-mutating
+  '("pichat_job_run_cancel" "pichat_job_run_now" "pichat_job_schedule")
+  "Jobs tools that ask approval by default.")
 
 (defmacro pichat-test-with-job-tools (&rest body)
   "Run BODY with the Jobs tools registered over the fixture's owned store."
@@ -26,25 +31,26 @@
            (pichat-jobs--owned-store nil))
        ,@body)))
 
-(defun pichat-test-job-tool (name &optional params)
-  "Call registered Jobs tool NAME with PARAMS; return (ERRORP . DECODED-OR-TEXT)."
-  (let* ((result (pichat-tools-call (gethash name pichat-tools-registry) params))
+(defun pichat-test-job-tool (name &optional params session)
+  "Call registered Jobs tool NAME with PARAMS from optional calling SESSION.
+Return (ERRORP . DECODED-OR-TEXT)."
+  (let* ((result (pichat-tools-call (gethash name pichat-tools-registry) params session))
          (value (plist-get result :value)))
     (cons (plist-get result :is-error)
           (if (plist-get result :is-error) value
             (json-parse-string value :object-type 'plist :array-type 'list
                                :null-object nil :false-object :false)))))
 
-(defun pichat-test-job-tool-ok (name &optional params)
-  "Return NAME's decoded successful result for PARAMS."
-  (let ((result (pichat-test-job-tool name params)))
+(defun pichat-test-job-tool-ok (name &optional params session)
+  "Return NAME's decoded successful result for PARAMS from optional SESSION."
+  (let ((result (pichat-test-job-tool name params session)))
     (ert-info ((format "%S" (cdr result)))
       (should-not (car result)))
     (cdr result)))
 
-(defun pichat-test-job-tool-error (name params pattern)
-  "Assert NAME with PARAMS fails with a message matching PATTERN."
-  (let ((result (pichat-test-job-tool name params)))
+(defun pichat-test-job-tool-error (name params pattern &optional session)
+  "Assert NAME with PARAMS from optional SESSION fails matching PATTERN."
+  (let ((result (pichat-test-job-tool name params session)))
     (should (car result))
     (ert-info ((cdr result))
       (should (string-match-p pattern (cdr result))))))
@@ -66,7 +72,8 @@
         (let ((tool (cl-find name catalogue :key (lambda (entry) (plist-get entry :name))
                              :test #'equal)))
           (should (equal "Jobs" (plist-get tool :group)))
-          (should (eq (equal name "pichat_job_schedule") (plist-get tool :mutating))))))
+          (should (eq (and (member name pichat-test-job-tools-mutating) t)
+                      (plist-get tool :mutating))))))
     ;; Registration is not exposure.
     (should (equal "{\"protocolVersion\":1,\"tools\":[]}"
                    (pichat-tool-bridge-definitions-json
@@ -173,6 +180,27 @@
                                          :message)))
       (should-not (plist-get (pichat-job-record store 'jobs job) :schedule)))))
 
+(ert-deftest pichat-job-tools-accept-json-false-from-the-bridge ()
+  ;; The bridge decodes JSON false as nil, not :false.
+  (pichat-test-with-job-tools
+    (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (session (apply #'pichat-test-select-emacs-tools
+                           (pichat-session-make :cwd project-dir) pichat-test-job-tools-names))
+           (pichat-approval-policy-file (expand-file-name "approvals.el" project-dir))
+           (request (json-serialize
+                     (list :name "pichat_job_schedule"
+                           :params (list :job_id job :kind "once"
+                                         :start (+ 3600 (floor (float-time)))
+                                         :enabled :false)))))
+      (setq pichat-approval-rules '(("pichat_job_schedule" . allow)))
+      (pichat-approval-save)
+      (let ((reply (json-parse-string (pichat-tool-bridge-execute-json request session)
+                                      :object-type 'plist :array-type 'list :false-object nil)))
+        (ert-info ((format "%S" reply))
+          (should-not (plist-get reply :isError))))
+      (should (eq :false (plist-get (plist-get (pichat-job-record store 'jobs job) :schedule)
+                                    :enabled))))))
+
 (ert-deftest pichat-job-tools-validate-arguments-in-emacs ()
   (pichat-test-with-job-tools
     (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))
@@ -246,6 +274,7 @@
                    (lambda (prompt &rest _) (push prompt prompts) "Deny once")))
           (should (string-match-p "Denied by user" (format "%S" (funcall call)))))
         (should (string-match-p "pichat_job_schedule.*once" (car prompts)))
+        (should (string-match-p "(Run once at .*: “Review files” on .* in " (car prompts)))
         (should-not (plist-get (pichat-job-record store 'jobs job) :schedule))
         ;; An allow policy runs it without prompting.
         (setq pichat-approval-rules '(("pichat_job_schedule" . allow)))
@@ -255,6 +284,173 @@
           (should-not (plist-get (funcall call) :isError)))
         (should (eq t (plist-get (plist-get (pichat-job-record store 'jobs job) :schedule)
                                  :enabled)))))))
+
+(defun pichat-test-job-tools-worker (executor store job)
+  "Claim a run of saved JOB in STORE as a job worker; return (RUN-ID . SESSION).
+The execution is registered with EXECUTOR but has no process."
+  (let* ((run (pichat-job-enqueue store nil job))
+         (claim (pichat-job-claim store run))
+         (session (pichat-session-make :cwd default-directory)))
+    (puthash run (pichat-job-execution--create
+                  :executor executor :id run :token (plist-get claim :attempt)
+                  :session session)
+             (pichat-job-executor-contexts executor))
+    (cons run session)))
+
+(defun pichat-test-job-tools-finish (store run &optional evidence)
+  "Finish claimed RUN in STORE as completed, with optional EVIDENCE plist."
+  (let ((token (plist-get (pichat-job-record store 'runs run) :attempt)))
+    (pichat-job-advance store run token "running" '(:runtime-id "pichat-runtime-gone"))
+    (pichat-job-advance store run token "settling")
+    (pichat-job-advance store run token "finished"
+                        (list :result "completed" :safe-to-release t :synchronized t
+                              :summary "Stored summary"
+                              :evidence (and evidence (pichat-job-evidence-save store evidence))))))
+
+(ert-deftest pichat-job-tools-run-now-submits-like-run-job ()
+  (pichat-test-with-job-tools
+    (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (other (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (rule (list :kind "once" :start (+ 3600 (floor (float-time))))))
+      (pichat-job-executor-schedule-change executor job rule)
+      (let ((schedule (plist-get (pichat-job-record store 'jobs job) :schedule)))
+        ;; Keep submitted runs queued: no runtime starts in unit tests.
+        (cl-letf (((symbol-function 'pichat-job-executor-pump) #'ignore))
+          (let* ((first (pichat-test-job-tool-ok "pichat_job_run_now" (list :job_id job)))
+                 (run (pichat-job-record store 'runs (plist-get first :run_id))))
+            (should (equal "queued" (plist-get first :state)))
+            (should (equal job (plist-get run :job-id)))
+            (should (equal "manual" (plist-get (plist-get first :run) :trigger)))
+            (should (string-match-p "Timing is unchanged" (plist-get first :message)))
+            (should-not (plist-get first :waiting_for))
+            ;; As in Jobs, one unfinished run per saved job; the error names it.
+            (pichat-test-job-tool-error "pichat_job_run_now" (list :job_id job)
+                                        (concat "unfinished run " (plist-get run :id)
+                                                " (queued); inspect or cancel")))
+          (let ((pichat-jobs-queue-limit 1))
+            (pichat-test-job-tool-error "pichat_job_run_now" (list :job_id other) "queue is full"))
+          ;; A run waiting for a slot says why.
+          (let* ((pichat-jobs-max-concurrency 1)
+                 (active (pichat-job-enqueue store (pichat-test-job-spec project-dir))))
+            (pichat-job-claim store active)
+            (let ((waiting (pichat-test-job-tool-ok "pichat_job_run_now" (list :job_id other))))
+              (should (equal "queued" (plist-get waiting :state)))
+              (should (equal "Global concurrency limit" (plist-get waiting :waiting_for)))
+              (should (string-match-p "\\`Queued" (plist-get waiting :message))))))
+        (should (equal schedule (plist-get (pichat-job-record store 'jobs job) :schedule)))
+        (pichat-test-job-tool-error "pichat_job_run_now" '(:job_id "job-unknown") "Unknown saved job")
+        (pichat-test-job-tool-error "pichat_job_run_now" (list :job_id job :now t) "Unknown argument")))))
+
+(ert-deftest pichat-job-tools-cancel-pending-and-active-runs ()
+  (pichat-test-with-job-tools
+    (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (queued (pichat-job-enqueue store nil job))
+           (result (pichat-test-job-tool-ok "pichat_job_run_cancel" (list :run_id queued))))
+      (should (equal "finished" (plist-get result :state)))
+      (should (equal "cancelled" (plist-get result :result)))
+      (should (equal "Cancelled." (plist-get result :message)))
+      (pichat-test-job-tool-error "pichat_job_run_cancel" (list :run_id queued) "not cancellable")
+      (pichat-test-job-tool-error "pichat_job_run_cancel" '(:run_id "run-unknown") "Unknown job run")))
+  ;; An active run is asked to abort; the result does not claim it stopped.
+  (pichat-test-with-owned-job
+    (pichat-job-tools-register)
+    (let ((pichat-jobs-file (pichat-job-store-file store))
+          (pichat-jobs--executor executor)
+          (pichat-jobs--owned-store nil)
+          calls)
+      (setf (pichat-job-execution-submitted execution) t)
+      (pichat-job-executor--advance execution "running")
+      (cl-letf (((symbol-function 'pichat-job-executor--call)
+                 (lambda (_execution type &rest _) (push type calls))))
+        (let ((result (pichat-test-job-tool-ok "pichat_job_run_cancel" (list :run_id id))))
+          (should (equal '("abort") calls))
+          (should (equal "running" (plist-get result :state)))
+          (should (eq nil (plist-get result :result)))
+          (should (string-match-p "Cancellation requested.*uncertain" (plist-get result :message))))))))
+
+(ert-deftest pichat-job-tools-a-job-run-cannot-start-or-cancel-itself ()
+  (pichat-test-with-job-tools
+    (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (other (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (worker (pichat-test-job-tools-worker executor store job))
+           (run (car worker))
+           (session (cdr worker)))
+      (cl-letf (((symbol-function 'pichat-job-executor-pump) #'ignore))
+        (pichat-test-job-tool-error "pichat_job_run_now" (list :job_id job)
+                                    "this runtime's own run" session)
+        (pichat-test-job-tool-error "pichat_job_run_cancel" (list :run_id run)
+                                    "cannot cancel itself" session)
+        (should (= 1 (length (pichat-job-records store 'runs))))
+        (should (equal "starting" (plist-get (pichat-job-record store 'runs run) :state)))
+        ;; The caller may still start other saved jobs.
+        (pichat-test-job-tool-ok "pichat_job_run_now" (list :job_id other) session)))))
+
+(ert-deftest pichat-job-tools-run-inspect-reads-results-without-the-chat ()
+  (pichat-test-with-job-tools
+    (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (long (concat "# Report\n\n" (make-string 5000 ?x)))
+           (finished (car (pichat-test-job-tools-worker executor store job)))
+           fallback queued)
+      (pichat-test-job-tools-finish store finished (list :version 1 :response long :transcript "t"))
+      (setq fallback (car (pichat-test-job-tools-worker executor store job)))
+      (pichat-test-job-tools-finish store fallback)
+      (setq queued (pichat-job-enqueue store nil job))
+      ;; Finished: final response from captured evidence, bounded; no chat needed.
+      (let ((result (pichat-test-job-tool-ok "pichat_job_run_inspect" (list :run_id finished))))
+        (should (equal "finished" (plist-get (plist-get result :run) :state)))
+        (should (equal "completed" (plist-get (plist-get result :run) :result)))
+        (should (equal job (plist-get result :job_id)))
+        (should (equal "Review files" (plist-get result :title)))
+        (should (string-prefix-p "# Report\n\nxxx" (plist-get result :response)))
+        (should (= pichat-job-tools-response-limit (length (plist-get result :response))))
+        (should (eq t (plist-get result :response_truncated)))
+        (should (equal "captured evidence" (plist-get result :response_source)))
+        ;; The runtime is gone, so no runtime_id is offered.
+        (should-not (plist-member result :runtime_id))
+        (should-not (string-match-p "transcript\\|entries" (format "%S" result))))
+      ;; Without evidence the stored summary is used and labelled.
+      (let ((result (pichat-test-job-tool-ok "pichat_job_run_inspect" (list :run_id fallback))))
+        (should (equal "Stored summary" (plist-get result :response)))
+        (should (equal "stored summary" (plist-get result :response_source))))
+      ;; Missing evidence falls back too, with the error reported.
+      (let ((digest (plist-get (pichat-job-record store 'runs finished) :evidence)))
+        (delete-file (pichat-job--evidence-file store digest))
+        (let ((result (pichat-test-job-tool-ok "pichat_job_run_inspect" (list :run_id finished))))
+          (should (equal "Stored summary" (plist-get result :response)))
+          (should (string-match-p "missing or changed" (plist-get result :evidence_error)))))
+      ;; Pending runs report state and why they wait, without output.
+      (let ((result (pichat-test-job-tool-ok "pichat_job_run_inspect" (list :run_id queued))))
+        (should (equal "queued" (plist-get (plist-get result :run) :state)))
+        (should-not (plist-member result :response)))
+      (pichat-test-job-tool-error "pichat_job_run_inspect" '(:run_id "run-unknown") "Unknown job run"))))
+
+(ert-deftest pichat-job-tools-run-inspect-links-a-retained-runtime ()
+  (pichat-test-with-job-tools
+    (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (worker (pichat-test-job-tools-worker executor store job))
+           (run (car worker))
+           (session (cdr worker)))
+      (pichat-register-session session)
+      (pichat-job-advance store run (plist-get (pichat-job-record store 'runs run) :attempt)
+                          "running" (list :runtime-id (pichat-session-runtime-id session)))
+      (let ((result (pichat-test-job-tool-ok "pichat_job_run_inspect" (list :run_id run))))
+        (should (equal (pichat-session-runtime-id session) (plist-get result :runtime_id)))
+        (should-not (plist-member result :response))))))
+
+(ert-deftest pichat-job-tools-approval-names-the-job-and-run ()
+  (pichat-test-with-job-tools
+    (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (run (pichat-job-enqueue store nil job))
+           (tool (lambda (name) (gethash name pichat-tools-registry))))
+      (should (string-match-p "\\`Run now: “Review files” on .* in "
+                              (pichat-tools-approval-summary
+                               (funcall tool "pichat_job_run_now") (list :job_id job))))
+      (should (string-match-p "\\`Cancel queued run: “Review files”"
+                              (pichat-tools-approval-summary
+                               (funcall tool "pichat_job_run_cancel") (list :run_id run))))
+      ;; A bad ID cannot be summarized, but the prompt still shows arguments.
+      (should-not (pichat-tools-approval-summary
+                   (funcall tool "pichat_job_run_cancel") '(:run_id "run-unknown"))))))
 
 (when pichat-test-include-integration
   (ert-deftest pichat-integration-job-tools-bridge-manages-one-native-scheduled-occurrence ()
@@ -335,6 +531,62 @@
                     (pichat-test-job-wait store run "finished")
                     (should (equal "completed" (plist-get (pichat-job-record store 'runs run) :result)))
                     (pichat-test-assert-provider-script-consumed status-file)))))
+          (when chat
+            (ignore-errors (pichat-rpc-stop chat))
+            (when-let* ((buffer (pichat-session-buffer chat)))
+              (when (buffer-live-p buffer) (kill-buffer buffer)))))))))
+
+;; Integration: an orchestrator chat runs a saved job now, reads its result
+;; after the worker finishes, and cancels another queued run.
+(when pichat-test-include-integration
+  (ert-deftest pichat-integration-job-tools-run-now-inspect-and-cancel ()
+    (pichat-test-with-job-executor
+        (:script '(:turns [(:text "WORKER REPORT: all files reviewed")]))
+      (pichat-job-tools-register)
+      (let* ((pichat-jobs-file (pichat-job-store-file store))
+             (pichat-jobs--executor executor)
+             (pichat-jobs--owned-store nil)
+             (pichat-approval-policy-file (expand-file-name "approvals.el" project-dir))
+             (pichat-chat-stop-session-on-kill nil)
+             (job (pichat-job-save store (pichat-test-job-spec project-dir)))
+             (other (pichat-job-save store (pichat-test-job-spec project-dir)))
+             (inspect-args (expand-file-name "inspect-args.json" project-dir))
+             (cancel-args (expand-file-name "cancel-args.json" project-dir))
+             (chat-status (expand-file-name "chat-status.json" project-dir))
+             (script
+              `(:turns
+                [(:expectTool (:name "pichat_job_run_now")
+                  :toolCall (:id "run" :name "pichat_job_run_now" :arguments (:job_id ,job)))
+                 (:expectContextIncludes ["run_id" "Timing is unchanged"] :text "submitted")
+                 (:toolCall (:id "inspect" :name "pichat_job_run_inspect" :argumentsFile ,inspect-args))
+                 (:expectContextIncludes ["WORKER REPORT: all files reviewed" "captured evidence"]
+                  :toolCall (:id "cancel" :name "pichat_job_run_cancel" :argumentsFile ,cancel-args))
+                 (:expectContextIncludes "Cancelled." :text "done")]))
+             chat)
+        (setq pichat-approval-rules '(("pichat_job_run_now" . allow)
+                                      ("pichat_job_run_cancel" . allow)))
+        (pichat-approval-save)
+        (unwind-protect
+            (progn
+              (setq chat (pichat-test-start-bridge-chat project-dir script chat-status
+                                                        pichat-test-job-tools-names))
+              (pichat-test-prompt-and-wait chat "run the review job")
+              (let ((run (plist-get (seq-find (lambda (r) (equal job (plist-get r :job-id)))
+                                              (pichat-job-records store 'runs))
+                                    :id)))
+                (should run)
+                (pichat-test-job-wait store run "finished")
+                (should (equal "completed" (plist-get (pichat-job-record store 'runs run) :result)))
+                (pichat-test-assert-provider-script-consumed status-file)
+                ;; A pending run to cancel; nothing pumps until the cancel.
+                (let ((queued (pichat-job-enqueue store nil other)))
+                  (with-temp-file inspect-args (insert (json-serialize (list :run_id run))))
+                  (with-temp-file cancel-args (insert (json-serialize (list :run_id queued))))
+                  (pichat-test-prompt-and-wait chat "report and cancel the other run")
+                  (pichat-test-assert-provider-script-consumed chat-status)
+                  (let ((cancelled (pichat-job-record store 'runs queued)))
+                    (should (equal "finished" (plist-get cancelled :state)))
+                    (should (equal "cancelled" (plist-get cancelled :result)))))))
           (when chat
             (ignore-errors (pichat-rpc-stop chat))
             (when-let* ((buffer (pichat-session-buffer chat)))

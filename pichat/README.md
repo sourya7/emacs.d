@@ -1388,8 +1388,8 @@ a future cron replacement requires explicit migration, disabling non-equivalent
 rules for review rather than running two timing engines or silently translating
 arbitrary elapsed intervals into cron field steps.
 
-An agent can manage the same saved-job timing through the Jobs tools (see
-[Saved-job schedule tools](#saved-job-schedule-tools)).
+An agent can manage the same saved-job timing, and run, follow and cancel job
+runs, through the Jobs tools (see [Saved-job tools](#saved-job-tools)).
 
 ### Scheduled continuation in this conversation
 
@@ -2306,6 +2306,17 @@ directly. For example:
     (format "Buffer %s has %d characters" (buffer-name) (buffer-size))))
 ```
 
+While a tool runs, `pichat-tools-calling-session` is the runtime that called
+it (nil outside bridge calls). A mutating tool can pass
+`:approval-summary #'my-summary`: a function of `params` returning a short
+description (for example the title of the thing it changes) shown in the
+approval prompt beside the raw arguments. It runs only when a prompt is shown;
+if it fails, the prompt shows the arguments alone. For strict argument handling
+and compact results, tools can use `pichat-tools-check-params`,
+`pichat-tools-count-param`, `pichat-tools-boolean-param` (the bridge decodes
+JSON `false` as nil), `pichat-tools-id-param`, `pichat-tools-display-text`,
+`pichat-tools-truncate` and `pichat-tools-json`.
+
 **Registering a tool makes it selectable, not exposed.** Each runtime offers
 only the Emacs-defined tools selected for it; the default is none. Select them
 in `x Tools` under **Emacs-defined tools**: groups show selected/available
@@ -2316,7 +2327,8 @@ none, or toggle individual tools. Or give an explicit-tool preset a baseline:
 (pichat-make-preset 'jobs-agent
   :description "Inspect and schedule saved jobs."
   :tools '("read" "grep" "find" "ls")
-  :emacs-tools '("pichat_jobs_list" "pichat_job_inspect" "pichat_job_schedule"))
+  :emacs-tools '("pichat_jobs_list" "pichat_job_inspect" "pichat_job_schedule"
+                 "pichat_job_run_now" "pichat_job_run_inspect"))
 ```
 
 Selections are exact names: tools registered later are listed but never
@@ -2332,16 +2344,18 @@ runtime; now add `:emacs-tools` to your preset or select them in `x Tools`.
 Selecting a tool does not approve it: mutating tools keep their own approval
 policy (see [Permissions](#permissions)).
 
-### Saved-job schedule tools
+### Saved-job tools
 
 The **Jobs** group is always registered (and, like any group, offered only when
-selected). It lets an agent inspect saved jobs and manage their timing; it
-cannot create or edit jobs, or run or cancel work.
+selected). It lets an agent inspect saved jobs, manage their timing, and run,
+follow and cancel job runs; it cannot create or edit jobs. The mutating tools
+(`pichat_job_schedule`, `pichat_job_run_now`, `pichat_job_run_cancel`) ask
+approval by default; their prompts name the job, its target and directory.
 
 - `pichat_jobs_list` and `pichat_job_inspect` return job IDs, summaries, timing,
   whether a timer is running, the next occurrence and recent runs. Times are
   Unix seconds with UTC and local forms.
-- `pichat_job_schedule` (asks approval) does one of:
+- `pichat_job_schedule` does one of:
   - `kind` `once`/`interval` with `start` (and `interval_seconds` ≥ 60): save
     that timing and enable it, unless `enabled` is `false`;
   - `kind` `none`: remove timing;
@@ -2349,12 +2363,72 @@ cannot create or edit jobs, or run or cancel work.
 
   Repeating an identical request changes nothing. Removing or disabling timing
   never cancels queued or active runs.
+- `pichat_job_run_now` starts a saved job exactly like Jobs → Run job, without
+  changing its timing, and returns the job run ID. As in Jobs, a saved job has at
+  most one unfinished run, so the error names the run already pending; a job run
+  therefore cannot start its own saved job. A queued run says what it waits for.
+- `pichat_job_run_inspect` returns one job run's state, result and reason and,
+  once finished, its final response (up to 4000 characters, truncation marked)
+  from the captured run-end evidence, so it stays readable after the run's chat
+  is closed. If the evidence is missing or changed, the stored 2000-character
+  summary is returned and labelled. While the run's runtime is retained, its
+  `runtime_id` can be passed to `pichat_chat_read`.
+- `pichat_job_run_cancel` removes a scheduled or queued run. For an active run
+  it asks the runtime to abort and reports the state recorded afterwards; the
+  run finishes as cancelled, or becomes uncertain if it does not settle within
+  `pichat-jobs-control-timeout`. Finished and uncertain runs, and a run whose
+  completion is already being cleaned up, cannot be cancelled. A job run cannot
+  cancel itself.
 
 The tools use the same Jobs owner as `M-x pichat-jobs`, starting it if needed
 just as opening Jobs would (which also resumes your other enabled schedules).
 Intervals are elapsed time, not calendar recurrence, so local times shift
 across DST. As with all saved-job timing, Emacs must keep running and missed
 occurrences are not replayed.
+
+### Chat tools
+
+The **Chats** group is always registered and read-only. It never creates,
+selects, opens or changes a chat or runtime, and listing chats never starts
+Jobs.
+
+- `pichat_chats_list` describes each retained runtime: `runtime_id`, name,
+  directory, target, state, whether it is waiting for user input, model,
+  preset, whether its chat buffer is open, the `job_run_id` of a job run it is
+  executing, and `self` for the caller. Runtime IDs are valid only in the
+  current Emacs session.
+- `pichat_chat_read` returns the recent settled user and assistant messages of
+  one runtime (`messages`, default 10, at most 30; each message's text up to
+  1000 characters, truncation marked). Tool calls are named only; thinking,
+  tool arguments and tool results are omitted, as is the in-progress reply. A
+  runtime whose chat buffer is closed reports `transcript_available: false`.
+
+### Orchestrator jobs
+
+A saved job whose preset selects the Jobs and Chats tools can act as an
+orchestrator, for example on an elapsed-interval schedule: it checks what other
+chats are doing, starts saved jobs, reads their results and cancels runs.
+
+```elisp
+(pichat-make-preset 'orchestrator
+  :description "Start, follow and cancel saved jobs; read other chats."
+  :tools '("read")
+  :emacs-tools '("pichat_jobs_list" "pichat_job_inspect" "pichat_job_run_now"
+                 "pichat_job_run_inspect" "pichat_job_run_cancel"
+                 "pichat_chats_list" "pichat_chat_read"))
+```
+
+- **Approval.** Without a rule, a mutating tool's approval waits until you select
+  the orchestrator's chat and answer (see [Permissions](#permissions)), so an
+  unattended run stalls. Choose **Always allow** for the tools it must use
+  without you. That rule is global: the per-runtime Tools selection is what
+  keeps other runtimes from using those tools.
+- **Capacity.** The orchestrator is itself a job run and occupies one of
+  `pichat-jobs-max-concurrency` slots while it runs.
+- **Target.** The orchestrator must run locally, since SSH runtimes have no
+  bridge; the jobs it starts may use SSH.
+- **Trust.** Chat messages and job responses come from other agents; the tool
+  instructions tell the agent to treat them as data, not instructions.
 
 ## Removed compatibility APIs
 

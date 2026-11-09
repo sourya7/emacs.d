@@ -16,6 +16,7 @@
 (require 'pichat-test-job-core)
 (require 'pichat-test-jobs)
 (require 'pichat-test-job-tools)
+(require 'pichat-test-chat-bridge-tools)
 (require 'pichat-test-job-conversation)
 (require 'pichat-test-rpc)
 (require 'pichat-test-transport)

@@ -234,6 +234,72 @@
         (pichat-approval-save)
         (should (eq 'deny (pichat-approval-resolve "mutate" t)))))))
 
+(ert-deftest pichat-tools-expose-the-calling-runtime-only-during-a-call ()
+  (pichat-test-with-clean-state
+    (let ((session (pichat-session-make :cwd default-directory))
+          seen)
+      (pichat-define-tool pichat-test-caller ()
+        (setq seen pichat-tools-calling-session)
+        "ok")
+      (pichat-tools-execute-json "{\"name\":\"pichat-test-caller\",\"params\":{}}" session)
+      (should (eq session seen))
+      (should-not pichat-tools-calling-session)
+      (pichat-tools-call (gethash "pichat-test-caller" pichat-tools-registry) nil)
+      (should-not seen))))
+
+(ert-deftest pichat-tools-approval-summary-describes-the-call-lazily ()
+  ;; The prompt names what the call will do; raw arguments stay visible.  The
+  ;; summary runs only when prompting, and a failing summary still prompts.
+  (pichat-test-with-clean-state
+    (pichat-test-with-approval-file
+      (let ((session (pichat-session-make :cwd default-directory))
+            (summaries 0)
+            prompts)
+        (pichat-define-tool pichat-test-described
+            (:mutating t
+             :approval-summary (lambda (params)
+                                 (cl-incf summaries)
+                                 (when (equal (plist-get params :target) "bad")
+                                   (error "Summary failed"))
+                                 (format "Change %s\nnow" (plist-get params :target))))
+          "changed")
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (prompt &rest _) (push prompt prompts) "Deny once")))
+          (pichat-tools-execute-json
+           "{\"name\":\"pichat-test-described\",\"params\":{\"target\":\"alpha\"}}" session)
+          (should (string-match-p "pichat-test-described (Change alpha now) with arguments.*alpha"
+                                  (car prompts)))
+          (pichat-tools-execute-json
+           "{\"name\":\"pichat-test-described\",\"params\":{\"target\":\"bad\"}}" session)
+          (should (string-match-p "pichat-test-described with arguments.*bad" (car prompts))))
+        (should (= 2 summaries))
+        (setq pichat-approval-rules '(("pichat-test-described" . allow)))
+        (pichat-approval-save)
+        (pichat-tools-execute-json
+         "{\"name\":\"pichat-test-described\",\"params\":{\"target\":\"alpha\"}}" session)
+        (should (= 2 summaries))))))
+
+(ert-deftest pichat-tools-parameter-helpers-validate-bridge-values ()
+  ;; The bridge decodes JSON false as nil; boolean helpers must accept it.
+  (let ((params (plist-get (json-parse-string
+                            "{\"params\":{\"flag\":false,\"on\":true,\"count\":3}}"
+                            :object-type 'plist :false-object nil :null-object nil)
+                           :params)))
+    (should (eq params (pichat-tools-check-params params '(:flag :on :count) '(:count))))
+    (should-error (pichat-tools-check-params params '(:flag :on)) :type 'user-error)
+    (should-error (pichat-tools-check-params params '(:flag :on :count :x) '(:x))
+                  :type 'user-error)
+    (should (eq nil (pichat-tools-boolean-param params :flag)))
+    (should (eq t (pichat-tools-boolean-param params :on)))
+    (should (eq 'absent (pichat-tools-boolean-param params :missing)))
+    (should-error (pichat-tools-boolean-param params :count) :type 'user-error)
+    (should (= 3 (pichat-tools-count-param params :count 1 5 1)))
+    (should (= 1 (pichat-tools-count-param nil :count 1 5 1)))
+    (should-error (pichat-tools-count-param params :count 1 2) :type 'user-error)
+    (should-error (pichat-tools-count-param '(:count 0) :count 1 5 1) :type 'user-error)
+    (should (equal "a b…" (pichat-tools-display-text "a\nbcd" 4)))
+    (should-error (pichat-tools-id-param '(:id "../x") :id "an ID") :type 'user-error)))
+
 (ert-deftest pichat-mutating-bridge-tool-waits-for-owning-chat-before-approval ()
   (pichat-test-with-unit-session (session proc)
     (pichat-test-with-approval-file

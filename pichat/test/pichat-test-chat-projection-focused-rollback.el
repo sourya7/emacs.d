@@ -249,7 +249,6 @@
     (pichat-test-focused-rollback--candidate
      pichat-chat--live-draft "message_update" "changed prose" "focused.el")
     (let ((full 0) (focused 0)
-          (undo-before (copy-tree buffer-undo-list))
           (modified-before (buffer-modified-p))
           (full-original (symbol-function 'pichat-chat--projection-snapshot))
           (focused-original
@@ -264,8 +263,14 @@
       (should (= 1 focused))
       (should (zerop full))
       (should (equal "unsent draft" (pichat-chat--input-text)))
-      (should (equal undo-before buffer-undo-list))
-      (should (eq modified-before (buffer-modified-p))))))
+      (should (eq modified-before (buffer-modified-p)))
+      (let ((prefix (buffer-substring (point-min) pichat-chat--input-start))
+            (pending-undo-list t))
+        (undo-start)
+        (undo-more 1)
+        (should (equal "" (pichat-chat--input-text)))
+        (should (equal-including-properties
+                 prefix (buffer-substring (point-min) pichat-chat--input-start)))))))
 
 (ert-deftest pichat-chat-compatibility-status-update-uses-full-rollback ()
   (pichat-test-focused-rollback--with-buffer
@@ -439,7 +444,6 @@
       (should (zerop (hash-table-count pichat-chat--tool-auxiliary-details))))))
 
 (ert-deftest pichat-chat-focused-rollback-after-prompt-edits-preserves-private-undo ()
-  (ert-skip "TODO W28: preserve focused change-group undo identity after prompt edits")
   (pichat-test-focused-rollback--with-buffer
     (goto-char (point-max))
     (insert "unsent draft")
@@ -457,6 +461,156 @@
       (should (equal-including-properties before (buffer-string)))
       (should (equal undo-before buffer-undo-list))
       (should (equal "unsent draft" (pichat-chat--input-text))))))
+
+(defun pichat-test-focused-rollback--edit-prompt ()
+  "Make ordinary insertion/deletion history and begin an undo sequence."
+  (goto-char (point-max))
+  (insert "unsent")
+  (undo-boundary)
+  (insert " draft!")
+  (undo-boundary)
+  (delete-region (1- (point)) (point))
+  (undo-start))
+
+(defun pichat-test-focused-rollback--undo-prompt (&optional resumed)
+  "Continue prompt undo without changing transcript text.
+When RESUMED is non-nil, the first prompt edit has already been undone."
+  (let ((prefix (buffer-substring (point-min) pichat-chat--input-start)))
+    (dolist (expected (if resumed '("unsent" "") '("unsent draft!" "unsent" "")))
+      (undo-more 1)
+      (should (equal expected (pichat-chat--input-text)))
+      (should (equal-including-properties
+               prefix (buffer-substring (point-min) pichat-chat--input-start))))))
+
+(ert-deftest pichat-chat-prompt-undo-survives-projection-failure-and-retry ()
+  (dolist (path '(focused replacement full))
+    (dolist (text '("x" "candidate prose" "much longer candidate prose for growth"))
+      (dolist (stage '(index commit refresh))
+        (dolist (condition '(error quit))
+          (ert-info ((format "path=%s text=%s stage=%s condition=%s"
+                             path text stage condition))
+            (let ((pending-undo-list t))
+              (pichat-test-focused-rollback--with-buffer
+                (pichat-test-focused-rollback--edit-prompt)
+                (pichat-test-focused-rollback--candidate
+                 pichat-chat--live-draft "message_update" text "old.el")
+                (let* ((before (pichat-test-focused-rollback--state))
+                       (undo buffer-undo-list)
+                       (pending pending-undo-list)
+                       (pending-before (copy-tree pending-undo-list))
+                       (draft pichat-chat--live-draft)
+                       (target (pichat-chat-draft-capture))
+                       (generation pichat-chat--source-generation)
+                       (process-generation (pichat-session-process-generation session))
+                       (index (symbol-function 'pichat-chat--index-canonical-tools))
+                       (commit (symbol-function 'pichat-chat--commit-live-projection-result))
+                       (refresh (symbol-function 'pichat-chat--refresh-user-disclosures))
+                       (safe (symbol-function 'pichat-chat--focused-live-rollback-safe-p))
+                       (replace (symbol-function 'pichat-chat--replace-live-fragments))
+                       (compatibility (symbol-function 'pichat-chat--compatibility-diagnostics-text))
+                       (failure (list condition "injected prompt-undo failure")))
+                  (cl-letf (((symbol-function 'pichat-chat--focused-live-rollback-safe-p)
+                             (lambda (candidate)
+                               (and (not (eq path 'full)) (funcall safe candidate))))
+                            ((symbol-function 'pichat-chat--replace-live-fragments)
+                             (lambda (candidate)
+                               (unless (eq path 'replacement) (funcall replace candidate))))
+                            ((symbol-function 'pichat-chat--compatibility-diagnostics-text)
+                             (lambda (transcript)
+                               (if (eq path 'full) "[forced compatibility change]"
+                                 (funcall compatibility transcript)))))
+                    (cl-letf (((symbol-function 'pichat-chat--index-canonical-tools)
+                               (lambda (&rest args)
+                                 (prog1 (apply index args)
+                                   (when (eq stage 'index)
+                                     (signal condition (cdr failure))))))
+                              ((symbol-function 'pichat-chat--commit-live-projection-result)
+                               (lambda (&rest args)
+                                 (apply commit args)
+                                 (when (eq stage 'commit)
+                                   (signal condition (cdr failure)))))
+                              ((symbol-function 'pichat-chat--refresh-user-disclosures)
+                               (lambda ()
+                                 (funcall refresh)
+                                 (when (eq stage 'refresh)
+                                   (signal condition (cdr failure))))))
+                      (should (equal failure
+                                     (condition-case err (pichat-chat--project-live-tail)
+                                       ((error quit) err)))))
+                    (should (equal-including-properties
+                             (plist-get before :text) (buffer-string)))
+                    (should (equal (plist-get before :undo) buffer-undo-list))
+                    (should (equal pending-before pending-undo-list))
+                    (let ((after (pichat-test-focused-rollback--state)))
+                      (dolist (key '(:point :windows :modified :markers :fragments
+                                     :live-block-table :combined-block-table
+                                     :activity-blocks :live-activity-block-table
+                                     :combined-activity-block-table :fingerprint
+                                     :views :activity-views :enrichments :statuses))
+                        (should (equal (plist-get before key) (plist-get after key)))))
+                    (unless (eq path 'full)
+                      ;; Focused rollback retains exact block/overlay/marker
+                      ;; identities; full rollback may rebuild decorations.
+                      (should (equal before (pichat-test-focused-rollback--state)))
+                      (should (eq undo buffer-undo-list))
+                      (should (eq pending pending-undo-list)))
+                    (should (eq draft pichat-chat--live-draft))
+                    (should (= generation pichat-chat--source-generation))
+                    (should (equal process-generation
+                                   (pichat-session-process-generation session)))
+                    (should (pichat-chat-draft-current-p target))
+                    (should (equal "unsent draft" (pichat-chat-draft-text target)))
+                    (should (pichat-chat--project-live-tail))
+                    (should (string-match-p (regexp-quote text) (buffer-string)))
+                    (should-not (pichat-chat--project-live-tail))
+                    (pichat-test-focused-rollback--undo-prompt)))))))))))
+
+(ert-deftest pichat-chat-prompt-undo-survives-successful-projection ()
+  (dolist (path '(focused replacement full))
+    (dolist (text '("x" "candidate prose" "much longer candidate prose for growth"))
+      (dolist (resumed '(nil t))
+        (ert-info ((format "path=%s text=%s resumed=%s" path text resumed))
+          (let ((pending-undo-list t))
+            (pichat-test-focused-rollback--with-buffer
+              (pichat-test-focused-rollback--edit-prompt)
+              (when resumed (undo-more 1))
+              (pichat-test-focused-rollback--candidate
+               pichat-chat--live-draft "message_update" text "old.el")
+              (let ((safe (symbol-function 'pichat-chat--focused-live-rollback-safe-p))
+                    (replace (symbol-function 'pichat-chat--replace-live-fragments)))
+                (cl-letf (((symbol-function 'pichat-chat--focused-live-rollback-safe-p)
+                           (lambda (candidate)
+                             (and (not (eq path 'full)) (funcall safe candidate))))
+                          ((symbol-function 'pichat-chat--replace-live-fragments)
+                           (lambda (candidate)
+                             (unless (eq path 'replacement) (funcall replace candidate)))))
+                  (should (pichat-chat--project-live-tail))))
+              (should (equal (if resumed "unsent draft!" "unsent draft")
+                             (pichat-chat--input-text)))
+              (pichat-test-focused-rollback--undo-prompt resumed))))))))
+
+(ert-deftest pichat-chat-prompt-property-undo-survives-prefix-shrink ()
+  (let ((pending-undo-list t))
+    (pichat-test-focused-rollback--with-buffer
+      (pichat-chat--set-status 'fixture "a long status prefix before prompt edits")
+      (goto-char (point-max))
+      (insert "unsent draft")
+      (undo-boundary)
+      (put-text-property pichat-chat--input-start (point-max) 'pichat-test-property t)
+      (undo-start)
+      (pichat-test-focused-rollback--candidate
+       pichat-chat--live-draft "message_update" "x" "old.el")
+      (pichat-chat--project-live-tail)
+      (pichat-chat--set-status 'fixture "x")
+      (let ((prefix (buffer-substring (point-min) pichat-chat--input-start)))
+        (should (get-text-property pichat-chat--input-start 'pichat-test-property))
+        (undo-more 1)
+        (should-not (get-text-property pichat-chat--input-start 'pichat-test-property))
+        (should (equal "unsent draft" (pichat-chat--input-text)))
+        (undo-more 1)
+        (should (equal "" (pichat-chat--input-text)))
+        (should (equal-including-properties
+                 prefix (buffer-substring (point-min) pichat-chat--input-start)))))))
 
 (provide 'pichat-test-chat-projection-focused-rollback)
 ;;; pichat-test-chat-projection-focused-rollback.el ends here

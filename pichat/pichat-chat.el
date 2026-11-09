@@ -1042,16 +1042,27 @@ undo history; both behaviors remain enabled for user edits in the prompt."
   "Shift prompt undo positions after OLD-BOUNDARY by DELTA characters.
 PiChat edits before the prompt with undo recording disabled.  Emacs undo entries
 store integer positions, so those positions must follow an internal prefix
-length change even though the internal edit itself must not become undoable."
-  (when (/= delta 0)
-    (let ((deltas (list (cons old-boundary (- delta)))))
+length change even though the internal edit itself must not become undoable.
+Focused transactions defer this adjustment until their private undo log is gone."
+  (when (and (/= delta 0) (not pichat-chat--focused-change-group-active-p))
+    ;; Unlike selective-undo deletion deltas, a prefix shrink translates the
+    ;; prompt below OLD-BOUNDARY; `undo-adjust-elt' clamps at that boundary.
+    (cl-labels ((shift (position)
+                  (if (>= position old-boundary) (+ position delta) position))
+                (shift-entry (entry)
+                  (pcase entry
+                    ((pred integerp) (shift entry))
+                    (`(,(and beg (pred integerp)) . ,(and end (pred integerp)))
+                     (cons (shift beg) (shift end)))
+                    (`(,(and text (pred stringp)) . ,(and pos (pred integerp)))
+                     (cons text (* (if (< pos 0) -1 1) (shift (abs pos)))))
+                    (`(nil ,property ,value ,beg . ,end)
+                     `(nil ,property ,value ,(shift beg) . ,(shift end)))
+                    (_ entry))))
       (dolist (variable '(buffer-undo-list pending-undo-list))
         (when (and (boundp variable)
                    (listp (symbol-value variable)))
-          (set variable
-               (mapcar (lambda (entry)
-                         (undo-adjust-elt entry deltas))
-                       (symbol-value variable))))))))
+          (set variable (mapcar #'shift-entry (symbol-value variable))))))))
 
 (defun pichat-chat--protect-region (beg end)
   "Mark BEG..END as read-only transcript text."
@@ -2622,27 +2633,35 @@ No chat-buffer text is copied; the active Emacs change group owns text undo."
 
 (defun pichat-chat--call-with-focused-live-rollback (candidate function)
   "Call FUNCTION in a focused change-group transaction for CANDIDATE."
-  (let ((snapshot (pichat-chat--focused-live-snapshot candidate)))
-    (let ((buffer-undo-list nil)
-          (pichat-chat--focused-change-group-active-p t)
-          (pichat-chat--projection-transaction-depth 1)
-          (change-group (prepare-change-group))
-          accepted)
-      (activate-change-group change-group)
-      (condition-case err
-          (prog1 (funcall function)
-            (pichat-chat--refresh-user-disclosures)
-            (accept-change-group change-group)
-            (setq accepted t))
-        ((error quit)
-         (unless accepted
-           (let ((inhibit-read-only t)
-                 (inhibit-modification-hooks t)
-                 (pichat-chat--inhibit-edit-guard t))
-             (cancel-change-group change-group)))
-         (pichat-chat--restore-focused-live-snapshot snapshot)
-         (pichat-chat-user-ui-restore (plist-get snapshot :user-disclosures))
-         (signal (car err) (cdr err)))))))
+  (let ((snapshot (pichat-chat--focused-live-snapshot candidate))
+        (old-end (marker-position pichat-chat--live-end)))
+    (prog1
+        ;; Prepare only after binding the private log: the handle must not
+        ;; capture the user's prompt history from the enclosing binding.
+        (let* ((buffer-undo-list nil)
+               (pichat-chat--focused-change-group-active-p t)
+               (pichat-chat--projection-transaction-depth 1)
+               (change-group (prepare-change-group))
+               accepted)
+          (activate-change-group change-group)
+          (condition-case err
+              (prog1 (funcall function)
+                (pichat-chat--refresh-user-disclosures)
+                (accept-change-group change-group)
+                (setq accepted t))
+            ((error quit)
+             (unless accepted
+               (let ((inhibit-read-only t)
+                     (inhibit-modification-hooks t)
+                     (pichat-chat--inhibit-edit-guard t))
+                 (cancel-change-group change-group)))
+             (pichat-chat--restore-focused-live-snapshot snapshot)
+             (pichat-chat-user-ui-restore (plist-get snapshot :user-disclosures))
+             (signal (car err) (cdr err)))))
+      ;; Only the live region can change on this path.  Shift the real prompt
+      ;; history (including an ongoing undo) once, and only after acceptance.
+      (pichat-chat--adjust-undo-for-prefix-delta
+       old-end (- (marker-position pichat-chat--live-end) old-end)))))
 
 (defmacro pichat-chat--with-projection-rollback (&rest body)
   "Run BODY atomically and restore the complete projection if it signals.
@@ -3342,6 +3361,7 @@ Return non-nil when a changed candidate commits."
         (pichat-chat--preserve-view
           (pichat-chat--with-live-projection-rollback candidate
             (let* ((modified (buffer-modified-p))
+                   (old-end (marker-position pichat-chat--live-end))
                    ;; Final Markdown fontification may change every prose run;
                    ;; without that derived layer, final tool updates remain
                    ;; safe for logical replacement.
@@ -3350,6 +3370,10 @@ Return non-nil when a changed candidate commits."
                                  (not pichat-chat-markdown-mode))
                              (pichat-chat--replace-live-fragments candidate))
                         (pichat-chat--replace-live-full candidate))))
+              ;; Full rollback owns prompt history here; focused rollback
+              ;; defers this shift until its private change group is finished.
+              (pichat-chat--adjust-undo-for-prefix-delta
+               old-end (- (marker-position pichat-chat--live-end) old-end))
               (pichat-chat--commit-live-projection-result candidate result)
               (set-buffer-modified-p modified))))
         t))))

@@ -329,6 +329,23 @@ files are retained."
       (pichat-job-executor-delete-run owner id)
       (message "Run deleted; evidence and saved session retained"))))
 
+(defun pichat-jobs--delete-chain (owner id)
+  "Confirm and delete the whole run chain of run ID belonging to OWNER."
+  (let* ((members (append (plist-get (pichat-job-chain (pichat-job-executor-store owner) id)
+                                     :members)
+                          nil))
+         (open (seq-count (lambda (run) (not (equal (plist-get run :state) "finished")))
+                          members)))
+    (unless (zerop open)
+      (user-error "%d run%s in this chain %s not finished; wait or cancel first"
+                  open (if (= open 1) "" "s") (if (= open 1) "is" "are")))
+    (when (y-or-n-p
+           (format "Delete all %d runs in the chain of ‘%s’? Evidence and saved sessions retained. "
+                   (length members)
+                   (pichat-jobs--display (plist-get (plist-get (car members) :spec) :title))))
+      (pichat-job-executor-delete-chain owner id (mapcar (lambda (run) (plist-get run :id)) members))
+      (message "%d runs deleted; evidence and saved sessions retained" (length members)))))
+
 (defun pichat-jobs-history ()
   "Show attempts for the selected saved job."
   (interactive)
@@ -890,6 +907,8 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
        (when (pichat-job-continuable-p record) '((work "c" "Continue work…" continue)))
        (when (and finished (not (pichat-job-conversation-p record))) '((work "r" "Repeat…" repeat)))
        (when finished '((work "D" "Delete run…" delete-run)))
+       (when (> (length (plist-get (pichat-job-chain store (plist-get record :id)) :members)) 1)
+         '((work "C" "Delete chain…" delete-chain)))
        (when (and finished (not (pichat-job-conversation-p record)) (plist-get record :session-file))
          '((work "i" "Continue in chat…" open-saved)))
        (when (pichat-jobs--cancellable-p owner record) '((work "k" "Cancel run…" cancel)))
@@ -968,6 +987,7 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
       ('continue (pichat-jobs--continue owner id))
       ('repeat (pichat-jobs--repeat owner id))
       ('delete-run (pichat-jobs--delete-run owner id))
+      ('delete-chain (pichat-jobs--delete-chain owner id))
       ('open-saved (pichat-jobs--open-saved owner id))
       ('release (pichat-jobs--resolve owner id))
       ('save (pichat-job--compose owner 'save-as spec record))

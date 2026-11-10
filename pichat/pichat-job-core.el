@@ -1077,6 +1077,30 @@ deleted run) end the walk, so that run's nearest surviving ancestor is the root.
 Members are detached copies."
   (pichat-job--copy (pichat-job--chain (pichat-job-store-data store) id)))
 
+(defun pichat-job-chain-delete (store id expected)
+  "Delete the whole run chain of run ID from STORE in one transaction.
+EXPECTED is the list of member run IDs the user confirmed; a chain that changed
+since then is refused.  Every member must be finished, and no schedule history
+may reference one.  Links into the chain come only from its own members, so
+references stay consistent.  Evidence and saved session files are retained."
+  (let* ((data (pichat-job--copy (pichat-job-store-data store)))
+         (members (append (plist-get (pichat-job--chain data id) :members) nil))
+         (ids (mapcar (lambda (run) (plist-get run :id)) members)))
+    (unless (equal ids expected)
+      (pichat-job--fail "Run chain changed; review it again"))
+    (unless (seq-every-p (lambda (run) (equal (plist-get run :state) "finished")) members)
+      (pichat-job--fail "Every run in the chain must be finished; deletion refused"))
+    (when (seq-some
+           (lambda (job)
+             (member (plist-get (plist-get (plist-get job :schedule) :last) :run-id) ids))
+           (plist-get data :jobs))
+      (pichat-job--fail "Schedule history references a run in this chain; deletion refused"))
+    (setf (plist-get data :runs)
+          (vconcat (seq-remove (lambda (run) (member (plist-get run :id) ids))
+                               (plist-get data :runs))))
+    (pichat-job--commit store data)
+    ids))
+
 (defun pichat-job--observe-stop (store data run queue-limit)
   "Record RUN's first stop and bounded dispatch atomically in transaction DATA.
 No external execution occurs here.  Later resolution never observes a new stop."

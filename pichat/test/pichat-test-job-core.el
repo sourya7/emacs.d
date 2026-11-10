@@ -1929,5 +1929,35 @@
           (should-not (pichat-job-followup-event-p (append bad (copy-sequence event)))))
         (should (pichat-job-followup-event-p (append (copy-sequence event) '(:round 3))))))))
 
+(ert-deftest pichat-job-chain-delete-removes-only-a-finished-confirmed-chain ()
+  (pichat-test-job--with-store
+    (let* ((reviewer (pichat-job-save store (plist-put (pichat-test-job--spec) :title "Reviewer")))
+           (worker (pichat-job-save store (plist-put (pichat-test-job--spec) :after-job-id reviewer)))
+           (unrelated (pichat-job-enqueue store nil reviewer))
+           (w1 (pichat-job-enqueue store nil worker)))
+      (pichat-test-job--finish store unrelated "failed")
+      (pichat-test-job--finish store w1 "failed")
+      (let* ((r1 (pichat-test-job--followup-of store w1))
+             (chain (lambda () (mapcar (lambda (run) (plist-get run :id))
+                                       (append (plist-get (pichat-job-chain store w1) :members) nil)))))
+        ;; An unfinished member refuses deletion.
+        (should-error (pichat-job-chain-delete store w1 (funcall chain)) :type 'pichat-job-error)
+        (pichat-test-job--finish store r1 "failed")
+        (let ((w2 (pichat-job-enqueue-options store (list :job-id worker :requested-by r1))))
+          (pichat-job-cancel-queued store w2)
+          ;; A stale confirmation (the chain grew) is refused.
+          (should-error (pichat-job-chain-delete store w1 (list w1 r1)) :type 'pichat-job-error)
+          ;; The cancelled worker run dispatched the reviewer again; finish it.
+          (let ((r2 (pichat-test-job--followup-of store w2)))
+            (pichat-test-job--finish store r2 "failed")
+            (should (equal (list w1 r1 w2 r2) (funcall chain)))
+            (should (= 5 (length (pichat-job-records store 'runs))))
+            ;; Any member identifies the chain; one transaction removes all of it.
+            (should (equal (list w1 r1 w2 r2) (pichat-job-chain-delete store w2 (list w1 r1 w2 r2)))))
+          (should (equal (list unrelated)
+                         (mapcar (lambda (run) (plist-get run :id))
+                                 (append (pichat-job-records store 'runs) nil))))
+          (should (pichat-job-record store 'jobs worker)))))))
+
 (provide 'pichat-test-job-core)
 ;;; pichat-test-job-core.el ends here

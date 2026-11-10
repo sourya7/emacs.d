@@ -19,7 +19,6 @@ until BODY submits work.  Fixture teardown retires handlers before stopping."
                   (pichat-path-mappings nil)
                   (pichat-rpc-command nil)
                   (pichat-bridge-extension-file nil)
-                  (pichat-auto-use-repo-bridge nil)
                   (pichat-pi-extra-env nil)
                   (pichat-pi-executable pichat-test-pi-executable)
                   (pichat-pi-session-dir session-dir)

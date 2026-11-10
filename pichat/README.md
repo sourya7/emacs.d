@@ -2657,38 +2657,6 @@ chats are doing, starts saved jobs, reads their results and cancels runs.
 - **Trust.** Chat messages and job responses come from other agents; the tool
   instructions tell the agent to treat them as data, not instructions.
 
-## Removed compatibility APIs
-
-The unused VUI facade and `pichat-vui` feature have been removed. Use
-`pichat-status`, `pichat-add-reference`, and `pichat-sessions-list` directly.
-For Emacs-tool approval policy, visit `pichat-approval-policy-file`; this is
-not the Pi-native permissions file.
-
-Legacy command names have been removed; use their current equivalents:
-
-- `pichat-chat-compose-send` → `pichat-chat-compose-apply` (draft-only, not send)
-- `pichat-sessions-show-branch-at-point` → `pichat-sessions-preview-branch-at-point`
-- `pichat-chat-show-transport-diagnostics` → `pichat-show-transport-diagnostics`
-- `pichat-chat-open-interactive-pi` → `pichat-diagnostics-open-interactive-pi`
-- `pichat-artifact-elisp-copy-report` → `pichat-artifact-result-copy-report`
-- `pichat-artifact-elisp-share` → `pichat-artifact-result-share`
-
-`pichat-tools-call-async` has been removed; use synchronous `pichat-tools-call`.
-The shipped `echo` tool is no longer defined or registered. Unused
-`pichat-session` slots `rpc` and `tool-registry` (including generated accessors
-and constructor keywords) have been removed; `backend-state` remains the
-backend extension point. `pichat-rpc-get-messages` is retained.
-
-The unused public helpers `pichat-tool-selection-baseline`,
-`pichat-tools-instructions`, `pichat-render-thinking-texts`,
-`pichat-render-entry-text`, `pichat-tool-enrichment-infer-old-text-location`,
-`pichat-chat-tool-ui-merge-block-tables`, and
-`pichat-chat-tool-ui-collapse-block` have also been removed without shims.
-Per-tool instructions still reach Pi's prompt guidelines; canonical rendering,
-explicit tool disclosure, and draft/response APIs remain the active paths.
-Restart Emacs after updating: already-loaded definitions and runtime structs
-are not migrated in place.
-
 ## Permissions
 
 Pi-native tools should be governed by Pi permission packages such as
@@ -2708,10 +2676,3 @@ A waiting approval belongs to the agent run that issued the call. When that run
 ends (for example on abort), the request is withdrawn: it no longer counts in
 `UI:N`, never prompts later, and if its prompt was already open, choosing Allow
 does not run the tool. A tool that is already running is not cancelled.
-
-### claude code bridge needs the following auto-approved -
-  "permissions": {
-    "allow": [
-        "mcp__custom-tools__*"
-    ]
-  }

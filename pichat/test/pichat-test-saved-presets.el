@@ -357,7 +357,6 @@ Reopening the launcher records its (ARGS . SCOPE) in `staged'."
         callbacks)
     (cl-letf (((symbol-function 'pichat--list-models-async)
                (lambda (_search callback &rest _) (push callback callbacks)))
-              ((symbol-function 'pichat--maybe-enable-default-bridge) #'ignore)
               ((symbol-function 'run-at-time)
                (lambda (_time _repeat function &rest args) (apply function args))))
       (pichat-test-with-launcher context nil

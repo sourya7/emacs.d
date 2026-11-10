@@ -139,7 +139,6 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.setStatus(STATUS_KEY, `synchronized:${tools.length}`);
 	}
 
-	pi.registerCommand("pichat-ping", { description: "Check whether the PiChat bridge extension is loaded", handler: async (_args, ctx) => { ctx.ui.notify("PiChat bridge loaded", "info"); } });
 	pi.registerCommand("pichat-sync-tools", { description: "Synchronize Emacs-defined PiChat tools", handler: async (_args, ctx) => { await syncTools(ctx); } });
 
 	pi.on("session_start", (_event, ctx) => {

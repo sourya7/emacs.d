@@ -170,31 +170,7 @@
         (should (string-match-p "Definitions exploded"
                                 (plist-get diagnostic :message)))))))
 
-(ert-deftest pichat-tools-rejects-async-before-definition-or-registration ()
-  (pichat-test-with-clean-state
-    (should-error
-     (macroexpand '(pichat-define-tool pichat-test-async
-                       (:description "Unsupported" :async t)
-                     "never"))
-     :type 'error)
-    (should-not (fboundp 'pichat-tool/pichat-test-async))
-    (let ((original (pichat-tools-register
-                     (pichat-tool-create :name "sentinel" :function #'ignore))))
-      (should-error
-       (pichat-tools-register
-        (pichat-tool-create :name "sentinel" :function #'ignore :async-p t))
-       :type 'error)
-      (should (eq original (gethash "sentinel" pichat-tools-registry))))
-    (should-not (string-match-p "pichat-test-async"
-                                (pichat-tools-definitions-json 'all)))
-    (pichat-define-tool pichat-test-sync (:async nil) "sync")
-    (should (equal "sync" (plist-get
-                           (pichat-tools-call
-                            (gethash "pichat-test-sync" pichat-tools-registry)
-                            nil)
-                           :value)))))
-
-(ert-deftest pichat-tools-call-reports-errors-once-and-rejects-async ()
+(ert-deftest pichat-tools-call-reports-errors-once ()
   (pichat-test-with-clean-state
     (let* ((calls 0)
            (tool (pichat-tool-create
@@ -205,10 +181,7 @@
            (result (pichat-tools-call tool nil)))
       (should (= 1 calls))
       (should (plist-get result :is-error))
-      (should (string-match-p "tool failure" (plist-get result :value)))
-      (setf (pichat-tool-async-p tool) t)
-      (should-error (pichat-tools-call tool nil) :type 'error)
-      (should (= 1 calls)))))
+      (should (string-match-p "tool failure" (plist-get result :value))))))
 
 (ert-deftest pichat-tools-instructions-serialize-only-nonblank-guidance ()
   (pichat-test-with-clean-state

@@ -26,7 +26,6 @@
 (require 'pichat-sessions)
 (require 'pichat-commands)
 (require 'pichat-approval)
-(require 'pichat-permissions)
 (require 'pichat-tool-bridge)
 (require 'pichat-bridge-transport)
 (require 'pichat-job-tools)
@@ -95,23 +94,6 @@ The function receives the runtime session.  Manager-initiated launches supply
 an explicit display function instead of using this default."
   :type 'function
   :group 'pichat)
-
-(defcustom pichat-auto-use-repo-bridge nil
-  "When non-nil, use `bridge/pichat-bridge.ts' from `pichat-directory' if present.
-The bridge is disabled by default until implemented/tested."
-  :type 'boolean
-  :group 'pichat)
-
-(defun pichat-default-bridge-file ()
-  "Return the development bridge file path when it exists."
-  (let ((file (expand-file-name "bridge/pichat-bridge.ts" pichat-directory)))
-    (and (file-exists-p file) file)))
-
-(defun pichat--maybe-enable-default-bridge ()
-  "Set `pichat-bridge-extension-file' from repo bridge when requested."
-  (when (and pichat-auto-use-repo-bridge
-             (null pichat-bridge-extension-file))
-    (setq pichat-bridge-extension-file (pichat-default-bridge-file))))
 
 (defun pichat--directory-basename (directory)
   "Return a display basename for DIRECTORY."
@@ -681,7 +663,6 @@ SCOPE is the immutable (KEY CWD LABEL) owner scope.  LAUNCH-OPTIONS supports
 `:persistence', `:preset', `:tools', `:transport' and run-local `:model'.
 The returned runtime captures resolved configuration and path context.  It does
 not become current/preferred and no RPC process or chat is created."
-  (pichat--maybe-enable-default-bridge)
   (when (plist-member launch-options :execution)
     (user-error "Obsolete :execution option; select a PiChat :preset instead"))
   (let* ((preset-name (let ((choice (plist-get launch-options :preset)))
@@ -1103,7 +1084,6 @@ in `pichat-launch' when the selection must apply only to a new runtime."
                (eq (pichat-transport-kind transport) 'local))
       (user-error
        "Run-local PiChat models are not supported with a local `pichat-rpc-command'")))
-  (pichat--maybe-enable-default-bridge)
   (let ((pichat--model-list-directory (or directory default-directory))
         (pichat--model-list-target
          (let ((target (plist-get profile :target)))
@@ -1532,7 +1512,6 @@ to the unchanged launcher; a superseded listing is ignored."
       (user-error
        "Run-local PiChat models are not supported with a local `pichat-rpc-command'"))
     (setq pichat--launch-model-request token)
-    (pichat--maybe-enable-default-bridge)
     (pichat--list-models-async
      nil
      (lambda (models)

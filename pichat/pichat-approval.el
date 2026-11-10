@@ -13,9 +13,11 @@
 (defvar pichat-approval-rules nil
   "Durable approval rules as alist of (TOOL-NAME . DECISION).")
 
-(defvar pichat-approval-session-rules
-  (make-hash-table :test #'eq :weakness 'key)
-  "Per-session approval alists keyed weakly by PiChat session objects.")
+(defconst pichat-approval-arguments-limit 300
+  "Maximum characters of raw arguments shown in an approval prompt.")
+
+(defconst pichat-approval-choices '("Allow once" "Always allow" "Deny")
+  "Approval prompt choices.  Only *Always allow* stores a rule.")
 
 (defun pichat-approval-load ()
   "Load valid approval rules from `pichat-approval-policy-file'.
@@ -53,71 +55,72 @@ Missing, empty, or malformed policy data safely resets to ask-by-default."
       (when (and temporary (file-exists-p temporary))
         (delete-file temporary)))))
 
-(defun pichat-approval-decision (tool-name &optional session)
-  "Return resolved decision for TOOL-NAME and optional SESSION.
-An explicit deny at either scope takes precedence over any allow."
-  (let ((durable (cdr (assoc tool-name pichat-approval-rules)))
-        (local (and session
-                    (cdr (assoc tool-name
-                                (gethash session pichat-approval-session-rules))))))
-    (cond
-     ((memq 'deny (list local durable)) 'deny)
-     ((memq 'allow (list local durable)) 'allow)
-     (t 'ask))))
-
-(defun pichat-approval-set-session (session tool-name decision)
-  "Set SESSION-local TOOL-NAME approval DECISION."
-  (unless session (error "Session-scoped approval requires a session"))
-  (let ((rules (copy-tree (gethash session pichat-approval-session-rules))))
-    (setf (alist-get tool-name rules nil nil #'equal) decision)
-    (puthash session rules pichat-approval-session-rules)))
+(defun pichat-approval-decision (tool-name)
+  "Return the stored decision for TOOL-NAME: `allow', `deny' or `ask'."
+  (pcase (cdr (assoc tool-name pichat-approval-rules))
+    ('allow 'allow)
+    ('deny 'deny)
+    (_ 'ask)))
 
 (defun pichat-approval-set (tool-name decision)
   "Set TOOL-NAME approval DECISION."
   (setf (alist-get tool-name pichat-approval-rules nil nil #'equal) decision)
   (pichat-approval-save))
 
-(defun pichat-approval-resolve (tool-name mutating-p &optional session)
-  "Resolve TOOL-NAME policy without prompting for optional SESSION.
+(defun pichat-approval-resolve (tool-name mutating-p)
+  "Resolve TOOL-NAME policy without prompting.
 Return `allow', `deny', or `ask'.  An unruled non-mutating tool resolves to
 `allow'; only an unruled mutating tool resolves to `ask'."
   (pichat-approval-load)
-  (pcase (pichat-approval-decision tool-name session)
+  (pcase (pichat-approval-decision tool-name)
     ('allow 'allow)
     ('deny 'deny)
     (_ (if mutating-p 'ask 'allow))))
 
-(defun pichat-approval-prompt (tool-name params &optional session summary)
-  "Prompt for mutating TOOL-NAME with PARAMS in optional SESSION.
+(defun pichat-approval--arguments-text (params)
+  "Return PARAMS printed on one line in `pichat-approval-arguments-limit' chars.
+A cut text ends with a marker counting the omitted characters."
+  (let ((text (replace-regexp-in-string
+               "[[:cntrl:]]+" " "
+               (let ((print-escape-newlines t)
+                     (print-length nil)
+                     (print-level nil))
+                 (prin1-to-string params))))
+        (limit pichat-approval-arguments-limit))
+    (if (<= (length text) limit)
+        text
+      ;; The marker is at most 30 characters; keep the whole within LIMIT.
+      (let ((kept (- limit 30)))
+        (format "%s… [%d more characters]"
+                (substring text 0 kept) (- (length text) kept))))))
+
+(defun pichat-approval-prompt (tool-name params &optional summary)
+  "Prompt for mutating TOOL-NAME with PARAMS; return non-nil to run it.
 Optional SUMMARY is the tool's one-line description of this call, or a
-function returning it; the raw arguments are always shown too."
+function returning it; it comes first, then the bounded raw arguments.
+Only *Always allow* stores a rule.  Quitting the prompt means *Deny*."
   (let* ((summary (if (functionp summary) (funcall summary) summary))
          (choice
-         (completing-read
-          (format "Allow mutating Emacs tool %s%s with arguments %S? "
-                  tool-name (if summary (format " (%s)" summary) "") params)
-          '("Allow once" "Allow for session" "Always allow"
-            "Deny once" "Deny for session" "Always deny")
-          nil t nil nil "Deny once")))
+          (condition-case nil
+              (completing-read
+               (format "%sEmacs tool %s, arguments %s. Allow? "
+                       (if summary (format "%s — " summary) "")
+                       tool-name (pichat-approval--arguments-text params))
+               pichat-approval-choices nil t nil nil "Deny")
+            (quit "Deny"))))
     (pcase choice
       ("Allow once" t)
-      ("Allow for session"
-       (pichat-approval-set-session session tool-name 'allow) t)
       ("Always allow" (pichat-approval-set tool-name 'allow) t)
-      ("Deny for session"
-       (pichat-approval-set-session session tool-name 'deny) nil)
-      ("Always deny" (pichat-approval-set tool-name 'deny) nil)
       (_ nil))))
 
-(defun pichat-approval-approve-p (tool-name mutating-p &optional params session summary)
-  "Return non-nil if Emacs TOOL-NAME with PARAMS should run in SESSION.
-Non-mutating tools are allowed unless explicitly denied.  Mutating prompts show
-SUMMARY (when non-nil) and arguments, and support one-shot, session, and
-durable exact-tool decisions."
-  (pcase (pichat-approval-resolve tool-name mutating-p session)
+(defun pichat-approval-approve-p (tool-name mutating-p &optional params summary)
+  "Return non-nil if Emacs TOOL-NAME with PARAMS should run.
+Non-mutating tools are allowed unless explicitly denied.  Mutating tools
+without a stored rule prompt, showing SUMMARY (when non-nil) and arguments."
+  (pcase (pichat-approval-resolve tool-name mutating-p)
     ('allow t)
     ('deny nil)
-    (_ (pichat-approval-prompt tool-name params session summary))))
+    (_ (pichat-approval-prompt tool-name params summary))))
 
 (provide 'pichat-approval)
 ;;; pichat-approval.el ends here

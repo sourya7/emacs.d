@@ -147,9 +147,6 @@ or user configuration are inherited."
     (setq pichat-tools-registry (make-hash-table :test #'equal)))
   (when (boundp 'pichat-approval-rules)
     (setq pichat-approval-rules nil))
-  (when (boundp 'pichat-approval-session-rules)
-    (setq pichat-approval-session-rules
-          (make-hash-table :test #'eq :weakness 'key)))
   (when (fboundp 'pichat-archive-reset)
     (pichat-archive-reset))
   (when (boundp 'pichat-sessions--summary-cache)

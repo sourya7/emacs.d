@@ -188,8 +188,9 @@ never exposes every tool."
         ((memq allowed '(nil none)) nil)
         (t (and (member name allowed) t))))
 
-(defun pichat-tools-approval-required-json-p (json &optional session allowed)
-  "Return non-nil when JSON tool call requires interactive approval in SESSION.
+(defun pichat-tools-approval-required-json-p (json &optional _session allowed)
+  "Return non-nil when JSON tool call requires interactive approval.
+Approval rules are global, so the calling runtime does not matter.
 Malformed, unknown and calls not permitted by ALLOWED (see
 `pichat-tools-allowed-p') return nil so the ordinary execution path can
 produce its error response without prompting."
@@ -203,7 +204,7 @@ produce its error response without prompting."
              (pichat-tools-allowed-p name allowed)
              (eq 'ask
                  (pichat-approval-resolve
-                  name (pichat-tool-mutating-p tool) session))))
+                  name (pichat-tool-mutating-p tool)))))
     (error nil)))
 
 (defun pichat-tools-call (tool params &optional session)
@@ -352,7 +353,7 @@ outside it is rejected before approval or execution."
     (json-serialize
      (cond
       ((not (pichat-approval-approve-p
-             name (pichat-tool-mutating-p tool) params session
+             name (pichat-tool-mutating-p tool) params
              (lambda () (pichat-tools-approval-summary tool params session))))
        (list :isError t
              :content (vector (list :type "text" :text "Denied by user"))))

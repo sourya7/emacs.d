@@ -271,10 +271,10 @@ Return (ERRORP . DECODED-OR-TEXT)."
                      "{\"name\":\"pichat_jobs_list\",\"params\":{}}" session))
         (should (pichat-tool-bridge-approval-required-p request session))
         (cl-letf (((symbol-function 'completing-read)
-                   (lambda (prompt &rest _) (push prompt prompts) "Deny once")))
+                   (lambda (prompt &rest _) (push prompt prompts) "Deny")))
           (should (string-match-p "Denied by user" (format "%S" (funcall call)))))
         (should (string-match-p "pichat_job_schedule.*once" (car prompts)))
-        (should (string-match-p "(Run once at .*: “Review files” on .* in " (car prompts)))
+        (should (string-match-p "\\`Run once at .*: “Review files” on .* in .* — Emacs tool" (car prompts)))
         (should-not (plist-get (pichat-job-record store 'jobs job) :schedule))
         ;; An allow policy runs it without prompting.
         (setq pichat-approval-rules '(("pichat_job_schedule" . allow)))
@@ -456,6 +456,22 @@ The execution is registered with EXECUTOR but has no process."
             ;; Runs started from Jobs are never refused by the limit.
             (let ((repeat (pichat-job-executor-submit-options executor (list :repeat-of w2))))
               (should (= 4 (length (plist-get (pichat-job-chain store repeat) :members)))))))))))
+
+(ert-deftest pichat-job-tools-run-now-blocked-by-uncertain-run-points-to-the-user ()
+  ;; An uncertain run cannot be cancelled, so the error must not suggest it.
+  (pichat-test-with-job-tools
+    (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (run (pichat-job-enqueue store nil job))
+           (token (plist-get (pichat-job-claim store run) :attempt)))
+      (pichat-job-advance store run token "running" '(:runtime-id "pichat-runtime-gone"))
+      (pichat-job-advance store run token "uncertain" '(:reason "Process lost"))
+      (let ((result (pichat-test-job-tool "pichat_job_run_now" (list :job_id job))))
+        (should (car result))
+        (ert-info ((cdr result))
+          (should (string-match-p (concat "unfinished run " run " (uncertain)")
+                                  (cdr result)))
+          (should (string-match-p "only the user can release it in Jobs" (cdr result)))
+          (should-not (string-match-p "cancel" (cdr result))))))))
 
 (ert-deftest pichat-job-tools-cancel-pending-and-active-runs ()
   (pichat-test-with-job-tools

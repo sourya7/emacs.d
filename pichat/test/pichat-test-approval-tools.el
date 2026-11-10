@@ -297,26 +297,74 @@
         (should (eq 'ask (pichat-approval-decision "tool")))
         (should (eq 'ask (pichat-approval-decision "stale")))))))
 
-(ert-deftest pichat-emacs-tool-approval-shows-arguments-and-supports-session-scope ()
+(ert-deftest pichat-emacs-tool-approval-offers-three-choices-and-only-always-stores ()
   (pichat-test-with-clean-state
     (pichat-test-with-approval-file
-      (let ((session (pichat-session-make :cwd default-directory))
-            (params '(:path "/tmp/target"))
-            prompt
+      (let ((params '(:path "/tmp/target"))
+            prompt collection default answer
             (prompts 0))
         (cl-letf (((symbol-function 'completing-read)
-                   (lambda (message &rest _args)
-                     (setq prompt message)
+                   (lambda (message choices _pred _require _initial _hist def &rest _)
+                     (setq prompt message collection choices default def)
                      (cl-incf prompts)
-                     "Allow for session")))
-          (should (pichat-approval-approve-p "mutate" t params session))
+                     answer)))
+          (setq answer "Deny")
+          (should-not (pichat-approval-approve-p "mutate" t params))
+          (should (equal '("Allow once" "Always allow" "Deny") collection))
+          (should (equal "Deny" default))
           (should (string-match-p (regexp-quote "/tmp/target") prompt))
-          (should (pichat-approval-approve-p "mutate" t params session))
-          (should (= 1 prompts)))
+          (should-not pichat-approval-rules)
+          (should-not (file-exists-p pichat-approval-policy-file))
+          ;; Deny is not remembered: the next call asks again.
+          (setq answer "Always allow")
+          (should (pichat-approval-approve-p "mutate" t params))
+          (should (= 2 prompts))
+          (should (pichat-approval-approve-p "mutate" t params))
+          (should (= 2 prompts)))
+        (should (eq 'allow (pichat-approval-decision "mutate")))
+        ;; A stored deny rule is still honoured without prompting.
         (setq pichat-approval-rules '(("mutate" . deny)))
         (pichat-approval-save)
-        (should-not (pichat-approval-approve-p "mutate" t params session))
-        (should (eq 'deny (pichat-approval-decision "mutate" session)))))))
+        (should-not (pichat-approval-approve-p "mutate" t params))
+        (should (= 2 prompts))))))
+
+(ert-deftest pichat-emacs-tool-approval-quit-denies-without-storing ()
+  ;; C-g used to cancel the dialog; the model then read "No result from Emacs".
+  (pichat-test-with-clean-state
+    (pichat-test-with-approval-file
+      (let ((executions 0))
+        (pichat-define-tool pichat-test-quit (:mutating t)
+          (cl-incf executions)
+          "ran")
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (&rest _) (signal 'quit nil))))
+          (let ((reply (json-parse-string
+                        (pichat-tools-execute-json
+                         "{\"name\":\"pichat-test-quit\",\"params\":{}}" nil 'all)
+                        :object-type 'plist :array-type 'list)))
+            (should (eq t (plist-get reply :isError)))
+            (should (equal "Denied by user"
+                           (plist-get (car (plist-get reply :content)) :text)))))
+        (should (= 0 executions))
+        (should-not pichat-approval-rules)
+        (should-not (file-exists-p pichat-approval-policy-file))))))
+
+(ert-deftest pichat-emacs-tool-approval-prompt-is-bounded-with-summary-first ()
+  (pichat-test-with-clean-state
+    (pichat-test-with-approval-file
+      (let ((params (list :job_id "job-1"
+                          :input (concat "first line\nsecond\t" (make-string 4000 ?x))))
+            prompt)
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (message &rest _) (setq prompt message) "Deny")))
+          (pichat-approval-approve-p "pichat_job_run_now" t params
+                                     (make-string 240 ?s)))
+        (should (< (length prompt) 600))
+        (should (string-prefix-p (make-string 240 ?s) prompt))
+        (should (string-match-p "pichat_job_run_now, arguments (:job_id \"job-1\"" prompt))
+        (should (string-match-p "first line\\\\nsecond" prompt))
+        (should-not (string-match-p "[\n\t]" prompt))
+        (should (string-match-p "… \\[[0-9]+ more characters\\]" prompt))))))
 
 (ert-deftest pichat-approval-resolution-separates-policy-from-prompting ()
   (pichat-test-with-clean-state
@@ -360,14 +408,14 @@
                                  (format "Change %s\nnow" (plist-get params :target))))
           "changed")
         (cl-letf (((symbol-function 'completing-read)
-                   (lambda (prompt &rest _) (push prompt prompts) "Deny once")))
+                   (lambda (prompt &rest _) (push prompt prompts) "Deny")))
           (pichat-tools-execute-json
            "{\"name\":\"pichat-test-described\",\"params\":{\"target\":\"alpha\"}}" session 'all)
-          (should (string-match-p "pichat-test-described (Change alpha now) with arguments.*alpha"
+          (should (string-match-p "\\`Change alpha now — Emacs tool pichat-test-described, arguments.*alpha"
                                   (car prompts)))
           (pichat-tools-execute-json
            "{\"name\":\"pichat-test-described\",\"params\":{\"target\":\"bad\"}}" session 'all)
-          (should (string-match-p "pichat-test-described with arguments.*bad" (car prompts))))
+          (should (string-match-p "\\`Emacs tool pichat-test-described, arguments.*bad" (car prompts))))
         (should (= 2 summaries))
         (setq pichat-approval-rules '(("pichat-test-described" . allow)))
         (pichat-approval-save)

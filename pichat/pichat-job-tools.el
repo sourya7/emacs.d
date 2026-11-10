@@ -327,12 +327,16 @@ so a job run can never start its own saved job."
                                    (not (equal (plist-get run :state) "finished"))))
                             (pichat-job-records store 'runs))))
     (when pending
-      ;; Name the blocking run so the agent can inspect or cancel it.
+      ;; Name the blocking run and the only way past it.  An uncertain run
+      ;; cannot be cancelled; only the user can release it in Jobs.
       (user-error "Saved job %s already has an unfinished run %s (%s)%s"
                   id (plist-get pending :id) (plist-get pending :state)
-                  (if (equal (plist-get pending :id) (pichat-job-tools--caller-run owner))
-                      "; it is this runtime's own run"
-                    "; inspect or cancel it first")))
+                  (cond
+                   ((equal (plist-get pending :id) (pichat-job-tools--caller-run owner))
+                    "; it is this runtime's own run")
+                   ((equal (plist-get pending :state) "uncertain")
+                    "; it is uncertain, so only the user can release it in Jobs; stop and report")
+                   (t "; inspect or cancel it first"))))
     ;; Check input before submitting, with the same rules as Jobs → Run job.
     (pichat-job-input-check (plist-get job :spec) input)
     (let* ((caller (pichat-job-tools--caller-run owner))

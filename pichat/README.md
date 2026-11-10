@@ -2690,6 +2690,12 @@ Emacs-defined tool must first be selected for the runtime, and selecting it (or
 its whole group) does not approve it. A mutating Emacs tool whose effective
 policy is `ask` waits for its owning chat to be selected before prompting;
 stored allow/deny decisions and non-mutating tools remain immediate.
+The prompt shows the tool's summary of the call first, then its name and its
+arguments (cut to 300 characters). It offers **Allow once**, **Always allow**
+and **Deny** (the default); `C-g` also denies. Only **Always allow** is
+remembered, as a global rule in `pichat-approval-policy-file`. To stop being
+asked, deselect the tool for the runtime instead; a `deny` rule written in that
+file is still honoured.
 A waiting approval belongs to the agent run that issued the call. When that run
 ends (for example on abort), the request is withdrawn: it no longer counts in
 `UI:N`, never prompts later, and if its prompt was already open, choosing Allow

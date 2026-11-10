@@ -256,7 +256,7 @@
             (should (process-live-p proc)))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
-(ert-deftest pichat-reconfigure-bridge-handshake-is-owned-but-tools-are-denied ()
+(ert-deftest pichat-reconfigure-bridge-definitions-are-owned-but-tools-are-denied ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-rpc--dispatch-process proc)
           (token (make-symbol "restart"))
@@ -268,8 +268,8 @@
                 ((symbol-function 'pichat-tool-bridge-execute-json)
                  (lambda (&rest _) (ert-fail "Restart executed an Emacs tool"))))
         (should (pichat-bridge-transport-handle
-                 session (list :id "handshake" :title
-                               pichat-bridge-transport-handshake-title)))
+                 session (list :id "definitions" :method "editor" :title
+                               pichat-bridge-transport-tools-title)))
         (should (pichat-bridge-transport-handle
                  session (list :id "tool" :title
                                pichat-bridge-transport-tool-call-title

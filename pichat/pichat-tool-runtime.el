@@ -115,7 +115,7 @@ and extension activation changes do not trigger it automatically."
                  (pcase (plist-get record :type)
                    ("extension_ui_request"
                     (cond
-                     ((and (member (plist-get record :method) '("input" "editor"))
+                     ((and (equal (plist-get record :method) "editor")
                            (pichat-bridge-transport-startup-request-p record))
                       (let ((pichat-rpc--internal-request t) (pichat-rpc--operation-token restart-token))
                         (pichat-rpc-extension-ui-value session (plist-get record :id)

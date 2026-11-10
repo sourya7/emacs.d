@@ -187,8 +187,8 @@
             (should-error
              (pichat-bridge-transport-handle
               session
-              (list :id "bridge"
-                    :title pichat-bridge-transport-handshake-title))
+              (list :id "bridge" :method "editor"
+                    :title pichat-bridge-transport-tools-title))
              :type 'user-error)
             (should-not rpc-called))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))

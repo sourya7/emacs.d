@@ -7,15 +7,13 @@
 (require 'pichat-backend)
 (require 'pichat-tool-bridge)
 
-(defconst pichat-bridge-transport-handshake-title "__pichat_handshake__")
 (defconst pichat-bridge-transport-tools-title "__pichat_tools_request__")
 (defconst pichat-bridge-transport-tool-call-title "__pichat_tool_call__")
 
 (defun pichat-bridge-transport-handle-p (raw)
   "Return non-nil if RAW extension UI request is a PiChat sentinel request."
   (let ((title (plist-get raw :title)))
-    (member title (list pichat-bridge-transport-handshake-title
-                        pichat-bridge-transport-tools-title
+    (member title (list pichat-bridge-transport-tools-title
                         pichat-bridge-transport-tool-call-title))))
 
 (defun pichat-bridge-transport-user-input-required-p (session raw)
@@ -26,12 +24,11 @@
         (or (plist-get raw :prefill) "{}") session)))
 
 (defun pichat-bridge-transport-startup-request-p (raw)
-  "Return non-nil if RAW is a handshake or definitions request.
-These are answered by `pichat-bridge-transport-startup-reply' without user
-input."
-  (member (plist-get raw :title)
-          (list pichat-bridge-transport-handshake-title
-                pichat-bridge-transport-tools-title)))
+  "Return non-nil if RAW is the bridge's definitions request.
+It is answered by `pichat-bridge-transport-startup-reply' without user
+input.  There is no handshake: the reply's protocolVersion is the bridge's
+compatibility check."
+  (equal (plist-get raw :title) pichat-bridge-transport-tools-title))
 
 (defconst pichat-bridge-transport-empty-tools-reply
   "{\"protocolVersion\":1,\"tools\":[]}"
@@ -39,15 +36,12 @@ input."
 
 (defun pichat-bridge-transport-startup-reply (raw &optional session)
   "Return a noninteractive startup reply for RAW owned by SESSION, or nil.
-Only handshake and definitions are supported here; never execute a tool.
+Only definitions are supported here; never execute a tool.
 Definitions contain only SESSION's selected Emacs-defined tools; without a
 runtime (for example a catalogue probe) none are declared.  A failure while
 building definitions declares none and records a diagnostic for SESSION, so
 the bridge's request is always answered."
-  (cond
-   ((equal (plist-get raw :title) pichat-bridge-transport-handshake-title)
-    "{\"protocolVersion\":1,\"capabilities\":[\"tools\",\"tool-errors\",\"dynamic-tool-refresh\"]}")
-   ((equal (plist-get raw :title) pichat-bridge-transport-tools-title)
+  (when (pichat-bridge-transport-startup-request-p raw)
     (condition-case err
         (pichat-tool-bridge-definitions-json session)
       (error
@@ -56,7 +50,7 @@ the bridge's request is always answered."
           session :origin 'bridge-definitions :condition err
           :message (format "Emacs-defined tools were not declared: %s"
                            (error-message-string err))))
-       pichat-bridge-transport-empty-tools-reply)))))
+       pichat-bridge-transport-empty-tools-reply))))
 
 (defun pichat-bridge-transport-handle (session raw)
   "Handle bridge sentinel RAW for SESSION.  Return non-nil if handled."
@@ -69,7 +63,7 @@ the bridge's request is always answered."
          (restarting (and operation
                           (memq (plist-get operation :phase)
                                 '(starting loading synchronizing))))
-         ;; Only the current process's bridge handshake/definitions may send
+         ;; Only the current process's bridge definitions request may send
          ;; operation-owned UI replies.  Never accept a previous process's
          ;; delayed event or execute a tool against a staged old snapshot.
          (pichat-rpc--operation-token

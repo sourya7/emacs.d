@@ -6,31 +6,14 @@ type PiChatToolsResponse = { protocolVersion?: number; tools?: PiChatToolDef[] }
 type SystemPromptOptions = { selectedTools: string[] };
 
 const PROTOCOL_VERSION = 1;
-const CAPABILITIES = ["tools", "tool-errors", "dynamic-tool-refresh"];
 const STATUS_KEY = "pichat-bridge";
 
-const HANDSHAKE_TITLE = "__pichat_handshake__";
 const TOOLS_REQUEST_TITLE = "__pichat_tools_request__";
 const TOOL_CALL_TITLE = "__pichat_tool_call__";
 
 export default function (pi: ExtensionAPI) {
-	let pichatHost = false;
 	const registeredTools = new Set<string>();
 	const toolFingerprints = new Map<string, string>();
-
-	async function handshake(ctx: any) {
-		if (pichatHost || !ctx.hasUI) return pichatHost;
-		try {
-			const value = await ctx.ui.input(HANDSHAKE_TITLE, JSON.stringify({ protocolVersion: PROTOCOL_VERSION, capabilities: CAPABILITIES }), { timeout: 1000 });
-			const parsed = value ? JSON.parse(value) : undefined;
-			pichatHost = parsed?.protocolVersion === PROTOCOL_VERSION;
-			ctx.ui.setStatus(STATUS_KEY, pichatHost ? `connected:v${PROTOCOL_VERSION}` : "incompatible-protocol");
-		} catch (err) {
-			pichatHost = false;
-			ctx.ui.setStatus(STATUS_KEY, `error:${err instanceof Error ? err.message : String(err)}`);
-		}
-		return pichatHost;
-	}
 
 	function validTool(tool: unknown): tool is PiChatToolDef {
 		if (!tool || typeof tool !== "object") return false;
@@ -77,11 +60,14 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	async function syncTools(ctx: any, systemPromptOptions?: SystemPromptOptions) {
-		if (!(await handshake(ctx))) return;
+		// Only PiChat loads this bridge, so ask for definitions directly; the
+		// reply's protocolVersion is the compatibility check.  Without a UI
+		// (print mode) nobody could answer.
+		if (!ctx.hasUI) return;
 		ctx.ui.setStatus(STATUS_KEY, "synchronizing");
 		let raw: string | undefined;
 		try {
-			raw = await ctx.ui.editor(TOOLS_REQUEST_TITLE, JSON.stringify({ protocolVersion: 1 }));
+			raw = await ctx.ui.editor(TOOLS_REQUEST_TITLE, JSON.stringify({ protocolVersion: PROTOCOL_VERSION }));
 		} catch (err) {
 			ctx.ui.setStatus(STATUS_KEY, `sync-error:${err instanceof Error ? err.message : String(err)}`);
 			return;
@@ -95,7 +81,12 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.setStatus(STATUS_KEY, "sync-error:invalid-json");
 			return;
 		}
-		if (response.protocolVersion !== PROTOCOL_VERSION || !Array.isArray(response.tools)) {
+		// Fail closed: a host speaking another version declares no tools here.
+		if (response?.protocolVersion !== PROTOCOL_VERSION) {
+			ctx.ui.setStatus(STATUS_KEY, `incompatible-protocol:${String(response?.protocolVersion)}`);
+			return;
+		}
+		if (!Array.isArray(response.tools)) {
 			ctx.ui.setStatus(STATUS_KEY, "sync-error:invalid-envelope");
 			return;
 		}
@@ -120,7 +111,7 @@ export default function (pi: ExtensionAPI) {
 				async execute(_toolCallId, params, signal, _onUpdate, toolCtx) {
 					if (signal?.aborted) throw new Error("Aborted before Emacs answered");
 					const resultRaw = await untilAborted(
-						toolCtx.ui.editor(TOOL_CALL_TITLE, JSON.stringify({ protocolVersion: 1, name: tool.name, params })),
+						toolCtx.ui.editor(TOOL_CALL_TITLE, JSON.stringify({ protocolVersion: PROTOCOL_VERSION, name: tool.name, params })),
 						signal,
 					);
 					if (!resultRaw) throw new Error("No result from Emacs");

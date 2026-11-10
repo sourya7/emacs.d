@@ -2488,7 +2488,11 @@ is implemented.
 
 The PiChat bridge exposes Emacs-defined tools to Pi. Local runtimes load the
 bundled bridge automatically when Emacs-defined tools are selected
-(`pichat-bridge-extension-file` overrides it); SSH runtimes cannot use it. Use `pichat-define-tool` for short,
+(`pichat-bridge-extension-file` overrides it); SSH runtimes cannot use it.
+Before each agent turn the bridge asks Emacs for the runtime's selected tool
+definitions; there is no separate handshake. If Emacs answers with another
+protocol version, the bridge declares no tools and its extension status reads
+`incompatible-protocol:VERSION`. Use `pichat-define-tool` for short,
 synchronous operations: the body receives `params` and returns its final result
 directly. For example:
 

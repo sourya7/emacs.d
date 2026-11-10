@@ -1225,25 +1225,53 @@ clears MCP stays empty; an ineligible baseline or missing model starts nothing."
                3 "versioned bridge synchronization health"))
           (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+  (ert-deftest pichat-integration-bridge-declares-selected-tools-on-first-turn ()
+    ;; No handshake: the bridge's first request is for definitions, and the
+    ;; selected tool is declared to the very first turn.
+    (pichat-test-with-integration-session
+        (session :preset 'manual
+                 :selection '(:builtins nil :emacs ("pichat_test_first"))
+                 :before-start (pichat-define-tool pichat_test_first () "first")
+                 :script '(:turns [(:expectTool (:name "pichat_test_first")
+                                    :text "declared")]))
+      (pichat-test-prompt-and-wait session "first turn")
+      (pichat-test-assert-provider-script-consumed status-file)
+      (let ((requests (reverse
+                       (cl-remove-if-not
+                        (lambda (event)
+                          (equal "extension_ui_request" (plist-get event :type)))
+                        (pichat-session-event-log session)))))
+        (should-not (cl-find "__pichat_handshake__" requests
+                             :key (lambda (event) (plist-get event :title))
+                             :test #'equal))
+        (let ((first (cl-find-if (lambda (event) (plist-get event :title)) requests)))
+          (should (equal pichat-bridge-transport-tools-title (plist-get first :title)))
+          (should (equal "editor" (plist-get first :method)))))))
+
   (ert-deftest pichat-integration-bridge-rejects-incompatible-protocol-version ()
-    ;; Install the incompatible reply before startup: startup now succeeds
-    ;; without a chat view, rather than timing out until the first prompt.
+    ;; A definitions reply in another protocol version fails closed: the bridge
+    ;; registers none of its tools and shows a status naming the version.
     (let ((original (symbol-function 'pichat-bridge-transport-startup-reply)))
       (cl-letf (((symbol-function 'pichat-bridge-transport-startup-reply)
                  (lambda (raw &optional session)
-                   (if (equal pichat-bridge-transport-handshake-title (plist-get raw :title))
-                       "{\"protocolVersion\":999}"
-                     (funcall original raw session)))))
+                   (let ((reply (funcall original raw session)))
+                     (and reply
+                          (replace-regexp-in-string
+                           "\"protocolVersion\":1" "\"protocolVersion\":999" reply t t))))))
         (pichat-test-with-integration-session
-            (session :no-session t
-                     :extensions (list pichat-test-bridge-extension)
-                     :script '(:turns []))
+            (session :preset 'manual
+                     :selection '(:builtins nil :emacs ("pichat_test_mismatch"))
+                     :before-start (pichat-define-tool pichat_test_mismatch () "never")
+                     :script '(:turns [(:expectToolAbsent "pichat_test_mismatch"
+                                        :text "not declared")]))
           (pichat-test-wait-until
            (lambda ()
              (cl-find-if (lambda (event)
-                           (equal "incompatible-protocol" (plist-get event :statusText)))
+                           (equal "incompatible-protocol:999" (plist-get event :statusText)))
                          (pichat-session-event-log session)))
-           3 "bridge protocol rejection")))))
+           3 "bridge protocol rejection")
+          (pichat-test-prompt-and-wait session "mismatched turn")
+          (pichat-test-assert-provider-script-consumed status-file)))))
 
   (ert-deftest pichat-integration-bridge-preserves-emacs-tool-schema ()
     (pichat-test-with-integration-session
@@ -2343,7 +2371,7 @@ clears MCP stays empty; an ineligible baseline or missing model starts nothing."
             (kill-buffer buffer)))))))
 
 (when pichat-test-include-integration
-  (ert-deftest pichat-integration-reconfigure-bridge-handshake-reconnects ()
+  (ert-deftest pichat-integration-reconfigure-bridge-reconnects ()
     (pichat-test-with-integration-session
         (session :extensions (list pichat-test-bridge-extension)
                  :script '(:turns [(:text "bridge restart answer")]))
@@ -2393,7 +2421,8 @@ clears MCP stays empty; an ineligible baseline or missing model starts nothing."
                      (pichat-session-event-log session)))
        8 (format "bridge readiness without a chat view: %S" (pichat-session-event-log session)))
       (should-not (cl-find-if (lambda (event)
-                               (equal "incompatible-protocol" (plist-get event :statusText)))
+                               (string-prefix-p "incompatible-protocol"
+                                                (or (plist-get event :statusText) "")))
                              (pichat-session-event-log session)))
       (pichat-test-prompt-and-wait session "check tool")))
 

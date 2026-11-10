@@ -937,7 +937,7 @@ must not update public state or become conversation/prompt acceptance events."
       ;; not through the view's handler; retain the generic event above, but
       ;; do not deliver a second, duplicate reply through the view.
       (unless (and (eq normalized 'extension-ui-request)
-                   (member (plist-get event :method) '("input" "editor"))
+                   (equal (plist-get event :method) "editor")
                    (progn (require 'pichat-bridge-transport)
                           (pichat-bridge-transport-startup-request-p event))
                    (pichat-bridge-transport-handle session event))

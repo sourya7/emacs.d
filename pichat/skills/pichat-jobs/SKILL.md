@@ -56,6 +56,11 @@ other repositories cannot be named, a global file can only name a global job,
 and a job cannot name itself. The linked job must be imported first; Review
 resolves it.
 
+For a review loop (README "Review loops"), the worker declares `input` and names
+the reviewer in `after_job`. A reviewer that restarts the worker with
+`pichat_job_run_now` must say so in its own `instructions`, and its preset must
+include the Jobs tools.
+
 Only these fields are allowed. Do not add tools, arbitrary argv, schedules,
 captured configuration or executable Lisp. Use an explicit named
 preset (not `default`) and `provider/model` (no thinking suffix). Names/model

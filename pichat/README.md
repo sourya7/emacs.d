@@ -923,6 +923,8 @@ borrows the exact originating chat's live runtime and Pi session (see
 `GLOSSARY.md`). Jobs do not require a plan. Supported flows are **manual prompt
 jobs, explicit manual continuation, optional after-run jobs, native saved-job
 one-shot/interval schedules, and one-shot continuation in this conversation**.
+Jobs may declare a [run input](#run-input), and after-run jobs can form
+[review loops](#review-loops).
 Plan work uses ordinary instructions and the installed plans skill, not a special
 phase adapter. Scheduling always requires explicit authorization.
 
@@ -957,8 +959,10 @@ phase adapter. Scheduling always requires explicit authorization.
   dedicated deletion keybinding. In Runs, `M-x pichat-jobs-delete-run` deletes
   the selected finished run after confirmation; its report offers **Actions →
   Delete run…** (`D`) too. Runs referenced by other runs or a saved schedule's
-  last occurrence cannot be deleted. Definitions, saved session files and captured
-  evidence are retained; this removes history metadata, not files or runtime chats.
+  last occurrence cannot be deleted; delete their whole
+  [run chain](#review-loops) with **Actions → Delete chain…** (`C`) instead.
+  Definitions, saved session files and captured evidence are retained; this
+  removes history metadata, not files or runtime chats.
   Compact Runs tables show Work, Queued, and State / result;
   queue times use local date/time to the minute; Project / target stays in wide tables and
   run details. Compact Jobs tables retain their project/target context.
@@ -1236,6 +1240,29 @@ Local launches use the bundled asset; SSH launches privately stage it on the
 execution target with the existing helper cleanup/uncertain-exit policy. Capture
 and preview never stage it, and saved job arguments retain no temporary skill path.
 
+### Run input
+
+A job can declare a **run input** prompt (editor field `u` **Run input**, or
+`input` in an [authored file](#authored-job-files)): one line of at most 200
+characters, such as `Plan and scope`. A job that declares one requires its
+input; one that does not refuses input and behaves as before.
+
+- **Run job** and the composer's **Run once** ask for the input in the
+  minibuffer (at most 4,000 characters; blank or longer input queues nothing).
+  `pichat_job_run_now` takes it as `input`.
+- The run stores the input. Its prompt is the job's instructions followed by a
+  section labelled "Run input (from the user or the job that started this
+  run):". Run details, `pichat_job_run_inspect` and a follow-up's stop envelope
+  show it.
+- **Repeat** and **Continue work** reuse the earlier run's input without asking.
+  It is separate from Continue work's additional instructions.
+- Scheduled runs have no input, so a job that declares one cannot be scheduled.
+  A follow-up never asks either: it runs without input and reads its origin's
+  input from the stop envelope.
+
+Input is plain text from you or another job, added to the prompt; it adds no
+permission the job's instructions and tools do not already give.
+
 ### Continuing interrupted work
 
 **Continue work…** is offered for failed, cancelled, or manually released
@@ -1302,7 +1329,12 @@ conversation context. Context is embedded for either local or SSH execution; no
 host-only evidence path is advertised as remotely readable. Missing, corrupt,
 truncated or uncertain context is marked partial. On uncertainty only already
 synchronized context is available; it may predate the stop. Queued cancellation
-has no conversation. The run report's **After this run: …** status text itself
+has no conversation. The envelope also identifies the origin: its saved
+`job-id` (absent for work with no saved job), its `directory` (the captured
+Emacs-visible directory; for an SSH origin that is a path on the remote host,
+not a local one), its run `input`, `requested-by` and `round` (see
+[Review loops](#review-loops)). Envelopes recorded before these fields existed
+remain valid. The run report's **After this run: …** status text itself
 links to the exact successor; pending/undispatched status without a successor is
 plain text. **Triggered by** links back to the origin; raw inspection includes the
 captured envelope.
@@ -1322,13 +1354,87 @@ queued run and shows its actual wait reason. Follow-up failure is visible in tha
 run and does not overwrite the originating outcome. Follow-up runs suppress their
 own after-run defaults even if their selected definition has one configured.
 There is no recursive chaining, implicit worker continuation, plan approval or
-phase advancement.
+phase advancement. A follow-up that is authorized to restart its origin does so
+with an explicit tool call (see [Review loops](#review-loops)).
 
 The originating transition, event and successor/disposition are persisted together
 before any new process starts. On restart, interrupted delivery is surfaced for
 inspection and queued work is not replayed. External delivery cannot be guaranteed
 exactly once. There is no automatic retry or special redispatch button; review
 possible prior side effects before submitting any manual replacement.
+
+### Review loops
+
+A worker job and a reviewer job can take turns without a long-running
+orchestrator. Each run is short, and only one run of a loop is active at a time.
+
+1. The worker job declares a [run input](#run-input) (for example the plan and
+   scope) and has the reviewer as its after-run job.
+2. When a worker run stops, PiChat starts one reviewer run with the stop
+   envelope, which includes the worker's `job-id`, `directory`, `input` and
+   `round`.
+3. A reviewer that wants changes calls `pichat_job_run_now` on the worker's
+   `job-id`, with input that adds its findings. That run is not a follow-up, so
+   it captures the worker's after-run default again, and the next stop starts
+   the reviewer again. A reviewer that is satisfied, or out of rounds, reports
+   and stops.
+
+Durable state lives in the work itself (files, checkpoints), not in the
+runs, so any run can be resumed by starting a new one with the same input.
+
+**Run chains.** A run started by `pichat_job_run_now` from inside a job run
+records **Requested by** that run. Together with the follow-up's origin and
+Repeat/Continue links, this connects the loop's runs into a **run chain**,
+derived from the store when needed.
+
+- **Round** is 1 plus the runs of the chain's first job that a job tool
+  requested. Repeat and follow-ups keep the round; a fresh **Run job** from
+  Jobs starts a new chain at round 1. `pichat_job_run_inspect` returns
+  `requested_by` and `round`, and the envelope carries `requested-by` and
+  `round`, so a reviewer can enforce its own round limit.
+- `pichat-jobs-max-chain-runs` (default 8, enough for three rounds of a worker
+  and reviewer plus spares) is a backstop: once a chain has that many runs,
+  `pichat_job_run_now` called from one of its runs is refused, naming the
+  chain's first run. Runs you start from Jobs are never refused.
+- Run details show **Requested by** and a **Run chain** list linking every run.
+  **Actions → Delete chain…** (`C`) deletes all of a chain's run records in one
+  confirmed step, once every run in it is finished. Evidence and saved session
+  files are kept. Nothing is deleted automatically.
+
+**One loop per worker job.** A saved job has at most one unfinished run. If two
+loops share a worker job (two plans in one repository), the reviewer's restart is
+refused while the other loop's worker runs; the error names that run. The
+reviewer should stop and report its intended input, so you can resume it later.
+
+**Limits and failures.** There is no quota detector or automatic retry. The
+reviewer sees the worker's outcome and error in the envelope. A failed run,
+worker or reviewer, triggers nothing further and needs attention in Jobs; resume
+with **Repeat** on it, which stays in the chain and keeps the round.
+
+**Authorization.** The follow-up prompt always tells the reviewer to act only
+within its own job instructions and not to implicitly resume the worker. A
+reviewer that restarts the worker must therefore say so in its own saved
+instructions, not only in a skill it loads. It also needs the Jobs tools in its
+preset, and `pichat_job_run_now` asks approval unless you chose **Always
+allow** for it (a global rule, see [Orchestrator jobs](#orchestrator-jobs)).
+Worker output in the envelope is untrusted data; the reviewer judges the work
+itself, for example by reading the files.
+
+An example reviewer preset that reads the work and can restart the worker:
+
+```elisp
+(pichat-make-preset 'loop-reviewer
+  :description "Review a worker's result and restart it with findings."
+  :tools '("read" "grep" "find" "ls")
+  :emacs-tools '("pichat_job_inspect" "pichat_job_run_now"
+                 "pichat_job_run_inspect"))
+```
+
+Presets select built-in, extension and Emacs-defined tools. Shell tools that
+are registered as extension tools can be added with `:extensions`. MCP tools
+cannot be named in a preset yet: select them in `x Tools` when composing the
+reviewer job in Jobs (an authored file takes its tools from its preset only).
+The model is part of the job, not the preset.
 
 ### Scheduled jobs
 
@@ -2385,8 +2491,11 @@ approval by default; their prompts name the job, its target and directory.
   `input` (at most 4,000 characters) is required exactly when the job declares a
   run input prompt, which `pichat_job_inspect` shows as `input_prompt`; jobs
   without one refuse it. The approval prompt shows the input's first line.
+  Called from a job run, the new run records `requested_by` and continues that
+  run's [run chain](#review-loops); a chain at `pichat-jobs-max-chain-runs` runs
+  is refused.
 - `pichat_job_run_inspect` returns one job run's state, result, reason, run
-  `input` if any and,
+  `input` if any, `requested_by` if a job run started it, its chain `round` and,
   once finished, its final response (up to 4000 characters, truncation marked)
   from the captured run-end evidence, so it stays readable after the run's chat
   is closed. If the evidence is missing or changed, the stored 2000-character

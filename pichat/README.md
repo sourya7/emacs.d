@@ -2502,6 +2502,15 @@ directly. For example:
     (format "Buffer %s has %d characters" (buffer-name) (buffer-size))))
 ```
 
+The body must return a string; for structured data return JSON text from
+`pichat-tools-json`. Any other value, including nil, reaches Pi as a tool error
+"Emacs tool NAME returned no text". Registration refuses a tool Pi could not
+declare: a name outside letters, digits, `_` and `-`, a label or description
+that is not a string, parameters that are not a JSON object schema, or a
+definition `json-serialize` cannot encode. The error names the tool. If
+building the definitions still fails while a runtime asks for them, PiChat
+declares no Emacs-defined tools for that turn and records a diagnostic.
+
 While a tool runs, `pichat-tools-calling-session` is the runtime that called
 it (nil outside bridge calls). A mutating tool can pass
 `:approval-summary #'my-summary`: a function of `params` returning a short

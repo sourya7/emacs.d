@@ -351,6 +351,8 @@ Do not dispatch callbacks into a replacement process."
 (declare-function pichat-tool-runtime-prepare "pichat-tool-runtime" (session names &optional skill-file))
 (declare-function pichat-tool-runtime-begin "pichat-tool-runtime" (session &optional callback))
 (declare-function pichat-tool-runtime-dispose "pichat-tool-runtime" (session))
+(declare-function pichat-bridge-transport-startup-request-p "pichat-bridge-transport" (raw))
+(declare-function pichat-bridge-transport-handle "pichat-bridge-transport" (session raw))
 
 (cl-defun pichat-rpc-start (session &optional validated-command (startup-tools nil tools-p))
   "Start the Pi RPC process for SESSION and return SESSION.
@@ -937,7 +939,7 @@ must not update public state or become conversation/prompt acceptance events."
       (unless (and (eq normalized 'extension-ui-request)
                    (member (plist-get event :method) '("input" "editor"))
                    (progn (require 'pichat-bridge-transport)
-                          (pichat-bridge-transport-startup-reply event session))
+                          (pichat-bridge-transport-startup-request-p event))
                    (pichat-bridge-transport-handle session event))
         (pichat-emit session normalized :raw event)))))
 

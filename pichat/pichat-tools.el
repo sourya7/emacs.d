@@ -30,10 +30,55 @@ outside bridge calls.  Tools read it to refuse acting on their own runtime.")
 (defvar pichat-tools-registry (make-hash-table :test #'equal)
   "Registered Emacs tools keyed by tool name.")
 
+(defconst pichat-tools-name-regexp "\\`[A-Za-z0-9_-]+\\'"
+  "Names the Pi bridge accepts for an Emacs-defined tool.")
+
+(defun pichat-tools--definition (tool)
+  "Return TOOL's bridge definition as a plist ready for `json-serialize'.
+Absent label, description and parameters are omitted, not sent as null."
+  (let ((instructions (pichat-tool-instructions tool)))
+    (append (list :name (pichat-tool-name tool))
+            (when (pichat-tool-label tool)
+              (list :label (pichat-tool-label tool)))
+            (when (pichat-tool-description tool)
+              (list :description (pichat-tool-description tool)))
+            (when (pichat-tool-parameters tool)
+              (list :parameters (pichat-tool-parameters tool)))
+            (list :mutating (if (pichat-tool-mutating-p tool) t :json-false))
+            (when (and (stringp instructions)
+                       (not (string-blank-p instructions)))
+              (list :instructions instructions)))))
+
+(defun pichat-tools--check-definition (tool)
+  "Signal unless TOOL's bridge definition encodes as the bridge expects.
+The bridge rejects every Emacs-defined tool of a runtime when one
+definition is invalid, so refuse such a tool before it can be selected."
+  (let* ((name (pichat-tool-name tool))
+         (decoded
+          (condition-case err
+              (json-parse-string
+               (json-serialize (pichat-tools--definition tool)
+                               :false-object :json-false :null-object nil)
+               :object-type 'hash-table)
+            (error
+             (error "Emacs tool definition cannot be encoded as JSON: %s (%s)"
+                    name (error-message-string err))))))
+    (dolist (field '("label" "description"))
+      (unless (stringp (gethash field decoded ""))
+        (error "Emacs tool %s must be a string: %s" field name)))
+    (unless (hash-table-p (gethash "parameters" decoded (make-hash-table)))
+      (error "Emacs tool parameters must be a JSON object schema: %s" name))))
+
 (defun pichat-tools-register (tool)
-  "Register synchronous Emacs TOOL after validating its contract."
+  "Register synchronous Emacs TOOL after validating its contract.
+The name must match `pichat-tools-name-regexp' and the definition must
+encode as JSON, so a registered tool can always be declared to Pi."
   (unless (pichat-tool-p tool)
     (error "Invalid Emacs tool"))
+  (unless (and (stringp (pichat-tool-name tool))
+               (string-match-p pichat-tools-name-regexp (pichat-tool-name tool)))
+    (error "Emacs tool name must use only letters, digits, _ and -: %S"
+           (pichat-tool-name tool)))
   (when (pichat-tool-async-p tool)
     (error "Asynchronous Emacs-defined tools are unsupported: %s"
            (pichat-tool-name tool)))
@@ -50,6 +95,7 @@ outside bridge calls.  Tools read it to refuse acting on their own runtime.")
               (functionp (pichat-tool-approval-summary tool)))
     (error "Emacs tool approval summary must be a function: %s"
            (pichat-tool-name tool)))
+  (pichat-tools--check-definition tool)
   (puthash (pichat-tool-name tool) tool pichat-tools-registry)
   tool)
 
@@ -61,8 +107,9 @@ the Tools picker group; it affects presentation and selection convenience,
 never approval.  :approval-summary is evaluated to a function (for example
 #\='my-summary) called with the call's params; it returns a short human
 description shown in the approval prompt beside the raw arguments, or nil.
-The body receives `params'; the calling runtime is
-`pichat-tools-calling-session'."
+The body receives `params' and must return a string, usually
+`pichat-tools-json' text; any other value becomes a tool error.  The calling
+runtime is `pichat-tools-calling-session'."
   (declare (indent 2))
   (when (plist-get args :async)
     (error "Asynchronous Emacs-defined tools are unsupported: %s" name))
@@ -113,34 +160,26 @@ tool never selects or exposes it."
 
 (defun pichat-tools-definitions-json (&optional names)
   "Return JSON tool definitions for bridge registration.
-NAMES restricts the result as in `pichat-tools-allowed-p': omission or
-`all' includes every bridge-exposable tool, `none' includes nothing, and a
-list includes only those exact registered names."
+NAMES restricts the result as in `pichat-tools-allowed-p': `all' includes
+every bridge-exposable tool, a list includes only those exact registered
+names, and omission or `none' includes nothing."
   (let (defs)
     (maphash
      (lambda (name tool)
        (unless (or (pichat-tool-native-only-p tool)
                    (not (pichat-tools-allowed-p name names)))
-         (let ((instructions (pichat-tool-instructions tool)))
-           (push (append (list :name (pichat-tool-name tool)
-                               :label (pichat-tool-label tool)
-                               :description (pichat-tool-description tool)
-                               :parameters (pichat-tool-parameters tool)
-                               :mutating (if (pichat-tool-mutating-p tool) t :json-false))
-                         (when (and (stringp instructions)
-                                    (not (string-blank-p instructions)))
-                           (list :instructions instructions)))
-                 defs))))
+         (push (pichat-tools--definition tool) defs)))
      pichat-tools-registry)
     (json-serialize (list :protocolVersion 1 :tools (vconcat (nreverse defs)))
                     :false-object :json-false :null-object nil)))
 
 (defun pichat-tools-allowed-p (name allowed)
   "Return non-nil when tool NAME is permitted by ALLOWED.
-ALLOWED is nil or `all' for unrestricted internal callers, or a list of
-exact permitted names.  The empty selection is represented by `none'."
-  (cond ((or (null allowed) (eq allowed 'all)) t)
-        ((eq allowed 'none) nil)
+ALLOWED is `all' for unrestricted internal callers, or a list of exact
+permitted names.  nil and `none' permit nothing, so a missing selection
+never exposes every tool."
+  (cond ((eq allowed 'all) t)
+        ((memq allowed '(nil none)) nil)
         (t (and (member name allowed) t))))
 
 (defun pichat-tools-approval-required-json-p (json &optional session allowed)
@@ -163,7 +202,8 @@ produce its error response without prompting."
 
 (defun pichat-tools-call (tool params &optional session)
   "Call registered TOOL with structured PARAMS and return a result plist.
-The returned plist contains =:is-error= and =:value=.  When SESSION supplies an
+The returned plist contains =:is-error= and =:value=, always a string: a
+body returning anything but a string yields an error.  When SESSION supplies an
 Emacs working directory, bind it for the call.  Approval is deliberately outside
 this function so transports can apply their own asynchronous gate."
   (unless (pichat-tool-p tool)
@@ -178,8 +218,12 @@ this function so transports can apply their own asynchronous gate."
                       (pichat-session-emacs-cwd session))
                  default-directory))
             (pichat-tools-calling-session session))
-        (list :is-error nil
-              :value (funcall (pichat-tool-function tool) params)))
+        (let ((value (funcall (pichat-tool-function tool) params)))
+          (if (stringp value)
+              (list :is-error nil :value value)
+            (list :is-error t
+                  :value (format "Emacs tool %s returned no text"
+                                 (pichat-tool-name tool))))))
     (error
      (list :is-error t :value (error-message-string err)))))
 
@@ -257,30 +301,26 @@ Use :null and :false for JSON null and false."
   (json-serialize value :null-object :null :false-object :false))
 
 (defun pichat-tools--text (value)
-  "Return VALUE with encoded UTF-8 strings decoded, recursively.
+  "Return string VALUE with encoded UTF-8 decoded.
 Tools commonly return `json-serialize' output, which is UTF-8 bytes; the
 bridge reply needs character strings.  Invalid UTF-8 stays undecodable and
 is reported by the bridge as a failed reply."
-  (cond
-   ((and (stringp value) (not (multibyte-string-p value))
-         (string-match-p "[^\0-\177]" value))
-    (decode-coding-string value 'utf-8))
-   ((vectorp value) (vconcat (mapcar #'pichat-tools--text value)))
-   ((consp value) (mapcar #'pichat-tools--text value))
-   (t value)))
+  (if (and (not (multibyte-string-p value))
+           (string-match-p "[^\0-\177]" value))
+      (decode-coding-string value 'utf-8)
+    value))
 
 (defun pichat-tools-result-wire (result)
-  "Convert structured tool RESULT into the existing bridge wire object."
-  (let ((value (pichat-tools--text (plist-get result :value))))
-    (append
-     (when (plist-get result :is-error) (list :isError t))
-     (cond
-      ((stringp value)
-       (list :content (vector (list :type "text" :text value))))
-      ((listp value) value)
-      (t
-       (list :content
-             (vector (list :type "text" :text (format "%S" value)))))))))
+  "Convert structured tool RESULT into the bridge's text result object.
+A non-string value, which `pichat-tools-call' never returns, is an error."
+  (let ((value (plist-get result :value)))
+    (if (stringp value)
+        (append (when (plist-get result :is-error) (list :isError t))
+                (list :content (vector (list :type "text"
+                                             :text (pichat-tools--text value)))))
+      (list :isError t
+            :content (vector (list :type "text"
+                                   :text "Emacs tool returned no text"))))))
 
 (cl-defun pichat-tools-execute-json (json &optional session allowed)
   "Execute tool call described by JSON for optional SESSION and return JSON.

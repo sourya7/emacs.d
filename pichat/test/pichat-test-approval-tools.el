@@ -30,7 +30,7 @@
          :description "A JSON encoding test tool"
          :parameters (:type "object" :properties (:value (:type "string")) :required ["value"]))
       "ok")
-    (let* ((decoded (json-parse-string (pichat-tools-definitions-json)
+    (let* ((decoded (json-parse-string (pichat-tools-definitions-json 'all)
                                        :object-type 'plist
                                        :array-type 'list
                                        :false-object nil))
@@ -44,7 +44,8 @@
         (:label "Result Test" :description "A result encoding test tool")
       "tool output")
     (let* ((decoded (json-parse-string
-                     (pichat-tools-execute-json "{\"name\":\"pichat-test-result\",\"params\":{}}")
+                     (pichat-tools-execute-json "{\"name\":\"pichat-test-result\",\"params\":{}}"
+                                                nil 'all)
                      :object-type 'plist
                      :array-type 'list
                      :false-object nil))
@@ -58,21 +59,116 @@
     (let ((json (json-serialize '(:title "Résumé — 日本語"))))
       (should-not (multibyte-string-p json))
       (pichat-define-tool pichat-test-encoded-string () json)
-      (pichat-define-tool pichat-test-encoded-structure ()
-        (list :content (vector (list :type "text" :text json))))
       (pichat-define-tool pichat-test-invalid-bytes () (unibyte-string #xff #xfe))
-      (dolist (name '("pichat-test-encoded-string" "pichat-test-encoded-structure"))
-        (let* ((reply (json-parse-string
-                       (pichat-tools-execute-json (json-serialize (list :name name :params '())))
-                       :object-type 'plist :array-type 'list))
-               (text (plist-get (car (plist-get reply :content)) :text)))
-          (should-not (plist-get reply :isError))
-          (should (equal "Résumé — 日本語"
-                         (plist-get (json-parse-string text :object-type 'plist) :title)))))
+      (let* ((reply (json-parse-string
+                     (pichat-tools-execute-json
+                      "{\"name\":\"pichat-test-encoded-string\",\"params\":{}}" nil 'all)
+                     :object-type 'plist :array-type 'list))
+             (text (plist-get (car (plist-get reply :content)) :text)))
+        (should-not (plist-get reply :isError))
+        (should (equal "Résumé — 日本語"
+                       (plist-get (json-parse-string text :object-type 'plist) :title))))
       ;; Binary output cannot become text; the bridge turns this into an
       ;; error reply (`pichat-bridge-result-encoding-error-replies-instead-of-hanging').
       (should-error (pichat-tools-execute-json
-                     "{\"name\":\"pichat-test-invalid-bytes\",\"params\":{}}")))))
+                     "{\"name\":\"pichat-test-invalid-bytes\",\"params\":{}}" nil 'all)))))
+
+(ert-deftest pichat-tools-non-text-results-are-tool-errors-naming-the-tool ()
+  ;; nil used to reach Pi as JSON null and a list as an arbitrary object.
+  (pichat-test-with-clean-state
+    (pichat-define-tool pichat-test-nil-result () nil)
+    (pichat-define-tool pichat-test-structured-result ()
+      (list :content (vector (list :type "text" :text "structured"))))
+    (pichat-define-tool pichat-test-number-result () 42)
+    (dolist (name '("pichat-test-nil-result" "pichat-test-structured-result"
+                    "pichat-test-number-result"))
+      (let* ((reply (json-parse-string
+                     (pichat-tools-execute-json
+                      (json-serialize (list :name name :params '())) nil 'all)
+                     :object-type 'plist :array-type 'list))
+             (content (plist-get reply :content)))
+        (should (eq t (plist-get reply :isError)))
+        (should (= 1 (length content)))
+        (should (equal (format "Emacs tool %s returned no text" name)
+                       (plist-get (car content) :text)))))))
+
+(ert-deftest pichat-tools-registration-rejects-tools-the-bridge-cannot-declare ()
+  ;; The bridge drops every Emacs-defined tool of a runtime when one
+  ;; definition is invalid, so such a tool must never become selectable.
+  (pichat-test-with-clean-state
+    (let ((original (pichat-tools-register
+                     (pichat-tool-create :name "kept" :function #'ignore))))
+      (pcase-dolist (`(,tool . ,pattern)
+                     `((,(pichat-tool-create :name "bad.name" :function #'ignore)
+                        . "bad\\.name")
+                       (,(pichat-tool-create :name "with space" :function #'ignore)
+                        . "with space")
+                       (,(pichat-tool-create :name 'symbol :function #'ignore)
+                        . "symbol")
+                       (,(pichat-tool-create :name "unencodable" :function #'ignore
+                                             :parameters '(:type object))
+                        . "cannot be encoded.*unencodable")
+                       (,(pichat-tool-create :name "array-schema" :function #'ignore
+                                             :parameters ["object"])
+                        . "JSON object schema: array-schema")
+                       (,(pichat-tool-create :name "numeric-label" :function #'ignore
+                                             :label 7)
+                        . "label must be a string: numeric-label")
+                       (,(pichat-tool-create :name "kept" :function #'ignore
+                                             :description '(:not "text"))
+                        . "description must be a string: kept")))
+        (let ((err (should-error (pichat-tools-register tool) :type 'error)))
+          (should (string-match-p pattern (error-message-string err)))))
+      (should (eq original (gethash "kept" pichat-tools-registry)))
+      (should (= 1 (hash-table-count pichat-tools-registry)))
+      ;; Absent label, description and parameters are omitted, not null.
+      (let ((tool (car (plist-get (json-parse-string
+                                   (pichat-tools-definitions-json 'all)
+                                   :object-type 'plist :array-type 'list)
+                                  :tools))))
+        (should (equal "kept" (plist-get tool :name)))
+        (should-not (plist-member tool :label))
+        (should-not (plist-member tool :parameters))))))
+
+(ert-deftest pichat-tools-missing-selection-permits-nothing ()
+  (pichat-test-with-clean-state
+    (pichat-define-tool pichat-test-anything () "ran")
+    (should-not (pichat-tools-allowed-p "pichat-test-anything" nil))
+    (should-not (pichat-tools-allowed-p "pichat-test-anything" 'none))
+    (should (pichat-tools-allowed-p "pichat-test-anything" 'all))
+    (should (pichat-tools-allowed-p "pichat-test-anything" '("pichat-test-anything")))
+    (should (equal [] (plist-get (json-parse-string (pichat-tools-definitions-json)
+                                                    :object-type 'plist)
+                                 :tools)))
+    (let ((reply (json-parse-string
+                  (pichat-tools-execute-json
+                   "{\"name\":\"pichat-test-anything\",\"params\":{}}")
+                  :object-type 'plist :array-type 'list)))
+      (should (eq t (plist-get reply :isError)))
+      (should (string-match-p "not selected"
+                              (plist-get (car (plist-get reply :content)) :text))))))
+
+(ert-deftest pichat-bridge-definitions-failure-still-answers-and-records-diagnostic ()
+  ;; An unanswered definitions request blocks Pi's before_agent_start.
+  (pichat-test-with-unit-session (session proc)
+    (let (response)
+      (pichat-define-tool pichat-test-declared () "ok")
+      (pichat-test-select-emacs-tools session "pichat-test-declared")
+      (cl-letf (((symbol-function 'pichat-tools-definitions-json)
+                 (lambda (&rest _) (error "Definitions exploded")))
+                ((symbol-function 'pichat-rpc-extension-ui-value)
+                 (lambda (_session id value) (setq response (list id value)))))
+        (should (pichat-bridge-transport-handle
+                 session '(:id "defs" :method "editor"
+                           :title "__pichat_tools_request__" :prefill "{}"))))
+      (should (equal "defs" (car response)))
+      (let ((reply (json-parse-string (cadr response) :object-type 'plist)))
+        (should (= 1 (plist-get reply :protocolVersion)))
+        (should (equal [] (plist-get reply :tools))))
+      (let ((diagnostic (pichat-chat-diagnostics-latest session)))
+        (should (eq 'bridge-definitions (plist-get diagnostic :origin)))
+        (should (string-match-p "Definitions exploded"
+                                (plist-get diagnostic :message)))))))
 
 (ert-deftest pichat-tools-rejects-async-before-definition-or-registration ()
   (pichat-test-with-clean-state
@@ -90,7 +186,7 @@
        :type 'error)
       (should (eq original (gethash "sentinel" pichat-tools-registry))))
     (should-not (string-match-p "pichat-test-async"
-                                (pichat-tools-definitions-json)))
+                                (pichat-tools-definitions-json 'all)))
     (pichat-define-tool pichat-test-sync (:async nil) "sync")
     (should (equal "sync" (plist-get
                            (pichat-tools-call
@@ -121,7 +217,7 @@
       "ok")
     (pichat-define-tool pichat-test-blank (:instructions "  \n") "ok")
     (pichat-define-tool pichat-test-absent () "ok")
-    (let* ((tools (plist-get (json-parse-string (pichat-tools-definitions-json)
+    (let* ((tools (plist-get (json-parse-string (pichat-tools-definitions-json 'all)
                                                :object-type 'plist :array-type 'list)
                             :tools))
            (guided (cl-find "pichat-test-guided" tools :test #'equal
@@ -241,7 +337,7 @@
       (pichat-define-tool pichat-test-caller ()
         (setq seen pichat-tools-calling-session)
         "ok")
-      (pichat-tools-execute-json "{\"name\":\"pichat-test-caller\",\"params\":{}}" session)
+      (pichat-tools-execute-json "{\"name\":\"pichat-test-caller\",\"params\":{}}" session 'all)
       (should (eq session seen))
       (should-not pichat-tools-calling-session)
       (pichat-tools-call (gethash "pichat-test-caller" pichat-tools-registry) nil)
@@ -266,17 +362,17 @@
         (cl-letf (((symbol-function 'completing-read)
                    (lambda (prompt &rest _) (push prompt prompts) "Deny once")))
           (pichat-tools-execute-json
-           "{\"name\":\"pichat-test-described\",\"params\":{\"target\":\"alpha\"}}" session)
+           "{\"name\":\"pichat-test-described\",\"params\":{\"target\":\"alpha\"}}" session 'all)
           (should (string-match-p "pichat-test-described (Change alpha now) with arguments.*alpha"
                                   (car prompts)))
           (pichat-tools-execute-json
-           "{\"name\":\"pichat-test-described\",\"params\":{\"target\":\"bad\"}}" session)
+           "{\"name\":\"pichat-test-described\",\"params\":{\"target\":\"bad\"}}" session 'all)
           (should (string-match-p "pichat-test-described with arguments.*bad" (car prompts))))
         (should (= 2 summaries))
         (setq pichat-approval-rules '(("pichat-test-described" . allow)))
         (pichat-approval-save)
         (pichat-tools-execute-json
-         "{\"name\":\"pichat-test-described\",\"params\":{\"target\":\"alpha\"}}" session)
+         "{\"name\":\"pichat-test-described\",\"params\":{\"target\":\"alpha\"}}" session 'all)
         (should (= 2 summaries))))))
 
 (ert-deftest pichat-tools-parameter-helpers-validate-bridge-values ()
@@ -395,8 +491,9 @@
     (let ((executions 0) response)
       (pichat-define-tool pichat-test-bad-result ()
         (cl-incf executions)
-        ;; A malformed structured result used to leave the dialog pending.
-        (list :content (vector (list :type "text" :text (make-symbol "bad")))))
+        ;; Undecodable bytes cannot be encoded; this used to leave the
+        ;; dialog pending.
+        (unibyte-string #xff #xfe))
       (pichat-test-select-emacs-tools session "pichat-test-bad-result")
       (cl-letf (((symbol-function 'pichat-rpc-extension-ui-value)
                  (lambda (_session id value) (setq response (list id value)))))

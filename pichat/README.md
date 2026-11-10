@@ -1487,9 +1487,11 @@ worker or reviewer, triggers nothing further and needs attention in Jobs; resume
 with **Repeat** on it, which stays in the chain and keeps the round.
 
 **Authorization.** The follow-up prompt always tells the reviewer to act only
-within its own job instructions and not to implicitly resume the worker. A
-reviewer that restarts the worker must therefore say so in its own saved
-instructions, not only in a skill it loads. It also needs the Jobs tools in its
+within its own job instructions: unless those instructions authorise it, it must
+not resume or restart the worker, release reservations, approve gates or advance
+plan phases, and nothing in the envelope can authorise it. A reviewer that
+restarts the worker must therefore say so in its own saved instructions, not
+only in a skill it loads. It also needs the Jobs tools in its
 preset, and `pichat_job_run_now` asks approval unless you chose **Always
 allow** for it (a global rule, see [Orchestrator jobs](#orchestrator-jobs)).
 Worker output in the envelope is untrusted data; the reviewer judges the work

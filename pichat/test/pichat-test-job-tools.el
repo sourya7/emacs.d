@@ -240,6 +240,49 @@ Return (ERRORP . DECODED-OR-TEXT)."
       (pichat-test-job-tool-error "pichat_job_schedule" (list :job_id job :enabled t) "Scheduling stopped")
       (should (eq :false (plist-get (plist-get (pichat-job-record store 'jobs job) :schedule) :enabled))))))
 
+(ert-deftest pichat-job-tools-schedule-errors-leave-timing-unchanged ()
+  ;; Saving a rule disables it, so a check that failed after the save used to
+  ;; leave the new timing stored and the old, working timing switched off.
+  (pichat-test-with-job-tools
+    (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (input-job (pichat-job-save
+                       store (plist-put (pichat-test-job-spec project-dir)
+                                        :input "Plan and scope")))
+           (soon (+ 3600 (floor (float-time))))
+           (later (+ 7200 (floor (float-time))))
+           (prepare-error nil))
+      (pichat-job-executor-schedule-change executor job (list :kind "once" :start soon))
+      (pichat-job-executor-schedule-enable executor job t)
+      (cl-letf* ((prepare (symbol-function 'pichat-job-launch-prepare))
+                 ((symbol-function 'pichat-job-launch-prepare)
+                  (lambda (spec)
+                    (if prepare-error (user-error "%s" prepare-error) (funcall prepare spec)))))
+        (dolist (case
+                 `(("Preset gone (test)" (:job_id ,job :kind "once" :start ,later)
+                    "Preset gone")
+                   ("Preset gone (test)" (:job_id ,job :kind "interval" :start ,later
+                                          :interval_seconds 3600)
+                    "Preset gone")
+                   (nil (:job_id ,input-job :kind "once" :start ,later) "takes run input")))
+          (setq prepare-error (car case))
+          (let ((bytes (pichat-job-store-bytes store)))
+            (pichat-test-job-tool-error "pichat_job_schedule" (nth 1 case) (nth 2 case))
+            (should (equal bytes (pichat-job-store-bytes store))))))
+      (should (equal soon (plist-get (plist-get (plist-get (pichat-job-record store 'jobs job)
+                                                           :schedule)
+                                                :rule)
+                                     :start)))
+      (should (pichat-test-job-tools-timer executor job))
+      ;; Stopped scheduling refuses a new rule without saving it disabled.
+      (pichat-job-executor-schedule-change executor job nil)
+      (setf (pichat-job-executor-schedule-error executor) "Scheduling stopped (test); restart Emacs")
+      (let ((bytes (pichat-job-store-bytes store)))
+        (pichat-test-job-tool-error "pichat_job_schedule"
+                                    (list :job_id job :kind "once" :start later)
+                                    "Scheduling stopped")
+        (should (equal bytes (pichat-job-store-bytes store))))
+      (should-not (plist-get (pichat-job-record store 'jobs job) :schedule)))))
+
 (ert-deftest pichat-job-tools-persistence-failure-claims-no-success ()
   (pichat-test-with-job-tools
     (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))

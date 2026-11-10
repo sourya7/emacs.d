@@ -251,7 +251,8 @@
   "Set, enable, disable or remove saved-job timing for PARAMS; return JSON.
 With kind once/interval, save that timing and enable it unless enabled is
 false.  With kind none, remove timing.  Without kind, only switch the
-existing timing on or off.  Runs already queued or active are unaffected."
+existing timing on or off.  Runs already queued or active are unaffected.
+Every check runs before the first store change, so an error changes nothing."
   (pichat-tools-check-params params '(:job_id :kind :start :interval_seconds :enabled)
                             '(:job_id))
   (let* ((id (pichat-job-tools--id-param params))
@@ -262,36 +263,41 @@ existing timing on or off.  Runs already queued or active are unaffected."
          (store (pichat-job-executor-store owner))
          (job (pichat-job-tools--find store id))
          (current (plist-get (plist-get job :schedule) :rule))
+         (was-enabled (eq (plist-get (plist-get job :schedule) :enabled) t))
+         (replace (and kind-p (not (equal rule current))))
          changes)
+    ;; Check everything first: saving a rule also disables it, so a failure
+    ;; after the save would leave working timing switched off.
     (cond
      ((and kind-p (null rule))
-      (unless (eq enabled 'absent) (user-error "kind none takes no enabled flag"))
-      (when current
-        (pichat-job-executor-schedule-change owner id nil)
-        (push "timing removed" changes)))
+      (unless (eq enabled 'absent) (user-error "kind none takes no enabled flag")))
      (kind-p
-      (unless (equal rule current)
-        (pichat-job-executor-schedule-change owner id rule)
-        (push "timing saved" changes))
       (when (eq enabled 'absent) (setq enabled t)))
      ((eq enabled 'absent)
       (user-error "Give kind to set timing, or enabled to switch existing timing"))
      ((null current)
       (user-error "Saved job %s has no timing; give kind and start" id)))
-    (unless (eq enabled 'absent)
-      (let* ((schedule (plist-get (pichat-job-tools--find store id) :schedule))
-             (now-enabled (eq (plist-get schedule :enabled) t)))
-        (cond
-         ((and enabled (not now-enabled))
-          (unless (pichat-job-schedule-next (plist-get schedule :rule) (float-time))
-            (user-error "This one-time schedule is in the past; give a future start"))
-          ;; Validate the saved job's configuration without launching it.
-          (pichat-job-launch-prepare (plist-get (pichat-job-tools--find store id) :spec))
-          (pichat-job-executor-schedule-enable owner id t)
-          (push "enabled" changes))
-         ((and (not enabled) now-enabled)
-          (pichat-job-executor-schedule-enable owner id nil)
-          (push "disabled" changes)))))
+    ;; After a replacement the timing is disabled, so enabling is needed.
+    (let ((enable (and (eq enabled t) (or replace (not was-enabled)))))
+      (when (and rule (plist-get (plist-get job :spec) :input))
+        (user-error "Saved job %s takes run input, so it cannot be scheduled" id))
+      (when enable
+        (when (pichat-job-executor-schedule-error owner)
+          (user-error "%s" (pichat-job-executor-schedule-error owner)))
+        (unless (pichat-job-schedule-next (if kind-p rule current) (float-time))
+          (user-error "This one-time schedule is in the past; give a future start"))
+        ;; Validate the saved job's configuration without launching it.
+        (pichat-job-launch-prepare (plist-get job :spec)))
+      (when replace
+        (pichat-job-executor-schedule-change owner id rule)
+        (push (if rule "timing saved" "timing removed") changes))
+      (cond
+       (enable
+        (pichat-job-executor-schedule-enable owner id t)
+        (push "enabled" changes))
+       ((and (eq enabled nil) was-enabled (not replace))
+        (pichat-job-executor-schedule-enable owner id nil)
+        (push "disabled" changes))))
     (pichat-tools-json
      (list :changed (if changes t :false)
            :message (if changes

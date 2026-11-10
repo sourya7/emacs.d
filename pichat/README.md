@@ -2568,8 +2568,10 @@ approval by default; their prompts name the job, its target and directory.
   - `kind` `none`: remove timing;
   - only `enabled`: switch existing timing on or off.
 
-  Repeating an identical request changes nothing. Removing or disabling timing
-  never cancels queued or active runs.
+  Repeating an identical request changes nothing, and neither does a request
+  that returns an error: the job's configuration and the future start are
+  checked before any timing is saved. Removing or disabling timing never
+  cancels queued or active runs.
 - `pichat_job_run_now` starts a saved job exactly like Jobs → Run job, without
   changing its timing, and returns the job run ID. As in Jobs, a saved job has at
   most one unfinished run, so the error names the run already pending; a job run

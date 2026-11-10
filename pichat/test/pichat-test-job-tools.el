@@ -341,6 +341,56 @@ The execution is registered with EXECUTOR but has no process."
         (pichat-test-job-tool-error "pichat_job_run_now" '(:job_id "job-unknown") "Unknown saved job")
         (pichat-test-job-tool-error "pichat_job_run_now" (list :job_id job :now t) "Unknown argument")))))
 
+(ert-deftest pichat-job-tools-run-now-passes-declared-input ()
+  (pichat-test-with-job-tools
+    (let* ((job (pichat-job-save store (plist-put (pichat-test-job-spec project-dir)
+                                                  :input "Plan and scope")))
+           (plain (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (input "plan: example; scope: Phase 1\nfindings (round 1): none"))
+      (cl-letf (((symbol-function 'pichat-job-executor-pump) #'ignore))
+        ;; Inspect shows whether input is needed.
+        (should (equal "Plan and scope"
+                       (plist-get (plist-get (pichat-test-job-tool-ok "pichat_job_inspect"
+                                                                     (list :job_id job))
+                                             :job)
+                                  :input_prompt)))
+        (should-not (plist-get (plist-get (pichat-test-job-tool-ok "pichat_job_inspect"
+                                                                  (list :job_id plain))
+                                          :job)
+                               :input_prompt))
+        ;; Required when declared, refused otherwise, bounded, and nothing is queued on error.
+        (pichat-test-job-tool-error "pichat_job_run_now" (list :job_id job)
+                                    "needs run input (Plan and scope)")
+        (pichat-test-job-tool-error "pichat_job_run_now" (list :job_id job :input "  ")
+                                    "needs run input")
+        (pichat-test-job-tool-error "pichat_job_run_now" (list :job_id job :input 7)
+                                    "input must be a string")
+        (pichat-test-job-tool-error "pichat_job_run_now"
+                                    (list :job_id job :input (make-string 4001 ?x))
+                                    "exceeds 4000 characters")
+        (pichat-test-job-tool-error "pichat_job_run_now" (list :job_id plain :input "x")
+                                    "does not take run input")
+        (should (equal [] (pichat-job-records store 'runs)))
+        (let* ((result (pichat-test-job-tool-ok "pichat_job_run_now" (list :job_id job :input input)))
+               (run (pichat-job-record store 'runs (plist-get result :run_id))))
+          (should (equal input (plist-get run :input)))
+          (should (string-suffix-p input (pichat-job-prompt run)))
+          (should (equal input (plist-get (pichat-test-job-tool-ok "pichat_job_run_inspect"
+                                                                  (list :run_id (plist-get run :id)))
+                                          :input))))
+        (let ((result (pichat-test-job-tool-ok "pichat_job_run_now" (list :job_id plain))))
+          (should-not (plist-member (pichat-test-job-tool-ok "pichat_job_run_inspect"
+                                                            (list :run_id (plist-get result :run_id)))
+                                    :input))))
+      ;; The approval prompt shows the input's first line.
+      (let ((tool (gethash "pichat_job_run_now" pichat-tools-registry)))
+        (should (string-match-p "“Review files” .* with input “plan: example; scope: Phase 1” (first line)\\'"
+                                (pichat-tools-approval-summary tool (list :job_id job :input input))))
+        (should (string-match-p "with input “one line”\\'"
+                                (pichat-tools-approval-summary tool (list :job_id job :input "one line"))))
+        (should-not (string-match-p "with input"
+                                    (pichat-tools-approval-summary tool (list :job_id plain))))))))
+
 (ert-deftest pichat-job-tools-cancel-pending-and-active-runs ()
   (pichat-test-with-job-tools
     (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))

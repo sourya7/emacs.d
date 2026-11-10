@@ -2382,7 +2382,11 @@ approval by default; their prompts name the job, its target and directory.
   changing its timing, and returns the job run ID. As in Jobs, a saved job has at
   most one unfinished run, so the error names the run already pending; a job run
   therefore cannot start its own saved job. A queued run says what it waits for.
-- `pichat_job_run_inspect` returns one job run's state, result and reason and,
+  `input` (at most 4,000 characters) is required exactly when the job declares a
+  run input prompt, which `pichat_job_inspect` shows as `input_prompt`; jobs
+  without one refuse it. The approval prompt shows the input's first line.
+- `pichat_job_run_inspect` returns one job run's state, result, reason, run
+  `input` if any and,
   once finished, its final response (up to 4000 characters, truncation marked)
   from the captured run-end evidence, so it stays readable after the run's chat
   is closed. If the evidence is missing or changed, the stored 2000-character

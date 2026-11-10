@@ -26,11 +26,13 @@
 (declare-function pichat-job-executor-schedule-error "pichat-job-executor")
 (declare-function pichat-job-executor-schedule-change "pichat-job-executor")
 (declare-function pichat-job-executor-schedule-enable "pichat-job-executor")
-(declare-function pichat-job-executor-submit "pichat-job-executor")
+(declare-function pichat-job-executor-submit-options "pichat-job-executor")
+(declare-function pichat-session-runtime-id "pichat-session")
 (declare-function pichat-job-executor-cancel "pichat-job-executor")
 (declare-function pichat-job-executor-session-run "pichat-job-executor")
 (declare-function pichat-job-records "pichat-job-core")
 (declare-function pichat-job-record "pichat-job-core")
+(declare-function pichat-job-input-check "pichat-job-core")
 (declare-function pichat-job-admission "pichat-job-core")
 (declare-function pichat-job-evidence-read "pichat-job-core")
 (declare-function pichat-job-executor-run-session "pichat-job-executor")
@@ -151,6 +153,8 @@
            :schedule (or (pichat-job-tools--schedule owner job) :null))
      (when detail
        (list :instructions_preview (pichat-tools-display-text (plist-get spec :instructions))
+             ;; A declared prompt means pichat_job_run_now needs input.
+             :input_prompt (or (plist-get spec :input) :null)
              :model (or (plist-get config :model) :null)
              :preset (or (plist-get (plist-get config :preset) :name) :null)
              :updated_at (or (plist-get job :updated-at) :null)
@@ -177,6 +181,13 @@
   (or (seq-find (lambda (run) (equal id (plist-get run :id)))
                 (pichat-job-records store 'runs))
       (user-error "Unknown job run ID: %s; inspect the saved job's runs again" id)))
+
+(defun pichat-job-tools--input-param (params)
+  "Return PARAMS input text, or nil when absent; bounds are checked by the job."
+  (let ((input (plist-get params :input)))
+    (unless (or (null input) (stringp input))
+      (user-error "input must be a string"))
+    input))
 
 (defun pichat-job-tools--caller-run (owner)
   "Return the job run ID the calling runtime is executing for OWNER, or nil."
@@ -303,11 +314,12 @@ existing timing on or off.  Runs already queued or active are unaffected."
   "Submit the saved job in PARAMS now, exactly like Jobs → Run job; return JSON.
 Timing is unchanged.  As in Jobs, a saved job has at most one unfinished run,
 so a job run can never start its own saved job."
-  (pichat-tools-check-params params '(:job_id) '(:job_id))
+  (pichat-tools-check-params params '(:job_id :input) '(:job_id))
   (let* ((id (pichat-job-tools--id-param params))
+         (input (pichat-job-tools--input-param params))
          (owner (pichat-job-tools--owner))
          (store (pichat-job-executor-store owner))
-         (_job (pichat-job-tools--find store id))
+         (job (pichat-job-tools--find store id))
          (pending (seq-find (lambda (run)
                               (and (equal id (plist-get run :job-id))
                                    (not (equal (plist-get run :state) "finished"))))
@@ -319,7 +331,9 @@ so a job run can never start its own saved job."
                   (if (equal (plist-get pending :id) (pichat-job-tools--caller-run owner))
                       "; it is this runtime's own run"
                     "; inspect or cancel it first")))
-    (let* ((run-id (pichat-job-executor-submit owner nil id))
+    ;; Check input before submitting, with the same rules as Jobs → Run job.
+    (pichat-job-input-check (plist-get job :spec) input)
+    (let* ((run-id (pichat-job-executor-submit-options owner (list :job-id id :input input)))
            (run (pichat-job-record store 'runs run-id))
            (waiting (pichat-job-tools--waiting-reason store run)))
       (pichat-tools-json
@@ -402,6 +416,8 @@ Fall back to the stored summary when evidence is absent or unreadable."
                      summary))
             :job_id (or (plist-get run :job-id) :null)
             :title (pichat-tools-display-text (plist-get (plist-get run :spec) :title) 200))
+      ;; Input is bounded at submission (4,000 characters).
+      (when (plist-get run :input) (list :input (plist-get run :input)))
       (when waiting (list :waiting_for waiting))
       ;; Only a retained runtime is useful to pichat_chat_read.
       (when session
@@ -430,7 +446,12 @@ Fall back to the stored summary when evidence is absent or unreadable."
 
 (defun pichat-job-tools-run-now-summary (params)
   "Describe the pichat_job_run_now call PARAMS for its approval prompt."
-  (concat "Run now: " (pichat-job-tools--job-label (pichat-job-tools--id-param params))))
+  (let ((input (plist-get params :input)))
+    (concat "Run now: " (pichat-job-tools--job-label (pichat-job-tools--id-param params))
+            (when (and (stringp input) (not (string-blank-p input)))
+              (let ((lines (split-string (string-trim input) "\n")))
+                (concat " with input “" (pichat-tools-display-text (car lines) 120) "”"
+                        (when (cdr lines) " (first line)")))))))
 
 (defun pichat-job-tools-run-cancel-summary (params)
   "Describe the pichat_job_run_cancel call PARAMS for its approval prompt."
@@ -504,9 +525,10 @@ Registration lists the tools in the Tools picker; it exposes nothing."
     (:group "Jobs" :label "Run saved job now" :mutating t
      :approval-summary #'pichat-job-tools-run-now-summary
      :description "Start a saved job now, exactly like Jobs → Run job, without changing its timing. Returns the new job run ID."
-     :instructions "A saved job has at most one unfinished run; the new run may wait in the queue for a free job slot. Follow it with pichat_job_run_inspect."
+     :instructions "A saved job has at most one unfinished run; the new run may wait in the queue for a free job slot. Follow it with pichat_job_run_inspect. Give input exactly when pichat_job_inspect shows an input_prompt: it is then required, and jobs without one refuse it. The input is added to the job's prompt."
      :parameters (:type "object"
-                  :properties (:job_id (:type "string"))
+                  :properties (:job_id (:type "string")
+                               :input (:type "string" :maxLength 4000))
                   :required ["job_id"]
                   :additionalProperties :json-false))
   (pichat-job-tools-run-now params))

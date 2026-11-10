@@ -25,6 +25,7 @@
 (require 'pichat-test-reconfigure-ssh)
 (require 'pichat-test-launch)
 (require 'pichat-test-presets)
+(require 'pichat-test-saved-presets)
 (require 'pichat-test-tool-selection)
 (require 'pichat-test-emacs-tool-selection)
 (require 'pichat-test-tool-discovery)

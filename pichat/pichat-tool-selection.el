@@ -13,18 +13,15 @@
 (require 'pichat-presets)
 (require 'pichat-tools)
 
-(defun pichat-tool-selection--name (server tool)
-  "Return Pi's unambiguous MCP name for SERVER and original TOOL.
-Reject normalized collisions against the complete server catalogue first:
-Pi hash-suffixes both members of a collision."
-  (concat "mcp__" (replace-regexp-in-string "[^A-Za-z0-9_]" "_" server)
-          "__" (replace-regexp-in-string "[^A-Za-z0-9_]" "_" tool)))
+(defalias 'pichat-tool-selection--name #'pichat-presets-mcp-name)
 
 (defun pichat-tool-selection-resolve (preset &optional selection)
   "Resolve PRESET and optional explicit SELECTION into a runtime snapshot.
 SELECTION contains :builtins, :mcp (SERVER . TOOL) pairs, :extensions and
-:emacs exact names.  Omission means the preset baseline, with MCP disabled.
-The pass-through preset returns nil and cannot accept a selection."
+:emacs exact names.  Omission means the preset baseline, including its :mcp
+pairs; MCP is disabled when the baseline has none.  An explicit selection is
+complete, so an empty :mcp stays empty.  The pass-through preset returns nil
+and cannot accept a selection."
   (let ((baseline (plist-get preset :tools)))
     (if (eq baseline :default)
         (progn
@@ -33,7 +30,8 @@ The pass-through preset returns nil and cannot accept a selection."
                         (plist-get preset :name)))
           nil)
       (let ((builtins (if selection (plist-get selection :builtins) baseline))
-            (mcp (and selection (plist-get selection :mcp)))
+            (mcp (if selection (plist-get selection :mcp)
+                   (plist-get preset :mcp)))
             (extensions (if selection (plist-get selection :extensions)
                           (plist-get preset :extensions)))
             (emacs (if selection (plist-get selection :emacs)
@@ -61,8 +59,7 @@ The pass-through preset returns nil and cannot accept a selection."
                         (length (cl-remove-duplicates (copy-tree mcp) :test #'equal))))
           (user-error "Invalid or duplicate MCP tool selection"))
         (let ((names (mapcar (lambda (pair) (pichat-tool-selection--name (car pair) (cdr pair))) mcp)))
-          (unless (= (length names)
-                     (length (cl-remove-duplicates (copy-sequence names) :test #'equal)))
+          (unless (pichat-presets-mcp-pairs-p mcp)
             (user-error "Ambiguous normalized MCP tool names"))
           (when (cl-intersection names extensions :test #'equal)
             (user-error "Tool selected as both MCP and extension"))

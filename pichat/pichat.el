@@ -352,14 +352,21 @@ session over the global `pichat-current-session'."
        (stringp (nth 2 scope))))
 
 (defun pichat--normalize-launch-profile (&optional profile)
-  "Return validated high-level launch PROFILE with explicit defaults."
+  "Return validated high-level launch PROFILE with explicit defaults.
+An omitted model follows an explicitly named preset's model policy; the
+`default' preset choice keeps Pi's default model so it can reuse the
+preferred runtime."
   (let* ((backend (or (plist-get profile :backend) 'pi))
          (scope (or (plist-get profile :scope) 'current))
          (target (or (plist-get profile :target) 'inferred))
          (persistence (or (plist-get profile :persistence) 'persistent))
          (preset (or (plist-get profile :preset) 'default))
          (tools (plist-get profile :tools))
-         (model (or (plist-get profile :model) 'default))
+         (model (or (plist-get profile :model)
+                    (and (not (eq preset 'default))
+                         (pichat-presets-defined-p preset)
+                         (pichat-presets-model preset))
+                    'default))
          (explicit-reuse-p (plist-member profile :reuse))
          (reuse (or (plist-get profile :reuse)
                     (if (or (eq persistence 'ephemeral)
@@ -386,7 +393,7 @@ session over the global `pichat-current-session'."
       (user-error "Invalid PiChat persistence: %S" persistence))
     (when (plist-member profile :execution)
       (user-error "Obsolete :execution option; select a PiChat :preset instead"))
-    (unless (or (eq preset 'default) (assq preset pichat-presets))
+    (unless (or (eq preset 'default) (pichat-presets-defined-p preset))
       (user-error "Unknown PiChat launch preset: %S" preset))
     (when tools
       (pichat-tool-selection-resolve
@@ -555,15 +562,87 @@ session over the global `pichat-current-session'."
                             (plist-get response :error))))
               (error (release) (signal (car error-data) (cdr error-data))))))))))
 
+(defvar pichat--launch-mcp-verified nil
+  "Non-nil while continuing a launch whose preset MCP tools were verified.")
+
+(defun pichat--launch-baseline-mcp (profile directory)
+  "Return PROFILE's preset MCP baseline when a new runtime would use it.
+Nil when Tools were customized (Apply already checked them), the baseline has
+no MCP tools, or a live preferred runtime in DIRECTORY's scope is reused."
+  (unless (plist-get profile :tools)
+    (let* ((preset (plist-get profile :preset))
+           (pairs (plist-get (pichat-get-preset (if (eq preset 'default)
+                                                    pichat-default-preset
+                                                  preset))
+                             :mcp)))
+      (when (and pairs
+                 (not (and (eq (plist-get profile :reuse) 'preferred)
+                           (let* ((scope (pichat--resolve-launch-scope
+                                          (plist-get profile :scope) directory
+                                          (plist-get profile :target)))
+                                  (session (gethash (nth 0 scope)
+                                                    pichat--sessions-by-scope)))
+                             (and session (pichat-session-alive-p session))))))
+        pairs))))
+
+(defun pichat--verify-launch-mcp (profile directory continue)
+  "Check PROFILE's preset MCP baseline at its destination, then call CONTINUE.
+Discovery runs in the destination target and directory, as the Tools picker
+would.  Missing, hidden, non-direct or disconnected tools cancel the launch
+with a message; no tool outside the baseline is enabled."
+  (let* ((target (plist-get profile :target))
+         (scope (pichat--resolve-launch-scope (plist-get profile :scope)
+                                              directory target))
+         (transport (pichat-transport-resolve
+                     (nth 1 scope) (unless (eq target 'inferred) target)))
+         (context (pichat-transport-path-context transport pichat-path-mappings))
+         (runtime-cwd (or (plist-get (pichat-path-resolve-to-runtime
+                                      (nth 1 scope) context)
+                                     :path)
+                          (user-error "Directory is unavailable to target %s"
+                                      (pichat-transport-label transport))))
+         (preset (plist-get profile :preset))
+         (snapshot (pichat-tool-selection-resolve
+                    (pichat-presets-resolve (if (eq preset 'default)
+                                                pichat-default-preset
+                                              preset)))))
+    (when (and pichat-rpc-command (eq (pichat-transport-kind transport) 'local))
+      (user-error "Preset MCP tools cannot be selected through a complete Pi command wrapper"))
+    (message "Checking preset MCP tools for %s..." (pichat-transport-label transport))
+    (pichat-mcp-discovery-start
+     transport runtime-cwd
+     (or (pichat-transport-pi-executable transport) pichat-pi-executable)
+     (lambda (servers errors)
+       (run-at-time
+        0 nil
+        (lambda ()
+          (condition-case err
+              (progn
+                (unless servers
+                  (user-error "MCP discovery failed: %s" (or errors "no MCP servers")))
+                (pichat-tool-selection-check-catalogue snapshot servers)
+                (let ((pichat--launch-mcp-verified t))
+                  (funcall continue)))
+            (error
+             (message "PiChat launch cancelled: %s"
+                      (error-message-string err))))))))))
+
 (defun pichat--open-launch-profile (profile &optional directory)
   "Open normalized launch PROFILE relative to optional DIRECTORY.
 Return the exact runtime synchronously when its model is already known.
-Prompted-model profiles first select a model asynchronously and return nil."
+Prompted-model profiles first select a model asynchronously and return nil,
+as do presets whose MCP baseline is first checked at the destination."
   (let* ((profile (pichat--normalize-launch-profile profile))
          (model (plist-get profile :model)))
     (cond
      ((eq model 'prompt)
       (pichat--select-model-before-launch profile directory)
+      nil)
+     ((and (not pichat--launch-mcp-verified)
+           (pichat--launch-baseline-mcp profile directory))
+      (pichat--verify-launch-mcp
+       profile directory
+       (lambda () (pichat--open-launch-profile profile directory)))
       nil)
      ((eq (plist-get (plist-get profile :conversation) :kind) 'saved)
       (pichat--open-selected-conversation-profile profile directory))
@@ -1135,8 +1214,7 @@ This is the first implementation check; it does not send an LLM prompt."
 
 (defun pichat--launch-preset-choices ()
   "Return default policy and registered preset names for the launcher."
-  (cons "default" (mapcar (lambda (entry) (symbol-name (car entry)))
-                           pichat-presets)))
+  (cons "default" (mapcar #'symbol-name (pichat-presets-names))))
 
 (defun pichat--read-configuration-preset (prompt initial tools &optional defaults history)
   "Read a preset for PROMPT, confirming reset of customized TOOLS.
@@ -1144,7 +1222,7 @@ INITIAL is its current name.  DEFAULTS allows the launcher's default policy.
 HISTORY is the completion history variable.
 Return a name without changing state."
   (let* ((choices (if defaults (pichat--launch-preset-choices)
-                    (mapcar (lambda (entry) (symbol-name (car entry))) pichat-presets)))
+                    (mapcar #'symbol-name (pichat-presets-names))))
          (completion-extra-properties
           (list :annotation-function
                 (lambda (choice)
@@ -1165,8 +1243,10 @@ Return a name without changing state."
          (chosen (pichat--read-configuration-preset
                   prompt initial (plist-get scope :tool-selection) t history)))
     (unless (equal chosen initial)
+      ;; A newly selected preset brings its own baseline and model policy.
       (setf (plist-get scope :tool-selection) nil
-            (plist-get scope :tool-target) nil))
+            (plist-get scope :tool-target) nil
+            (plist-get scope :model) nil))
     chosen))
 
 (defun pichat--launch-target-argument (arguments)
@@ -1191,17 +1271,20 @@ Return a name without changing state."
                                  arguments))
          (preset (if preset-arg
                      (let ((name (substring preset-arg 9)))
-                       (or (car (cl-find-if
-                                 (lambda (entry)
-                                   (string= name (symbol-name (car entry))))
-                                 pichat-presets))
+                       (or (cl-find-if
+                            (lambda (entry) (string= name (symbol-name entry)))
+                            (pichat-presets-names))
                            (and (string= name "default") 'default)
                            (user-error "Unknown PiChat preset: %s" name)))
                    'default))
          (tools (plist-get context :tool-selection))
          (conversation (plist-get context :conversation))
+         ;; Nil follows the preset; a staged choice from `m' overrides it.
+         (model (cond (prompt-p 'prompt)
+                      ((plist-get context :model))))
          (independent-p (or (member "--new" arguments)
                             conversation ephemeral-p prompt-p tools
+                            (memq model '(prompt)) (stringp model)
                             (not (eq preset 'default)))))
     (pichat--normalize-launch-profile
      (list :backend 'pi
@@ -1212,7 +1295,7 @@ Return a name without changing state."
            :preset preset
            :tools tools
            :conversation conversation
-           :model (if prompt-p 'prompt 'default)
+           :model model
            :display-function (or (plist-get context :display-function)
                                  #'pichat-chat-open)))))
 
@@ -1232,6 +1315,8 @@ Return a name without changing state."
       (list (format "target %s" (plist-get profile :target))))
     (when (eq (plist-get profile :persistence) 'ephemeral) '("ephemeral"))
     (when (eq (plist-get profile :model) 'prompt) '("choose model"))
+    (when (stringp (plist-get profile :model))
+      (list (format "model %s" (plist-get profile :model))))
     (pcase (plist-get (plist-get profile :conversation) :kind)
       ('new '("new conversation"))
       ('saved '("saved conversation"))))
@@ -1399,6 +1484,168 @@ Return a name without changing state."
          (transient-setup 'pichat-launch nil nil :scope next)))
      (and (stringp (plist-get profile :model)) (plist-get profile :model))
      (plist-get context :tool-discovery))))
+
+(defvar pichat--launch-model-request nil
+  "Token owning the launcher's pending asynchronous model listing.
+Opening another launcher or making another request makes older
+callbacks stale, so they cannot reopen or change a launch draft.")
+
+(defun pichat--launch-model-label (profile)
+  "Return a short label for normalized PROFILE's model choice."
+  (let ((model (plist-get profile :model)))
+    (cond ((stringp model) model)
+          ((eq model 'prompt) "choose when launching")
+          (t "Pi default"))))
+
+(defun pichat--launch-model-description ()
+  "Describe the launcher's model, highlighting a staged override."
+  (let* ((context (transient-scope))
+         (profile (ignore-errors
+                    (pichat--launch-profile-from-arguments
+                     (transient-get-value) context))))
+    (concat "Model "
+            (propertize (if profile (pichat--launch-model-label profile) "?")
+                        'face (if (plist-get context :model)
+                                  'transient-value
+                                'transient-inactive-value)))))
+
+(defun pichat--launch-stage (context args &rest properties)
+  "Reopen the launcher on a copy of CONTEXT with ARGS and PROPERTIES."
+  (let ((next (copy-sequence context)))
+    (while properties
+      (setq next (plist-put next (pop properties) (pop properties))))
+    (transient-setup 'pichat-launch nil nil
+                     :scope (plist-put next :launch-args args))))
+
+(defun pichat--launch-select-model (context args profile)
+  "List models for PROFILE's destination, then stage one in CONTEXT.
+ARGS are the launcher arguments to restore.  Cancelling the prompt returns
+to the unchanged launcher; a superseded listing is ignored."
+  (let* ((token (make-symbol "pichat-launch-model"))
+         (directory (plist-get context :directory))
+         (target (plist-get profile :target))
+         (scope (pichat--resolve-launch-scope (plist-get profile :scope)
+                                              directory target))
+         (transport (pichat-transport-resolve
+                     (nth 1 scope) (unless (eq target 'inferred) target))))
+    (when (and pichat-rpc-command (eq (pichat-transport-kind transport) 'local))
+      (user-error
+       "Run-local PiChat models are not supported with a local `pichat-rpc-command'"))
+    (setq pichat--launch-model-request token)
+    (pichat--maybe-enable-default-bridge)
+    (pichat--list-models-async
+     nil
+     (lambda (models)
+       (run-at-time
+        0 nil
+        (lambda ()
+          (when (eq token pichat--launch-model-request)
+            (setq pichat--launch-model-request nil)
+            (let ((model
+                   (condition-case err
+                       (pichat--read-model-table-choice
+                        "Model for this launch (select or enter provider/model): "
+                        models t)
+                     (quit nil)
+                     (error (message "PiChat model choice rejected: %s"
+                                     (error-message-string err))
+                            nil))))
+              (if model
+                  (pichat--launch-stage context args :model model)
+                (pichat--launch-stage context args)))))))
+     (nth 1 scope) transport)))
+
+(transient-define-suffix pichat-launch-model ()
+  "Stage this launch's model without changing Pi's global default.
+Selecting a preset restores its model policy; this overrides it for this
+launch only."
+  (interactive)
+  (let* ((args (transient-args 'pichat-launch))
+         (context (transient-scope))
+         (profile (pichat--launch-profile-from-arguments args context))
+         (preset (plist-get profile :preset))
+         (preset-model (unless (eq preset 'default)
+                         (pichat-presets-model preset)))
+         (choices (append (when (stringp preset-model)
+                            (list (format "Preset model (%s)" preset-model)))
+                          '("Pi default model" "Select or enter model…"
+                            "Choose when launching")))
+         (choice (completing-read "Model: " choices nil t)))
+    (cond
+     ((string-prefix-p "Preset model" choice)
+      (pichat--launch-stage context args :model nil))
+     ((equal choice "Pi default model")
+      (pichat--launch-stage context args
+                            :model (and (stringp preset-model) 'default)))
+     ((equal choice "Choose when launching")
+      (pichat--launch-stage context args :model 'prompt))
+     (t (pichat--launch-select-model context args profile)))))
+
+(defun pichat--launch-preset-definition (profile context name)
+  "Return the definition to save as NAME from PROFILE and launcher CONTEXT.
+Capture the effective built-in, extension, Emacs-defined and MCP tools, the
+source preset's own prompt sources and the model policy.  Shared
+`pichat-append-system-prompt' text, targets, scope, persistence and
+conversation choices are not part of a preset."
+  (let* ((preset (plist-get profile :preset))
+         (source (if (eq preset 'default) pichat-default-preset preset))
+         (definition (or (pichat-get-preset source)
+                         (user-error "Unknown PiChat preset: %S" source)))
+         (tools (plist-get context :tool-selection))
+         (selection (pichat-tool-selection-resolve
+                     (pichat-presets-resolve source) tools))
+         (model (plist-get profile :model)))
+    (unless (or (stringp model) (eq model 'default))
+      (user-error "Choose a concrete model with m first; a choice at launch cannot be saved"))
+    (append
+     (list :description
+           (if (and (eq source name) (not tools))
+               (plist-get definition :description)
+             (format "Saved from %s%s" source (if tools " with customized tools" ""))))
+     (if selection
+         (append
+          (list :tools (copy-sequence (plist-get selection :builtins)))
+          (when-let* ((names (plist-get selection :extensions)))
+            (list :extensions (copy-sequence names)))
+          (when-let* ((names (plist-get selection :emacs)))
+            (list :emacs-tools (copy-sequence names)))
+          (when-let* ((pairs (plist-get selection :mcp)))
+            (list :mcp (copy-tree pairs))))
+       (list :tools :default))
+     (when-let* ((source (plist-get definition :system-prompt)))
+       (list :system-prompt (copy-tree source)))
+     (when-let* ((source (plist-get definition :append-system-prompt)))
+       (list :append-system-prompt (copy-tree source)))
+     (list :model (if (stringp model) (copy-sequence model) 'default)))))
+
+(transient-define-suffix pichat-launch-save-preset ()
+  "Save the selected preset, Tools and model as a named preset.
+The definition is written to `custom-file' and selected in the launcher;
+nothing is launched, and other launch choices remain unsaved."
+  (interactive)
+  (let* ((args (transient-args 'pichat-launch))
+         (context (copy-sequence (transient-scope)))
+         name file)
+    (condition-case err
+        (let* ((profile (pichat--launch-profile-from-arguments args context))
+               ;; Reject unsaveable drafts before asking for a name.
+               (_ (pichat--launch-preset-definition profile context nil)))
+          (setq name (pichat-presets-read-name (read-string "Preset name: ")))
+          (when (and (pichat-presets-defined-p name)
+                     (not (yes-or-no-p (format "Replace preset %s? " name))))
+            (user-error "Preset %s not replaced" name))
+          (setq file (pichat-presets-save-definition
+                      name (pichat--launch-preset-definition profile context name))))
+      (quit (message "Preset not saved"))
+      (error (message "Preset not saved: %s" (error-message-string err))))
+    (if (not file)
+        (pichat--launch-stage context args)
+      (pichat--launch-stage
+       context
+       (cons (format "--preset=%s" name)
+             (cl-remove-if (lambda (arg) (string-prefix-p "--preset=" arg)) args))
+       :tool-selection nil :tool-target nil :model nil)
+      (message "Saved PiChat preset %s to %s" name (abbreviate-file-name file)))))
 
 (transient-define-suffix pichat-launch-execute (arguments context)
   "Execute a PiChat launch from Transient ARGUMENTS and CONTEXT."
@@ -1693,14 +1940,16 @@ Return a name without changing state."
    ["Configuration"
     ("p" "Preset" "--preset=" :choices pichat--launch-preset-choices
      :reader pichat--launch-read-preset)
-    ("m" "Choose/enter model" "--model")
+    ("m" pichat-launch-model :description pichat--launch-model-description)
     ("x" pichat-launch-tools :description pichat--launch-tools-description)]]
   [["Action" :description pichat--launch-action-heading
+    ("c" "Save preset as…" pichat-launch-save-preset)
     ("RET" pichat-launch-execute
      :description pichat--launch-action-description)]]
   [:hide (lambda () t)
    ("<return>" pichat-launch-execute)]
   (interactive)
+  (setq pichat--launch-model-request nil)
   (transient-setup 'pichat-launch nil nil
                    :scope (or context (pichat--make-launch-context))))
 

@@ -91,8 +91,8 @@ default is kept only while no import has set it."
   (let* ((data (plist-get record :definition))
          (preset-name (plist-get data :preset))
          (target-name (or (plist-get (plist-get data :target) :name) "local"))
-         (preset (car (seq-find (lambda (entry) (equal (symbol-name (car entry)) preset-name))
-                                pichat-presets)))
+         (preset (seq-find (lambda (name) (equal (symbol-name name) preset-name))
+                           (pichat-presets-names)))
          (target (if (equal target-name "local") 'local
                    (car (seq-find (lambda (entry) (equal (symbol-name (car entry)) target-name))
                                   pichat-targets)))))

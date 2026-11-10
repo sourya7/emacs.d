@@ -175,6 +175,112 @@
                           (pichat-test-assert-provider-script-consumed status))
                       (when session (pichat-rpc-stop session))))))))))))
 
+  (ert-deftest pichat-integration-named-preset-mcp-baseline-and-model ()
+    "A saved-style preset launches its exact MCP baseline and model.
+Its baseline is checked at the destination before Pi starts; an override that
+clears MCP stays empty; an ineligible baseline or missing model starts nothing."
+    (pichat-test-require-pi)
+    (pichat-test-with-clean-state
+      (pichat-test-with-temp-dir project-dir
+        (pichat-test-with-temp-dir agent-dir
+          (pichat-test-with-temp-dir session-dir
+            (let* ((python (or (executable-find "python3")
+                               (ert-fail "MCP fixture needs python3")))
+                   (fixture (expand-file-name
+                             "fixtures/mcp-server.py"
+                             (file-name-directory (locate-library
+                                                   "pichat-test-integration"))))
+                   (script (expand-file-name "script.json" project-dir))
+                   (status (expand-file-name "status.json" project-dir))
+                   (process-environment
+                    (append (list "PI_OFFLINE=1" "PI_SKIP_VERSION_CHECK=1"
+                                  "PI_TELEMETRY=0"
+                                  (concat "PI_CODING_AGENT_DIR=" agent-dir)
+                                  (concat "PI_CODING_AGENT_SESSION_DIR=" session-dir)
+                                  (concat "PICHAT_FAKE_PROVIDER_SCRIPT=" script)
+                                  (concat "PICHAT_FAKE_PROVIDER_STATUS=" status))
+                            process-environment))
+                   (pichat-presets (copy-tree pichat-presets))
+                   (pichat-saved-presets
+                    '((web :tools ("read") :mcp (("probe" . "search"))
+                           :model "pichat-fake/pichat-fake")
+                      (hidden :tools ("read") :mcp (("probe" . "other")))
+                      (missing :tools ("read") :model "absent-provider/model")))
+                   (pichat-rpc-command nil)
+                   (pichat-default-model nil)
+                   (pichat-bridge-extension-file nil)
+                   (pichat-pi-executable pichat-test-pi-executable)
+                   (pichat-pi-default-args
+                    '("--mode" "rpc" "--offline" "--no-approve"
+                      "--no-context-files" "--no-skills" "--no-prompt-templates"
+                      "--no-themes" "--no-extensions"))
+                   (pichat-pi-extra-args
+                    (list "-e" pichat-test-fake-provider-extension))
+                   (scope (list (concat "project:" project-dir) project-dir "preset@test"))
+                   (messages nil))
+              (with-temp-file (expand-file-name "mcp.json" agent-dir)
+                (insert (json-serialize
+                         (list :mcpServers
+                               (list :probe (list :command python
+                                                  :args (vector fixture)
+                                                  :exposure "direct"
+                                                  :toolExposure (list :other "hidden"))))
+                         :null-object nil :false-object :json-false)))
+              (cl-letf* ((original-message (symbol-function 'message))
+                         ((symbol-function 'message)
+                          (lambda (format &rest args)
+                            (when format (push (apply #'format-message format args) messages))
+                            (apply original-message format args))))
+                (cl-flet ((launch (preset tools)
+                            (pichat--open-launch-profile
+                             (list :scope scope :reuse 'new :persistence 'ephemeral
+                                   :preset preset :tools tools
+                                   :display-function #'ignore)
+                             project-dir))
+                          (settled (text)
+                            (pichat-test-wait-until
+                             (lambda () (cl-some (lambda (m) (string-match-p text m)) messages))
+                             30 text)))
+                  ;; Ineligible baselines and missing models start no runtime.
+                  (should-not (launch 'hidden nil))
+                  (settled "PiChat launch cancelled: MCP tool probe/other")
+                  (should-not (pichat-session-list))
+                  (launch 'missing nil)
+                  (settled "selected-model launch failed")
+                  (should-not (pichat-session-list))
+                  (dolist (case '((nil "mcp__probe__other" "mcp__probe__search")
+                                  ((:builtins ("read") :mcp nil)
+                                   "mcp__probe__search" "read")))
+                    (pcase-let ((`(,tools ,absent ,present) case))
+                      (let ((before (pichat-session-list)) session)
+                        (with-temp-file script
+                          (insert (json-serialize
+                                   (list :turns
+                                         (vector (list :expectToolAbsent absent
+                                                       :expectTool (list :name present)
+                                                       :text "preset reply")))
+                                   :null-object nil :false-object :json-false)))
+                        (unwind-protect
+                            (progn
+                              ;; Only an unchecked baseline defers the launch.
+                              (should (eq (null tools) (null (launch 'web tools))))
+                              (pichat-test-wait-until
+                               (lambda ()
+                                 (setq session pichat-current-session)
+                                 (and session (not (memq session before))))
+                               30 "verified preset model runtime")
+                              (should (equal "pichat-fake/pichat-fake"
+                                             (pichat-session-startup-model session)))
+                              (should (equal (list "--model" "pichat-fake/pichat-fake")
+                                             (last (pichat-session-rpc-command session) 2)))
+                              (pichat-test-rpc-call session "set_auto_retry"
+                                                    (list :enabled :json-false))
+                              (pichat-test-rpc-call session "set_auto_compaction"
+                                                    (list :enabled :json-false))
+                              (pichat-test-prompt-and-wait session "preset case")
+                              (pichat-test-assert-provider-script-consumed status))
+                          (when session (pichat-rpc-stop session))))))))))))))
+
   (ert-deftest pichat-integration-mcp-discovery-uses-isolated-target ()
     (pichat-test-require-pi)
     (pichat-test-with-temp-dir project-dir

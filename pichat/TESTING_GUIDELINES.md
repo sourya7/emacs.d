@@ -277,6 +277,19 @@ still be iconified by the window manager: `display-graphic-p` and passing window
 geometry assertions do not prove the layout was visible. Review the displayed
 screens separately before closing a visible-layout acceptance task.
 
+## Saved preset live check
+
+`pichat-test-presets-live-ui.el` drives the real launcher `p`, `x` Tools (with
+the offline MCP fixture), `m` model listing (offline fake provider) and `c` Save
+preset as keys, including replacement refusal, Tools Cancel and an unsaveable
+model choice, then reloads the saved presets in a fresh Emacs. It uses a private
+`custom-file`, never the user's, and launches no runtime. It needs a terminal, so
+run it in a separate `emacs -Q -nw` (for example under `script` when no tty is
+available) with the result/exit wrapper above and selector
+`"^pichat-integration-presets-live-ui-"`. For Evil, add the optional load
+paths and enable `evil-mode` and `pichat-evil-setup` first. It is a programmatic
+check, not human visual review or live Ketch access.
+
 ## Opt-in Mermaid Docker tests
 
 With local Docker running and the configured pinned image already present:

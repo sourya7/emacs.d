@@ -334,7 +334,8 @@ Emacs-defined tools remain explicit per-group or per-tool choices."
   "Restore the captured preset baseline." :transient t
   (interactive)
   (pichat-tool-picker--set-selection
-   (list :builtins (copy-sequence (plist-get pichat-tool-picker--state :baseline)) :mcp nil
+   (list :builtins (copy-sequence (plist-get pichat-tool-picker--state :baseline))
+         :mcp (copy-tree (plist-get (plist-get pichat-tool-picker--state :preset) :mcp))
          :extensions (copy-sequence (plist-get (plist-get pichat-tool-picker--state :preset) :extensions))
          :emacs (copy-sequence (plist-get (plist-get pichat-tool-picker--state :preset) :emacs-tools)))))
 

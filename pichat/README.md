@@ -551,15 +551,16 @@ display behavior.
 | `n` | Independent runtime | Start an additional runtime instead of reusing the preferred one |
 | `t` | Target | Use inferred, local, or a configured runtime target |
 | `e` | Ephemeral | Start Pi with `--no-session`; implies independent |
-| `m` | Choose/enter model | Select a listed model or enter an unlisted ID for only this run; implies independent |
-| `p` | Preset | Choose a named tool/prompt preset; explicit selection implies independent |
+| `m` | Model | Stage this launch's model: the preset's model, Pi's default, a listed or entered ID, or a choice when launching; a concrete or deferred choice implies independent |
+| `p` | Preset | Choose a named tool/prompt preset; explicit selection implies independent and restores its model |
 | `x` | Tools | Choose that preset's built-ins, extension tools and direct MCP tools for a new independent runtime |
 | `s` | Conversation | Default, new independent conversation, existing chat route, or select a saved session |
 | `r` | Reconfigure this runtime | From its owning chat, enter a separate captured-runtime menu; never implied by launching |
+| `c` | Save preset as… | Save the selected preset, Tools and model under a name; see [Saving presets from the launcher](#saving-presets-from-the-launcher) |
 | `RET` | Open / launch | Execute the normalized profile summarized in the action label |
 
-The switches compose. For example, `g e m` creates an independent global,
-ephemeral runtime and asks for its model. `n` alone creates an independent
+The switches compose. For example, `g e`, then `m` **Choose when launching**,
+creates an independent global, ephemeral runtime and asks for its model at `RET`. `n` alone creates an independent
 persistent/default-model runtime in the current scope. `g` alone opens the
 preferred global runtime. With no switches, PiChat opens the preferred current
 runtime. The picker starts at `default (manual)`; this policy reuses the
@@ -684,8 +685,11 @@ cancels it, `d` resets all choices to the captured preset, and `r` refreshes
 discovery. `a` selects all eligible built-in, extension and MCP tools
 (Emacs-defined tools are chosen per group); `n` deselects all.
 `[` and `]` page longer lists.
-Cancel does not change the launch/reconfiguration draft. Reset restores the
-preset's extension baseline as well as its built-ins, with no MCP tools.
+Cancel does not change the launch/reconfiguration draft. Reset restores all of
+the preset's baseline: built-ins, extension, Emacs-defined and MCP tools
+(none, unless the preset declares `:mcp`). Deselecting a baseline MCP tool is a
+customization: an empty MCP selection launches with `--no-mcp` rather than
+falling back to the preset.
 The picker configures a new independent runtime, or the captured replacement
 in **Reconfigure this runtime**; it never edits a live process in place.
 
@@ -697,6 +701,73 @@ conflicting generic Pi tool/prompt flags before runtime creation; use `standard`
 when generic Pi arguments should govern, and leave
 `pichat-append-system-prompt` nil if supplying a generic appended-prompt flag.
 Changes to definitions affect future runtimes only.
+
+### Preset MCP tools and models
+
+An explicit-tool preset can also select direct MCP tools by default with exact
+`(SERVER . TOOL)` pairs, and pin a model for runtimes launched by naming it:
+
+```elisp
+(pichat-make-preset 'web-search
+  :description "Read files and search the web through Ketch."
+  :tools '("read" "grep" "find" "ls")
+  :mcp '(("ketch" . "search") ("ketch" . "fetch"))
+  :model "anthropic/claude-sonnet-4-5")
+```
+
+`:mcp` requires explicit `:tools`; pass-through presets cannot declare it.
+Malformed, duplicate or normalization-colliding pairs, and names that overlap an
+extension or Emacs-defined tool, are rejected. Before a new runtime starts with
+an unchanged MCP baseline, the launch checks those exact tools with the same
+destination discovery as `x Tools` (target and directory). A missing, hidden,
+non-direct or disconnected tool cancels the launch with a message; no other tool
+is enabled instead. Reusing a live preferred runtime does not repeat the check,
+and Tools applied in the launcher were already checked. Complete local
+`pichat-rpc-command` wrappers cannot use MCP baselines.
+
+`:model` is an exact `provider/model` (no thinking-level suffix) or `default`,
+which is the same as omitting it: Pi's normal model policy. Naming the preset
+in the launcher (or a programmatic profile with no `:model`) uses its model as a
+run-local model, verified at startup like `m`; an unavailable model fails
+startup instead of falling back. `m` overrides it for one launch. The launcher's
+`default` preset choice keeps Pi's default model so that it can reuse the
+preferred runtime, even when `pichat-default-preset` declares a model.
+Reconfiguring a runtime keeps its active model; selecting a preset there does
+not change models.
+
+### Saving presets from the launcher
+
+To reuse a configuration, set it up in `pichat-launch` and press `c`:
+
+1. Choose a preset with `p`, adjust `x Tools`, and optionally choose `m Model`.
+2. Press `c` (**Save preset as…**) and enter a name, such as `web-search`.
+3. For a new name the preset is saved immediately. An existing name, including
+   a shipped or programmatic preset, asks `Replace preset web-search?` first;
+   declining changes nothing.
+
+The launcher returns with the new name selected and the same effective tools,
+prompts and model; nothing is launched. A saved preset records the effective
+built-in, extension, Emacs-defined and MCP tools, the source preset's own prompt
+sources (not `pichat-append-system-prompt`, which still applies to every
+preset), and the model: an exact ID, or `default` for Pi's default policy. A
+**Choose when launching** model cannot be saved; pick a concrete model or the
+default first. Target, scope, persistence, conversation and runtime state are
+not saved. Saving does not start, stop or reconfigure a runtime, or change Pi's
+global model or `pichat-default-preset`. Tools Apply/Cancel stay run-local; only
+`c` saves. Save several names to keep several presets; all appear under `p`.
+
+Saved presets are stored in the `pichat-saved-presets` user option through
+Emacs's Custom mechanism, in your existing `custom-file`, and reload in a fresh
+Emacs whether that file loads before or after PiChat. Only that option is newly
+saved: other unsaved Custom changes are not written, and text outside Custom's
+`custom-set-variables` form is kept. Saving requires `custom-file` to be set
+and refuses, with nothing changed, when the file's buffer has unsaved edits or
+changed on disk, when the file cannot be parsed or has several
+`custom-set-variables` forms, or when it holds saved settings this Emacs has not
+loaded (for example, saved by another Emacs). A saved definition takes
+precedence over a programmatic one with the same name, regardless of load order.
+To rename or delete saved presets, edit `pichat-saved-presets` with
+`M-x customize-option`.
 
 ### Extension tools
 
@@ -791,9 +862,13 @@ in its complete command instead.
 An independent runtime is a separate Pi RPC process retained in the manager but
 not marked `★` as the scope's preferred runtime. “Independent” does not mean
 Pi's `new_session` operation inside an existing runtime. For a run-local model,
-PiChat lists and prompts for models before creating the target runtime, then
-passes the exact selection through that process's startup `--model`. The launch
-prompt also accepts an unlisted `provider/model-id` when that provider appears
+`m` either lists and prompts for models immediately (**Select or enter
+model…**, staging the choice in the launcher) or defers that prompt until `RET`
+(**Choose when launching**), before creating the target runtime. PiChat then
+passes the exact selection through that process's startup `--model`. A preset
+model (see [Preset MCP tools and models](#preset-mcp-tools-and-models)) is used
+the same way. Model listings superseded by another `m` or launcher are ignored.
+The model prompt also accepts an unlisted `provider/model-id` when that provider appears
 in Pi's available-model list; nested slashes in the model ID are preserved.
 Unlisted IDs cannot include a Pi thinking-level suffix. Pi supplies fallback
 metadata for such IDs from another model on the provider, so this facility is

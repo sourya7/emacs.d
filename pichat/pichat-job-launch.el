@@ -40,7 +40,11 @@
          :append-system-prompt (plist-get preset :append-system-prompt))
    ;; Omitted when empty: captures predating Emacs-defined selection match.
    (when-let* ((names (plist-get preset :emacs-tools)))
-     (list :emacs-tools (vconcat names)))))
+     (list :emacs-tools (vconcat names)))
+   ;; Likewise for an MCP baseline.  A preset model is not captured here:
+   ;; the job's own :model is authoritative.
+   (when-let* ((pairs (plist-get preset :mcp)))
+     (list :mcp (pichat-job-launch--pairs pairs)))))
 
 (defun pichat-job-launch--optional-strings (values)
   "Decode optional captured string VALUES; older captures omit them."
@@ -58,16 +62,21 @@
                :extensions (pichat-job-launch--strings (plist-get preset :extensions))
                :system-prompt (plist-get preset :system-prompt)
                :append-system-prompt (plist-get preset :append-system-prompt)))
-        (emacs (pichat-job-launch--optional-strings (plist-get preset :emacs-tools))))
+        (emacs (pichat-job-launch--optional-strings (plist-get preset :emacs-tools)))
+        (mcp (and (plist-get preset :mcp)
+                  (pichat-job-launch--unpairs (plist-get preset :mcp)))))
     (pichat-presets--validate
      (plist-get result :name)
      (list :description (plist-get result :description)
            :tools (plist-get result :tools)
            :extensions (plist-get result :extensions)
            :emacs-tools emacs
+           :mcp mcp
            :system-prompt (plist-get result :system-prompt)
            :append-system-prompt (plist-get result :append-system-prompt)))
-    (if emacs (append result (list :emacs-tools emacs)) result)))
+    (append result
+            (when emacs (list :emacs-tools emacs))
+            (when mcp (list :mcp mcp)))))
 
 (defun pichat-job-launch--tools (tools)
   "Encode resolved TOOLS."

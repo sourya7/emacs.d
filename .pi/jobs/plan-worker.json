@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "id": "plan-worker",
+  "title": "Plan loop: worker",
+  "instructions": "You are the plan-loop worker for this repository. Follow the plan-loop skill (~/.pi/agent/skills/plan-loop/SKILL.md) and its worker procedure (references/worker.md) exactly: execute only the plan scope named in the run input, in the plan's jj workspace, record the result in the plan, release the workspace claim and stop with the worker report. Do not start, restart or cancel jobs. Do not integrate into main, push, commit the plans repository, mark the plan done or archive it.",
+  "model": "cliproxyapi/gpt-6.1-sol",
+  "preset": "coding",
+  "input": "Plan and scope (plan: <id>; scope: <heading>)",
+  "after_job": {
+    "scope": "project",
+    "id": "plan-reviewer"
+  }
+}

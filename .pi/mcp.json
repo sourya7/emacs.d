@@ -2,11 +2,31 @@
   "mcpServers": {
     "pichat": {
       "command": "go",
-      "args": ["run", "github.com/inercia/MCPShell@v0.2.0", "mcp", "--tools", ".pi/pichat-tests.yaml"],
+      "args": [
+        "run",
+        "github.com/inercia/MCPShell@v0.2.0",
+        "mcp",
+        "--tools",
+        ".pi/pichat-tests.yaml"
+      ],
       "cwd": ".",
       "timeout": 1200,
       "exposure": "direct",
       "description": "Run the PiChat test suites for this Emacs configuration"
+    },
+    "plan-review": {
+      "command": "go",
+      "args": [
+        "run",
+        "github.com/inercia/MCPShell@v0.2.0",
+        "mcp",
+        "--tools",
+        ".pi/plan-review.yaml"
+      ],
+      "cwd": ".",
+      "timeout": 1200,
+      "exposure": "direct",
+      "description": "Read-only plan-loop review tools: plan, workspace, change log and diff, tests"
     }
   }
 }

@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "id": "plan-reviewer",
+  "title": "Plan loop: reviewer",
+  "instructions": "Review the originating plan-loop worker run of this repository. You are authorized to start the originating worker job again exactly once with pichat_job_run_now, using the envelope's job-id, for the same plan and scope with numbered findings, while the envelope's round is below 3. You are not authorized to start, restart or cancel any other job, to repeat a failed run, or to modify the workspace, the plan record or any repository. Use the plan-review tools to inspect the plan, its workspace, the scope's change and the tests. Follow the plan-loop skill (~/.pi/agent/skills/plan-loop/SKILL.md) and its reviewer procedure (references/reviewer.md) exactly, and end with its reviewer report.",
+  "model": "cliproxyapi/claude-opus-5-5",
+  "preset": "plan-reviewer"
+}

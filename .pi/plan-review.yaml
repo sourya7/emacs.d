@@ -1,0 +1,104 @@
+# plan-loop reviewer tools (from the plan-loop skill's assets/mcp/plan-review.yaml).
+mcp:
+  description: Read-only plan-loop review tools for this repository's plans, their jj workspaces and tests.
+  run:
+    shell: bash
+  tools:
+    - name: plan_show
+      description: Show one plan of this repository as JSON (metadata, tasks and the full Org text).
+      params:
+        plan:
+          type: string
+          description: Plan ID (lowercase kebab-case), from the plan-loop run input.
+          required: true
+      constraints:
+        - "plan.matches('^[a-z0-9]+(-[a-z0-9]+)*$') && plan.size() <= 80"
+      run:
+        command: python3 "$HOME/.pi/agent/skills/plans/scripts/plans.py" --json show {{ .plan }} 2>&1
+        timeout: 1m
+
+    - name: workspace_show
+      description: Show the plan's jj workspace binding as JSON (state, workspace path, recorded changes with their scopes, claim, issues).
+      params:
+        plan:
+          type: string
+          description: Plan ID (lowercase kebab-case).
+          required: true
+      constraints:
+        - "plan.matches('^[a-z0-9]+(-[a-z0-9]+)*$') && plan.size() <= 80"
+      run:
+        command: python3 "$HOME/.pi/agent/skills/plans/scripts/plans.py" --json workspace show {{ .plan }} 2>&1
+        timeout: 1m
+
+    - name: change_log
+      description: Show one jj change (ID, parents, description) of the plan's workspace, without snapshotting the workspace.
+      params:
+        plan:
+          type: string
+          description: Plan ID (lowercase kebab-case).
+          required: true
+        change:
+          type: string
+          description: Full or unique-prefix jj change ID (letters k-z), from workspace_show's recorded changes.
+          required: true
+      constraints:
+        - "plan.matches('^[a-z0-9]+(-[a-z0-9]+)*$') && plan.size() <= 80"
+        - "change.matches('^[k-z]{4,32}$')"
+      run:
+        command: |
+          set -o pipefail
+          W=$(python3 "$HOME/.pi/agent/skills/plans/scripts/plans.py" --json workspace show {{ .plan }} \
+            | python3 -c 'import json,sys; print((json.load(sys.stdin).get("local") or {})["workspace_path"])' 2>/dev/null) \
+            || { echo "plan {{ .plan }} has no bound workspace"; exit 1; }
+          jj -R "$W" --no-pager --color=never --ignore-working-copy log --no-graph -r 'change_id({{ .change }})' 2>&1
+        timeout: 1m
+
+    - name: change_diff
+      description: Show the diff of one jj change in the plan's workspace (only that change, against its parent), without snapshotting the workspace.
+      params:
+        plan:
+          type: string
+          description: Plan ID (lowercase kebab-case).
+          required: true
+        change:
+          type: string
+          description: Full or unique-prefix jj change ID (letters k-z).
+          required: true
+        stat:
+          type: boolean
+          description: Only list changed files with line counts.
+          default: false
+      constraints:
+        - "plan.matches('^[a-z0-9]+(-[a-z0-9]+)*$') && plan.size() <= 80"
+        - "change.matches('^[k-z]{4,32}$')"
+      run:
+        command: |
+          set -o pipefail
+          W=$(python3 "$HOME/.pi/agent/skills/plans/scripts/plans.py" --json workspace show {{ .plan }} \
+            | python3 -c 'import json,sys; print((json.load(sys.stdin).get("local") or {})["workspace_path"])' 2>/dev/null) \
+            || { echo "plan {{ .plan }} has no bound workspace"; exit 1; }
+          jj -R "$W" --no-pager --color=never --ignore-working-copy diff {{ if .stat }}--stat{{ else }}--git{{ end }} -r 'change_id({{ .change }})' 2>&1
+        timeout: 2m
+
+    - name: test
+      description: Run the PiChat ERT suite (pichat/test/run-tests.sh) inside the plan's jj workspace and return the output.
+      params:
+        plan:
+          type: string
+          description: Plan ID (lowercase kebab-case).
+          required: true
+        integration:
+          type: boolean
+          description: Also run the RPC integration tests (--full).
+          default: false
+      constraints:
+        - "plan.matches('^[a-z0-9]+(-[a-z0-9]+)*$') && plan.size() <= 80"
+      run:
+        command: |
+          set -o pipefail
+          W=$(python3 "$HOME/.pi/agent/skills/plans/scripts/plans.py" --json workspace show {{ .plan }} \
+            | python3 -c 'import json,sys; print((json.load(sys.stdin).get("local") or {})["workspace_path"])' 2>/dev/null) \
+            || { echo "plan {{ .plan }} has no bound workspace"; exit 1; }
+          cd "$W" || exit 1
+          pichat/test/run-tests.sh{{ if .integration }} --full{{ end }} 2>&1
+        timeout: 15m

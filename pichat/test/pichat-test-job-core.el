@@ -1625,5 +1625,148 @@
       (should (equal before (pichat-job-record store 'runs id)))
       (should (equal before (pichat-job-record (pichat-job-store-open file) 'runs id))))))
 
+;;; Run input
+
+(defun pichat-test-job--input-spec (&optional prompt)
+  "Make a captured spec declaring run input PROMPT."
+  (plist-put (pichat-test-job--spec) :input (or prompt "Plan and scope")))
+
+(defun pichat-test-job--finish (store id result)
+  "Claim queued ID in STORE and finish it with RESULT."
+  (let ((token (plist-get (pichat-job-claim store id) :attempt)))
+    (pichat-job-advance store id token "finished" (list :result result :safe-to-release t))))
+
+(ert-deftest pichat-job-input-declaration-is-required-bounded-and-rendered ()
+  (pichat-test-job--with-store
+    (let* ((job (pichat-job-save store (pichat-test-job--input-spec)))
+           (data (pichat-job-store-data store)))
+      (dolist (missing '(nil "" "   "))
+        (should-error (pichat-job-enqueue-options store (list :job-id job :input missing))
+                      :type 'pichat-job-error))
+      (should-error (pichat-job-enqueue-options
+                     store (list :job-id job :input (make-string 4001 ?x)))
+                    :type 'pichat-job-error)
+      (should (equal data (pichat-job-store-data store)))
+      (let* ((input "plan: example; scope: Phase 1")
+             (id (pichat-job-enqueue-options store (list :job-id job :input input)))
+             (run (pichat-job-record (pichat-job-store-open file) 'runs id))
+             (prompt (pichat-job-prompt run)))
+        (should (equal (plist-get run :input) input))
+        (should (string-prefix-p "Inspect; do not change files." prompt))
+        (should (string-suffix-p (concat "Run input (from the user or the job that started this run):\n"
+                                         input)
+                                 prompt)))
+      (let ((full (make-string 4000 ?y)) (other (pichat-job-save store (pichat-test-job--input-spec))))
+        (should (equal full (plist-get (pichat-job-record
+                                       store 'runs
+                                       (pichat-job-enqueue-options store (list :job-id other :input full)))
+                                      :input)))))))
+
+(ert-deftest pichat-job-input-undeclared-jobs-are-unchanged-and-reject-input ()
+  (pichat-test-job--with-store
+    (let* ((spec (pichat-test-job--spec))
+           (digest (pichat-job-data-digest
+                    (list :title (plist-get spec :title) :instructions (plist-get spec :instructions)
+                          :directory (plist-get spec :directory)
+                          :configuration (plist-get spec :configuration))))
+           (job (pichat-job-save store spec)))
+      ;; Existing imported jobs keep their digest, so they do not look diverged.
+      (should (equal digest (pichat-job-spec-digest spec)))
+      (should-not (equal digest (pichat-job-spec-digest (pichat-test-job--input-spec))))
+      (should-error (pichat-job-enqueue-options store (list :job-id job :input "text"))
+                    :type 'pichat-job-error)
+      (should-error (pichat-job-enqueue-options store (list :spec spec :input "text"))
+                    :type 'pichat-job-error)
+      (let ((run (pichat-job-record store 'runs (pichat-job-enqueue store nil job))))
+        (should-not (plist-member run :input))
+        (should (equal (pichat-job-prompt run) (plist-get spec :instructions)))))))
+
+(ert-deftest pichat-job-input-prompt-declaration-is-validated ()
+  (pichat-test-job--with-store
+    (dolist (prompt (list "" " " "Two\nlines" (make-string 201 ?p) 7))
+      (should-error (pichat-job-save store (pichat-test-job--input-spec prompt))
+                    :type 'pichat-job-error))
+    (should (pichat-job-save store (pichat-test-job--input-spec (make-string 200 ?p))))))
+
+(ert-deftest pichat-job-input-repeat-and-continue-reuse-input ()
+  (pichat-test-job--with-store
+    (let* ((job (pichat-job-save store (pichat-test-job--input-spec)))
+           (origin (pichat-job-enqueue-options store (list :job-id job :input "plan: a; scope: b"))))
+      (pichat-test-job--finish store origin "failed")
+      (let ((repeat (pichat-job-enqueue store nil nil nil origin)))
+        (should (equal "plan: a; scope: b" (plist-get (pichat-job-record store 'runs repeat) :input)))
+        (should (string-match-p "scope: b" (pichat-job-prompt (pichat-job-record store 'runs repeat))))
+        (pichat-job-cancel-queued store repeat))
+      (let ((override (pichat-job-enqueue-options
+                       store (list :repeat-of origin :input "plan: a; scope: c"))))
+        (should (equal "plan: a; scope: c"
+                       (plist-get (pichat-job-record store 'runs override) :input)))
+        (pichat-job-cancel-queued store override))
+      (let* ((continued (pichat-job-enqueue store nil nil nil nil origin "Check tests"))
+             (run (pichat-job-record store 'runs continued)))
+        (should (equal "plan: a; scope: b" (plist-get run :input)))
+        (should (string-match-p "Original instructions:\n.*\n\nRun input[^\n]*:\nplan: a; scope: b"
+                                (pichat-job-prompt run)))))))
+
+(ert-deftest pichat-job-input-jobs-cannot-be-scheduled ()
+  (pichat-test-job--with-store
+    (let* ((rule (list :kind "interval" :start (+ (float-time) 3600) :seconds 7200))
+           (job (pichat-job-save store (pichat-test-job--input-spec)))
+           (plain (pichat-job-save store (pichat-test-job--spec)))
+           (data (pichat-job-store-data store)))
+      (should-error (pichat-job-schedule-set store job rule) :type 'pichat-job-error)
+      (should (equal data (pichat-job-store-data store)))
+      ;; Removing timing stays possible, and a scheduled job cannot gain input.
+      (pichat-job-schedule-set store job nil)
+      (pichat-job-schedule-set store plain rule)
+      (should-error (pichat-job-save store (pichat-test-job--input-spec) plain)
+                    :type 'pichat-job-error)
+      (pichat-job-schedule-set store plain nil)
+      (pichat-job-save store (pichat-test-job--input-spec) plain)
+      (should (equal "Plan and scope"
+                     (plist-get (plist-get (pichat-job-record store 'jobs plain) :spec) :input))))))
+
+(ert-deftest pichat-job-input-is-in-the-followup-envelope-not-the-followup ()
+  (pichat-test-job--with-store
+    (let* ((handler (pichat-job-save store (pichat-test-job--input-spec "Never asked")))
+           (worker (pichat-job-save store (plist-put (pichat-test-job--input-spec) :after-job-id handler)))
+           (origin (pichat-job-enqueue-options store (list :job-id worker :input "plan: a; scope: b"))))
+      (pichat-test-job--finish store origin "failed")
+      (let* ((record (pichat-job-record store 'runs origin))
+             (event (plist-get record :stop-event))
+             (child (pichat-job-record store 'runs (plist-get (plist-get record :dispatch) :run-id))))
+        (should (equal "plan: a; scope: b" (plist-get event :input)))
+        (should (pichat-job-followup-event-p event))
+        (should (equal event (plist-get child :event)))
+        (should-not (plist-member child :input))
+        (should (string-match-p "\"input\":\"plan: a; scope: b\"" (pichat-job-prompt child)))
+        (should-not (string-match-p "Run input (from" (pichat-job-prompt child)))))
+    ;; Envelopes without input, as recorded before this field, stay valid.
+    (let* ((plain (let ((id (pichat-job-enqueue store (pichat-test-job--spec))))
+                    (pichat-job-cancel-queued store id)
+                    id))
+           (event (pichat-job-followup-event (pichat-job-record store 'runs plain)
+                                             '(:evidence nil :warning "none"))))
+      (should-not (plist-member event :input))
+      (should (pichat-job-followup-event-p (plist-put (copy-sequence event) :input nil)))
+      (should-not (pichat-job-followup-event-p
+                   (plist-put (copy-sequence event) :input (make-string 4021 ?x)))))))
+
+(ert-deftest pichat-job-input-store-validation-rejects-misplaced-input ()
+  (pichat-test-job--with-store
+    (let* ((job (pichat-job-save store (pichat-test-job--input-spec)))
+           (id (pichat-job-enqueue-options store (list :job-id job :input "text")))
+           (data (pichat-job--copy (pichat-job-store-data store))))
+      (should (pichat-job--validate data))
+      (dolist (bad (list "" (make-string 4001 ?x) 5))
+        (let ((copy (pichat-job--copy data)))
+          (setf (plist-get (aref (plist-get copy :runs) 0) :input) bad)
+          (should-error (pichat-job--validate copy) :type 'pichat-job-error)))
+      (let ((copy (pichat-job--copy data)))
+        (setf (plist-get (aref (plist-get copy :runs) 0) :trigger)
+              '(:kind "once" :schedule-token "t" :due 1.0))
+        (should-error (pichat-job--validate copy) :type 'pichat-job-error))
+      (should (equal id (plist-get (aref (plist-get data :runs) 0) :id))))))
+
 (provide 'pichat-test-job-core)
 ;;; pichat-test-job-core.el ends here

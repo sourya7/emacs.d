@@ -399,8 +399,27 @@ reservation after inspection and confirmation.  With Evil, use g R."
   (interactive)
   (unless (eq pichat-jobs--kind 'jobs) (user-error "Use Repeat this run from run details"))
   (let ((id (or (tabulated-list-get-id) (user-error "No job selected"))))
-    (pichat-job-executor-submit pichat-jobs--owner nil id)
+    (pichat-jobs--run-saved pichat-jobs--owner id)
     (message "PiChat job queued; your current chat is unchanged")))
+
+(defun pichat-jobs--read-input (spec &optional initial)
+  "Read run input for SPEC when it declares a prompt, else return nil.
+INITIAL prefills the minibuffer.  Blank or oversized input is refused here,
+before anything is queued; the store checks it again."
+  (when-let* ((prompt (plist-get spec :input)))
+    (let ((input (read-string (format "%s: " prompt) initial)))
+      (when (string-blank-p input)
+        (user-error "This job needs run input; nothing queued"))
+      (when (> (length input) pichat-job-input-max-length)
+        (user-error "Run input exceeds %d characters; nothing queued"
+                    pichat-job-input-max-length))
+      input)))
+
+(defun pichat-jobs--run-saved (owner id)
+  "Queue saved job ID in OWNER, asking for run input only when it declares one."
+  (let* ((job (pichat-job-record (pichat-job-executor-store owner) 'jobs id))
+         (input (pichat-jobs--read-input (plist-get job :spec))))
+    (pichat-job-executor-submit-options owner (list :job-id id :input input))))
 
 (defun pichat-jobs-edit ()
   "Edit the selected saved job; existing attempts remain immutable."
@@ -897,7 +916,7 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
     ;; Navigation may select a new buffer; do not restore the old one over it.
     (set-buffer (plist-get scope :origin))
     (pcase action
-      ('run (pichat-job-executor-submit owner nil id))
+      ('run (pichat-jobs--run-saved owner id))
       ('edit (pichat-job--edit-saved owner id))
       ('delete-job (pichat-jobs--delete-job owner id))
       ('history (pichat-jobs--show-history owner (if (eq kind 'jobs) id (plist-get record :job-id))))
@@ -1070,6 +1089,9 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
       (insert "Trigger: " (pichat-jobs--trigger-label record) "\n\n")
       (insert "Instructions:\n")
       (pichat-jobs--insert-instructions (plist-get spec :instructions))
+      (when-let* ((input (plist-get record :input)))
+        (insert "Run input:\n")
+        (pichat-jobs--insert-instructions input 'input))
       (when (equal state "uncertain")
         (insert "State: Execution uncertain\nReservation: Held\n"))
       (when-let* ((event (plist-get record :event)))
@@ -1133,6 +1155,8 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
       (when-let* ((source (plist-get record :source)))
         (insert "Imported from: " (plist-get source :file) "\n"))
       (pichat-jobs--insert-settings spec)
+      (when-let* ((prompt (plist-get spec :input)))
+        (insert "Run input: asked when run (" (pichat-jobs--display prompt) ")\n"))
       (when (plist-get spec :after-job-id)
         (insert (format "After this run: %s\n"
                         (pichat-job--after-job-title (plist-get spec :after-job-id)))))
@@ -1299,7 +1323,7 @@ SAVE creates a definition only.  Failures retain a recoverable detached draft."
           (let* ((draft (plist-get scope :draft))
                  (owner (plist-get scope :owner))
                  (store (pichat-job-executor-store owner))
-                 (continuation (plist-get draft :continue-of)) spec capture id)
+                 (continuation (plist-get draft :continue-of)) spec capture input id)
             (when (and save continuation)
               (user-error "Continuation is one run, not a reusable job"))
             (when (and save (not (pichat-job--text-p (plist-get draft :title))))
@@ -1308,6 +1332,13 @@ SAVE creates a definition only.  Failures retain a recoverable detached draft."
             (with-current-buffer (plist-get scope :origin)
               (let ((pichat-job--draft draft) (pichat-jobs--owner owner))
                 (setq spec (pichat-job--submission-spec))))
+            ;; Repeat and continuation reuse the earlier run's input.  Ask only
+            ;; when there is none to reuse and the definition declares a prompt.
+            (unless save
+              (setq input (or (and (or continuation (plist-get draft :repeat-of))
+                                   (plist-get spec :input)
+                                   (plist-get (plist-get scope :run) :input))
+                              (pichat-jobs--read-input spec))))
             (when continuation
               (setq capture (pichat-job-continuation-context
                              store (pichat-job-record store 'runs continuation)))
@@ -1321,9 +1352,11 @@ SAVE creates a definition only.  Failures retain a recoverable detached draft."
               (user-error "Job context changed; reopen the composer"))
             (setq id
                   (if save (pichat-job-save store spec)
-                    (pichat-job-executor-submit
-                     owner spec nil (plist-get draft :repeat-of)
-                     continuation (plist-get draft :guidance) capture
+                    (pichat-job-executor-submit-options
+                     owner (list :spec spec :repeat-of (plist-get draft :repeat-of)
+                                 :continue-of continuation
+                                 :guidance (plist-get draft :guidance)
+                                 :capture capture :input input)
                      (lambda (accepted-id)
                        ;; Commit is final even if later refresh/dispatch fails.
                        (setf (plist-get scope :submitted-run-id) accepted-id)
@@ -1384,11 +1417,16 @@ SAVE creates a definition only.  Failures retain a recoverable detached draft."
       (pichat-job-composer-review-mode)
       (setq pichat-job--inspection-scope scope)
       (let ((inhibit-read-only t))
-        (insert (format "Name: %s\nWorkspace: %s\nAfter this run: %s\n\nInstructions:\n"
+        (insert (format "Name: %s\nWorkspace: %s\nAfter this run: %s\nRun input prompt: %s\n\nInstructions:\n"
                         (plist-get draft :title) (plist-get draft :directory)
                         (let ((pichat-jobs--owner (plist-get scope :owner)))
-                          (pichat-job--after-job-title (plist-get draft :after-job-id))))
+                          (pichat-job--after-job-title (plist-get draft :after-job-id)))
+                        (or (plist-get draft :input) "None"))
                 (plist-get draft :instructions) "\n\n")
+        (when-let* ((input (and (plist-get draft :input)
+                                (or (plist-get draft :repeat-of) (plist-get draft :continue-of))
+                                (plist-get (plist-get scope :run) :input))))
+          (insert "Run input (reused from the earlier run):\n" input "\n\n"))
         (when (plist-get draft :continue-of)
           (insert "Additional guidance:\n" (plist-get draft :guidance) "\n\n"))
         (when-let* ((run (and (plist-get draft :continue-of) (plist-get scope :run))))
@@ -1449,6 +1487,7 @@ SAVE creates a definition only.  Failures retain a recoverable detached draft."
         :instructions (or (plist-get spec :instructions) "")
         :title (or (plist-get spec :title) "")
         :after-job-id (plist-get spec :after-job-id)
+        :input (plist-get spec :input)
         :profile (list :preset pichat-default-preset :target 'inferred
                        :model (or pichat-default-model 'prompt) :tools nil)
         :dirty nil))
@@ -1820,7 +1859,7 @@ its prefix while waiting for the model-list process."
       (setf (plist-get scope :pending) 'editing)
       (condition-case err
           (progn
-            (unless (member choice '("Name" "Workspace" "After this run"))
+            (unless (member choice '("Name" "Workspace" "After this run" "Run input"))
               (let ((pichat-job--draft draft))
                 (pichat-job--invalidate-capture)
                 (setq draft pichat-job--draft)))
@@ -1830,6 +1869,15 @@ its prefix while waiting for the model-list process."
               (pcase choice
                 ("Name" (setf (plist-get draft :title)
                               (read-string "Job name: " (plist-get draft :title))))
+                ("Run input"
+                 (let ((prompt (string-trim
+                                (read-string "Run input prompt (empty for none): "
+                                             (plist-get draft :input)))))
+                   (unless (or (string-empty-p prompt) (pichat-job-input-prompt-p prompt))
+                     (user-error "Run input prompt must be one line of at most %d characters"
+                                 pichat-job-input-prompt-max-length))
+                   (setf (plist-get draft :input) (unless (string-empty-p prompt) prompt)
+                         (plist-get draft :dirty) t)))
                 ((or "Workspace" "After this run")
                  (let ((pichat-job--draft draft)
                        (pichat-jobs--owner (plist-get scope :owner)))
@@ -1958,8 +2006,9 @@ its prefix while waiting for the model-list process."
                                    (plist-get draft :instructions)))
                   ('workspace (abbreviate-file-name (plist-get draft :directory)))
                   ('after (let ((pichat-jobs--owner (plist-get scope :owner)))
-                            (pichat-job--after-job-title (plist-get draft :after-job-id))))))
-         (label (pcase field ('after "After this run")
+                            (pichat-job--after-job-title (plist-get draft :after-job-id))))
+                  ('input (or (plist-get draft :input) "None"))))
+         (label (pcase field ('after "After this run") ('input "Run input")
                        ('instructions (if (plist-get draft :continue-of) "Guidance" "Instructions"))
                        (_ (capitalize (symbol-name field))))))
     (concat label ": "
@@ -1976,6 +2025,10 @@ its prefix while waiting for the model-list process."
   "Stage a workspace change." (interactive) (pichat-job--settings-edit "Workspace"))
 (transient-define-suffix pichat-job-edit-after ()
   "Stage the after-run default." (interactive) (pichat-job--settings-edit "After this run"))
+(transient-define-suffix pichat-job-edit-input ()
+  "Stage the run input prompt asked for each time the job runs.
+Empty input removes it.  Jobs that take run input cannot be scheduled."
+  (interactive) (pichat-job--settings-edit "Run input"))
 (transient-define-suffix pichat-job-edit-text ()
   "Edit multiline instructions; Apply returns here without saving."
   (interactive)
@@ -2044,7 +2097,9 @@ quota availability is not checked.  See `pichat-job-schedule-continuation'."
     ("d" pichat-job-edit-workspace :description (lambda () (pichat-job--edit-description 'workspace))
      :if-not pichat-job--composer-fixed-source-p)
     ("a" pichat-job-edit-after :description (lambda () (pichat-job--edit-description 'after))
-     :if-not pichat-job--composer-conversation-p)]
+     :if-not pichat-job--composer-conversation-p)
+    ("u" pichat-job-edit-input :description (lambda () (pichat-job--edit-description 'input))
+     :if-not pichat-job--composer-fixed-source-p)]
    ["Timing" :if pichat-job--composer-conversation-p
     ("w" pichat-job-composer-when
      :description (lambda () (concat "When: " (if-let* ((due (plist-get (transient-scope) :due)))
@@ -2122,6 +2177,11 @@ quota availability is not checked.  See `pichat-job-schedule-continuation'."
                                        (plist-get draft :profile)))))
       (when (or (plist-member spec :after-job-id) (plist-get draft :after-job-id))
         (setf (plist-get spec :after-job-id) (plist-get draft :after-job-id)))
+      ;; Remove a cleared declaration rather than storing nil.
+      (setq spec (if (plist-get draft :input)
+                     (plist-put spec :input (plist-get draft :input))
+                   (cl-loop for (key value) on spec by #'cddr
+                            unless (eq key :input) append (list key value))))
       spec)))
 
 (defun pichat-job-run-once ()

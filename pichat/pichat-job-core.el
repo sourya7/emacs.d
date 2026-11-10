@@ -31,6 +31,10 @@
 (defconst pichat-job--max-file-bytes (* 16 1024 1024))
 (defconst pichat-job-evidence-max-bytes (* 8 1024 1024)
   "Maximum UTF-8 JSON bytes in one immutable run-evidence file.")
+(defconst pichat-job-input-max-length 4000
+  "Maximum characters of run input supplied when starting a run.")
+(defconst pichat-job-input-prompt-max-length 200
+  "Maximum characters of a definition's run input prompt.")
 
 (defun pichat-job--fail (format-string &rest arguments)
   "Signal a job error using FORMAT-STRING and ARGUMENTS."
@@ -77,8 +81,11 @@ Keep RPC false values distinct from null; do not guess alist encodings."
   "Hash authored fields and execution capture in SPEC, not native add-ons.
 After-run defaults and inert legacy resource metadata are preserved separately."
   (pichat-job-data-digest
-   (list :title (plist-get spec :title) :instructions (plist-get spec :instructions)
-         :directory (plist-get spec :directory) :configuration (plist-get spec :configuration))))
+   (append
+    (list :title (plist-get spec :title) :instructions (plist-get spec :instructions)
+          :directory (plist-get spec :directory) :configuration (plist-get spec :configuration))
+    ;; Only declared input enters the digest, so older jobs keep their digest.
+    (when (plist-get spec :input) (list :input (plist-get spec :input))))))
 
 (defun pichat-job-source-diverged-p (job)
   "Whether JOB's authored fields/capture differ from its last imported source.
@@ -129,6 +136,30 @@ it from the store vector rather than update the stored record."
                                 'sha256 (format "%s:%S:%s" (emacs-pid)
                                                 (current-time) (random))) 0 24)))
 
+(defun pichat-job-input-prompt-p (value)
+  "Whether VALUE is a valid run input prompt declaration."
+  (and (pichat-job--text-p value)
+       (<= (length value) pichat-job-input-prompt-max-length)
+       (not (string-match-p "[\n\r\0]" value))))
+
+(defun pichat-job-input-check (spec input)
+  "Return INPUT for a run of SPEC, or signal why it is unacceptable.
+A declared prompt requires nonblank INPUT; undeclared jobs reject it."
+  (let ((prompt (plist-get spec :input)))
+    (cond
+     ((and prompt (not (pichat-job--text-p input)))
+      (pichat-job--fail "This job needs run input (%s)" prompt))
+     ((and input (not prompt))
+      (pichat-job--fail "This job does not take run input"))
+     ((and input (not (stringp input)))
+      (pichat-job--fail "Run input must be text"))
+     ((and input (> (length input) pichat-job-input-max-length))
+      (pichat-job--fail "Run input exceeds %d characters; shorten it"
+                        pichat-job-input-max-length))
+     ((and input (string-match-p "\0" input))
+      (pichat-job--fail "Run input cannot contain NUL characters"))
+     (t input))))
+
 (defun pichat-job--validate-spec (spec)
   "Validate a captured prompt job SPEC without resolving external settings."
   (unless (and (listp spec)
@@ -142,6 +173,10 @@ it from the store vector rather than update the stored record."
   (when (and (plist-get spec :after-job-id)
              (not (pichat-job--text-p (plist-get spec :after-job-id))))
     (pichat-job--fail "Invalid after-run job reference"))
+  (when-let* ((prompt (plist-get spec :input)))
+    (unless (pichat-job-input-prompt-p prompt)
+      (pichat-job--fail "Run input prompt must be one nonblank line of at most %d characters"
+                        pichat-job-input-prompt-max-length)))
   ;; Old snapshots retain their resource metadata for historical fidelity only.
   (when (and (plist-member spec :resources) (not (vectorp (plist-get spec :resources))))
     (pichat-job--fail "Invalid legacy job resource metadata"))
@@ -305,6 +340,12 @@ it from the store vector rather than update the stored record."
           (when-let* ((digest (plist-get record :evidence)))
             (unless (and (stringp digest) (string-match-p "\\`[a-f0-9]\\{64\\}\\'" digest))
               (pichat-job--fail "Invalid run evidence reference")))
+          (when-let* ((input (plist-get record :input)))
+            (unless (and (pichat-job--text-p input)
+                         (<= (length input) pichat-job-input-max-length)
+                         (not (member (plist-get (plist-get record :trigger) :kind)
+                                      '("lifecycle" "once" "interval" "conversation-once"))))
+              (pichat-job--fail "Invalid run input")))
           (dolist (key '(:queued-at :started-at :finished-at :resolved-at))
             (when (and (plist-get record key)
                        (not (pichat-job--text-p (plist-get record key))))
@@ -536,6 +577,8 @@ preserves existing linkage, including on native edits; timing is preserved."
          (record (if id (pichat-job--find data :jobs id)
                    (list :id (pichat-job--id "job") :created-at now
                          :updated-at now :spec nil))))
+    (when (and (plist-get spec :input) (plist-get record :schedule))
+      (pichat-job--fail "Remove this job's timing before declaring run input"))
     (setf (plist-get record :spec) spec
           (plist-get record :updated-at) now)
     (when source
@@ -595,6 +638,8 @@ Never submit work.  Replacing timing invalidates all previous timer ownership."
   (when rule (pichat-job-schedule-validate-rule rule))
   (let* ((data (pichat-job--copy (pichat-job-store-data store)))
          (job (pichat-job--find data :jobs id)))
+    (when (and rule (plist-get (plist-get job :spec) :input))
+      (pichat-job--fail "Jobs that take run input cannot be scheduled"))
     (pichat-job--stamp
      job :schedule (when rule
                      (list :version 1 :token (pichat-job--id "schedule")
@@ -736,9 +781,16 @@ Return :context and optional :warning requiring review before submission."
                                (car err))))
           :warning warning)))
 
+(defun pichat-job-input-section (input)
+  "Return the prompt section presenting run INPUT, or an empty string."
+  (if (pichat-job--text-p input)
+      (concat "\n\nRun input (from the user or the job that started this run):\n" input)
+    ""))
+
 (defun pichat-job-prompt (run)
   "Return the exact prompt for RUN without changing its original scope."
-  (let ((instructions (plist-get (plist-get run :spec) :instructions))
+  (let ((instructions (concat (plist-get (plist-get run :spec) :instructions)
+                              (pichat-job-input-section (plist-get run :input))))
         (continuation (plist-get run :continuation)))
     (cond
      ((plist-get run :event)
@@ -777,7 +829,9 @@ the caller, avoiding another evidence read after a user confirmation."
 (defun pichat-job-enqueue-options (store options)
   "Persist a run in STORE using named submission OPTIONS, without executing.
 OPTIONS accepts :spec, :job-id, :repeat-of, :continue-of, :guidance, :capture
-and :queue-limit, with the semantics of `pichat-job-enqueue'.
+and :queue-limit, with the semantics of `pichat-job-enqueue', and :input, the
+run input text.  A job whose definition declares input requires it; Repeat and
+Continue work copy the earlier run's input unless :input is given.
 Legacy manual submission delegates here; lifecycle dispatch uses the same data
 constructor inside its originating transition's atomic transaction."
   (when (or (plist-get options :destination) (plist-get options :scheduled))
@@ -801,6 +855,7 @@ constructor inside its originating transition's atomic transaction."
          (capture (plist-get options :capture))
          (event (plist-get options :event))
          (lifecycle (and event t))
+         (input nil)
          (runs (plist-get data :runs))
          (limit (or (plist-get options :queue-limit) 20)))
     (unless (and (integerp limit) (> limit 0))
@@ -843,6 +898,17 @@ constructor inside its originating transition's atomic transaction."
     (unless (equal (plist-get (plist-get spec :configuration) :mode)
                    (and (plist-get options :destination) "conversation"))
       (pichat-job--fail "Unknown or mismatched execution destination"))
+    (when (and (plist-get options :schedule-trigger) (plist-get spec :input))
+      (pichat-job--fail "Jobs that take run input cannot be scheduled"))
+    ;; Follow-ups and scheduled runs take no input; manual runs must match the
+    ;; declaration.  Repeat and continuation reuse the earlier run's input.
+    (setq input
+          (unless (or lifecycle (plist-get options :schedule-trigger))
+            (pichat-job-input-check
+             spec (or (plist-get options :input)
+                      (and (plist-get spec :input) (or repeat-of continue-of)
+                           (plist-get (pichat-job--find data :runs (or repeat-of continue-of))
+                                      :input))))))
     (let* ((now (pichat-job--now))
            (run (list :id (pichat-job--id "run") :job-id job-id
                       :created-at now :updated-at now
@@ -862,6 +928,8 @@ constructor inside its originating transition's atomic transaction."
         (setf (plist-get run :destination) (pichat-job--copy (plist-get options :destination))))
       (when lifecycle
         (setf (plist-get run :event) (pichat-job--copy event)))
+      (when input
+        (setf (plist-get run :input) (copy-sequence input)))
       (when (and (not lifecycle) (plist-get spec :after-job-id))
         (let* ((id (plist-get spec :after-job-id))
                (handler (pichat-job--find data :jobs id)))

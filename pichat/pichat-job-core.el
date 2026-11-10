@@ -116,7 +116,12 @@ This is cached-data-only: never read the authored file or resolve settings."
                                  (and (stringp digest)
                                       (string-match-p "\\`[a-f0-9]\\{64\\}\\'" digest))))
                              '(:authored-digest :spec-digest)))
-        (pichat-job--fail "Invalid authored job source linkage"))))
+        (pichat-job--fail "Invalid authored job source linkage"))
+      (when-let* ((link (plist-get source :after-job)))
+        (unless (and (consp link)
+                     (member (plist-get link :scope) '("global" "project"))
+                     (pichat-job--text-p (plist-get link :id)))
+          (pichat-job--fail "Invalid authored after-run link")))))
   source)
 
 (defun pichat-job--now ()

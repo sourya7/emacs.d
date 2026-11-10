@@ -242,8 +242,17 @@ opens the job store, resolves execution settings or initializes the executor."
     (or (pichat-job-import-review-spec review)
         (plist-get (pichat-job-import-review-previous review) :spec))))
 
-(defun pichat-job-definition-ui--fields (spec)
-  "Project SPEC into readable fields for meaningful comparisons."
+(defun pichat-job-definition-ui--job-title (store id)
+  "Return saved job ID's display title in STORE, or nil without ID."
+  (when id
+    (if-let* ((job (seq-find (lambda (job) (equal (plist-get job :id) id))
+                             (and store (pichat-job-records store 'jobs)))))
+        (pichat-jobs--display (plist-get (plist-get job :spec) :title))
+      "Unavailable job")))
+
+(defun pichat-job-definition-ui--fields (spec &optional store)
+  "Project SPEC into readable fields for meaningful comparisons.
+STORE names after-run jobs; without it the field shows the saved job ID."
   (let* ((config (plist-get spec :configuration))
          (preset (plist-get config :preset)) (tools (plist-get config :tools)))
     (list (cons "Title" (plist-get spec :title))
@@ -261,7 +270,31 @@ opens the job store, resolves execution settings or initializes the executor."
           (cons "Emacs-defined tools" (if tools (plist-get tools :emacs)
                                        (plist-get preset :emacs-tools)))
           (cons "System prompt" (plist-get preset :system-prompt))
-          (cons "Appended prompt" (plist-get preset :append-system-prompt)))))
+          (cons "Appended prompt" (plist-get preset :append-system-prompt))
+          (cons "Run input" (plist-get spec :input))
+          (cons "After this run" (if store
+                                     (pichat-job-definition-ui--job-title
+                                      store (plist-get spec :after-job-id))
+                                   (plist-get spec :after-job-id))))))
+
+(defun pichat-job-definition-ui--links (session)
+  "Return SESSION's cached run input and after-run lines, then warnings."
+  (let* ((review (plist-get session :review))
+         (data (plist-get (plist-get session :record) :definition))
+         (link (plist-get data :after-job))
+         (target (and review (pichat-job-import-review-after-job review))))
+    (append
+     (when-let* ((prompt (plist-get data :input)))
+       (list (concat "Run input: asked when run (" prompt ")")))
+     (when link
+       (list (concat "After this run: "
+                     (if target (pichat-jobs--display (plist-get (plist-get target :spec) :title))
+                       (concat "ID " (plist-get link :id)))
+                     " (" (plist-get link :scope) " job"
+                     (unless target ", resolved at Review") ")")))
+     (when review
+       (mapcar (lambda (warning) (propertize warning 'face 'warning))
+               (pichat-job-import-review-warnings review))))))
 
 (defun pichat-job-definition-ui--changes (session)
   "Return SESSION's changed readable fields and technical capture labels."
@@ -305,6 +338,7 @@ opens the job store, resolves execution settings or initializes the executor."
      (append
       (list (propertize title 'face 'transient-heading))
       (unless review (list "" (plist-get data :instructions)))
+      (pichat-job-definition-ui--links session)
       (when-let* ((changes (pichat-job-definition-ui--changes session)))
         (list (concat "Changes    " (string-join changes ", "))))
       (when (and review (pichat-job-import-review-diverged review))
@@ -500,15 +534,18 @@ This view never recaptures."
     (pichat-jobs--disclosure 'definition "Details" #'pichat-job-definition-ui--render-inspector)
     (when (memq 'definition pichat-jobs--expanded)
       (insert "\n")
-      (pichat-job-definition-ui--inspector-settings data spec))
+      (pichat-job-definition-ui--inspector-settings data spec)
+      (dolist (line (pichat-job-definition-ui--links session))
+        (insert line "\n")))
     (when changes
       (insert "\n")
       (pichat-jobs--disclosure 'changes "Changes" #'pichat-job-definition-ui--render-inspector)
       (when (memq 'changes pichat-jobs--expanded)
         (insert "\n")
         (dolist (label changes)
-          (let ((before (assoc label (pichat-job-definition-ui--fields old)))
-                (after (assoc label (pichat-job-definition-ui--fields spec))))
+          (let* ((store (pichat-job-import-review-store review))
+                 (before (assoc label (pichat-job-definition-ui--fields old store)))
+                 (after (assoc label (pichat-job-definition-ui--fields spec store))))
             (insert label "\n")
             (when after
               (insert "Before: " (pichat-job-definition-ui--value (cdr before)) "\n"

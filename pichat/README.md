@@ -996,8 +996,8 @@ phase adapter. Scheduling always requires explicit authorization.
   and full root context. Inspector refresh redraws snapshots without rescanning
   files. Empty lists show zero files in the overview. Opening the initial menu
   or its inspector does not access the job store, resolve settings, initialize
-  an executor or start Pi. Import never enables timing or changes follow-ups,
-  queued captures or historical attempts; Run and timing remain separate.
+  an executor or start Pi. Import never enables timing or changes follow-ups
+  (other than a file's own `after_job` link), queued captures or historical attempts; Run and timing remain separate.
 - Saved-job details put instructions first, followed by a clickable latest-run
   summary, schedule and workspace/target. Completed summaries use the recorded
   finish time; older records without one label their queue time instead. Enabled
@@ -1181,13 +1181,28 @@ A project definition can omit directory to use the selected project root:
 ```
 
 Replace `provider/model-id` with a concrete model. Version 1 accepts only the
-fields above plus optional `directory`. Global files require an absolute,
+fields above plus optional `directory`, `input` and `after_job`. Global files require an absolute,
 Emacs-visible directory; project-relative directories resolve against the project
 root, not `.pi/jobs/`. No tilde expansion or environment interpolation occurs.
 Omitted target means local; a different name must identify a configured target.
 Preset must be an explicit named preset, not `default`. Names resolve at Review,
-not discovery. Tools and prompts come from that preset; schedules, follow-ups,
-inline target configuration and arbitrary command arguments are not source fields.
+not discovery. Tools and prompts come from that preset; schedules, inline target
+configuration and arbitrary command arguments are not source fields.
+
+Optional `"input": "Plan and scope"` declares a run input prompt: one nonblank
+line of at most 200 characters. **Run job** then asks for the input (at most
+4,000 characters) and the job cannot be scheduled. Optional
+`"after_job": {"scope": "global", "id": "plan-reviewer"}` sets the saved
+after-run default. Scope is required: `global` names an imported job from the
+global folder, `project` names an imported job from the same repository's
+`.pi/jobs/`. Scopes never fall back to each other, another repository's job
+cannot be named, and a global file can only name a global job. Review resolves
+the link to exactly one saved job, which must be imported first; it shows the
+linked job's title and scope, and warns when that job has its own after-run
+job (ignored when it runs as a follow-up). A file without `after_job` keeps a
+native after-run default; a file that sets one owns it, so reimport restores the
+file's link and removing the field clears it. Changing `input` natively counts
+as a native edit; changing the after-run default does not.
 
 Use strict UTF-8 JSON with unique keys, integer version `1`, no nulls or NUL text,
 and at most 256 KiB. ID is lowercase kebab-case, at most 64 characters. Nonblank

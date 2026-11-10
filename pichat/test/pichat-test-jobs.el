@@ -3093,6 +3093,155 @@
       (should (eq current pichat-current-session))
       (should (equal windows (window-list))))))
 
+(defun pichat-test-job--define (scope root name &rest changes)
+  "Write authored job NAME in SCOPE at ROOT with plist CHANGES; return its record."
+  (let* ((data (with-temp-buffer
+                 (insert-file-contents (expand-file-name
+                                       "job-definitions/project-review.json"
+                                       pichat-test-fixture-directory))
+                 (json-parse-buffer :object-type 'plist)))
+         (file (expand-file-name (concat (if (equal scope "global") "jobs/" ".pi/jobs/")
+                                         name ".json")
+                                 root)))
+    (setq data (plist-put data :model "pichat-fake/pichat-fake"))
+    (setq data (plist-put data :id name))
+    (setq data (plist-put data :title (concat "Job " name)))
+    (when (equal scope "global") (setq data (plist-put data :directory (expand-file-name root))))
+    (while changes (setq data (plist-put data (pop changes) (pop changes))))
+    (make-directory (file-name-directory file) t)
+    (with-temp-file file (insert (decode-coding-string (json-serialize data) 'utf-8)))
+    (or (seq-find (lambda (record) (equal (plist-get record :file) (file-truename file)))
+                  (plist-get (if (equal scope "global")
+                                 (pichat-job-definition-discover root nil)
+                               (pichat-job-definition-discover nil root))
+                             :definitions))
+        (error "Invalid authored test fixture %s" name))))
+
+(defun pichat-test-job--import (store record &optional replace)
+  "Prepare and commit RECORD in STORE; return the saved job ID."
+  (pichat-job-import-commit (pichat-job-import-prepare store record) replace))
+
+(ert-deftest pichat-job-import-after-job-resolves-global-and-same-repo-links ()
+  (pichat-test-with-job-executor ()
+    (let* ((global (pichat-test-job--import store (pichat-test-job--define "global" agent-dir "reviewer")))
+           (local (pichat-test-job--import store (pichat-test-job--define "project" project-dir "reviewer")))
+           (to-global (pichat-test-job--define "project" project-dir "worker-a"
+                                               :input "Plan and scope"
+                                               :after_job '(:scope "global" :id "reviewer")))
+           (to-local (pichat-test-job--define "project" project-dir "worker-b"
+                                              :after_job '(:scope "project" :id "reviewer"))))
+      (should-not (equal global local))
+      (let ((review (pichat-job-import-prepare store to-global)))
+        (should (equal (plist-get (pichat-job-import-review-after-job review) :id) global))
+        (should-not (pichat-job-import-review-warnings review))
+        (let* ((job (pichat-job-import-commit review))
+               (record (pichat-job-record store 'jobs job)))
+          (should (equal (plist-get (plist-get record :spec) :after-job-id) global))
+          (should (equal (plist-get (plist-get record :spec) :input) "Plan and scope"))
+          (should (equal (plist-get (plist-get record :source) :after-job)
+                         '(:scope "global" :id "reviewer")))
+          ;; Run input stays required when the imported job runs.
+          (should-error (pichat-job-enqueue store nil job) :type 'pichat-job-error)))
+      (let ((job (pichat-test-job--import store to-local)))
+        (should (equal (plist-get (plist-get (pichat-job-record store 'jobs job) :spec) :after-job-id)
+                       local))))))
+
+(ert-deftest pichat-job-import-after-job-refuses-other-repos-missing-and-self ()
+  (pichat-test-with-job-executor ()
+    (let* ((other-dir (file-name-as-directory (expand-file-name "other" project-dir)))
+           (_ (pichat-test-job--import store (pichat-test-job--define "project" other-dir "reviewer")))
+           (_global (pichat-test-job--import store (pichat-test-job--define "global" agent-dir "helper")))
+           (worker (pichat-test-job--define "project" project-dir "worker"
+                                            :after_job '(:scope "project" :id "reviewer")))
+           (before (pichat-job--read-bytes (pichat-job-store-file store))))
+      ;; Another repository's job with that ID never resolves; neither does the global scope.
+      (should-error (pichat-job-import-prepare store worker) :type 'pichat-job-definition-error)
+      (condition-case err (pichat-job-import-prepare store worker)
+        (pichat-job-definition-error
+         (should (string-match-p "no imported project job with ID reviewer" (cadr err)))))
+      (should-error (pichat-job-import-prepare
+                     store (pichat-test-job--define "project" project-dir "worker"
+                                                    :after_job '(:scope "project" :id "helper")))
+                    :type 'pichat-job-definition-error)
+      (should-error (pichat-job-import-prepare
+                     store (pichat-test-job--define "project" project-dir "worker"
+                                                    :after_job '(:scope "global" :id "missing")))
+                    :type 'pichat-job-definition-error)
+      (should (equal before (pichat-job--read-bytes (pichat-job-store-file store)))))))
+
+(ert-deftest pichat-job-import-after-job-reimport-is-noop-and-file-owns-the-link ()
+  (pichat-test-with-job-executor ()
+    (let* ((reviewer (pichat-test-job--import store (pichat-test-job--define "global" agent-dir "reviewer")))
+           (native (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (record (pichat-test-job--define "project" project-dir "worker" :input "Plan and scope"
+                                            :after_job '(:scope "global" :id "reviewer")))
+           (job (pichat-test-job--import store record))
+           (before (pichat-job--read-bytes (pichat-job-store-file store))))
+      (cl-letf (((symbol-function 'pichat-job-launch-capture) (lambda (&rest _) (ert-fail "recapture")))
+                ((symbol-function 'pichat-job--commit) (lambda (&rest _) (ert-fail "write"))))
+        (let ((review (pichat-job-import-prepare store record)))
+          (should (equal (pichat-job-import-review-action review) "unchanged"))
+          (should (equal (pichat-job-import-commit review) job))))
+      (should (equal before (pichat-job--read-bytes (pichat-job-store-file store))))
+      ;; A native after-run change is not divergence; the next import restores the file's link.
+      (let ((spec (plist-get (pichat-job-record store 'jobs job) :spec)))
+        (pichat-job-save store (plist-put spec :after-job-id native) job))
+      (let ((review (pichat-job-import-prepare store record)))
+        (should-not (pichat-job-import-review-diverged review))
+        (should (equal (pichat-job-import-review-action review) "update"))
+        (pichat-job-import-commit review))
+      (should (equal reviewer (plist-get (plist-get (pichat-job-record store 'jobs job) :spec) :after-job-id)))
+      ;; Removing after_job and input from the file clears both.
+      (setq record (pichat-test-job--define "project" project-dir "worker"))
+      (pichat-test-job--import store record)
+      (let ((saved (pichat-job-record store 'jobs job)))
+        (should-not (plist-get (plist-get saved :spec) :after-job-id))
+        (should-not (plist-member (plist-get saved :spec) :input))
+        (should-not (plist-member (plist-get saved :source) :after-job)))
+      ;; Without an authored link, a native after-run default survives imports.
+      (let ((spec (plist-get (pichat-job-record store 'jobs job) :spec)))
+        (pichat-job-save store (plist-put spec :after-job-id native) job))
+      (pichat-test-job--import store (pichat-test-job--define "project" project-dir "worker"
+                                                              :instructions "Changed"))
+      (should (equal native (plist-get (plist-get (pichat-job-record store 'jobs job) :spec) :after-job-id))))))
+
+(ert-deftest pichat-job-import-native-input-edit-requires-replacement ()
+  (pichat-test-with-job-executor ()
+    (let* ((record (pichat-test-job--define "project" project-dir "worker" :input "Plan and scope"))
+           (job (pichat-test-job--import store record))
+           (spec (plist-get (pichat-job-record store 'jobs job) :spec)))
+      (pichat-job-save store (plist-put spec :input "Something else") job)
+      (should (pichat-job-source-diverged-p (pichat-job-record store 'jobs job)))
+      (let ((review (pichat-job-import-prepare store record)))
+        (should (pichat-job-import-review-diverged review))
+        (should-error (pichat-job-import-commit review) :type 'pichat-job-definition-error)
+        (should (equal job (pichat-job-import-commit review t))))
+      (should (equal "Plan and scope"
+                     (plist-get (plist-get (pichat-job-record store 'jobs job) :spec) :input))))))
+
+(ert-deftest pichat-job-import-after-job-relinks-and-warns-about-nested-followups ()
+  (pichat-test-with-job-executor ()
+    (let* ((other (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (reviewer-record (pichat-test-job--define "global" agent-dir "reviewer"))
+           (reviewer (pichat-test-job--import store reviewer-record))
+           (record (pichat-test-job--define "project" project-dir "worker"
+                                            :after_job '(:scope "global" :id "reviewer")))
+           (job (pichat-test-job--import store record)))
+      (let ((spec (plist-get (pichat-job-record store 'jobs reviewer) :spec)))
+        (pichat-job-save store (plist-put spec :after-job-id other) reviewer))
+      (let ((review (pichat-job-import-prepare store record)))
+        (should (equal (pichat-job-import-review-action review) "unchanged"))
+        (should (string-match-p "its own after-run job"
+                                (car (pichat-job-import-review-warnings review)))))
+      ;; Deleting and importing the target again relinks on the next import.
+      (pichat-job-delete store reviewer)
+      (let* ((again (pichat-test-job--import store reviewer-record))
+             (review (pichat-job-import-prepare store record)))
+        (should (equal (pichat-job-import-review-action review) "update"))
+        (pichat-job-import-commit review)
+        (should (equal again (plist-get (plist-get (pichat-job-record store 'jobs job) :spec)
+                                        :after-job-id)))))))
+
 (ert-deftest pichat-job-import-noop-is-inert-and-refresh-is-explicit ()
   (pichat-test-with-job-executor ()
     (let* ((record (pichat-test-job-author project-dir))
@@ -3515,6 +3664,47 @@
           (should (equal (pichat-job-records store 'runs) []))
           (should-error (pichat-job-definition-ui-save) :type 'user-error)
           (should-not pichat-jobs--executor))))))
+
+(ert-deftest pichat-job-files-review-shows-run-input-and-after-run-link ()
+  (pichat-test-with-job-executor ()
+    (let* ((pichat-jobs--executor nil) (pichat-jobs--owned-store store)
+           (pichat-jobs-file (pichat-job-store-file store))
+           (reviewer (pichat-test-job--import store (pichat-test-job--define "global" agent-dir "reviewer")))
+           (other (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (record (pichat-test-job--define "project" project-dir "worker" :input "Plan and scope"
+                                            :after_job '(:scope "global" :id "reviewer"))))
+      (pichat-job-save store (plist-put (plist-get (pichat-job-record store 'jobs reviewer) :spec)
+                                        :after-job-id other)
+                       reviewer)
+      (with-temp-buffer
+      (cl-letf (((symbol-function 'transient-setup) #'ignore))
+        (pichat-job-definition-preview record)
+        (let ((summary (pichat-job-definition-ui--summary pichat-job-definition-ui--session)))
+          (should (string-match-p "Run input: asked when run (Plan and scope)" summary))
+          (should (string-match-p "After this run: ID reviewer (global job, resolved at Review)" summary)))
+        (pichat-job-definition-import)
+        (let ((summary (pichat-job-definition-ui--summary pichat-job-definition-ui--session)))
+          (should (string-match-p "After this run: Job reviewer (global job)" summary))
+          (should (string-match-p "its own after-run job" summary)))
+        (pichat-job-definition-inspect)
+        (pichat-test-job-press "Details")
+        (should (string-match-p "After this run: Job reviewer (global job)" (buffer-string)))
+        (pichat-job-definition-inspector-quit)
+        (pichat-job-definition-ui-save)
+      (let ((job (seq-find (lambda (job) (equal (plist-get (plist-get job :spec) :title) "Job worker"))
+                           (pichat-job-records store 'jobs))))
+        (should (equal reviewer (plist-get (plist-get job :spec) :after-job-id)))
+        ;; A changed link is listed with titles in Changes.
+        (pichat-job-definition-preview
+         (pichat-test-job--define "project" project-dir "worker" :input "Plan and scope"))
+        (pichat-job-definition-import)
+        (should (member "After this run"
+                        (pichat-job-definition-ui--changes pichat-job-definition-ui--session)))
+        (pichat-job-definition-inspect)
+        (pichat-test-job-press "Changes")
+        (should (string-match-p "After this run\nBefore: Job reviewer\nAfter: None" (buffer-string)))
+        (pichat-job-definition-inspector-quit)
+        (pichat-job-definition-ui-cancel)))))))
 
 (ert-deftest pichat-job-files-ui-noop-and-explicit-refresh-remain-distinct ()
   (pichat-test-with-job-executor ()

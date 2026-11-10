@@ -12,7 +12,8 @@
 
 (cl-defstruct (pichat-job-import-review (:constructor pichat-job-import--review))
   "Prepared import.  Treat as immutable; commit rejects stale store/source data."
-  store baseline bytes record job-id previous spec source action diverged)
+  store baseline bytes record job-id previous spec source action diverged
+  after-job warnings)
 
 (defun pichat-job-import--current (record)
   "Reread RECORD's exact scope/file and reject changed or conflicting data."
@@ -46,16 +47,47 @@
     (car matches)))
 
 (defun pichat-job-import--authored-digest (record)
-  "Hash RECORD's semantic fields, normalizing omitted cwd/target defaults."
+  "Hash RECORD's semantic fields, normalizing omitted cwd/target defaults.
+Optional fields enter only when declared, so older imports keep their digest."
   (let ((data (plist-get record :definition)))
     (pichat-job-data-digest
      (append (cl-loop for key in '(:version :id :title :instructions :model :preset)
                       append (list key (plist-get data key)))
              (list :directory (plist-get record :directory)
-                   :target (or (plist-get (plist-get data :target) :name) "local"))))))
+                   :target (or (plist-get (plist-get data :target) :name) "local"))
+             (cl-loop for key in '(:input :after-job)
+                      when (plist-get data key) append (list key (plist-get data key)))))))
 
-(defun pichat-job-import--capture (record previous)
-  "Capture RECORD through ordinary launch APIs, retaining PREVIOUS add-ons."
+(defun pichat-job-import--after-job (store record self)
+  "Resolve RECORD's authored after_job to exactly one saved job in STORE.
+A project link names the same repository's imported job; a global link names an
+imported global job.  Scopes never fall back to one another.  SELF is the saved
+job being updated, which cannot follow itself."
+  (when-let* ((link (plist-get (plist-get record :definition) :after-job)))
+    (let* ((scope (plist-get link :scope)) (id (plist-get link :id))
+           (matches (seq-filter
+                     (lambda (job)
+                       (let ((identity (plist-get (plist-get job :source) :identity)))
+                         (and identity (equal (aref identity 0) scope)
+                              (equal (aref identity 2) id)
+                              (or (equal scope "global")
+                                  (equal (aref identity 1) (plist-get record :root))))))
+                     (pichat-job-records store 'jobs))))
+      (cond
+       ((null matches)
+        (pichat-job-definition--fail
+         "after_job: no imported %s job with ID %s; import it first" scope id))
+       ((cdr matches)
+        (pichat-job-definition--fail
+         "after_job: several imported %s jobs have ID %s; delete the extra ones" scope id))
+       ((equal (plist-get (car matches) :id) self)
+        (pichat-job-definition--fail "after_job cannot name this job itself"))
+       (t (car matches))))))
+
+(defun pichat-job-import--capture (record previous after-job)
+  "Capture RECORD through ordinary launch APIs, retaining PREVIOUS add-ons.
+The authored AFTER-JOB, when declared, replaces the after-run default; a native
+default is kept only while no import has set it."
   (let* ((data (plist-get record :definition))
          (preset-name (plist-get data :preset))
          (target-name (or (plist-get (plist-get data :target) :name) "local"))
@@ -70,10 +102,21 @@
                  (plist-get data :title) (plist-get data :instructions)
                  (plist-get record :directory)
                  (list :preset preset :model (plist-get data :model) :target target))))
-      (dolist (key '(:after-job-id :resources))
-        (when (plist-member (plist-get previous :spec) key)
-          (setq spec (plist-put spec key (plist-get (plist-get previous :spec) key)))))
+      (when (plist-member (plist-get previous :spec) :resources)
+        (setq spec (plist-put spec :resources (plist-get (plist-get previous :spec) :resources))))
+      (cond (after-job (setq spec (plist-put spec :after-job-id (plist-get after-job :id))))
+            ((and (plist-get (plist-get previous :spec) :after-job-id)
+                  (not (plist-get (plist-get previous :source) :after-job)))
+             (setq spec (plist-put spec :after-job-id
+                                   (plist-get (plist-get previous :spec) :after-job-id)))))
+      (when-let* ((prompt (plist-get data :input)))
+        (setq spec (plist-put spec :input prompt)))
       spec)))
+
+(defun pichat-job-import--warnings (after-job)
+  "Return review warnings about resolved AFTER-JOB."
+  (when (plist-get (plist-get after-job :spec) :after-job-id)
+    (list "The after-run job has its own after-run job; it is ignored when that job runs as a follow-up")))
 
 (defun pichat-job-import-prepare (store record &optional refresh)
   "Prepare importing discovered RECORD into its owning STORE, without saving.
@@ -91,19 +134,27 @@ work."
                (previous (pichat-job-import--job store (plist-get record :identity)))
                (digest (pichat-job-import--authored-digest record))
                (diverged (pichat-job-source-diverged-p previous))
+               (after-job (pichat-job-import--after-job store record (plist-get previous :id)))
                (unchanged (and previous (not refresh) (not diverged)
-                               (equal digest (plist-get (plist-get previous :source) :authored-digest))))
-               (spec (unless unchanged (pichat-job-import--capture record previous)))
+                               (equal digest (plist-get (plist-get previous :source) :authored-digest))
+                               ;; A relinked target (deleted and imported again) is an update.
+                               (or (not after-job)
+                                   (equal (plist-get after-job :id)
+                                          (plist-get (plist-get previous :spec) :after-job-id)))))
+               (spec (unless unchanged (pichat-job-import--capture record previous after-job)))
+               (link (plist-get (plist-get record :definition) :after-job))
                (source (unless unchanged
-                         (list :version 1 :identity (plist-get record :identity)
-                               :file (plist-get record :file) :authored-digest digest
-                               :spec-digest (pichat-job-spec-digest spec)))))
+                         (append (list :version 1 :identity (plist-get record :identity)
+                                       :file (plist-get record :file) :authored-digest digest
+                                       :spec-digest (pichat-job-spec-digest spec))
+                                 (when link (list :after-job (pichat-job--copy link)))))))
           (pichat-job-import--review
            :store store :baseline baseline :bytes bytes :record (pichat-job--copy record)
            :job-id (plist-get previous :id) :previous previous :spec spec :source source
            :action (cond (unchanged "unchanged") ((not previous) "create")
                          (refresh "refresh") (t "update"))
-           :diverged diverged)))
+           :diverged diverged :after-job (pichat-job--copy after-job)
+           :warnings (pichat-job-import--warnings after-job))))
     (error (pichat-job-definition--fail "%s: %.500s" (plist-get record :file)
                                           (error-message-string err)))))
 

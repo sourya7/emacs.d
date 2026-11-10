@@ -46,8 +46,18 @@ Project-relative directories resolve against the selected project root, not
 `"target": {"name": "local"}` is the default; use an explicitly configured target
 name for SSH. Do not embed executables, credentials, mappings or target definitions.
 
+Optional `"input": "Plan and scope"` declares a run input prompt (one nonblank
+line, at most 200 characters); the user types the input when running, and such
+a job cannot be scheduled. Optional
+`"after_job": {"scope": "global" | "project", "id": "<authored-id>"}` sets the
+saved after-run default. `project` means the same repository's `.pi/jobs/`;
+`global` means the global jobs folder. Scope is required, there is no fallback,
+other repositories cannot be named, a global file can only name a global job,
+and a job cannot name itself. The linked job must be imported first; Review
+resolves it.
+
 Only these fields are allowed. Do not add tools, arbitrary argv, schedules,
-follow-ups, captured configuration or executable Lisp. Use an explicit named
+captured configuration or executable Lisp. Use an explicit named
 preset (not `default`) and `provider/model` (no thinking suffix). Names/model
 choices are resolved at explicit import, not discovery. Tools and prompts come
 from that preset; execution settings/environment are not a sandbox.
@@ -56,6 +66,7 @@ from that preset; execution settings/environment are not a sandbox.
 - ID: lowercase kebab-case, at most 64 characters. Keep it stable when editing.
 - Nonblank title <=200, instructions <=131072, directory <=4096 characters.
 - Model <=1024; preset/target names <=200, without whitespace.
+- `input` <=200 characters on one line; `after_job` has exactly `scope` and `id`.
 - No recursion, dotfiles or symlink source files/resource directories.
 - Identity is scope kind + canonical scope root + ID, NOT the filename.
   Same-scope duplicate IDs are errors; project/global and separate projects do

@@ -785,7 +785,35 @@ narrowest displaying window."
   "Describe RUN's trigger without conflating timing and outcome."
   (pcase (plist-get (plist-get run :trigger) :kind)
     ("conversation-once" "This conversation · Once")
-    ("lifecycle" "After run") ("once" "Once") ("interval" "Interval") (_ "Manual")))
+    ("lifecycle" "After run") ("once" "Once") ("interval" "Interval")
+    (_ (if (plist-get (plist-get run :trigger) :requested-by) "Requested by a job run" "Manual"))))
+
+(defun pichat-jobs--insert-chain (owner record)
+  "Insert RECORD's run chain links from OWNER's store, when it has one."
+  (let* ((store (pichat-job-executor-store owner))
+         (id (plist-get record :id))
+         (chain (pichat-job-chain store id))
+         (members (plist-get chain :members))
+         (caller (plist-get (plist-get record :trigger) :requested-by)))
+    (when caller
+      (insert "Requested by: ")
+      (if-let* ((run (seq-find (lambda (run) (equal caller (plist-get run :id))) members)))
+          (pichat-jobs--button (pichat-jobs--display (plist-get (plist-get run :spec) :title))
+                              (lambda () (pichat-jobs--show-detail owner 'runs caller)))
+        (insert "deleted run " caller))
+      (insert "\n"))
+    (when (> (length members) 1)
+      (insert (format "Run chain: round %d · %d runs\n" (plist-get chain :round) (length members)))
+      (seq-doseq (run members)
+        (let ((other (plist-get run :id)))
+          (insert "  ")
+          (if (equal other id)
+              (insert (pichat-jobs--display (plist-get (plist-get run :spec) :title)) " (this run)")
+            (pichat-jobs--button
+             (format "%s · %s" (pichat-jobs--display (plist-get (plist-get run :spec) :title))
+                     (pichat-jobs--status owner run))
+             (lambda () (pichat-jobs--show-detail owner 'runs other))))
+          (insert "\n"))))))
 
 (defun pichat-jobs--cancellable-p (owner record)
   "Whether RECORD in OWNER still offers cancellation."
@@ -1100,6 +1128,7 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
           (pichat-jobs--button (pichat-jobs--display (plist-get event :title))
                               (lambda () (pichat-jobs--show-detail owner 'runs origin)))
           (insert "\n")))
+      (pichat-jobs--insert-chain owner record)
       (unless (member (plist-get (plist-get record :dispatch) :state) '("not-dispatched" "interrupted"))
         (pichat-jobs--insert-followup owner record))
       (insert (format "Workspace: %s · Target: %s\n"

@@ -355,6 +355,14 @@ A declared prompt requires nonblank INPUT; undeclared jobs reject it."
             (when (and (plist-get record key)
                        (not (pichat-job--text-p (plist-get record key))))
               (pichat-job--fail "Invalid run timestamp")))
+          (when-let* ((caller (plist-get (plist-get record :trigger) :requested-by)))
+            (let ((trigger (plist-get record :trigger)))
+              (unless (and (pichat-job--text-p caller)
+                           (equal (plist-get trigger :kind) "manual")
+                           (pichat-job--text-p (plist-get record :job-id))
+                           (not (plist-get trigger :repeat-of))
+                           (not (plist-get trigger :continue-of)))
+                (pichat-job--fail "Invalid requested-by provenance"))))
           (let* ((trigger (plist-get record :trigger))
                  (origin (plist-get trigger :continue-of))
                  (context (plist-get record :continuation)))
@@ -624,6 +632,7 @@ inspection.  Never change another run's immutable provenance or report."
                (or (equal id (plist-get trigger :repeat-of))
                    (equal id (plist-get trigger :continue-of))
                    (equal id (plist-get trigger :origin-run))
+                   (equal id (plist-get trigger :requested-by))
                    (equal id (plist-get (plist-get other :dispatch) :run-id)))))
            (plist-get data :runs))
       (pichat-job--fail "Another run references this run; deletion refused"))
@@ -856,6 +865,7 @@ constructor inside its originating transition's atomic transaction."
          (job-id (plist-get options :job-id))
          (repeat-of (plist-get options :repeat-of))
          (continue-of (plist-get options :continue-of))
+         (requested-by (plist-get options :requested-by))
          (guidance (plist-get options :guidance))
          (capture (plist-get options :capture))
          (event (plist-get options :event))
@@ -871,6 +881,11 @@ constructor inside its originating transition's atomic transaction."
       (pichat-job--fail "Job queue is full"))
     (when (and repeat-of continue-of)
       (pichat-job--fail "Choose repeat or continuation, not both"))
+    (when requested-by
+      (unless (and (pichat-job--text-p requested-by) job-id
+                   (not (or repeat-of continue-of event (plist-get options :schedule-trigger)))
+                   (pichat-job--find data :runs requested-by))
+        (pichat-job--fail "Only a saved-job run can be requested by another job run")))
     (when (or repeat-of continue-of)
       (when job-id (pichat-job--fail "Choose a saved job or historical attempt"))
       (let* ((origin (pichat-job--find data :runs (or repeat-of continue-of)))
@@ -925,6 +940,7 @@ constructor inside its originating transition's atomic transaction."
                                 ((plist-get options :schedule-trigger)
                                  (pichat-job--copy (plist-get options :schedule-trigger)))
                                 (t (append '(:kind "manual")
+                                           (when requested-by (list :requested-by requested-by))
                                            (when repeat-of (list :repeat-of repeat-of))
                                            (when continue-of (list :continue-of continue-of)))))
                       :state (if (plist-get options :scheduled) "scheduled" "queued") :result nil
@@ -1016,6 +1032,51 @@ that due time and recording the actual dispatch instant."
       (pichat-job--commit store data)
       (unless reason id))))
 
+(defun pichat-job--chain-parent (run)
+  "Return the run ID that RUN continues in its chain, or nil for a chain root.
+Links: requested by a job run's tool, follow-up origin, Repeat and Continue."
+  (let ((trigger (plist-get run :trigger)))
+    (or (plist-get trigger :requested-by) (plist-get trigger :origin-run)
+        (plist-get trigger :repeat-of) (plist-get trigger :continue-of))))
+
+(defun pichat-job--chain (data id)
+  "Return the run chain of run ID in store DATA, derived on demand.
+The plist has :root (root run ID), :members (a vector of run records in
+store order) and
+:round: 1 plus the runs of the root's job, up to and including ID, that a job
+run requested.  Repeats and follow-ups do not raise it.  Missing ancestors (a
+deleted run) end the walk, so that run's nearest surviving ancestor is the root."
+  (let ((runs (make-hash-table :test #'equal)) (roots (make-hash-table :test #'equal)))
+    (seq-doseq (run (plist-get data :runs)) (puthash (plist-get run :id) run runs))
+    (unless (gethash id runs) (pichat-job--fail "Unknown job run: %s" id))
+    (cl-labels ((root (run-id)
+                  (or (gethash run-id roots)
+                      (puthash run-id
+                               (let ((seen nil) (current run-id))
+                                 ;; Links always point to older runs; the guard
+                                 ;; only protects against corrupt data.
+                                 (while (let ((parent (pichat-job--chain-parent (gethash current runs))))
+                                          (and parent (gethash parent runs) (not (member parent seen))))
+                                   (push current seen)
+                                   (setq current (pichat-job--chain-parent (gethash current runs))))
+                                 current)
+                               roots))))
+      (let* ((top (root id))
+             (members (seq-filter (lambda (run) (equal top (root (plist-get run :id))))
+                                  (append (plist-get data :runs) nil)))
+             (job (plist-get (gethash top runs) :job-id))
+             (upto (seq-take members (1+ (seq-position members (gethash id runs) #'eq)))))
+        (list :root top :members (vconcat members)
+              :round (1+ (seq-count (lambda (run)
+                                      (and (equal job (plist-get run :job-id))
+                                           (plist-get (plist-get run :trigger) :requested-by)))
+                                    upto)))))))
+
+(defun pichat-job-chain (store id)
+  "Return the run chain of run ID in STORE; see `pichat-job--chain'.
+Members are detached copies."
+  (pichat-job--copy (pichat-job--chain (pichat-job-store-data store) id)))
+
 (defun pichat-job--observe-stop (store data run queue-limit)
   "Record RUN's first stop and bounded dispatch atomically in transaction DATA.
 No external execution occurs here.  Later resolution never observes a new stop."
@@ -1023,7 +1084,9 @@ No external execution occurs here.  Later resolution never observes a new stop."
                  (plist-get (plist-get run :spec) :after-job-id))
              (not (plist-get run :dispatch))
              (member (plist-get run :state) '("finished" "uncertain")))
-    (let* ((event (pichat-job-followup-event run (pichat-job-context store run)))
+    (let* ((event (pichat-job-followup-event
+                   run (pichat-job-context store run)
+                   (list :round (plist-get (pichat-job--chain data (plist-get run :id)) :round))))
            (snapshot (plist-get run :after-job))
            (limit (or queue-limit 20))
            (full (>= (seq-count (lambda (item) (equal (plist-get item :state) "queued"))

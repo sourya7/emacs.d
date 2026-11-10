@@ -4233,5 +4233,33 @@
         (should (equal (plist-get (plist-get run :spec) :input) "Plan and scope"))
         (should (equal (plist-get run :input) "plan: a; scope: b"))))))
 
+(ert-deftest pichat-jobs-run-details-show-requester-and-chain-links ()
+  (pichat-test-with-job-views
+    (let* ((reviewer (pichat-job-save store (plist-put (pichat-test-job-spec project-dir) :title "Reviewer")))
+           (worker (pichat-job-save store (plist-put (pichat-test-job-spec project-dir) :title "Worker")))
+           (w1 (pichat-job-enqueue store nil worker)))
+      (pichat-job-cancel-queued store w1)
+      (let ((r1 (pichat-job-enqueue-options store (list :job-id reviewer :requested-by w1))))
+        (pichat-job-cancel-queued store r1)
+        (let ((w2 (pichat-job-enqueue-options store (list :job-id worker :requested-by r1))))
+          (pichat-job-cancel-queued store w2)
+          (pichat-jobs--show-detail executor 'runs w2)
+          (pichat-test-job-press "Details")
+          (should (string-match-p "Trigger: Requested by a job run" (buffer-string)))
+          (should (string-match-p "Run chain: round 2 · 3 runs" (buffer-string)))
+          (should (string-match-p "  Worker (this run)" (buffer-string)))
+          (button-activate (pichat-test-job-goto-button "Requested by: Reviewer"))
+          (should (equal pichat-jobs--detail (cons 'runs r1)))
+          (unless (member 'execution pichat-jobs--expanded) (pichat-test-job-press "Details"))
+          (should (string-match-p "Run chain: round 1 · 3 runs" (buffer-string)))
+          (button-activate (pichat-test-job-goto-button "  Worker · "))
+          (should (equal pichat-jobs--detail (cons 'runs w1)))
+          ;; A single run shows no chain section.
+          (let ((alone (pichat-job-enqueue store nil reviewer)))
+            (pichat-job-cancel-queued store alone)
+            (pichat-jobs--show-detail executor 'runs alone)
+            (unless (member 'execution pichat-jobs--expanded) (pichat-test-job-press "Details"))
+            (should-not (string-match-p "Run chain:\\|Requested by:" (buffer-string)))))))))
+
 (provide 'pichat-test-jobs)
 ;;; pichat-test-jobs.el ends here

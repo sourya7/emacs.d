@@ -391,6 +391,72 @@ The execution is registered with EXECUTOR but has no process."
         (should-not (string-match-p "with input"
                                     (pichat-tools-approval-summary tool (list :job_id plain))))))))
 
+(ert-deftest pichat-job-tools-run-now-from-a-job-run-continues-its-chain ()
+  (pichat-test-with-job-tools
+    (let* ((reviewer (pichat-job-save store (plist-put (pichat-test-job-spec project-dir)
+                                                       :title "Reviewer")))
+           (worker (pichat-job-save store (plist-put (pichat-test-job-spec project-dir)
+                                                     :after-job-id reviewer)))
+           (caller (pichat-test-job-tools-worker executor store reviewer))
+           (run (car caller)) (session (cdr caller)))
+      (cl-letf (((symbol-function 'pichat-job-executor-pump) #'ignore))
+        (let* ((result (pichat-test-job-tool-ok "pichat_job_run_now" (list :job_id worker) session))
+               (started (pichat-job-record store 'runs (plist-get result :run_id))))
+          (should (equal run (plist-get (plist-get started :trigger) :requested-by)))
+          ;; The started run captures the worker's after-run default again.
+          (should (equal reviewer (plist-get (plist-get started :after-job) :job-id)))
+          (let ((inspect (pichat-test-job-tool-ok "pichat_job_run_inspect"
+                                                  (list :run_id (plist-get started :id)))))
+            (should (equal run (plist-get inspect :requested_by)))
+            ;; Rounds count restarts of the chain's first job (here the
+            ;; reviewer), so starting another job keeps round 1.
+            (should (= 1 (plist-get inspect :round))))
+          (let ((inspect (pichat-test-job-tool-ok "pichat_job_run_inspect" (list :run_id run))))
+            (should-not (plist-member inspect :requested_by))
+            (should (= 1 (plist-get inspect :round))))
+          ;; A busy worker is refused, naming the blocking run.
+          (pichat-test-job-tool-error "pichat_job_run_now" (list :job_id worker)
+                                      (concat "unfinished run " (plist-get started :id))
+                                      session))
+        ;; A chat that is not a job run records no requester.
+        (let ((plain (pichat-job-save store (pichat-test-job-spec project-dir))))
+          (should-not (plist-get (plist-get (pichat-job-record
+                                             store 'runs
+                                             (plist-get (pichat-test-job-tool-ok
+                                                         "pichat_job_run_now" (list :job_id plain))
+                                                        :run_id))
+                                            :trigger)
+                                 :requested-by)))))))
+
+(ert-deftest pichat-job-tools-chain-limit-refuses-only-tool-started-runs ()
+  (pichat-test-with-job-tools
+    (let* ((pichat-jobs-max-chain-runs 3)
+           (worker (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (reviewer (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (first (car (pichat-test-job-tools-worker executor store worker))))
+      (pichat-test-job-tools-finish store first)
+      (cl-letf (((symbol-function 'pichat-job-executor-pump) #'ignore))
+        ;; Two runs in the chain: the caller may start a third.
+        (let* ((r1 (pichat-job-enqueue-options store (list :job-id reviewer :requested-by first)))
+               (token (plist-get (pichat-job-claim store r1) :attempt))
+               (session (pichat-session-make :cwd project-dir)))
+          (puthash r1 (pichat-job-execution--create :executor executor :id r1 :token token
+                                                    :session session)
+                   (pichat-job-executor-contexts executor))
+          (let ((w2 (plist-get (pichat-test-job-tool-ok "pichat_job_run_now" (list :job_id worker)
+                                                        session)
+                               :run_id)))
+            (pichat-job-cancel-queued store w2)
+            ;; Three runs now: the next tool request is refused, naming the chain.
+            (let ((before (length (pichat-job-records store 'runs))))
+              (pichat-test-job-tool-error "pichat_job_run_now" (list :job_id worker)
+                                          (concat "Run chain of " first " already has 3 runs")
+                                          session)
+              (should (= before (length (pichat-job-records store 'runs)))))
+            ;; Runs started from Jobs are never refused by the limit.
+            (let ((repeat (pichat-job-executor-submit-options executor (list :repeat-of w2))))
+              (should (= 4 (length (plist-get (pichat-job-chain store repeat) :members)))))))))))
+
 (ert-deftest pichat-job-tools-cancel-pending-and-active-runs ()
   (pichat-test-with-job-tools
     (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))

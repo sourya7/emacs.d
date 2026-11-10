@@ -1829,5 +1829,105 @@
         (should-error (pichat-job--validate copy) :type 'pichat-job-error))
       (should (equal id (plist-get (aref (plist-get data :runs) 0) :id))))))
 
+;;; Run lineage
+
+(defun pichat-test-job--followup-of (store id)
+  "Return the follow-up run ID dispatched by stopped run ID in STORE."
+  (plist-get (plist-get (pichat-job-record store 'runs id) :dispatch) :run-id))
+
+(ert-deftest pichat-job-chain-rounds-count-tool-restarts-not-repeats ()
+  (pichat-test-job--with-store
+    (let* ((reviewer (pichat-job-save store (plist-put (pichat-test-job--spec) :title "Reviewer")))
+           (worker (pichat-job-save store (plist-put (pichat-test-job--input-spec)
+                                                     :after-job-id reviewer)))
+           (w1 (pichat-job-enqueue-options store (list :job-id worker :input "plan: a; scope: b"))))
+      (should (= 1 (plist-get (pichat-job-chain store w1) :round)))
+      (pichat-test-job--finish store w1 "failed")
+      (let* ((r1 (pichat-test-job--followup-of store w1))
+             (event (plist-get (pichat-job-record store 'runs r1) :event)))
+        ;; The envelope identifies the origin's saved job, directory, input and round.
+        (should (equal worker (plist-get event :job-id)))
+        (should (equal (plist-get (pichat-test-job--spec) :directory) (plist-get event :directory)))
+        (should (equal "plan: a; scope: b" (plist-get event :input)))
+        (should (= 1 (plist-get event :round)))
+        (should-not (plist-member event :requested-by))
+        (should (= 1 (plist-get (pichat-job-chain store r1) :round)))
+        (pichat-test-job--finish store r1 "failed")
+        ;; The reviewer's tool restarts the worker: same chain, next round.
+        (let ((w2 (pichat-job-enqueue-options
+                   store (list :job-id worker :input "plan: a; scope: b\nfindings (round 1): x"
+                               :requested-by r1))))
+          (should (equal r1 (plist-get (plist-get (pichat-job-record store 'runs w2) :trigger)
+                                       :requested-by)))
+          (should (= 2 (plist-get (pichat-job-chain store w2) :round)))
+          (pichat-test-job--finish store w2 "failed")
+          (let* ((r2 (pichat-test-job--followup-of store w2))
+                 (event (plist-get (pichat-job-record store 'runs r2) :event)))
+            (should (= 2 (plist-get event :round)))
+            (should (equal r1 (plist-get event :requested-by)))
+            (should (pichat-job-followup-event-p event))
+            (pichat-test-job--finish store r2 "failed")
+            ;; A Repeat (resume after a limit) stays in the chain and keeps the round.
+            (let ((w2b (pichat-job-enqueue store nil nil nil w2)))
+              (should (= 2 (plist-get (pichat-job-chain store w2b) :round)))
+              (should (equal w1 (plist-get (pichat-job-chain store w2b) :root)))
+              (pichat-test-job--finish store w2b "failed")
+              (let ((r3 (pichat-test-job--followup-of store w2b)))
+                (should (= 2 (plist-get (plist-get (pichat-job-record store 'runs r3) :event) :round)))
+                (pichat-test-job--finish store r3 "failed")
+                (should (equal (list w1 r1 w2 r2 w2b r3)
+                               (mapcar (lambda (run) (plist-get run :id))
+                                       (append (plist-get (pichat-job-chain store w2) :members) nil))))))))
+        ;; A fresh run from Jobs starts a new chain at round 1.
+        (let ((fresh (pichat-job-enqueue-options store (list :job-id worker :input "plan: c"))))
+          (should (equal fresh (plist-get (pichat-job-chain store fresh) :root)))
+          (should (= 1 (plist-get (pichat-job-chain store fresh) :round)))
+          (should (= 1 (length (plist-get (pichat-job-chain store fresh) :members)))))))))
+
+(ert-deftest pichat-job-requested-by-is-validated-and-blocks-single-deletion ()
+  (pichat-test-job--with-store
+    (let* ((job (pichat-job-save store (pichat-test-job--spec)))
+           (other (pichat-job-save store (pichat-test-job--spec)))
+           (caller (pichat-job-enqueue store nil other)))
+      (pichat-test-job--finish store caller "failed")
+      ;; Only saved-job runs, with an existing caller, can carry the link.
+      (should-error (pichat-job-enqueue-options store (list :spec (pichat-test-job--spec)
+                                                            :requested-by caller))
+                    :type 'pichat-job-error)
+      (should-error (pichat-job-enqueue-options store (list :job-id job :requested-by "run-missing"))
+                    :type 'pichat-job-error)
+      (should-error (pichat-job-enqueue-options store (list :repeat-of caller :requested-by caller))
+                    :type 'pichat-job-error)
+      (let ((id (pichat-job-enqueue-options store (list :job-id job :requested-by caller))))
+        (should (equal "Requested by a job run"
+                       (progn (require 'pichat-jobs)
+                              (pichat-jobs--trigger-label (pichat-job-record store 'runs id)))))
+        (pichat-job-cancel-queued store id)
+        (should-error (pichat-job-run-delete store caller) :type 'pichat-job-error)
+        (let ((copy (pichat-job--copy (pichat-job-store-data store))))
+          (setf (plist-get (plist-get (aref (plist-get copy :runs) 1) :trigger) :repeat-of) caller)
+          (should-error (pichat-job--validate copy) :type 'pichat-job-error))
+        (pichat-job-run-delete store id)
+        (pichat-job-run-delete store caller)))))
+
+(ert-deftest pichat-job-envelope-lineage-is-optional-and-bounded ()
+  (pichat-test-job--with-store
+    (let* ((inline (pichat-job-enqueue store (pichat-test-job--spec))))
+      (pichat-job-cancel-queued store inline)
+      (let ((event (pichat-job-followup-event (pichat-job-record store 'runs inline)
+                                              '(:evidence nil :warning "none"))))
+        ;; A run without a saved job has no job ID; legacy envelopes lack all new fields.
+        (should-not (plist-member event :job-id))
+        (should-not (plist-member event :round))
+        (should (plist-get event :directory))
+        (should (pichat-job-followup-event-p event))
+        (let ((legacy (copy-sequence event)))
+          (cl-remf legacy :directory)
+          (should (pichat-job-followup-event-p legacy)))
+        (dolist (bad (list (list :round 0) (list :round "1") (list :job-id (make-string 201 ?j))
+                           (list :requested-by 5) (list :directory (make-string 4111 ?d))))
+          (should-not (pichat-job-followup-event-p (append bad (copy-sequence event)))))
+        (should (pichat-job-followup-event-p (append (copy-sequence event) '(:round 3))))))))
+
 (provide 'pichat-test-job-core)
 ;;; pichat-test-job-core.el ends here

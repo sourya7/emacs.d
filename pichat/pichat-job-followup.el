@@ -25,14 +25,22 @@ The store supplies detached data; this policy never mutates that input."
         (concat (substring text 0 limit) "\n[Truncated]")
       text)))
 
-(defun pichat-job-followup-event (run context)
+(defun pichat-job-followup-event (run context &optional lineage)
   "Build a versioned immutable event for RUN using captured CONTEXT.
-CONTEXT is structured bounded data, not continuation instructions.
-The origin's run input, when present, is included in full: the store bounds it."
-  (append
-   (pichat-job-followup--base-event run context)
-   (when-let* ((input (plist-get run :input)))
-     (list :input (pichat-job-followup--excerpt input 4000)))))
+CONTEXT is structured bounded data, not continuation instructions.  Optional
+fields identify the origin: its saved job ID (absent for inline work), its
+captured Emacs-visible directory, its run input (bounded by the store), the run
+whose tool requested it, and LINEAGE's :round in its run chain."
+  (let ((trigger (plist-get run :trigger)))
+    (append
+     (pichat-job-followup--base-event run context)
+     (when-let* ((job (plist-get run :job-id))) (list :job-id job))
+     (when-let* ((directory (plist-get (plist-get run :spec) :directory)))
+       (list :directory (pichat-job-followup--excerpt directory 4096)))
+     (when-let* ((input (plist-get run :input)))
+       (list :input (pichat-job-followup--excerpt input 4000)))
+     (when-let* ((caller (plist-get trigger :requested-by))) (list :requested-by caller))
+     (when-let* ((round (plist-get lineage :round))) (list :round round)))))
 
 (defun pichat-job-followup--base-event (run context)
   "Build the version-1 event fields common to every stop of RUN with CONTEXT."
@@ -69,7 +77,9 @@ The origin's run input, when present, is included in full: the store bounds it."
                        (and (or (null text) (stringp text))
                             (<= (length text) (cdr field)))))
                    '((:title . 520) (:instructions . 8020) (:reason . 2020) (:summary . 2020)
-                     (:input . 4020)))
+                     (:input . 4020) (:job-id . 200) (:directory . 4110) (:requested-by . 200)))
+         (or (null (plist-get event :round))
+             (and (integerp (plist-get event :round)) (> (plist-get event :round) 0)))
          (listp context) (plist-member context :evidence) (plist-member context :warning)
          (or (null (plist-get context :evidence))
              (and (stringp (plist-get context :evidence))

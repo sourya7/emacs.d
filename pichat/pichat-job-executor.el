@@ -22,6 +22,11 @@
 (defcustom pichat-jobs-queue-limit 20
   "Maximum queued attempts, shared by manual, scheduled and lifecycle submissions."
   :type 'natnum :group 'pichat-jobs)
+(defcustom pichat-jobs-max-chain-runs 8
+  "Maximum runs in a run chain before job tools may not start another.
+Runs you start from Jobs (Run job, Repeat, Continue work) are never refused.
+The default fits three review rounds of a worker and a reviewer, plus spares."
+  :type 'natnum :group 'pichat-jobs)
 (defcustom pichat-jobs-control-timeout 30
   "Seconds to wait for readiness, settlement sync or cancellation.
 Running work and user interaction have no implicit timeout."

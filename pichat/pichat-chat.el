@@ -4346,8 +4346,7 @@ not run.  Other extensions' dialogs are untouched."
   (when (hash-table-p pichat-chat--pending-ui-requests)
     (let (withdrawn)
       (maphash (lambda (id raw)
-                 (when (equal (plist-get raw :title)
-                              pichat-bridge-transport-tool-call-title)
+                 (when (pichat-bridge-transport-request-p raw)
                    (push id withdrawn)))
                pichat-chat--pending-ui-requests)
       (when withdrawn
@@ -4448,7 +4447,7 @@ not run.  Other extensions' dialogs are untouched."
   "Interactively answer pending RAW for SESSION."
   (let ((id (plist-get raw :id))
         (method (plist-get raw :method)))
-    (if (pichat-bridge-transport-handle-p raw)
+    (if (pichat-bridge-transport-request-p raw)
         (let* ((buffer (current-buffer))
                (pichat-tools-request-live-function
                 (lambda ()
@@ -4640,7 +4639,7 @@ not run.  Other extensions' dialogs are untouched."
     (cond
      (pichat-chat--restart-staging
       (when (member method '("confirm" "input" "select" "editor"))
-        (if (pichat-bridge-transport-handle-p raw)
+        (if (pichat-bridge-transport-request-p raw)
             (pichat-bridge-transport-handle session raw)
           (let* ((operation (pichat-session-restart-operation session))
                  (pichat-rpc--operation-token
@@ -4648,11 +4647,8 @@ not run.  Other extensions' dialogs are untouched."
                        (pichat-rpc--dispatch-current-p session)
                        (plist-get operation :token))))
             (pichat-rpc-extension-ui-cancel session (plist-get raw :id))))))
-     ((and (member method '("confirm" "input" "select" "editor"))
-           (pichat-bridge-transport-handle-p raw))
-      (if (pichat-bridge-transport-user-input-required-p session raw)
-          (pichat-chat--queue-extension-ui-request session raw)
-        (pichat-bridge-transport-handle session raw)))
+     ;; The RPC dispatcher answers every other bridge request, so a bridge
+     ;; tool call here needs approval and queues like any extension dialog.
      ((member method '("confirm" "input" "select" "editor"))
       (pichat-chat--queue-extension-ui-request session raw))
      ((string= method "notify")

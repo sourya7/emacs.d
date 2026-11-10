@@ -593,14 +593,92 @@
                         ((symbol-function 'pichat-rpc-extension-ui-value)
                          (lambda (_session id value)
                            (setq response (list id value)))))
+                ;; The RPC dispatcher answers it; the chat never sees it.
+                (pichat-rpc--dispatch-public-event
+                 session (append '(:type "extension_ui_request") raw))
                 (with-current-buffer buffer
-                  (pichat-chat--on-extension-ui-request
-                   session 'extension-ui-request (list :raw raw))
                   (should (zerop pichat-chat--pending-ui-count))))
               (should (equal "bridge-deny" (car response)))
               (should (string-match-p "Denied by user" (cadr response))))
           (when (buffer-live-p buffer) (kill-buffer buffer))
           (when (buffer-live-p other) (kill-buffer other)))))))
+
+(ert-deftest pichat-bridge-dispatch-answers-everything-but-approval ()
+  ;; One entry point decides: definitions and unprompted calls are answered
+  ;; at once, a call that needs approval is left for the chat, and other
+  ;; dialogs are not the bridge's.
+  (pichat-test-with-unit-session (session proc)
+    (pichat-test-with-approval-file
+      (let ((executions 0) replies)
+        (pichat-define-tool pichat-test-read () (cl-incf executions) "read")
+        (pichat-define-tool pichat-test-write (:mutating t) (cl-incf executions) "wrote")
+        (pichat-test-select-emacs-tools session "pichat-test-read" "pichat-test-write")
+        (cl-letf (((symbol-function 'pichat-rpc-extension-ui-value)
+                   (lambda (_session id value) (push (cons id value) replies)))
+                  ((symbol-function 'completing-read)
+                   (lambda (&rest _) (ert-fail "Dispatch must never prompt"))))
+          (cl-flet ((call (id name &optional method)
+                      (list :id id :method (or method "editor")
+                            :title pichat-bridge-transport-tool-call-title
+                            :prefill (format "{\"name\":\"%s\",\"params\":{}}" name))))
+            (should (eq 'answered
+                        (pichat-bridge-transport-dispatch
+                         session (list :id "defs" :method "editor"
+                                       :title pichat-bridge-transport-tools-title))))
+            (should (string-match-p "pichat-test-write" (cdr (assoc "defs" replies))))
+            (should (eq 'answered (pichat-bridge-transport-dispatch
+                                   session (call "read" "pichat-test-read"))))
+            (should (string-match-p "read" (cdr (assoc "read" replies))))
+            (should (eq 'approval (pichat-bridge-transport-dispatch
+                                   session (call "write" "pichat-test-write"))))
+            (should-not (assoc "write" replies))
+            (should (= 1 executions))
+            ;; The startup barrier answers definitions only.
+            (should-not (pichat-bridge-transport-dispatch
+                         session (call "barrier" "pichat-test-read") t))
+            ;; Not the bridge's: other dialogs and other methods.
+            (should-not (pichat-bridge-transport-dispatch
+                         session '(:id "other" :method "editor" :title "Edit notes")))
+            (should-not (pichat-bridge-transport-dispatch
+                         session (call "input" "pichat-test-read" "input")))
+            (should (= 1 executions))
+            (should-not (cl-intersection '("barrier" "other" "input")
+                                         (mapcar #'car replies) :test #'equal))
+            ;; During a restart nothing waits for approval.
+            (setf (pichat-session-restart-operation session)
+                  (list :token (make-symbol "restart") :phase 'stopping))
+            (should (eq 'answered (pichat-bridge-transport-dispatch
+                                   session (call "restart" "pichat-test-write"))))
+            (should (string-match-p "restarting" (cdr (assoc "restart" replies))))
+            (should (= 1 executions))))))))
+
+(ert-deftest pichat-bridge-requests-are-answered-without-a-chat-view ()
+  ;; The RPC dispatcher answers an unprompted call even when no chat exists;
+  ;; only a call that needs approval is published to the view.
+  (pichat-test-with-unit-session (session proc)
+    (pichat-test-with-approval-file
+      (let (replies published)
+        (pichat-define-tool pichat-test-headless-read () "read")
+        (pichat-define-tool pichat-test-headless-write (:mutating t) "wrote")
+        (pichat-test-select-emacs-tools
+         session "pichat-test-headless-read" "pichat-test-headless-write")
+        (pichat-on 'extension-ui-request
+                   (lambda (_session _event plist)
+                     (push (plist-get (plist-get plist :raw) :id) published))
+                   session)
+        (should-not (buffer-live-p (pichat-session-buffer session)))
+        (cl-letf (((symbol-function 'pichat-rpc-extension-ui-value)
+                   (lambda (_session id value) (push (cons id value) replies))))
+          (dolist (call '(("read" . "pichat-test-headless-read")
+                          ("write" . "pichat-test-headless-write")
+                          ("other" . nil)))
+            (pichat-rpc--dispatch-public-event
+             session
+             (list :type "extension_ui_request" :id (car call) :method "editor"
+                   :title (if (cdr call) pichat-bridge-transport-tool-call-title "Notes")
+                   :prefill (format "{\"name\":\"%s\",\"params\":{}}" (cdr call))))))
+        (should (equal '("read") (mapcar #'car replies)))
+        (should (equal '("other" "write") published))))))
 
 (ert-deftest pichat-bridge-result-encoding-error-replies-instead-of-hanging ()
   (pichat-test-with-unit-session (session proc)

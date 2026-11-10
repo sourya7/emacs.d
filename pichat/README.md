@@ -2665,7 +2665,8 @@ tools, because those execute in Emacs. Approval applies after availability: an
 Emacs-defined tool must first be selected for the runtime, and selecting it (or
 its whole group) does not approve it. A mutating Emacs tool whose effective
 policy is `ask` waits for its owning chat to be selected before prompting;
-stored allow/deny decisions and non-mutating tools remain immediate.
+stored allow/deny decisions and non-mutating tools remain immediate, and are
+answered even when the runtime has no chat open.
 The prompt shows the tool's summary of the call first, then its name and its
 arguments (cut to 300 characters). It offers **Allow once**, **Always allow**
 and **Deny** (the default); `C-g` also denies. Only **Always allow** is

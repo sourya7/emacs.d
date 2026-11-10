@@ -351,8 +351,8 @@ Do not dispatch callbacks into a replacement process."
 (declare-function pichat-tool-runtime-prepare "pichat-tool-runtime" (session names &optional skill-file))
 (declare-function pichat-tool-runtime-begin "pichat-tool-runtime" (session &optional callback))
 (declare-function pichat-tool-runtime-dispose "pichat-tool-runtime" (session))
-(declare-function pichat-bridge-transport-startup-request-p "pichat-bridge-transport" (raw))
-(declare-function pichat-bridge-transport-handle "pichat-bridge-transport" (session raw))
+(declare-function pichat-bridge-transport-dispatch "pichat-bridge-transport"
+                  (session raw &optional definitions-only))
 
 (cl-defun pichat-rpc-start (session &optional validated-command (startup-tools nil tools-p))
   "Start the Pi RPC process for SESSION and return SESSION.
@@ -933,14 +933,14 @@ must not update public state or become conversation/prompt acceptance events."
       (pichat-emit session 'rpc-event
                    :raw event :normalized-event normalized))
     (when (pichat-rpc--dispatch-current-p session)
-      ;; Bridge startup must work before a chat buffer exists.  Answer here,
-      ;; not through the view's handler; retain the generic event above, but
-      ;; do not deliver a second, duplicate reply through the view.
+      ;; Bridge requests must work before (or without) a chat buffer, so they
+      ;; are answered here.  Only a tool call that needs approval reaches
+      ;; the view.  Retain the generic event above, but never deliver an
+      ;; answered request to the view as well.
       (unless (and (eq normalized 'extension-ui-request)
-                   (equal (plist-get event :method) "editor")
                    (progn (require 'pichat-bridge-transport)
-                          (pichat-bridge-transport-startup-request-p event))
-                   (pichat-bridge-transport-handle session event))
+                          (eq 'answered
+                              (pichat-bridge-transport-dispatch session event))))
         (pichat-emit session normalized :raw event)))))
 
 (defun pichat-rpc--write-line (session line)

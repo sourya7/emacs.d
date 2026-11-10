@@ -4192,7 +4192,8 @@ Return non-nil only when the projected status value changes."
   (pichat-chat--preserve-view
     (pichat-chat--insert-prompt))
   (pichat-chat--refresh-stats session 'settled)
-  (pichat-chat--request-sync nil))
+  (pichat-chat--request-sync nil)
+  (pichat-chat--withdraw-bridge-tool-calls session))
 
 (defun pichat-chat--on-state-changed (session _event _plist)
   "Update display and source identity after state changes."
@@ -4336,6 +4337,28 @@ This acknowledges all active notices, not the draft, attachments or runtime."
           pichat-chat--active-ui-request nil)
     (pichat-chat--update-pending-ui-count)))
 
+(defun pichat-chat--withdraw-bridge-tool-calls (session)
+  "Drop SESSION's pending Emacs-defined tool approvals without replying.
+A tool call cannot outlive the agent run that issued it, so any still
+pending when the run settles is stale (typically an abort): the bridge has
+stopped waiting.  An open prompt for one is left to finish, but its tool is
+not run.  Other extensions' dialogs are untouched."
+  (when (hash-table-p pichat-chat--pending-ui-requests)
+    (let (withdrawn)
+      (maphash (lambda (id raw)
+                 (when (equal (plist-get raw :title)
+                              pichat-bridge-transport-tool-call-title)
+                   (push id withdrawn)))
+               pichat-chat--pending-ui-requests)
+      (when withdrawn
+        (when (member pichat-chat--scheduled-ui-request withdrawn)
+          (pichat-chat--cancel-scheduled-ui-request))
+        (dolist (id withdrawn)
+          (remhash id pichat-chat--pending-ui-requests)
+          (pichat-chat--remove-queued-ui-request id))
+        (pichat-chat--update-pending-ui-count)
+        (pichat-chat--maybe-start-next-ui-request session)))))
+
 (defun pichat-chat--on-session-ended (_session _event _plist)
   "Cancel pending UI/stats work and display a session-ended status."
   (pichat-chat--cancel-stats-request)
@@ -4426,8 +4449,16 @@ This acknowledges all active notices, not the draft, attachments or runtime."
   (let ((id (plist-get raw :id))
         (method (plist-get raw :method)))
     (if (pichat-bridge-transport-handle-p raw)
-        (unless (pichat-bridge-transport-handle session raw)
-          (error "Unsupported PiChat bridge request"))
+        (let* ((buffer (current-buffer))
+               (pichat-tools-request-live-function
+                (lambda ()
+                  (and (buffer-live-p buffer)
+                       (with-current-buffer buffer
+                         (and (hash-table-p pichat-chat--pending-ui-requests)
+                              (gethash id pichat-chat--pending-ui-requests)
+                              t))))))
+          (unless (pichat-bridge-transport-handle session raw)
+            (error "Unsupported PiChat bridge request")))
       (pcase method
         ("confirm"
          (pichat-chat--complete-ui-request

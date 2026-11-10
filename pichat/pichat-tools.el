@@ -27,6 +27,12 @@
 Bound by `pichat-tools-call' (and while computing an approval summary); nil
 outside bridge calls.  Tools read it to refuse acting on their own runtime.")
 
+(defvar pichat-tools-request-live-function nil
+  "Function of no arguments telling whether the current tool call is wanted.
+Bound by the chat around an approval prompt.  When it returns nil after the
+user approves, the request was withdrawn (its agent turn ended) and the tool
+is not called.")
+
 (defvar pichat-tools-registry (make-hash-table :test #'equal)
   "Registered Emacs tools keyed by tool name.")
 
@@ -344,12 +350,18 @@ outside it is rejected before approval or execution."
     (when (pichat-tool-native-only-p tool)
       (error "Emacs tool is unavailable through the Pi bridge: %s" name))
     (json-serialize
-     (if (pichat-approval-approve-p
-          name (pichat-tool-mutating-p tool) params session
-          (lambda () (pichat-tools-approval-summary tool params session)))
-         (pichat-tools-result-wire (pichat-tools-call tool params session))
+     (cond
+      ((not (pichat-approval-approve-p
+             name (pichat-tool-mutating-p tool) params session
+             (lambda () (pichat-tools-approval-summary tool params session))))
        (list :isError t
              :content (vector (list :type "text" :text "Denied by user"))))
+      ((and pichat-tools-request-live-function
+            (not (funcall pichat-tools-request-live-function)))
+       (list :isError t
+             :content (vector (list :type "text"
+                                    :text "Not run: the agent turn ended before approval"))))
+      (t (pichat-tools-result-wire (pichat-tools-call tool params session))))
      :false-object :json-false :null-object nil)))
 
 (provide 'pichat-tools)

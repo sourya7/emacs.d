@@ -448,6 +448,101 @@
           (when (buffer-live-p buffer) (kill-buffer buffer))
           (when (buffer-live-p other) (kill-buffer other)))))))
 
+(defmacro pichat-test-with-quiet-settlement (&rest body)
+  "Run BODY with settlement's sync and stats requests stubbed out."
+  (declare (indent 0) (debug t))
+  `(cl-letf (((symbol-function 'pichat-chat--request-sync) #'ignore)
+             ((symbol-function 'pichat-chat--refresh-stats) #'ignore))
+     ,@body))
+
+(ert-deftest pichat-settled-turn-withdraws-only-its-pending-tool-approvals ()
+  ;; After an abort the bridge stops waiting; the queued approval must not
+  ;; prompt later or run the tool for a dead turn.
+  (pichat-test-with-unit-session (session proc)
+    (pichat-test-with-approval-file
+      (let ((pichat-chat-stop-session-on-kill nil)
+            (other (generate-new-buffer " *pichat-tool-withdraw-other*"))
+            buffer replies
+            (tool-raw '(:id "stale-tool" :method "editor"
+                        :title "__pichat_tool_call__"
+                        :prefill "{\"name\":\"pichat-test-stale\",\"params\":{}}"))
+            (confirm-raw '(:id "other-dialog" :method "confirm"
+                           :title "Other extension" :message "Keep?")))
+        (pichat-define-tool pichat-test-stale (:mutating t)
+          (ert-fail "Withdrawn tool must not execute"))
+        (pichat-test-select-emacs-tools session "pichat-test-stale")
+        (unwind-protect
+            (progn
+              (setq buffer (pichat-chat-open session))
+              (switch-to-buffer other)
+              (cl-letf (((symbol-function 'pichat-rpc-extension-ui-value)
+                         (lambda (_session id _value) (push id replies)))
+                        ((symbol-function 'pichat-rpc-extension-ui-cancel)
+                         (lambda (_session id) (push id replies))))
+                (with-current-buffer buffer
+                  (dolist (raw (list tool-raw confirm-raw))
+                    (pichat-chat--on-extension-ui-request
+                     session 'extension-ui-request (list :raw raw)))
+                  (should (= 2 (pichat-chat-pending-user-input-count session)))
+                  (pichat-test-with-quiet-settlement
+                    (pichat-chat--on-agent-settled
+                     session 'agent-settled '(:raw (:type "agent_settled"))))
+                  (should (= 1 (pichat-chat-pending-user-input-count session)))
+                  (should-not (gethash "stale-tool" pichat-chat--pending-ui-requests))
+                  (should (gethash "other-dialog" pichat-chat--pending-ui-requests))
+                  (should (equal '("other-dialog")
+                                 (mapcar (lambda (raw) (plist-get raw :id))
+                                         pichat-chat--pending-ui-queue)))))
+              ;; Withdrawn means not answered: the bridge already gave up.
+              (should-not replies))
+          (when (buffer-live-p buffer) (kill-buffer buffer))
+          (when (buffer-live-p other) (kill-buffer other)))))))
+
+(ert-deftest pichat-late-approval-for-a-settled-turn-does-not-run-the-tool ()
+  ;; The turn is aborted while the approval prompt is open; the user then
+  ;; chooses Allow.  The tool must not run and no rule is stored.
+  (pichat-test-with-unit-session (session proc)
+    (pichat-test-with-approval-file
+      (let ((pichat-chat-stop-session-on-kill nil)
+            buffer callback callback-args response
+            (executions 0)
+            (raw '(:id "late-tool" :method "editor"
+                   :title "__pichat_tool_call__"
+                   :prefill "{\"name\":\"pichat-test-late\",\"params\":{}}")))
+        (pichat-define-tool pichat-test-late (:mutating t)
+          (cl-incf executions)
+          "ran")
+        (pichat-test-select-emacs-tools session "pichat-test-late")
+        (unwind-protect
+            (progn
+              (setq buffer (pichat-chat-open session))
+              (switch-to-buffer buffer)
+              (cl-letf (((symbol-function 'run-at-time)
+                         (lambda (_delay _repeat function &rest args)
+                           (setq callback function callback-args args)
+                           'deferred))
+                        ((symbol-function 'completing-read)
+                         (lambda (&rest _args)
+                           (with-current-buffer buffer
+                             (pichat-test-with-quiet-settlement
+                               (pichat-chat--on-agent-settled
+                                session 'agent-settled
+                                '(:raw (:type "agent_settled")))))
+                           "Allow once"))
+                        ((symbol-function 'pichat-rpc-extension-ui-value)
+                         (lambda (_session id value)
+                           (setq response (list id value)))))
+                (with-current-buffer buffer
+                  (pichat-chat--on-extension-ui-request
+                   session 'extension-ui-request (list :raw raw)))
+                (should callback)
+                (apply callback callback-args))
+              (should (= 0 executions))
+              (should-not pichat-approval-rules)
+              (should (string-match-p "Not run" (or (cadr response) "")))
+              (should (= 0 (pichat-chat-pending-user-input-count session))))
+          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
 (ert-deftest pichat-stored-bridge-deny-remains-immediate-in-background ()
   (pichat-test-with-unit-session (session proc)
     (pichat-test-with-approval-file

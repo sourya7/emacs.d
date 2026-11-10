@@ -2690,6 +2690,10 @@ Emacs-defined tool must first be selected for the runtime, and selecting it (or
 its whole group) does not approve it. A mutating Emacs tool whose effective
 policy is `ask` waits for its owning chat to be selected before prompting;
 stored allow/deny decisions and non-mutating tools remain immediate.
+A waiting approval belongs to the agent run that issued the call. When that run
+ends (for example on abort), the request is withdrawn: it no longer counts in
+`UI:N`, never prompts later, and if its prompt was already open, choosing Allow
+does not run the tool. A tool that is already running is not cancelled.
 
 ### claude code bridge needs the following auto-approved -
   "permissions": {

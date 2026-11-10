@@ -50,6 +50,22 @@ export default function (pi: ExtensionAPI) {
 		return Type.Any();
 	}
 
+	// Pi 1.5.1 RPC `ui.editor` ignores options, so an aborted turn would wait
+	// for Emacs forever.  Stop waiting on abort; Emacs withdraws the queued
+	// approval when the turn settles and never runs the tool.
+	function untilAborted<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+		if (!signal) return promise;
+		if (signal.aborted) return Promise.reject(new Error("Aborted before Emacs answered"));
+		return new Promise<T>((resolve, reject) => {
+			const onAbort = () => reject(new Error("Aborted before Emacs answered"));
+			signal.addEventListener("abort", onAbort, { once: true });
+			promise.then(
+				(value) => { signal.removeEventListener("abort", onAbort); resolve(value); },
+				(err) => { signal.removeEventListener("abort", onAbort); reject(err); },
+			);
+		});
+	}
+
 	function textFromToolResult(result: any): string {
 		const content = result?.content;
 		if (Array.isArray(content)) {
@@ -101,8 +117,12 @@ export default function (pi: ExtensionAPI) {
 				promptSnippet: tool.description ?? `Call Emacs tool ${tool.name}`,
 				...(tool.instructions === undefined ? {} : { promptGuidelines: [tool.instructions] }),
 				parameters: schemaForTool(tool),
-				async execute(_toolCallId, params, _signal, _onUpdate, toolCtx) {
-					const resultRaw = await toolCtx.ui.editor(TOOL_CALL_TITLE, JSON.stringify({ protocolVersion: 1, name: tool.name, params }));
+				async execute(_toolCallId, params, signal, _onUpdate, toolCtx) {
+					if (signal?.aborted) throw new Error("Aborted before Emacs answered");
+					const resultRaw = await untilAborted(
+						toolCtx.ui.editor(TOOL_CALL_TITLE, JSON.stringify({ protocolVersion: 1, name: tool.name, params })),
+						signal,
+					);
 					if (!resultRaw) throw new Error("No result from Emacs");
 					let result: any;
 					try {

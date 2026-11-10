@@ -74,6 +74,24 @@ Do not delete rows after implementation. Change their disposition and add the
 implementation and test locations so later upgrades do not rediscover the same
 feature.
 
+## Observed Pi behavior relied on
+
+Behavior checked in a shipped release rather than documented upstream. Recheck
+it when upgrading.
+
+- **RPC `ui.editor` ignores dialog options (Pi 1.5.1).** In RPC mode,
+  `select`, `confirm` and `input` resolve with their default value when
+  `opts.signal` aborts, but `editor(title, prefill)` takes no options and waits
+  for an `extension_ui_response` indefinitely. Pi sends the client no notice
+  when an extension stops waiting, and ignores a late response for an unknown
+  ID. The bridge (`untilAborted` in `bridge/pichat-bridge.ts`) therefore stops
+  waiting on the tool's abort signal itself, and the chat withdraws pending
+  bridge tool calls when the agent run settles. Covered by
+  `pichat-integration-bridge-abort-withdraws-pending-tool-approval`: without
+  the bridge change an aborted run never settles and the `abort` RPC never
+  responds. If a later Pi honours `signal` for `editor`, the race is redundant
+  but harmless.
+
 ## Verification history
 
 | Date | Pi version | Pi release commit | Command | Result |

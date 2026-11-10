@@ -1507,6 +1507,70 @@ clears MCP stays empty; an ineligible baseline or missing model starts nothing."
           (when (buffer-live-p buffer)
             (kill-buffer buffer))))))
 
+  (ert-deftest pichat-integration-bridge-abort-withdraws-pending-tool-approval ()
+    ;; A mutating tool waits for approval in an unselected chat.  Aborting must
+    ;; settle the turn without an answer, clear the pending input and never
+    ;; run the tool, also when the user allows it after the abort.
+    (dolist (late-allow '(nil t))
+      (ert-info ((format "late allow: %s" late-allow))
+        (pichat-test-with-integration-session
+            (session :no-session t
+                     :extensions (list pichat-test-bridge-extension)
+                     :preset 'manual :selection '(:builtins nil :emacs ("pichat-test-abortable"))
+                     :before-start (pichat-define-tool pichat-test-abortable () "placeholder")
+                     :script '(:turns [(:toolCall (:id "abortable-1"
+                                                   :name "pichat-test-abortable"
+                                                   :arguments (:value "x")))]))
+          (let ((pichat-chat-stop-session-on-kill nil)
+                (pichat-approval-policy-file (expand-file-name "approvals.el" project-dir))
+                (pichat-approval-rules nil)
+                (other (generate-new-buffer " *pichat-abort-other*"))
+                (executions 0)
+                (prompts 0)
+                buffer)
+            (pichat-define-tool pichat-test-abortable
+                (:mutating t
+                 :parameters (:type "object" :properties (:value (:type "string"))))
+              (cl-incf executions)
+              "ran")
+            (unwind-protect
+                (progn
+                  (setq buffer (pichat-chat-open session))
+                  (switch-to-buffer other)
+                  (pichat-test-rpc-call session "prompt" (list :message "use the tool"))
+                  (pichat-test-wait-until
+                   (lambda () (= 1 (pichat-chat-pending-user-input-count session)))
+                   5 "queued tool approval")
+                  (if (not late-allow)
+                      (pichat-test-rpc-call session "abort")
+                    ;; Abort while the prompt is open, then choose Allow.
+                    (cl-letf (((symbol-function 'completing-read)
+                               (lambda (&rest _)
+                                 (cl-incf prompts)
+                                 (pichat-test-rpc-call session "abort")
+                                 (pichat-test-wait-for-raw-event session "agent_settled" 5)
+                                 "Allow once")))
+                      (switch-to-buffer buffer)
+                      (with-current-buffer buffer
+                        (pichat-chat--maybe-start-next-ui-request session))
+                      (pichat-test-wait-until (lambda () (= 1 prompts)) 5 "approval prompt")))
+                  (let ((settled (pichat-test-wait-for-raw-event session "agent_settled" 5)))
+                    (should (eq t (plist-get settled :aborted))))
+                  (pichat-test-wait-until
+                   (lambda () (= 0 (pichat-chat-pending-user-input-count session)))
+                   5 "withdrawn approval")
+                  (switch-to-buffer buffer)
+                  (cl-letf (((symbol-function 'completing-read)
+                             (lambda (&rest _) (ert-fail "Withdrawn call must not prompt"))))
+                    (with-current-buffer buffer
+                      (pichat-chat--maybe-start-next-ui-request session))
+                    (accept-process-output nil 0.1))
+                  (should (= 0 executions))
+                  (should-not pichat-approval-rules)
+                  (should (eq (pichat-session-state session) 'idle)))
+              (when (buffer-live-p buffer) (kill-buffer buffer))
+              (when (buffer-live-p other) (kill-buffer other))))))))
+
   (ert-deftest pichat-integration-abort-active-prompt-settles-session ()
     (pichat-test-with-integration-session
         (session :no-session t

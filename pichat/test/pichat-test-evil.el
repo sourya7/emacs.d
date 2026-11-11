@@ -311,5 +311,59 @@
       (setq pichat-artifacts-preview-mode-hook previous-preview-hook)
       (unless was-active (evil-mode -1)))))
 
+(ert-deftest pichat-evil-j-leaves-folded-message-with-long-first-paragraph ()
+  ;; The collapsed suffix hides the newline that ends the first paragraph.
+  ;; Logical `j' must still reach the following lines, also as a motion.
+  (skip-unless (require 'evil nil t))
+  (require 'pichat-evil)
+  (let ((was-active (bound-and-true-p evil-mode))
+        (previous (evil-initial-state 'pichat-chat-mode)))
+    (unwind-protect
+        (save-window-excursion
+          (evil-mode 1)
+          (pichat-evil-setup)
+          (with-temp-buffer
+            (switch-to-buffer (current-buffer))
+            (delete-other-windows)
+            (pichat-chat-mode)
+            (let* ((paragraph (mapconcat (lambda (_) "word") (number-sequence 1 200) " "))
+                   (text (concat paragraph "\n\nsecond paragraph"))
+                   (node (pichat-transcript-node-create
+                          :kind 'message :role 'user :key "submitted"
+                          :content (list (pichat-transcript-content-create
+                                          :kind 'prose :index 0 :text text))))
+                   (pichat-chat--inhibit-edit-guard t))
+              (insert (pichat-render-fragment-propertized-string
+                       (pichat-render--node-fragment node (pichat-render-default-context))))
+              (insert "\nfirst after\nsecond after\n")
+              (pichat-chat-user-ui-refresh (point-min) (point-max) 0)
+              (let* ((suffix (pichat-chat-user-ui-collapsed-suffix-at
+                              (save-excursion (goto-char (point-min))
+                                              (line-end-position)))))
+                (should suffix)
+                (goto-char (point-min))
+                (should (eq (key-binding (kbd "j")) #'pichat-evil-chat-next-line))
+                (call-interactively (key-binding (kbd "j")))
+                (should (> (point) (overlay-end suffix)))
+                (should-not (pichat-chat-user-ui-collapsed-suffix-at (point)))
+                (let ((after-one (point)))
+                  (call-interactively (key-binding (kbd "j")))
+                  (should (= (point) (save-excursion (goto-char after-one)
+                                                     (forward-line 1) (point))))
+                  (let ((after-two (point)))
+                    (goto-char (point-min))
+                    (let ((current-prefix-arg 2))
+                      (call-interactively (key-binding (kbd "j"))))
+                    (should (= after-two (point)))))
+                ;; Linewise operator motion covers the folded message.
+                (should (eq 'line (evil-get-command-property
+                                   'pichat-evil-chat-next-line :type)))
+                (goto-char (point-min))
+                (let ((range (evil-motion-range #'pichat-evil-chat-next-line 1)))
+                  (should (eq 'line (evil-type range)))
+                  (should (> (evil-range-end range) (overlay-end suffix))))))))
+      (evil-set-initial-state 'pichat-chat-mode previous)
+      (unless was-active (evil-mode -1)))))
+
 (provide 'pichat-test-evil)
 ;;; pichat-test-evil.el ends here

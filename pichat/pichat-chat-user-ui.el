@@ -58,6 +58,15 @@
   (cl-find-if (lambda (overlay) (overlay-get overlay 'pichat-user-choice))
               (overlays-at (point))))
 
+(defun pichat-chat-user-ui-collapsed-suffix-at (position)
+  "Return the collapsed disclosure suffix overlay hiding POSITION, or nil.
+The suffix is collapsed exactly when it replaces its text with an ellipsis."
+  (cl-find-if (lambda (overlay)
+                (and (overlay-get overlay 'display)
+                     (<= (overlay-start overlay) position)
+                     (< position (overlay-end overlay))))
+              pichat-chat-user-ui--overlays))
+
 (defun pichat-chat-user-ui-copy ()
   "Copy the complete original submitted message text, without display bars.
 Image data is not text and is not placed on the kill ring."

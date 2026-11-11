@@ -53,6 +53,30 @@
 (declare-function evil-normalize-keymaps "evil-core" ())
 
 (declare-function evil-forward-word-begin "evil-commands" (count &optional bigword))
+(declare-function evil-next-line "evil-commands" (&optional count))
+(declare-function evil-get-command-properties "evil-common" (command))
+(declare-function evil-set-command-properties "evil-common" (command &rest properties))
+
+(defun pichat-evil-chat-next-line (&optional count)
+  "Move COUNT logical lines down, treating a folded message as one line.
+If the current logical line ends inside a collapsed submitted-message
+suffix, `evil-next-line' cannot leave it: Emacs measures the next screen
+line from hidden text and returns to the same place.  Continue from the
+end of the hidden suffix instead, where the folded line visibly ends."
+  (interactive "P")
+  (setq count (if count (prefix-numeric-value count) 1))
+  (if (< count 0)
+      (evil-next-line count)
+    ;; Fix the goal column before any jump, as one `next-line' run would.
+    (let ((last-command last-command))
+      (unless (memq last-command '(next-line previous-line))
+        (setq temporary-goal-column (current-column)
+              last-command 'next-line))
+      (dotimes (_ count)
+        (let ((suffix (pichat-chat-user-ui-collapsed-suffix-at
+                       (line-end-position))))
+          (when suffix (goto-char (overlay-end suffix))))
+        (evil-next-line 1)))))
 
 (defun pichat-evil-chat-copy-or-motion ()
   "Keep Normal/Visual word motion over a disclosure; otherwise copy its text."
@@ -84,6 +108,11 @@ remain in their original mode maps."
   (evil-define-key* 'normal pichat-view-mode-map
     (kbd "q") #'pichat-view-quit)
   (define-key pichat-chat-user-ui-map (kbd "w") #'pichat-evil-chat-copy-or-motion)
+  ;; Same motion type and repeat behaviour, so `dj', `yj' and Visual `j' work.
+  (apply #'evil-set-command-properties 'pichat-evil-chat-next-line
+         (evil-get-command-properties 'evil-next-line))
+  (define-key pichat-chat-user-ui-map [remap evil-next-line]
+              #'pichat-evil-chat-next-line)
   (evil-define-key* 'normal pichat-chat-mode-map
     (kbd "g y") #'pichat-chat-user-ui-copy
     (kbd "]]") #'pichat-chat-next-user-turn

@@ -615,7 +615,13 @@ compose editors for the empty source are retargeted, while extension-owned
 state is reset. A failed
 post-stop attempt retains the last synchronized conversation as a read-only
 snapshot. Reopen `r` from that chat for **Retry requested**, **Restore previous**,
-or **Leave stopped**. Preferred-runtime designation returns only if no newer
+or **Leave stopped**. A quit during the restart is handled like an error and
+still propagates: before the snapshot is staged nothing is changed; afterwards
+the attempt fails once, the previous preset, Tools and model stay installed,
+and the snapshot is retained for recovery. If the error or quit comes before
+PiChat asks Pi to stop, the original Pi process keeps running, local or SSH;
+**Retry requested** or **Restore previous** stops it only then. A failure after
+the stop request leaves a local runtime stopped. Preferred-runtime designation returns only if no newer
 preference was chosen in that scope. Busy, ephemeral, unsynchronized, missing-
 file with conversation history, unsupported-wrapper, and historical-active-leaf
 cases are blocked before stopping Pi. An empty but named, pending, or

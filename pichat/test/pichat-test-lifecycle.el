@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'pichat-test-support)
+(require 'pichat-test-reconfigure-ssh-support)
 
 (ert-deftest pichat-reconfigure-preset-label-commits-and-rolls-back-with-configuration ()
   (dolist (empty '(nil t))
@@ -255,6 +256,70 @@
             (should (eq proc (pichat-session-process session)))
             (should (process-live-p proc)))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-reconfigure-local-interrupted-pre-stop-keeps-original-runtime ()
+  "An error or quit after staging but before any stop request keeps local Pi.
+The attempt fails once with the snapshot retained, and Restore (after an
+error) or Retry (after a quit) then stops the original and restarts."
+  (dolist (condition '(error quit))
+    (pichat-test-ssh-restart--run
+     (lambda (fixture)
+       (let* ((session (plist-get fixture :session))
+              (original (plist-get fixture :original))
+              (runtime-id (pichat-session-runtime-id session))
+              (generation (pichat-session-process-generation session))
+              (configuration (pichat-test-ssh-restart--capture-configuration session))
+              (signalled
+               (cl-letf (((symbol-function 'pichat--suspend-default-for-restart)
+                          (lambda (&rest _)
+                            (signal condition '("Injected staging interruption")))))
+                 (pichat-test-ssh-restart--signal-of
+                  (lambda () (pichat-test-ssh-restart--begin fixture)))))
+              (operation (pichat-session-restart-operation session)))
+         (should (eq 'local (pichat-transport-kind (pichat-session-transport session))))
+         (if (eq condition 'quit)
+             (should (eq 'quit (car signalled)))
+           (should-not signalled))
+         ;; No stop was requested: the original runtime and process remain.
+         (should (process-live-p original))
+         (should (eq original (pichat-session-process session)))
+         (should (eql generation (pichat-session-process-generation session)))
+         (should (equal runtime-id (pichat-session-runtime-id session)))
+         (should (pichat-session-alive-p session))
+         (should-not (plist-get fixture :starts))
+         ;; One failed completion; the attempt is retained for recovery.
+         (should (= 1 (length (plist-get fixture :results))))
+         (should-not (caar (plist-get fixture :results)))
+         (should (string-match-p (if (eq condition 'quit) "Quit" "Injected")
+                                 (cadar (plist-get fixture :results))))
+         (should (eq 'failed (plist-get operation :phase)))
+         (should-not (plist-get operation :stop-requested))
+         (should (pichat-entry-cache-p (plist-get operation :retained)))
+         ;; The installed configuration objects are untouched.
+         (cl-mapc (lambda (expected actual) (should (eq expected actual)))
+                  configuration
+                  (pichat-test-ssh-restart--capture-configuration session))
+         (with-current-buffer (plist-get fixture :buffer)
+           (should pichat-chat--restart-staging)
+           (should (equal "unsent SSH draft" (pichat-chat--input-text))))
+         ;; Recovery stops the original only now, then starts one replacement.
+         (let ((choice (if (eq condition 'quit) 'retry 'restore)))
+           (pichat-test-ssh-restart--recover fixture choice)
+           (pichat-test-wait-until
+            (lambda () (= 2 (length (plist-get fixture :results))))
+            5 (format "local %s after pre-stop interruption" choice))
+           (should (equal '(t nil) (cadr (plist-get fixture :results))))
+           (should-not (process-live-p original))
+           (should (= 1 (length (plist-get fixture :starts))))
+           (should (eq (car (plist-get fixture :starts)) (pichat-session-process session)))
+           (should (equal runtime-id (pichat-session-runtime-id session)))
+           (should-not (pichat-session-restart-operation session))
+           (should (eq (if (eq choice 'retry) 'coding 'manual)
+                       (pichat-session-preset-name session)))
+           (with-current-buffer (plist-get fixture :buffer)
+             (should-not pichat-chat--restart-staging)
+             (should (equal "unsent SSH draft" (pichat-chat--input-text)))))))
+     nil t)))
 
 (ert-deftest pichat-reconfigure-bridge-definitions-are-owned-but-tools-are-denied ()
   (pichat-test-with-unit-session (session proc)

@@ -695,5 +695,265 @@
         (should-not (pichat--selected-file-conflict key))
         (should (pichat-forget-session session))))))
 
+;;; Interrupted attempts (REL-08)
+
+(defun pichat-test-ssh-restart--held-stop (fixture)
+  "Begin FIXTURE's restart and return its owned stop continuation.
+The original endpoint is removed and its exit independently verified, so the
+continuation is the real post-stop entry point into replacement startup."
+  (let (continuation)
+    (cl-letf (((symbol-function 'pichat-reconfigure-stop-and-wait)
+               (lambda (_session _operation callback) (setq continuation callback))))
+      (pichat-test-ssh-restart--begin fixture)
+      (pichat-test-ssh-restart--watch fixture 0 'ready))
+    (should continuation)
+    (delete-process (plist-get fixture :original))
+    (pichat-process-lifetime-confirm (plist-get fixture :original))
+    continuation))
+
+(defun pichat-test-ssh-restart--should-retain-failure (fixture condition signalled configuration)
+  "Check FIXTURE retained one failed attempt after CONDITION was injected.
+SIGNALLED is what escaped the boundary: a quit propagates, an error becomes
+the failure reason.  CONFIGURATION must still be installed, object for object."
+  (let* ((session (plist-get fixture :session))
+         (operation (pichat-session-restart-operation session)))
+    (if (eq condition 'quit)
+        (should (eq 'quit (car signalled)))
+      (should-not signalled))
+    (should (= 1 (length (plist-get fixture :results))))
+    (should-not (caar (plist-get fixture :results)))
+    (should (string-match-p (if (eq condition 'quit) "Quit" "Injected")
+                            (cadar (plist-get fixture :results))))
+    (should (eq 'failed (plist-get operation :phase)))
+    (should (pichat-entry-cache-p (plist-get operation :retained)))
+    (should (memq (plist-get fixture :original) (plist-get operation :shutdown-obligations)))
+    (should (equal configuration (pichat-test-ssh-restart--capture-configuration session)))
+    (cl-mapc (lambda (expected actual) (should (eq expected actual)))
+             (butlast configuration) (butlast (pichat-test-ssh-restart--capture-configuration session)))
+    (with-current-buffer (plist-get fixture :buffer)
+      (should pichat-chat--restart-staging)
+      (should (equal "unsent SSH draft" (pichat-chat--input-text))))
+    operation))
+
+(ert-deftest pichat-reconfigure-ssh-interrupted-startup-retires-attempt-once ()
+  (dolist (condition '(error quit))
+    (pichat-test-ssh-restart--run
+     (lambda (fixture)
+       (let* ((session (plist-get fixture :session))
+              (runtime-id (pichat-session-runtime-id session))
+              (configuration (pichat-test-ssh-restart--capture-configuration session))
+              (continuation (pichat-test-ssh-restart--held-stop fixture))
+              (signalled
+               (cl-letf (((symbol-function 'pichat-rpc-start)
+                          (lambda (&rest _) (signal condition '("Injected startup interruption")))))
+                 (pichat-test-ssh-restart--signal-of
+                  (lambda () (funcall continuation t nil)))))
+              (failed (pichat-test-ssh-restart--should-retain-failure
+                       fixture condition signalled configuration)))
+         (should-not (plist-get fixture :starts))
+         (should (eq session (pichat-session-by-runtime-id runtime-id)))
+         ;; The retired continuation cannot acquire or start another attempt.
+         (should-not (pichat-test-ssh-restart--signal-of
+                      (lambda () (funcall continuation t nil))))
+         (should (eq failed (pichat-session-restart-operation session)))
+         (should-not (plist-get fixture :starts))
+         (should (= 1 (length (plist-get fixture :results))))
+         (pichat-test-ssh-restart--recover fixture 'restore)
+         (should (equal '(t nil) (cadr (plist-get fixture :results))))
+         (should (= 1 (length (plist-get fixture :starts))))
+         (should (eq 'manual (pichat-session-preset-name session)))
+         (should-not (pichat-session-restart-operation session)))))))
+
+(ert-deftest pichat-reconfigure-ssh-interrupted-commit-restores-exact-configuration ()
+  (dolist (unwritten '(nil t))
+    (dolist (condition '(error quit))
+      (pichat-test-ssh-restart--run
+       (lambda (fixture)
+         (let* ((session (plist-get fixture :session))
+                (runtime-id (pichat-session-runtime-id session))
+                (configuration (pichat-test-ssh-restart--capture-configuration session))
+                (continuation (pichat-test-ssh-restart--held-stop fixture))
+                signalled)
+           (when unwritten
+             (plist-put fixture :state
+                        (plist-put (plist-put (copy-tree (plist-get fixture :state))
+                                              :sessionId "new-empty")
+                                   :sessionFile "/runtime/new-empty.jsonl")))
+           (setq signalled
+                 (cl-letf (((symbol-function 'pichat-render-canonical)
+                            (lambda (&rest _)
+                              (signal condition '("Injected projection interruption")))))
+                   (pichat-test-ssh-restart--signal-of
+                    (lambda () (funcall continuation t nil)))))
+           (let ((failed (pichat-test-ssh-restart--should-retain-failure
+                          fixture condition signalled configuration))
+                 (replacement (car (plist-get fixture :starts))))
+             (should replacement)
+             (should (memq replacement (plist-get failed :shutdown-obligations)))
+             (should-not (pichat-session-alive-p session))
+             (should (equal runtime-id (pichat-session-runtime-id session)))
+             (unless unwritten
+               (with-current-buffer (plist-get fixture :buffer)
+                 (should (string-match-p "Final persisted answer" (buffer-string)))))
+             (should-not (pichat-test-ssh-restart--signal-of
+                          (lambda () (funcall continuation t nil))))
+             (should (= 1 (length (plist-get fixture :starts))))
+             (should (eq failed (pichat-session-restart-operation session)))
+             (pichat-test-ssh-restart--recover fixture 'restore)
+             (pichat-test-ssh-restart--watch fixture 1 'ready)
+             (pichat-test-ssh-restart--watch fixture 1 'done t)
+             (pichat-test-wait-until (lambda () (= 2 (length (plist-get fixture :results))))
+                                     2 "restore after interrupted commit")
+             (should (equal '(t nil) (cadr (plist-get fixture :results))))
+             (should (eq 'manual (pichat-session-preset-name session)))
+             (with-current-buffer (plist-get fixture :buffer)
+               (should-not pichat-chat--restart-staging)
+               (should (equal "unsent SSH draft" (pichat-chat--input-text)))))))
+       unwritten))))
+
+(ert-deftest pichat-reconfigure-ssh-interrupted-stop-send-and-verification-retire-once ()
+  (dolist (point '(stop send verify))
+    (dolist (condition '(error quit))
+      (pichat-test-ssh-restart--run
+       (lambda (fixture)
+         (let* ((session (plist-get fixture :session))
+                (configuration (pichat-test-ssh-restart--capture-configuration session))
+                (send (symbol-function 'pichat-rpc-send))
+                (stop (symbol-function 'pichat-rpc-stop))
+                (injected 0)
+                signalled)
+           (cl-letf (((symbol-function 'pichat-rpc-stop)
+                      (lambda (target)
+                        (if (and (eq point 'stop) (= 0 injected))
+                            (progn (cl-incf injected)
+                                   (signal condition '("Injected stop interruption")))
+                          (funcall stop target))))
+                     ((symbol-function 'pichat-rpc-send)
+                      (lambda (target type &rest args)
+                        (if (and (eq point 'send) (equal type "switch_session"))
+                            (progn (cl-incf injected)
+                                   (signal condition '("Injected send interruption")))
+                          (apply send target type args))))
+                     ((symbol-function 'pichat-tool-runtime-verify)
+                      (lambda (&rest _)
+                        (cl-incf injected)
+                        (signal condition '("Injected verification interruption")))))
+             (pichat-test-ssh-restart--begin fixture)
+             (setq signalled (pichat-test-ssh-restart--signal-of
+                              (lambda () (pichat-test-ssh-restart--watch fixture 0 'ready))))
+             (unless (eq point 'stop)
+               (should-not signalled)
+               (pichat-test-ssh-restart--watch fixture 0 'done t)
+               ;; Replacement startup runs from the stop poll's timer; a quit
+               ;; there escapes through the waiting `accept-process-output'.
+               (setq signalled
+                     (pichat-test-ssh-restart--signal-of
+                      (lambda ()
+                        (pichat-test-wait-until
+                         (lambda () (plist-get fixture :results)) 2 "retired attempt"))))))
+           (should (= 1 injected))
+           (if (eq condition 'quit)
+               (should (eq 'quit (car signalled)))
+             (should-not signalled))
+           (let ((operation (pichat-session-restart-operation session)))
+             (should (= 1 (length (plist-get fixture :results))))
+             (should-not (caar (plist-get fixture :results)))
+             (should (eq 'failed (plist-get operation :phase)))
+             (should (memq (plist-get fixture :original)
+                           (plist-get operation :shutdown-obligations)))
+             (dolist (replacement (plist-get fixture :starts))
+               (should (memq replacement (plist-get operation :shutdown-obligations))))
+             (should-not (pichat-session-alive-p session))
+             (should (equal configuration
+                            (pichat-test-ssh-restart--capture-configuration session)))
+             (with-current-buffer (plist-get fixture :buffer)
+               (should pichat-chat--restart-staging)
+               (should (equal "unsent SSH draft" (pichat-chat--input-text)))))))))))
+
+(ert-deftest pichat-reconfigure-ssh-interrupted-pre-stop-setup-keeps-one-owner ()
+  (dolist (point '(observer suspend))
+    (dolist (condition '(error quit))
+      (pichat-test-ssh-restart--run
+       (lambda (fixture)
+         (let* ((session (plist-get fixture :session))
+                (original (plist-get fixture :original))
+                (configuration (pichat-test-ssh-restart--capture-configuration session))
+                (signalled
+                 (pcase point
+                   ('observer
+                    (cl-letf (((symbol-function 'pichat-process-lifetime-watch)
+                               (lambda (&rest _)
+                                 (signal condition '("Injected observer interruption")))))
+                      (pichat-test-ssh-restart--signal-of
+                       (lambda () (pichat-test-ssh-restart--begin fixture)))))
+                   ('suspend
+                    (pichat-test-ssh-restart--begin fixture)
+                    (cl-letf (((symbol-function 'pichat--suspend-default-for-restart)
+                               (lambda (&rest _)
+                                 (signal condition '("Injected staging interruption")))))
+                      (pichat-test-ssh-restart--signal-of
+                       (lambda () (pichat-test-ssh-restart--watch fixture 0 'ready))))))))
+           (should (process-live-p original))
+           (should-not (plist-get fixture :starts))
+           (pcase point
+             ('observer
+              ;; Nothing was staged or stopped: an ordinary preflight failure.
+              (if (eq condition 'quit)
+                  (should (eq 'quit (car signalled)))
+                (should-not signalled))
+              (should (equal '(nil) (mapcar #'car (plist-get fixture :results))))
+              (should-not (pichat-session-restart-operation session))
+              (should (equal configuration
+                             (pichat-test-ssh-restart--capture-configuration session)))
+              (with-current-buffer (plist-get fixture :buffer)
+                (should-not pichat-chat--restart-staging)
+                (should (equal "unsent SSH draft" (pichat-chat--input-text)))))
+             ('suspend
+              ;; The chat is staged: its snapshot needs a recoverable owner.
+              (pichat-test-ssh-restart--should-retain-failure
+               fixture condition signalled configuration)
+              (should (eq session (pichat--selected-file-conflict
+                                   (pichat--selected-file-key
+                                    (plist-get fixture :transport)
+                                    (pichat-session-session-file session)))))
+              (pichat-test-ssh-restart--recover fixture 'restore)
+              (pichat-test-ssh-restart--watch fixture 1 'ready)
+              (pichat-test-ssh-restart--watch fixture 1 'done t)
+              (pichat-test-wait-until (lambda () (= 2 (length (plist-get fixture :results))))
+                                      2 "restore after interrupted staging")
+              (should (equal '(t nil) (cadr (plist-get fixture :results))))
+              (with-current-buffer (plist-get fixture :buffer)
+                (should-not pichat-chat--restart-staging))))))))))
+
+(ert-deftest pichat-reconfigure-ssh-notification-failure-keeps-committed-restart ()
+  (dolist (condition '(error quit))
+    (pichat-test-ssh-restart--run
+     (lambda (fixture)
+       (let* ((session (plist-get fixture :session))
+              (continuation (pichat-test-ssh-restart--held-stop fixture))
+              (signalled
+               (cl-letf (((symbol-function 'pichat-note-session-updated)
+                          (lambda (&rest _)
+                            (signal condition '("Injected notification failure")))))
+                 (pichat-test-ssh-restart--signal-of
+                  (lambda () (funcall continuation t nil))))))
+         (if (eq condition 'quit)
+             (should (eq 'quit (car signalled)))
+           (should-not signalled))
+         (should (equal '((t nil)) (plist-get fixture :results)))
+         (should-not (pichat-session-restart-operation session))
+         (should (eq 'coding (pichat-session-preset-name session)))
+         (should (equal "fake/model" (pichat-session-startup-model session)))
+         (should (pichat-session-alive-p session))
+         (should (= 1 (length (plist-get fixture :starts))))
+         (with-current-buffer (plist-get fixture :buffer)
+           (should-not pichat-chat--restart-staging)
+           (should (equal "unsent SSH draft" (pichat-chat--input-text))))
+         ;; A replayed continuation cannot restart the committed runtime.
+         (should-not (pichat-test-ssh-restart--signal-of
+                      (lambda () (funcall continuation t nil))))
+         (should (= 1 (length (plist-get fixture :starts))))
+         (should (= 1 (length (plist-get fixture :results)))))))))
+
 (provide 'pichat-test-reconfigure-ssh)
 ;;; pichat-test-reconfigure-ssh.el ends here

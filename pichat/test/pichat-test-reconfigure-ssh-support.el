@@ -14,11 +14,12 @@
       ('ready (funcall (plist-get watch :ready)))
       ('done (funcall (plist-get watch :done) success reason)))))
 
-(defun pichat-test-ssh-restart--run (scenario &optional unwritten)
+(defun pichat-test-ssh-restart--run (scenario &optional unwritten local)
   "Call SCENARIO with an offline SSH restart fixture.
 Only transport creation/observer delivery and Pi RPC replies are simulated.
 Restart, source validation, snapshot projection, shutdown and recovery are real.
-UNWRITTEN selects a metadata-only source without an existing file."
+UNWRITTEN selects a metadata-only source without an existing file.  LOCAL keeps
+the implicit local transport instead, with the same simulated Pi replies."
   (pichat-test-with-unit-session (session original)
     (pichat-test-with-temp-dir dir
       (let* ((pichat-chat-stop-session-on-kill nil)
@@ -30,9 +31,10 @@ UNWRITTEN selects a metadata-only source without an existing file."
              (pichat--sessions-by-id (make-hash-table :test #'equal))
              (pichat--sessions-by-scope (make-hash-table :test #'equal))
              (pichat--session-order nil)
-             (transport (pichat-transport--create :id 'fixture :kind 'ssh
-                                                 :tramp-prefix "/ssh:fixture.invalid:"
-                                                 :pi-executable "fixture-pi"))
+             (transport (if local pichat-transport-local
+                          (pichat-transport--create :id 'fixture :kind 'ssh
+                                                    :tramp-prefix "/ssh:fixture.invalid:"
+                                                    :pi-executable "fixture-pi")))
              (file "/runtime/session.jsonl")
              (host-file (expand-file-name "session.jsonl" dir))
              (data (pichat-test-read-json-fixture "canonical-session.json"))
@@ -148,6 +150,15 @@ UNWRITTEN selects a metadata-only source without an existing file."
    (lambda (success reason)
      (plist-put fixture :results
                 (append (plist-get fixture :results) (list (list success reason)))))))
+
+(defun pichat-test-ssh-restart--signal-of (thunk)
+  "Call THUNK and return the error or quit it signalled, or nil."
+  (condition-case err (progn (funcall thunk) nil) ((error quit) err)))
+
+(defun pichat-test-ssh-restart--capture-configuration (session)
+  "Return SESSION's exact installed configuration objects and startup model."
+  (list (pichat-session-preset-spec session) (pichat-session-preset-name session)
+        (pichat-session-tool-selection session) (pichat-session-startup-model session)))
 
 (provide 'pichat-test-reconfigure-ssh-support)
 ;;; pichat-test-reconfigure-ssh-support.el ends here

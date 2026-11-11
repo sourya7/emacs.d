@@ -277,6 +277,26 @@ It must be repeated immediately before a restart transaction stops Pi."
       (push "The originating runtime is unavailable" blockers))
     (nreverse blockers)))
 
+(defmacro pichat-reconfigure--retiring (operation reason-format &rest body)
+  "Run BODY, retiring OPERATION's attempt if BODY signals an error or quit.
+The failure reason is the condition's message, passed through REASON-FORMAT
+\(a format string with one %s) when non-nil.  An error is reported only
+through the attempt's completion.  A quit is an interruption, not a failure
+to absorb: it propagates after the attempt has been retired.  Retirement is
+a no-op once OPERATION no longer owns its runtime, so nested boundaries
+complete an attempt at most once and never undo a finished commit."
+  (declare (indent 2) (debug t))
+  (let ((condition (make-symbol "condition")))
+    `(condition-case ,condition (progn ,@body)
+       ((error quit)
+        (pichat-reconfigure--finish
+         ,operation nil
+         ,(if reason-format
+              `(format ,reason-format (error-message-string ,condition))
+            `(error-message-string ,condition)))
+        (when (eq (car ,condition) 'quit)
+          (signal (car ,condition) (cdr ,condition)))))))
+
 (defun pichat-reconfigure--cancel-observers (operation)
   "Cancel OPERATION's observers without erasing shutdown obligations."
   (dolist (cancel (plist-get operation :observer-cancellers))
@@ -374,7 +394,9 @@ CONTINUATION after every unresolved lifetime has a verified observer baseline."
                   ;; losing the operation's eq ownership.  Mutate its tail.
                   (plist-put operation :observer-cancellers
                              (cons cancel (plist-get operation :observer-cancellers))))))))
-        ((error quit) (failed (error-message-string err)))))))
+        ((error quit)
+         (failed (error-message-string err))
+         (when (eq (car err) 'quit) (signal (car err) (cdr err))))))))
 
 (defun pichat-reconfigure-cancel-operation (session reason)
   "Retire active restart callbacks for SESSION and retain failure REASON.
@@ -435,8 +457,10 @@ late callbacks.  Never start a replacement while the old process is live."
             (plist-put operation :stop-requested t)
             (pichat-rpc-stop session)
             (poll))
-        (error (finish nil (format "Could not stop old Pi process: %s"
-                                   (error-message-string err))))))))
+        ((error quit)
+         (finish nil (format "Could not stop old Pi process: %s"
+                             (error-message-string err)))
+         (when (eq (car err) 'quit) (signal (car err) (cdr err))))))))
 
 (defun pichat-reconfigure-validated-command (session configuration state)
   "Resolve replacement argv without changing SESSION's committed configuration.
@@ -657,10 +681,14 @@ process generation to check."
         (when callback (funcall callback t reason)))
        (success
         (setf (pichat-session-restart-operation session) nil)
-        (pichat--restore-default-after-restart
-         session (plist-get operation :preferred-ticket))
-        (pichat-note-session-updated session)
-        (when callback (funcall callback t reason)))
+        ;; The commit is complete.  A failing or interrupted notification
+        ;; can neither undo it nor withhold its single completion.
+        (unwind-protect
+            (progn
+              (pichat--restore-default-after-restart
+               session (plist-get operation :preferred-ticket))
+              (pichat-note-session-updated session))
+          (when callback (funcall callback t reason))))
        ((eq (plist-get operation :phase) 'preflight)
         ;; Preflight failures must never stop or alter the original process.
         (setf (pichat-session-restart-operation session) nil)
@@ -668,20 +696,26 @@ process generation to check."
        (t
         ;; Retain both configuration snapshots and the failure for explicit
         ;; recovery.  Copy the plist so all old callbacks lose `eq' ownership.
+        ;; Stop only a process this attempt asked to stop or may have
+        ;; started.  Before any stop request (the pre-stop window, phase
+        ;; `stopping') the live process is the untouched original: keep it.
         (pichat-reconfigure-cancel-operation session reason)
-        (when (and (pichat-session-alive-p session)
-                   (or (eq (pichat-transport-kind
-                            (pichat-session-transport session)) 'local)
-                       (plist-get operation :stop-requested)
-                       (plist-get operation :replacement-process)))
-          (pichat-rpc-stop session))
-        (when-let* ((buffer (plist-get operation :chat)))
-          (when (buffer-live-p buffer)
-            (with-current-buffer buffer
-              (pichat-chat--set-status
-               'restart (format "[restart failed: %s; snapshot retained]"
-                                (truncate-string-to-width reason 140 nil nil t))))))
-        (when callback (funcall callback nil reason)))))))
+        (unwind-protect
+            (progn
+              (when (and (pichat-session-alive-p session)
+                         (or (plist-get operation :stop-requested)
+                             (plist-get operation :replacement-process)
+                             (and (eq (pichat-transport-kind
+                                       (pichat-session-transport session)) 'local)
+                                  (not (eq (plist-get operation :phase) 'stopping)))))
+                (pichat-rpc-stop session))
+              (when-let* ((buffer (plist-get operation :chat)))
+                (when (buffer-live-p buffer)
+                  (with-current-buffer buffer
+                    (pichat-chat--set-status
+                     'restart (format "[restart failed: %s; snapshot retained]"
+                                      (truncate-string-to-width reason 140 nil nil t)))))))
+          (when callback (funcall callback nil reason))))))))
 
 (defun pichat-reconfigure--send (operation phase type payload continuation)
   "Send bounded TYPE/PAYLOAD for owned OPERATION in PHASE.
@@ -690,25 +724,20 @@ CONTINUATION receives the authoritative response data on success."
     (let* ((session (plist-get operation :session))
            (pichat-rpc--operation-token (plist-get operation :token))
            (pichat-rpc-request-timeout pichat-reconfigure-phase-timeout))
-      (condition-case err
-          (pichat-rpc-send
-           session type payload
-           (lambda (response _session)
-             (when (pichat-reconfigure--owned-p operation phase)
-               (condition-case condition
-                   (funcall continuation (plist-get response :data))
-                 (error
-                  (pichat-reconfigure--finish
-                   operation nil (error-message-string condition))))))
-           (lambda (response _session)
-             (when (pichat-reconfigure--owned-p operation phase)
-               (pichat-reconfigure--finish
-                operation nil
-                (format "Pi %s failed: %s" type
-                        (or (plist-get response :error) "no response"))))))
-        (error (pichat-reconfigure--finish
-                operation nil (format "Could not send Pi %s: %s"
-                                      type (error-message-string err))))))))
+      (pichat-reconfigure--retiring operation
+          (format "Could not send Pi %s: %%s" type)
+        (pichat-rpc-send
+         session type payload
+         (lambda (response _session)
+           (when (pichat-reconfigure--owned-p operation phase)
+             (pichat-reconfigure--retiring operation nil
+               (funcall continuation (plist-get response :data)))))
+         (lambda (response _session)
+           (when (pichat-reconfigure--owned-p operation phase)
+             (pichat-reconfigure--finish
+              operation nil
+              (format "Pi %s failed: %s" type
+                      (or (plist-get response :error) "no response"))))))))))
 
 (defun pichat-reconfigure--verify-idle-state (operation state)
   "Require a fresh idle STATE with OPERATION's expected source identity."
@@ -750,25 +779,33 @@ CONTINUATION receives the authoritative response data on success."
                       (plist-get operation :origin)
                       (plist-get operation :retained) state entries)))
             (requested (plist-get operation :active-configuration))
-            (previous (plist-get operation :previous))
-            (old-model (pichat-session-startup-model session)))
-       (pichat-session-set-configuration
-        session
-        (pichat-presets--copy (plist-get requested :preset-spec))
-        (pichat-presets--copy (plist-get requested :tool-selection)))
-       (setf (pichat-session-startup-model session)
-             (plist-get operation :active-model))
-       (condition-case err
-           (with-current-buffer buffer
-             (if (plist-get operation :empty-unwritten)
-                 (pichat-chat-commit-staged-empty-restart session cache)
-               (pichat-chat-commit-staged-restart session cache)))
-         (error
-          (pichat-session-set-configuration
-           session (plist-get previous :preset-spec)
-           (plist-get previous :tool-selection))
-          (setf (pichat-session-startup-model session) old-model)
-          (signal (car err) (cdr err))))
+            ;; The exact installed objects, not a copy: a failed commit must
+            ;; leave the runtime's configuration as it found it.
+            (old-spec (pichat-session-preset-spec session))
+            (old-name (pichat-session-preset-name session))
+            (old-tools (pichat-session-tool-selection session))
+            (old-model (pichat-session-startup-model session))
+            (committed nil))
+       ;; Provisional until the chat projection commits.  Roll back on any
+       ;; non-local exit, including quit, before the attempt is retired.
+       (unwind-protect
+           (progn
+             (pichat-session-set-configuration
+              session
+              (pichat-presets--copy (plist-get requested :preset-spec))
+              (pichat-presets--copy (plist-get requested :tool-selection)))
+             (setf (pichat-session-startup-model session)
+                   (plist-get operation :active-model))
+             (with-current-buffer buffer
+               (if (plist-get operation :empty-unwritten)
+                   (pichat-chat-commit-staged-empty-restart session cache)
+                 (pichat-chat-commit-staged-restart session cache)))
+             (setq committed t))
+         (unless committed
+           (setf (pichat-session-preset-spec session) old-spec
+                 (pichat-session-preset-name session) old-name
+                 (pichat-session-tool-selection session) old-tools
+                 (pichat-session-startup-model session) old-model)))
        (pichat-reconfigure--finish operation t nil)))))
 
 (defun pichat-reconfigure--restore-settings (operation state)
@@ -788,10 +825,9 @@ CONTINUATION receives the authoritative response data on success."
        (plist-get operation :session)
        (lambda (success reason)
          (when (pichat-reconfigure--owned-p operation 'loading)
-           (condition-case err
-               (if success (pichat-reconfigure--synchronize operation state)
-                 (pichat-reconfigure--finish operation nil reason))
-             (error (pichat-reconfigure--finish operation nil (error-message-string err))))))))
+           (pichat-reconfigure--retiring operation nil
+             (if success (pichat-reconfigure--synchronize operation state)
+               (pichat-reconfigure--finish operation nil reason)))))))
      ((null command)
       ;; set_model changes Pi's persistent preference.  It is not a run-local
       ;; restoration mechanism and must not be used for this transaction.
@@ -860,21 +896,17 @@ Only recovery may pass ALLOW-STOPPED for an already-confirmed stopped runtime."
   (when (pichat-reconfigure--owned-p operation 'stopping)
     (cl-labels ((start ()
                   (when (pichat-reconfigure--owned-p operation 'stopping)
-                    (condition-case err
-                        (pichat-reconfigure--start-replacement operation)
-                      (error (pichat-reconfigure--finish
-                              operation nil (error-message-string err)))))))
+                    (pichat-reconfigure--retiring operation nil
+                      (pichat-reconfigure--start-replacement operation)))))
       (if (or (pichat-session-alive-p (plist-get operation :session))
               (and allow-stopped (plist-get operation :shutdown-ready)))
-          (condition-case err
-              (pichat-reconfigure-stop-and-wait
-               (plist-get operation :session) operation
-               (lambda (success reason)
-                 (when (pichat-reconfigure--owned-p operation 'stopping)
-                   (if success (start)
-                     (pichat-reconfigure--finish operation nil reason)))))
-            (error (pichat-reconfigure--finish
-                    operation nil (error-message-string err))))
+          (pichat-reconfigure--retiring operation nil
+            (pichat-reconfigure-stop-and-wait
+             (plist-get operation :session) operation
+             (lambda (success reason)
+               (when (pichat-reconfigure--owned-p operation 'stopping)
+                 (if success (start)
+                   (pichat-reconfigure--finish operation nil reason))))))
         (if allow-stopped (start)
           (pichat-reconfigure--finish
            operation nil "Old Pi process was not live; replacement was not started"))))))
@@ -926,8 +958,22 @@ Only recovery may pass ALLOW-STOPPED for an already-confirmed stopped runtime."
                                   (pichat--suspend-default-for-restart session))
                        (plist-put operation :phase 'stopping)
                        (pichat-reconfigure--stop-then-start operation))
-                   (error (pichat-reconfigure--finish
-                           operation nil (error-message-string err)))))))
+                   ((error quit)
+                    ;; Preflight failure leaves everything untouched, but a
+                    ;; staged snapshot needs a recoverable failed owner;
+                    ;; dropping the attempt would strand the chat read-only.
+                    ;; No stop was requested, so `--finish' keeps the live
+                    ;; original process (local or SSH) and its identity.
+                    (when (and (pichat-reconfigure--owned-p operation 'preflight)
+                               (eq session
+                                   (plist-get (buffer-local-value
+                                               'pichat-chat--restart-staging buffer)
+                                              :session)))
+                      (plist-put operation :phase 'stopping))
+                    (pichat-reconfigure--finish
+                     operation nil (error-message-string err))
+                    (when (eq (car err) 'quit)
+                      (signal (car err) (cdr err))))))))
           (pichat-reconfigure--prepare-shutdown operation nil #'begin))))))
 
 (defun pichat-reconfigure-restart (origin requested callback)
@@ -975,14 +1021,12 @@ The launcher enters this operation only after explicit confirmation."
        owned-origin
        (lambda (blockers result)
          (when (pichat-reconfigure--owned-p operation 'preflight)
-           (condition-case err
-               (if blockers
-                   (pichat-reconfigure--finish
-                    operation nil (string-join blockers "; "))
-                 (pichat-reconfigure--continue-after-preflight
-                  operation requested result))
-             (error (pichat-reconfigure--finish
-                     operation nil (error-message-string err))))))))
+           (pichat-reconfigure--retiring operation nil
+             (if blockers
+                 (pichat-reconfigure--finish
+                  operation nil (string-join blockers "; "))
+               (pichat-reconfigure--continue-after-preflight
+                operation requested result)))))))
     operation))
 
 (defun pichat-reconfigure--recovery-attempt (failed configuration command callback)

@@ -72,7 +72,23 @@ Keep tables narrow and pad columns for monospace readability.")
            ("plan-review" . "change_log") ("plan-review" . "change_diff")
            ("plan-review" . "test"))
     :emacs-tools '("pichat_job_inspect" "pichat_job_run_now"
-                   "pichat_job_run_inspect")))
+                   "pichat_job_run_inspect"))
+
+  ;; Plan-loop orchestrator chat: starts the worker job for a plan's next task
+  ;; (approval prompt), reports the reviewer's verdict, and lands or closes the
+  ;; plan's workspace with the plans skill.
+  (pichat-make-preset 'plan-orchestrator
+    :description "Start a plan's next scope as a plan-loop run; land and close its workspace."
+    :model "cliproxyapi/claude-opus-5-5"
+    :tools '("read" "grep" "find" "ls" "bash")
+    :emacs-tools '("pichat_jobs_list" "pichat_job_inspect" "pichat_job_run_now"
+                   "pichat_job_run_inspect")
+    :append-system-prompt
+    "You orchestrate plan-loop runs for this repository; you do not implement or review. Use the plans skill for everything about plans and their workspaces.
+- Start work: find the plan's next task (plans show), check with workspace show and pichat_job_inspect that no worker is running, then run the plan-worker job with pichat_job_run_now and input `plan: <plan-id>; scope: <exact task heading>`. Tasks that start with Decide or are BLOCKED go back to the user.
+- Status: inspect the worker run and the plan-reviewer job's latest run, and report the reviewer's verdict.
+- Try, land, close: only when the user asks for that action by name, following the plans skill.
+Never edit code, commit or push; change a plan record only where the plans skill's land or close says to."))
 
 (my/add-all-to-list 'display-buffer-alist
                     '(("\\`\\*pi:" (display-buffer-same-window))

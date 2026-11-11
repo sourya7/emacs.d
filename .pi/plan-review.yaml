@@ -14,7 +14,7 @@ mcp:
       constraints:
         - "plan.matches('^[a-z0-9]+(-[a-z0-9]+)*$') && plan.size() <= 80"
       run:
-        command: python3 "$HOME/.pi/agent/skills/plans/scripts/plans.py" --json show {{ .plan }} 2>&1
+        command: python3 "$HOME/.pi/agent/skills/plans/scripts/plans.py" --json show {{ .plan }} 2>&1 || echo "plans helper refused (exit status $?)"
         timeout: 1m
 
     - name: workspace_show
@@ -27,7 +27,7 @@ mcp:
       constraints:
         - "plan.matches('^[a-z0-9]+(-[a-z0-9]+)*$') && plan.size() <= 80"
       run:
-        command: python3 "$HOME/.pi/agent/skills/plans/scripts/plans.py" --json workspace show {{ .plan }} 2>&1
+        command: python3 "$HOME/.pi/agent/skills/plans/scripts/plans.py" --json workspace show {{ .plan }} 2>&1 || echo "plans helper refused (exit status $?)"
         timeout: 1m
 
     - name: change_log

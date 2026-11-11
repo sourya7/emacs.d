@@ -61,6 +61,19 @@ Keep tables narrow and pad columns for monospace readability.")
 
 ;; (setq pichat-project-target-alist '(("/home/mojo/Dev" . lima-devbox)))
 
+;; Preset for the authored plan-loop reviewer job (.pi/jobs/plan-reviewer.json).
+;; Read-only tools, the job tools it needs to restart the worker, and the
+;; plan-review MCP tools each repository defines in its .pi/mcp.json.
+(with-eval-after-load 'pichat-presets
+  (pichat-make-preset 'plan-reviewer
+    :description "Review a plan-loop worker's change and restart it with findings."
+    :tools '("read" "grep" "find" "ls")
+    :mcp '(("plan-review" . "plan_show") ("plan-review" . "workspace_show")
+           ("plan-review" . "change_log") ("plan-review" . "change_diff")
+           ("plan-review" . "test"))
+    :emacs-tools '("pichat_job_inspect" "pichat_job_run_now"
+                   "pichat_job_run_inspect")))
+
 (my/add-all-to-list 'display-buffer-alist
                     '(("\\`\\*pi:" (display-buffer-same-window))
                       ("\\`\\*PiChat Sessions" (display-buffer-same-window))

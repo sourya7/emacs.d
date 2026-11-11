@@ -726,6 +726,23 @@
       (should (equal (pichat-job-records store 'runs) []))
       (should (string-match-p "Run deleted" (buffer-string))))))
 
+(ert-deftest pichat-jobs-preserves-caller-directory-on-every-open ()
+  (pichat-test-with-job-views
+    (let ((first (file-name-as-directory project-dir))
+          (second (file-name-as-directory agent-dir))
+          jobs)
+      (with-temp-buffer
+        (setq default-directory first)
+        (pichat-jobs)
+        (setq jobs (current-buffer))
+        (should (equal default-directory first)))
+      ;; The global Jobs buffer may already exist from another project.
+      (with-temp-buffer
+        (setq default-directory second)
+        (pichat-jobs)
+        (should (eq (current-buffer) jobs))
+        (should (equal default-directory second))))))
+
 (ert-deftest pichat-jobs-delete-keeps-row-after-unfocused-resize ()
   (pichat-test-with-job-views
     (let* ((first (pichat-job-save store (pichat-test-job-spec project-dir)))

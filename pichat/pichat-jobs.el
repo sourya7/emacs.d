@@ -403,11 +403,14 @@ reservation after inspection and confirmation.  With Evil, use g R."
 
 ;;;###autoload
 (defun pichat-jobs ()
-  "Open the Jobs view; initialize the store once, without replaying old work."
+  "Open the Jobs view; initialize the store once, without replaying old work.
+Preserve the caller's directory for project-aware commands in the view."
   (interactive)
-  (let ((owner (pichat-jobs--engine)))
+  (let ((directory default-directory)
+        (owner (pichat-jobs--engine)))
     (pop-to-buffer (get-buffer-create "*PiChat Jobs*"))
     (unless (derived-mode-p 'pichat-jobs-mode) (pichat-jobs-mode))
+    (setq-local default-directory directory)
     (setq pichat-jobs--owner owner)
     (pichat-jobs-refresh)))
 

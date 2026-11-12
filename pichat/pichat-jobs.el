@@ -1658,13 +1658,16 @@ This stages the time only; Schedule remains a separate explicit action."
   (let* ((scope (transient-scope)) (capture (plist-get scope :conversation))
          (owner (plist-get scope :owner)) (token (list 'schedule))
          (due (plist-get scope :due)) (draft (plist-get scope :draft))
+         ;; Before acceptance a failure releases only this action; after it,
+         ;; the authorized run is reported and the composer is not reopened.
          (failed (lambda (reason)
-                   (if (plist-get scope :closed)
-                       (message "Scheduled %s before error; inspect Jobs: %s" (plist-get scope :submitted-run-id) reason)
-                     (when (eq token (plist-get scope :pending))
-                       (setf (plist-get scope :pending) nil)
-                       (pichat-job--settings-show scope)
-                       (message "%s" reason))))))
+                   (cond
+                    ((plist-get scope :submitted-run-id)
+                     (message "Scheduled %s before error; inspect Jobs: %s" (plist-get scope :submitted-run-id) reason))
+                    ((eq token (plist-get scope :pending))
+                     (setf (plist-get scope :pending) nil)
+                     (pichat-job--settings-show scope)
+                     (message "%s" reason))))))
     (pichat-job--composer-check scope)
     (unless (and capture (pichat-job-schedule-instant-p due) (> due (float-time)))
       (user-error "Choose a future When before Schedule"))

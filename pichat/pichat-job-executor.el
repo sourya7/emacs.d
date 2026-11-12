@@ -691,41 +691,66 @@ last response stays empty.  No domain success is inferred from prose."
 REPLACE is an explicitly confirmed exact pending record.  ACCEPTED gets the
 committed ID; FAILURE receives a bounded reason.  CURRENT guards a UI
 invocation.
-Nothing is sent and no runtime is acquired while preparing the schedule."
+Nothing is sent and no runtime is acquired while preparing the schedule.
+
+An error or quit before the durable commit calls FAILURE once; a quit then
+propagates.  After the commit the run stays authorized: ACCEPTED is called
+once and the run is observed even if a later step exits non-locally.  A later
+error only reaches FAILURE as a report; a quit propagates."
   (when (or (pichat-job-executor-schedules-closed executor)
             (pichat-job-executor-schedule-error executor))
     (user-error "Scheduling is stopped; inspect storage and restart Emacs"))
   (unless (pichat-job--text-p prompt) (user-error "Enter a continuation prompt first"))
-  (let ((session (plist-get capture :session)))
+  (let ((session (plist-get capture :session)) (completing nil))
     (pichat-job-conversation-verify
      capture
      (lambda (type success failed)
        (let ((pichat-rpc-request-timeout pichat-jobs-control-timeout))
-         (pichat-rpc-send session type nil (lambda (response _session) (funcall success response))
-                          (lambda (_response _session) (funcall failed "Cannot verify conversation; prompt not sent")))))
+         (pichat-rpc-send
+          session type nil
+          (lambda (response _session)
+            ;; Verification checks run in this RPC callback, after the
+            ;; invoking command returned; retire them on error or quit.
+            (condition-case err (funcall success response)
+              ((error quit)
+               (unless completing
+                 (funcall failed "Cannot verify conversation; prompt not sent"))
+               (when (eq (car err) 'quit) (signal (car err) (cdr err))))))
+          (lambda (_response _session) (funcall failed "Cannot verify conversation; prompt not sent")))))
      (lambda ()
-       (condition-case err
-           (progn
-             (unless (and (or (not current) (funcall current))
-                          (pichat-job-conversation-current-p capture))
-               (user-error "Composer or conversation changed; reopen scheduling"))
-             (let ((id (pichat-job-conversation-schedule
-                        (pichat-job-executor-store executor)
-                        (pichat-job-conversation-spec capture prompt)
-                        (plist-get capture :destination) due replace)))
+       (setq completing t)
+       (let (id)
+         (condition-case err
+             (progn
+               (unless (and (or (not current) (funcall current))
+                            (pichat-job-conversation-current-p capture))
+                 (user-error "Composer or conversation changed; reopen scheduling"))
+               (setq id (pichat-job-conversation-schedule
+                         (pichat-job-executor-store executor)
+                         (pichat-job-conversation-spec capture prompt)
+                         (plist-get capture :destination) due replace)))
+           ((error quit)
+            (funcall failure (pichat-chat-diagnostics-safe-summary-text (error-message-string err)))
+            (when (eq (car err) 'quit) (signal (car err) (cdr err)))))
+         (when id
+           (condition-case err
                ;; Durable authorization precedes observers/timers; any missed
                ;; mutation still invalidates the captured input generation.
-               (when replace (pichat-job-executor--conversation-forget executor (plist-get replace :id)))
-               (puthash id capture (pichat-job-executor-conversations executor))
-               (unwind-protect (funcall accepted id)
+               (unwind-protect
+                   (unwind-protect
+                       (progn
+                         (puthash id capture (pichat-job-executor-conversations executor))
+                         (when replace
+                           (pichat-job-executor--conversation-forget executor (plist-get replace :id))))
+                     (funcall accepted id))
                  (if (pichat-job-conversation-current-p capture)
                      (progn
                        (pichat-job-executor--conversation-observe executor id capture)
                        (pichat-job-executor-schedule-refresh executor)
                        (pichat-job-executor--changed executor))
                    (pichat-job-executor--conversation-invalidated
-                    executor id "Conversation changed after authorization; scheduled prompt not sent")))))
-         (error (funcall failure (pichat-chat-diagnostics-safe-summary-text (error-message-string err))))))
+                    executor id "Conversation changed after authorization; scheduled prompt not sent")))
+             (error (funcall failure (pichat-chat-diagnostics-safe-summary-text (error-message-string err))))))))
      failure)))
 
 (defun pichat-job-executor--conversation-start (executor run)

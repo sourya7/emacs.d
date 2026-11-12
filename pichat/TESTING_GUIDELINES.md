@@ -260,7 +260,11 @@ preservation, duplicate callbacks during a later picker in the same scope,
 replayed already-applied Tools returns (which must leave the installed draft,
 the later picker's token and the menu untouched, also after close, replacement,
 origin death, save or submission), owned discovery cleanup, reentrant final actions during capture/confirmation and
-post-commit dispatch failure without duplicate submission. Instruction drafts must retain plain text, not editor display
+post-commit dispatch failure without duplicate submission. Conversation-schedule
+cases inject `error` and `quit` into the delayed verification replies before and
+after the durable commit: before, only that Schedule action is released and the
+staged prompt/time remain; after, the run stays authorized and observed and the
+composer is not reopened. Instruction drafts must retain plain text, not editor display
 properties; the saved-editor scenario also collects garbage after editor cleanup.
 Admission cases exercise legacy resource metadata as inert historical data alongside
 new captures without it. A real offline-Pi scenario starts two jobs in the same

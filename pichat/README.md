@@ -1616,7 +1616,11 @@ follow-up message queued behind an active run; see `GLOSSARY.md`.
 - `s` **Schedule** explicitly authorizes the reviewed one-shot and opens its
   Jobs Run report. Scheduling sends no prompt and starts no runtime. `q` or
   Transient quit discards staging only. Ordinary New job still creates
-  independent work, even when invoked from this chat.
+  independent work, even when invoked from this chat. If the conversation
+  check fails or is interrupted (`C-g`) before the attempt is recorded, nothing
+  is scheduled and the composer keeps the prompt and time for another Schedule.
+  Once recorded, a later failure or interruption keeps the attempt; inspect it
+  in Jobs → Runs.
 
 The pending attempt appears in **Runs**, not as a reusable definition. Its
 report prominently shows the due time, destination and cancellation. While the

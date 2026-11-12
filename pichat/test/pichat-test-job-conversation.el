@@ -445,6 +445,152 @@
           (should (equal "Unsent work" (pichat-chat-draft-text (pichat-chat-draft-capture))))
           (should (equal [] (pichat-job-records store 'runs))))))))
 
+(defmacro pichat-test-with-conversation-composer (&rest body)
+  "Run BODY in the chat of a conversation fixture with delayed RPC replies.
+Requests are appended to REQUESTS as (TYPE SUCCESS FAILURE); COMMANDS logs
+types.  `transient-setup' records SCOPE, which `transient-scope' returns."
+  (declare (indent 0) (debug t))
+  `(pichat-test-with-conversation-job
+     (with-current-buffer buffer
+       (let ((pichat-jobs--executor executor)
+             (pichat-jobs-file (pichat-job-store-file store))
+             scope requests commands)
+         (cl-letf (((symbol-function 'transient-setup)
+                    (lambda (_prefix _layout _edit &rest args) (setq scope (plist-get args :scope))))
+                   ((symbol-function 'transient-scope) (lambda () scope))
+                   ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                   ((symbol-function 'pichat-rpc-send)
+                    (lambda (_session type _payload &optional success failure)
+                      (push type commands)
+                      (setq requests (append requests (list (list type success failure)))))))
+           ,@body)))))
+
+(defun pichat-test-job-conversation--answer (session request)
+  "Deliver a fresh fixture reply for delayed REQUEST of SESSION."
+  (should (member (car request) '("get_entries" "get_state")))
+  (funcall (nth 1 request) (pichat-test-job-conversation-reply session (car request)) session))
+
+(defun pichat-test-job-conversation--interrupt-once (symbol condition)
+  "Return a definition of SYMBOL that signals CONDITION on its first call only."
+  (let ((original (symbol-function symbol)) (fired nil))
+    (lambda (&rest args)
+      (if fired (apply original args)
+        (setq fired t)
+        (signal condition '("W34 injected interruption"))))))
+
+(defun pichat-test-job-conversation--signal-of (thunk)
+  "Call THUNK and return the condition it signalled, or nil."
+  (condition-case caught (progn (funcall thunk) nil) ((error quit) (car caught))))
+
+(ert-deftest pichat-job-conversation-interrupted-schedule-preparation-retires-only-its-action ()
+  (dolist (condition '(error quit))
+    (dolist (point '(entries state spec commit))
+      (ert-info ((format "%s during %s" condition point))
+        (pichat-test-with-conversation-composer
+          (pichat-job-schedule-continuation)
+          (let ((due (+ (float-time) 3600)) stale)
+            (setf (plist-get (plist-get scope :draft) :instructions) "Reviewed prompt"
+                  (plist-get scope :due) due)
+            (call-interactively #'pichat-job-composer-schedule)
+            (should (plist-get scope :pending))
+            (let ((observed
+                   (let ((target (pcase point
+                                   ('entries 'pichat-job-conversation--history-p)
+                                   ('state 'pichat-job-conversation-state-p)
+                                   ('spec 'pichat-job-conversation-spec)
+                                   ('commit 'pichat-job-conversation-schedule))))
+                    (cl-letf (((symbol-function target)
+                               (pichat-test-job-conversation--interrupt-once target condition)))
+                     (pichat-test-job-conversation--signal-of
+                      (lambda ()
+                        (while requests
+                          (let ((request (pop requests)))
+                            (push request stale)
+                            (pichat-test-job-conversation--answer session request)))))))))
+              ;; Quit keeps its condition; an error becomes the failure reason.
+              (should (eq observed (and (eq condition 'quit) 'quit))))
+            (should (equal (if (eq point 'entries) 1 2) (length stale)))
+            ;; Only this action is retired; its staged prompt and time remain.
+            (should-not (plist-get scope :pending))
+            (should (pichat-job--settings-current-p scope))
+            (should (equal due (plist-get scope :due)))
+            (should (equal "Reviewed prompt" (plist-get (plist-get scope :draft) :instructions)))
+            (should (equal [] (pichat-job-records store 'runs)))
+            (should (= 0 (hash-table-count (pichat-job-executor-conversations executor))))
+            ;; A later Schedule owns a new action that stale replies cannot clear.
+            (call-interactively #'pichat-job-composer-schedule)
+            (let ((token (plist-get scope :pending)))
+              (should token)
+              (dolist (request (reverse stale))
+                (pichat-test-job-conversation--answer session request))
+              (should (eq token (plist-get scope :pending)))
+              (should (equal [] (pichat-job-records store 'runs)))
+              (while requests (pichat-test-job-conversation--answer session (pop requests))))
+            (let ((run (pichat-job-record store 'runs (plist-get scope :submitted-run-id))))
+              (should (equal "scheduled" (plist-get run :state)))
+              (should (equal "Reviewed prompt" (pichat-job-prompt run)))
+              (should (= due (plist-get (plist-get run :trigger) :due))))
+            (should (plist-get scope :closed))
+            (should (= 1 (length (pichat-job-records store 'runs))))
+            (should-not (member "prompt" commands))))))))
+
+(ert-deftest pichat-job-conversation-accepted-schedule-interruption-keeps-authorization ()
+  (dolist (condition '(error quit))
+    (dolist (point '(forget close display))
+      (ert-info ((format "%s during %s" condition point))
+        (pichat-test-with-conversation-composer
+          (let (old)
+            (pichat-job-executor-conversation-schedule
+             executor (pichat-job-conversation-capture session) "Old prompt" (+ (float-time) 600) nil
+             (lambda (id) (setq old id)) (lambda (reason) (ert-fail reason)))
+            (while requests (pichat-test-job-conversation--answer session (pop requests)))
+            (should old)
+            (pichat-job-schedule-continuation)
+            (setf (plist-get scope :due) (+ (float-time) 3600))
+            (call-interactively #'pichat-job-composer-schedule)
+            (let ((observed
+                   (let ((target (pcase point
+                                   ('forget 'pichat-job-executor--conversation-forget)
+                                   ('close 'pichat-job--close-context)
+                                   ('display 'pichat-jobs--show-detail))))
+                    (cl-letf (((symbol-function target)
+                               (pichat-test-job-conversation--interrupt-once target condition)))
+                     (pichat-test-job-conversation--signal-of
+                      (lambda ()
+                        (while requests
+                          (pichat-test-job-conversation--answer session (pop requests)))))))))
+              (should (eq observed (and (eq condition 'quit) 'quit))))
+            ;; The confirmed replacement is durable, accepted once and owned.
+            (let* ((new (plist-get scope :submitted-run-id))
+                   (capture (and new (gethash new (pichat-job-executor-conversations executor)))))
+              (should new)
+              (should (= 2 (length (pichat-job-records store 'runs))))
+              (should (equal "cancelled" (plist-get (pichat-job-record store 'runs old) :result)))
+              (should (equal "scheduled" (plist-get (pichat-job-record store 'runs new) :state)))
+              (should (eq capture (plist-get scope :conversation)))
+              (should (plist-get capture :handlers))
+              (should (gethash new (pichat-job-executor-schedules executor)))
+              (should-not (gethash old (pichat-job-executor-schedules executor)))
+              ;; The composer is not reopened for a second authorization.
+              (should-error (call-interactively #'pichat-job-composer-schedule) :type 'user-error)
+              (should-not requests)
+              (should (= 2 (length (pichat-job-records store 'runs))))
+              (should-not (member "prompt" commands)))))))))
+
+(ert-deftest pichat-job-conversation-cancelled-schedule-preparation-reports-no-run ()
+  (pichat-test-with-conversation-composer
+    (pichat-job-schedule-continuation)
+    (setf (plist-get scope :due) (+ (float-time) 3600))
+    (call-interactively #'pichat-job-composer-schedule)
+    (call-interactively #'pichat-job-settings-cancel)
+    (let (messages)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format &rest args) (push (apply #'format-message format args) messages))))
+        (while requests (pichat-test-job-conversation--answer session (pop requests))))
+      (should-not (seq-some (lambda (text) (string-match-p "Scheduled" text)) messages)))
+    (should (equal [] (pichat-job-records store 'runs)))
+    (should-not (member "prompt" commands))))
+
 (ert-deftest pichat-job-conversation-dispatch-rechecks-fresh-state-without-worker-cleanup ()
   (dolist (change '(history busy unknown-queue))
     (pichat-test-with-conversation-job

@@ -584,7 +584,7 @@
   (cl-letf (((symbol-function 'transient-get-value)
              (lambda () '("--global" "--ephemeral" "--model" "--preset=review")))
             ((symbol-function 'transient-scope) (lambda (&rest _args) nil)))
-    (should (equal "Launch · independent · review · global · ephemeral · choose model"
+    (should (equal "Launch independent (review)"
                    (pichat--launch-action-description)))))
 
 (ert-deftest pichat-launch-selected-conversation-details-are-full-width ()
@@ -604,9 +604,9 @@
                (lambda (&rest _) (list nil nil "global"))))
       (should (equal "Selected saved conversation"
                      (pichat--launch-conversation-description)))
-      (should (equal (concat "Selected: what tools are available here · "
-                             "01a16663abc…\nSaved cwd: /home/mojo · "
-                             "owner: global\nAction")
+      (should (equal (concat "Selected: what tools are available here\n"
+                             "ID: 01a16663abc… · owner: global\n"
+                             "Saved cwd: /home/mojo\nAction")
                      (pichat--launch-action-heading)))
       (with-temp-buffer
         (transient--insert-groups)
@@ -626,7 +626,7 @@
                   'pichat-launch-execute)))
     (with-temp-buffer
       (transient--insert-groups)
-      (should (string-match-p "RET Launch ·" (buffer-string)))
+      (should (string-match-p "RET Launch preferred" (buffer-string)))
       (should-not (string-match-p "<return>" (buffer-string))))))
 
 (ert-deftest pichat-launch-transient-initializes-with-safe-empty-value ()
@@ -766,7 +766,7 @@
          (scope (list :origin (list :session session :session-id "session-123456")
                       :empty-unwritten t)))
     (cl-letf (((symbol-function 'transient-scope) (lambda (&rest _) scope)))
-      (should (equal "Reconfigure · Conversation (session-1…)"
+      (should (equal "Reconfigure · Conversation\nPi session: session-123…"
                      (pichat--reconfigure-menu-description))))))
 
 (ert-deftest pichat-reconfigure-transient-renders-blocked-restart ()
@@ -782,7 +782,7 @@
            (transient--layout (transient--init-suffixes 'pichat-reconfigure-menu))
            (transient--suffixes (transient--flatten-suffixes transient--layout)))
       (should (string-match-p "Blocked.*Pi is busy"
-                              (pichat--reconfigure-action-description)))
+                              (pichat--reconfigure-action-heading)))
       (with-temp-buffer
         (transient--insert-groups)
         (should (string-match-p "Blocked.*Pi is busy" (buffer-string)))))))
@@ -797,12 +797,12 @@
                (pichat-tool-selection-resolve
                 (pichat-presets-resolve 'manual) '("read")))
     (cl-letf (((symbol-function 'transient-scope) (lambda (&rest _) scope)))
-      (should (string-match-p "update tools"
+      (should (string-match-p "new tools"
                               (pichat--reconfigure-action-description)))
       (plist-put (plist-get definition :preset-spec)
                  :append-system-prompt "A genuinely different prompt")
       (plist-put scope :draft definition)
-      (should (string-match-p "definition changed"
+      (should (string-match-p "new manual definition"
                               (pichat--reconfigure-action-description))))))
 
 (ert-deftest pichat-reconfigure-transient-labels-new-empty-pi-session ()
@@ -811,8 +811,8 @@
          (draft (pichat-reconfigure-select-preset base 'coding))
          (scope (list :base base :draft draft :empty-unwritten t)))
     (cl-letf (((symbol-function 'transient-scope) (lambda (&rest _) scope)))
-      (should (string-match-p "new empty Pi session; keep chat and draft"
-                              (pichat--reconfigure-action-description))))))
+      (should (string-match-p "New empty Pi session; keep chat and draft"
+                              (pichat--reconfigure-action-heading))))))
 
 (ert-deftest pichat-reconfigure-empty-restart-confirms-concisely ()
   (pichat-test-with-unit-session (session proc)
@@ -867,7 +867,7 @@
                 (setf (pichat-session-restart-operation session)
                       (list :failure "Startup failed" :empty-unwritten empty))
                 (should (string-match-p
-                         (if empty "new Pi session" "snapshot retained$")
+                         (if empty "new Pi session" "Snapshot retained\\'")
                          (pichat--reconfigure-recovery-description)))
                 (pichat--reconfigure-recovery-run 'retry)
                 (should (equal "Retry this runtime restart? " prompt))
@@ -918,7 +918,7 @@
                   (lookup-key (transient--make-transient-map) (kbd key)))))
     (with-temp-buffer
       (transient--insert-groups)
-      (should (string-match-p "No configuration changes" (buffer-string)))))
+      (should (string-match-p "No changes · keep runtime" (buffer-string)))))
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)
           (started nil)

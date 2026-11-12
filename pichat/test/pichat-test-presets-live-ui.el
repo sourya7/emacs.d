@@ -146,7 +146,7 @@
                 ;; c: save under a new name.
                 (pichat-test-presets-live--expect "Preset name" "web-search")
                 (execute-kbd-macro (kbd "c"))
-                (pichat-test-presets-live--wait-menu 'pichat-launch "Launch · independent · web-search"
+                (pichat-test-presets-live--wait-menu 'pichat-launch "Launch independent (web-search)"
                                                      "web-search selected")
                 (should-not (plist-get (transient-scope) :tool-selection))
                 (should (string-match-p "Model pichat-fake/pichat-fake"

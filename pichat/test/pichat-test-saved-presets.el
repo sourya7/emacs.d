@@ -339,7 +339,9 @@ Reopening the launcher records its (ARGS . SCOPE) in `staged'."
                       nil (list :model "other/model"))))
         (should (equal "other/model" (plist-get profile :model)))
         (should (eq 'new (plist-get profile :reuse)))
-        (should (string-match-p "model other/model"
+        ;; The model shows on the m entry; the action says it is independent.
+        (should (equal "other/model" (pichat--launch-model-label profile)))
+        (should (string-match-p "\\`Launch independent "
                                 (pichat--launch-profile-description profile)))))))
 
 (ert-deftest pichat-saved-presets-selecting-a-preset-restores-its-model ()

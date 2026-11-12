@@ -157,7 +157,7 @@ times are rejected.  Returning a time stages it, never schedules work."
   (let ((rule (plist-get (transient-scope) :rule)))
     (pcase field
       ('kind (concat "Timing: " (if rule (pichat-job-schedule-ui-rule-label rule) "Remove schedule")))
-      ('start (concat (if (equal (plist-get rule :kind) "once") "When: " "First run: ")
+      ('start (concat (if (equal (plist-get rule :kind) "once") "When: " "Start: ")
                       (if rule (pichat-job-schedule-ui-time (plist-get rule :start)) "—")))
       ('interval (if (equal (plist-get rule :kind) "interval")
                      (concat "Interval: " (pichat-job-schedule-ui-rule-label rule))

@@ -41,6 +41,14 @@
   "Return checkbox LABEL for CHECKED."
   (format "[%s] %s" (if checked "✓" " ") label))
 
+(defun pichat-tool-picker--with-description (key head description)
+  "Return HEAD, then as much of DESCRIPTION as fits after KEY in the frame.
+HEAD carries the checkbox, name and state; the description is only a
+reminder, so it is dropped when too little room is left for it."
+  (let ((room (- (frame-width) 1 (+ 2 (string-width key)) (string-width head) 3)))
+    (if (< room 8) head
+      (concat head " — " (truncate-string-to-width description room nil nil "…")))))
+
 (defun pichat-tool-picker--selection ()
   "Return the current Tools draft."
   (plist-get pichat-tool-picker--state :draft))
@@ -112,10 +120,13 @@ servers may consequently appear here rather than in the shell MCP listing."
                           (pichat-tool-picker--toggle :extensions name)
                         (user-error "Tool %s cannot be enabled" name)))
                     :description
-                    (lambda () (format "%s — %s%s"
-                                       (pichat-tool-picker--description
-                                        (member name (plist-get (pichat-tool-picker--selection) :extensions)) name)
-                                       description (if eligible "" " (unavailable)")))
+                    (lambda ()
+                      (pichat-tool-picker--with-description
+                       (concat "e" key)
+                       (concat (pichat-tool-picker--description
+                                (member name (plist-get (pichat-tool-picker--selection) :extensions)) name)
+                               (if eligible "" " (unavailable)"))
+                       description))
                     :transient t)))))
 
 (defun pichat-tool-picker--current-server ()
@@ -237,11 +248,13 @@ servers may consequently appear here rather than in the shell MCP listing."
                       (lambda () (interactive) (pichat-tool-picker--toggle :emacs name))
                       :description
                       (lambda ()
-                        (format "%s — %s%s"
-                                (pichat-tool-picker--description
-                                 (member name (plist-get (pichat-tool-picker--selection) :emacs))
-                                 name)
-                                description (if mutating " (asks approval)" "")))
+                        (pichat-tool-picker--with-description
+                         key
+                         (concat (pichat-tool-picker--description
+                                  (member name (plist-get (pichat-tool-picker--selection) :emacs))
+                                  name)
+                                 (if mutating " (approval)" ""))
+                         description))
                       :transient t))))))
 
 (defun pichat-tool-picker--emacs-group-set (selected)
@@ -273,18 +286,20 @@ over exact names, not a grant to tools registered later."
      (cond
       ((not (pichat-rpc-bridge-p transport))
        (propertize (if (and transport (eq (pichat-transport-kind transport) 'ssh))
-                       " — not available over SSH"
-                     " — inactive: no PiChat bridge")
+                       " (not over SSH)"
+                     " (no PiChat bridge)")
                    'face 'warning))
       (missing
-       (propertize (format " — not loaded, will be skipped: %s" (string-join missing ", "))
-                   'face 'warning))))))
+       (concat "\n"
+               (propertize (pichat-transient-fill
+                            (format "Not loaded, skipped: %s" (string-join missing ", ")))
+                           'face 'warning)))))))
 
 (defun pichat-tool-picker--group-description ()
   "Describe the open Emacs tool group."
   (let* ((group (plist-get pichat-tool-picker--state :emacs-group))
          (tools (pichat-tool-picker--emacs-group-tools group)))
-    (format "%s: %d/%d selected · selection exposes tools; it does not approve them"
+    (format "%s: %d/%d selected\nSelecting does not approve calls"
             group (pichat-tool-picker--emacs-count tools) (length tools))))
 
 (defun pichat-tool-picker--all (&optional only-server)
@@ -467,8 +482,8 @@ Emacs-defined tools remain explicit per-group or per-tool choices."
   [:description pichat-tool-picker--emacs-heading :class transient-column
    :setup-children pichat-tool-picker--emacs-group-entries]
   [["Selection"
-    ("a" "Select all eligible tools" pichat-tool-picker-all)
-    ("n" "Select none" pichat-tool-picker-none)
+    ("a" "All eligible" pichat-tool-picker-all)
+    ("n" "None" pichat-tool-picker-none)
     ("d" "Reset to preset" pichat-tool-picker-reset)
     ("r" "Refresh discovery" pichat-tool-picker-refresh)
     ("?" pichat-tool-picker-status :description pichat-tool-picker--status-description)
@@ -480,16 +495,16 @@ Emacs-defined tools remain explicit per-group or per-tool choices."
   "Select Emacs-defined tools in one group."
   [:description pichat-tool-picker--group-description
    :class transient-column :setup-children pichat-tool-picker--emacs-tool-entries]
-  [["Selection" ("a" "Select all in group" pichat-tool-picker-emacs-group-all)
-    ("n" "Select none in group" pichat-tool-picker-emacs-group-none)
+  [["Selection" ("a" "All in group" pichat-tool-picker-emacs-group-all)
+    ("n" "None in group" pichat-tool-picker-emacs-group-none)
     ("[" "Previous page" pichat-tool-picker-prev) ("]" "Next page" pichat-tool-picker-next)]
    ["Action" ("RET" "Done" pichat-tool-picker-back) ("q" "Back" pichat-tool-picker-back)]]
   (interactive) (transient-setup 'pichat-tool-picker-emacs-group))
 (transient-define-prefix pichat-tool-picker-server ()
   "Select MCP server tools."
   ["Server tools" :class transient-column :setup-children pichat-tool-picker--server-tools]
-  [["Selection" ("a" "Select all" pichat-tool-picker-server-all)
-    ("n" "Select none" pichat-tool-picker-server-none)
+  [["Selection" ("a" "All eligible" pichat-tool-picker-server-all)
+    ("n" "None" pichat-tool-picker-server-none)
     ("[" "Previous page" pichat-tool-picker-prev) ("]" "Next page" pichat-tool-picker-next)]
    ["Action" ("RET" "Done" pichat-tool-picker-back) ("q" "Back" pichat-tool-picker-back)]]
   (interactive) (transient-setup 'pichat-tool-picker-server))

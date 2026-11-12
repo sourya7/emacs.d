@@ -54,7 +54,7 @@
                           (null (plist-get (transient-scope) :blockers))))
           15 "Tools applied to reconfiguration draft")
          (should-not (pichat--reconfigure-action-inapt-p))
-         (should (string-match-p "Restart runtime" (pichat--reconfigure-action-description)))
+         (should (string-match-p "\\`Restart · " (pichat--reconfigure-action-description)))
          (pichat-test-real-ssh--write-script
           fixture '(:turns [(:text "UI-selected tools work"
                                   :expectContextIncludes "persisted SSH answer"

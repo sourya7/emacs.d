@@ -256,7 +256,7 @@
                (transient--suffixes (transient--flatten-suffixes transient--layout)))
           (with-temp-buffer
             (transient--insert-groups)
-            (should (string-match-p "\\[ \\] pichat_test_set — Set (asks approval)" (buffer-string)))
+            (should (string-match-p "\\[ \\] pichat_test_set (approval) — Set" (buffer-string)))
             (should (string-match-p "does not approve" (buffer-string)))))
         (pichat-tool-picker-emacs-group-all)
         (should (equal '("pichat_test_buffer" "pichat_test_list" "pichat_test_set")
@@ -300,10 +300,10 @@
           (pichat-tool-picker-refresh))
         ;; The section says what will be skipped; Apply still succeeds.
         (let ((pichat-bridge-extension-file "/bridge.ts"))
-          (should (string-match-p "will be skipped: pichat_test_list"
+          (should (string-match-p "Not loaded, skipped: pichat_test_list"
                                   (pichat-tool-picker--emacs-heading))))
         (let ((pichat-rpc-bundled-bridge "/missing/pichat-bridge.ts"))
-          (should (string-match-p "inactive: no PiChat bridge"
+          (should (string-match-p "(no PiChat bridge)"
                                   (pichat-tool-picker--emacs-heading))))
         (pichat-tool-picker-apply)
         (should (equal '("pichat_test_list") (plist-get result :emacs)))))))

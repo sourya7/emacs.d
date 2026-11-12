@@ -557,7 +557,7 @@ display behavior.
 | `s` | Conversation | Default, new independent conversation, existing chat route, or select a saved session |
 | `r` | Reconfigure this runtime | From its owning chat, enter a separate captured-runtime menu; never implied by launching |
 | `c` | Save preset as… | Save the selected preset, Tools and model under a name; see [Saving presets from the launcher](#saving-presets-from-the-launcher) |
-| `RET` | Open / launch | Execute the normalized profile summarized in the action label |
+| `RET` | Open / launch | Execute the normalized profile; the action label names the runtime it uses (preferred or independent) and the preset |
 
 The switches compose. For example, `g e`, then `m` **Choose when launching**,
 creates an independent global, ephemeral runtime and asks for its model at `RET`. `n` alone creates an independent
@@ -584,7 +584,7 @@ switch, or jump to a runtime; the built-in file picker is the fallback. `RET`
 starts the selected preset/Tools in a new independent runtime, then loads the
 saved Pi session and waits for authoritative transcript synchronization. The
 menu keeps the choice short and shows the saved title, ID, cwd and resolved
-owner scope in full-width details above the action; loading it does not move
+owner scope on their own lines above the action; loading it does not move
 the process's working directory to that cwd.
 Selected saved sessions require persistent storage and the same target as the
 selected file. Changed target/path context, missing files, and PiChat runtimes
@@ -1522,7 +1522,7 @@ The model is part of the job, not the preset.
 ### Scheduled jobs
 
 Use **Actions → Set schedule…** (`a`, Evil `g a`) in a saved job's details. The timing
-Transient stages **Timing** (`k`, Once/Every), **When/First run** (`s`) and an
+Transient stages **Timing** (`k`, Once/Every), **When/Start** (`s`) and an
 elapsed **Interval** (`i`, whole minutes/hours/days). Date/time selection uses
 Org's calendar reader: select a date in the calendar, enter just `15:30`, or use
 Org shorthand such as `+1d 09:00` for tomorrow morning. The existing selection is
@@ -2562,8 +2562,8 @@ no Emacs-defined tools.
 
 Earlier PiChat versions offered every registered tool to every bridge-enabled
 runtime; now add `:emacs-tools` to your preset or select them in `x Tools`.
-Selecting a tool does not approve it: mutating tools keep their own approval
-policy (see [Permissions](#permissions)).
+Selecting a tool does not approve it: mutating tools, marked **(approval)** in
+their group, keep their own approval policy (see [Permissions](#permissions)).
 
 ### Saved-job tools
 

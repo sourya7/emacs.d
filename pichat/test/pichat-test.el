@@ -29,6 +29,7 @@
 (require 'pichat-test-tool-selection)
 (require 'pichat-test-emacs-tool-selection)
 (require 'pichat-test-transient-layout)
+(require 'pichat-test-transient-width)
 (require 'pichat-test-tool-discovery)
 (require 'pichat-test-extension-tools)
 (require 'pichat-test-chat-core)

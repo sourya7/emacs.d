@@ -69,7 +69,7 @@ Any menu left open is closed first: its exit hook clears the picker state."
       (setf (plist-get pichat-tool-picker--state :emacs-group) "Jobs")
       (transient-setup 'pichat-tool-picker-emacs-group)
       (should (eq 'pichat-tool-picker-emacs-group (oref transient--prefix command)))
-      (should (string-match-p "Select all in group" (pichat-test-transient--text)))
+      (should (string-match-p "All in group" (pichat-test-transient--text)))
       (should-not (pichat-test-transient--same-line-p "Selection" "Action")))))
 
 (ert-deftest pichat-transient-wide-frame-keeps-pichat-menu-columns ()

@@ -40,5 +40,27 @@ decision; any exit kills the buffer, so later menus decide afresh."
 
 (add-hook 'transient-setup-buffer-hook #'pichat-transient--setup-buffer)
 
+(defun pichat-transient-fill (text)
+  "Fill each line of TEXT to fit a menu line in the selected frame.
+For headings that carry a sentence, such as a blocking reason.  The
+wording is the same at every width; only where lines break differs.
+A terminal keeps the last column for the continuation glyph, so lines
+end one column before the frame edge."
+  (mapconcat (lambda (line)
+               (with-temp-buffer
+                 (insert line)
+                 (let ((fill-column (max 20 (1- (frame-width)))))
+                   (fill-region (point-min) (point-max)))
+                 (buffer-string)))
+             (split-string text "\n")
+             "\n"))
+
+(defun pichat-transient-truncate-left (text width)
+  "Return TEXT shortened to WIDTH columns by dropping its start.
+For paths, whose end says the most."
+  (let ((total (string-width text)))
+    (if (<= total width) text
+      (concat "…" (truncate-string-to-width text total (- total (1- width)))))))
+
 (provide 'pichat-transient)
 ;;; pichat-transient.el ends here

@@ -7,6 +7,7 @@
 ;;; Code:
 (require 'pichat-job-executor)
 (require 'transient)
+(require 'pichat-transient)
 (require 'org)
 (require 'subr-x)
 (defvar org-time-was-given)

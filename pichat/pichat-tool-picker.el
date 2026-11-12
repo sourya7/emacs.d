@@ -5,6 +5,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'transient)
+(require 'pichat-transient)
 (require 'pichat-tool-selection)
 (require 'pichat-mcp-discovery)
 (require 'pichat-tool-discovery)

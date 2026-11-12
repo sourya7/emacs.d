@@ -10,6 +10,7 @@
 (require 'subr-x)
 (require 'project)
 (require 'transient)
+(require 'pichat-transient)
 (require 'pichat-transport)
 (require 'pichat-pi-environment)
 (require 'pichat-session)

@@ -56,4 +56,11 @@ want to see it work with the plans command and its json output rather than havin
 - Completion: Previously marked DONE; normalized to the intake-supported terminal state. Implementation remains complete.
 - Review: The =idea-to-plan= skill is installed globally from the shared skills repository; no project-local copy remains.
 ** pichat archive and search should skip job runs
-** transient menu for pichat should be accessible in mobile devices. currently i can scroll sideways easily
+** PLANNED transient menu for pichat should be accessible in mobile devices. currently i can scroll sideways easily
+:PROPERTIES:
+:ID: 9c1bfb9e-9b29-4beb-ab2b-924697bb318d
+:IDEA_PROJECT: /home/dev/.emacs.d
+:IDEA_PLAN_ID: pichat-narrow-transient-menus
+:END:
+- Planning [2026-11-12T05:23:06+00:00]: Provisional draft created; research, draft and validate it before publication. /home/dev/Dev/plans/projects/emacs-d/plans/pichat-narrow-transient-menus/plan.org
+- Planning [2026-11-12T05:23:59+00:00]: Validated draft handoff: /home/dev/Dev/plans/projects/emacs-d/plans/pichat-narrow-transient-menus/plan.org; implementation requires separate approval.

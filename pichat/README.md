@@ -511,6 +511,15 @@ stored provenance is not authorization to reconnect.
 PiChat requires Transient for its advanced launcher. The package requires it
 explicitly and does not rely on configuration load order.
 
+PiChat's Transient menus stack their groups in one column when a menu opens
+in a frame narrower than `pichat-transient-single-column-width` (default 80
+columns; 0 never stacks), for example terminal Emacs on a phone. In PiChat
+menus, `<down>`/`<up>` stop at the last/first entry instead of wrapping to
+the other end, so a swipe past the bottom of a tall menu (sent as `<down>`
+by many phone terminals) keeps the view at the bottom, and Transient's
+echo-area summary of the entry reached is not shown. Other packages' menus
+are unchanged.
+
 Set `pichat-pi-extra-env` to an alist of environment variables that every
 Pi process started by PiChat should receive. Configured values override the
 environment inherited from Emacs without changing Emacs's global environment:

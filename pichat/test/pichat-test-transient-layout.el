@@ -106,5 +106,81 @@ Any menu left open is closed first: its exit hook clears the picker state."
       (should (pichat-test-transient--same-line-p "Left" "Right"))))
   (should-not transient-force-single-column))
 
+(defun pichat-test-transient--move (command start)
+  "Put point at START in the open menu, run COMMAND once, return point.
+START is `last' (the last entry) or `first' (the first entry)."
+  (with-selected-window transient--window
+    (goto-char (point-min))
+    (if (eq start 'last)
+        (progn (goto-char (point-max)) (backward-button 1))
+      (forward-button 1))
+    (funcall command 1)
+    (point)))
+
+(defun pichat-test-transient--entry-bounds ()
+  "Return (FIRST LAST POINT-MIN POINT-MAX) positions in the open menu."
+  (with-selected-window transient--window
+    (save-excursion
+      (list (progn (goto-char (point-min)) (forward-button 1) (point))
+            (progn (goto-char (point-max)) (backward-button 1) (point))
+            (point-min) (point-max)))))
+
+(ert-deftest pichat-transient-entry-navigation-stops-at-menu-ends ()
+  ;; A swipe in a phone terminal sends <down>/<up>; wrapping to the other
+  ;; end looked like the view resetting to the top.  At any width.
+  (pichat-test-with-tool-picker-state
+    (dolist (width '(42 120))
+      (pichat-test-with-frame-width width
+        (transient-setup 'pichat-tool-picker)
+        (pcase-let ((`(,first ,last ,min ,max) (pichat-test-transient--entry-bounds)))
+          (should (< first last))
+          (should (= max (pichat-test-transient--move
+                          #'transient-forward-button 'last)))
+          (should (= min (pichat-test-transient--move
+                          #'transient-backward-button 'first)))
+          ;; Ordinary moves inside the menu still go to the next entry.
+          (should (< first (pichat-test-transient--move
+                            #'transient-forward-button 'first)))
+          (should (> last (pichat-test-transient--move
+                           #'transient-backward-button 'last))))
+        ;; In-place sub-pickers share the buffer and the behavior.
+        (setf (plist-get pichat-tool-picker--state :emacs-group) "Jobs")
+        (transient-setup 'pichat-tool-picker-emacs-group)
+        (should (= (nth 3 (pichat-test-transient--entry-bounds))
+                   (pichat-test-transient--move
+                    #'transient-forward-button 'last)))))))
+
+(defun pichat-test-transient--echo-count (command)
+  "Move with COMMAND from the first entry; return the number of echoes.
+Navigation echo is forced on, as with `force-verbose'."
+  (let ((transient-enable-menu-navigation 'force-verbose)
+        (count 0))
+    (cl-letf (((symbol-function 'transient--button-move-echo)
+               (lambda () (setq count (1+ count)))))
+      (pichat-test-transient--move command 'first))
+    count))
+
+(ert-deftest pichat-transient-entry-navigation-echoes-only-outside-pichat ()
+  (pichat-test-with-tool-picker-state
+    (pichat-test-with-frame-width 42
+      (transient-setup 'pichat-tool-picker)
+      (should (= 0 (pichat-test-transient--echo-count #'transient-forward-button)))
+      (should (= 0 (pichat-test-transient--echo-count #'transient-backward-button)))
+      (pichat-test-transient--exit)
+      (transient-setup 'pichat-test-foreign-menu)
+      (should (= 1 (pichat-test-transient--echo-count #'transient-forward-button))))))
+
+(ert-deftest pichat-transient-other-menus-keep-wrapping-navigation ()
+  (pichat-test-with-tool-picker-state
+    (pichat-test-with-frame-width 42
+      (transient-setup 'pichat-tool-picker)
+      (pichat-test-transient--exit)
+      (transient-setup 'pichat-test-foreign-menu)
+      (pcase-let ((`(,first ,last . ,_) (pichat-test-transient--entry-bounds)))
+        (should (= first (pichat-test-transient--move
+                          #'transient-forward-button 'last)))
+        (should (= last (pichat-test-transient--move
+                         #'transient-backward-button 'first)))))))
+
 (provide 'pichat-test-transient-layout)
 ;;; pichat-test-transient-layout.el ends here

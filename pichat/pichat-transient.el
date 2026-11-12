@@ -7,6 +7,12 @@
 ;; screen, so PiChat menus switch to one column there.  Other packages'
 ;; menus are left alone: `transient-force-single-column' is set only
 ;; buffer-locally in the Transient buffer of a PiChat menu.
+;;
+;; A tall menu is moved through with <down> and <up> (a phone terminal
+;; sends those for a swipe).  Transient wraps from the last entry to the
+;; first, which looks like the view jumping back to the top; PiChat menus
+;; stop at either end instead.  They also skip Transient's echo-area
+;; summary of the entry reached, which the menu line already describes.
 
 ;;; Code:
 
@@ -28,17 +34,54 @@ packages' menus are not affected."
     pichat-tool-picker pichat-tool-picker-server pichat-tool-picker-emacs-group)
   "PiChat Transient prefixes that follow `pichat-transient-single-column-width'.")
 
+(defvar-local pichat-transient--no-wrap nil
+  "Non-nil in the Transient buffer of a PiChat menu.
+There, moving past the last or first entry stops instead of wrapping.")
+
 (defun pichat-transient--setup-buffer ()
-  "Use one column in this Transient buffer for a PiChat menu in a narrow frame.
-Runs from `transient-setup-buffer-hook' each time the Transient buffer is
-created.  PiChat sub-menus opened in place share the buffer and so the
-decision; any exit kills the buffer, so later menus decide afresh."
+  "Prepare this Transient buffer when it shows a PiChat menu.
+Stop entry navigation from wrapping, and use one column in a narrow
+frame.  Runs from `transient-setup-buffer-hook' each time the Transient
+buffer is created.  PiChat sub-menus opened in place share the buffer
+and so the decision; any exit kills the buffer, so later menus decide
+afresh."
   (when (and transient--prefix
-             (memq (oref transient--prefix command) pichat-transient-prefixes)
-             (< (frame-width) pichat-transient-single-column-width))
-    (setq-local transient-force-single-column t)))
+             (memq (oref transient--prefix command) pichat-transient-prefixes))
+    (setq-local pichat-transient--no-wrap t)
+    (when (< (frame-width) pichat-transient-single-column-width)
+      (setq-local transient-force-single-column t))))
 
 (add-hook 'transient-setup-buffer-hook #'pichat-transient--setup-buffer)
+
+(defun pichat-transient--move-without-wrap (fn n)
+  "Call FN with N, or move N entries without wrapping in a PiChat menu.
+FN is Transient's forward entry navigation with its count already
+signed: negative N moves backward.  In a PiChat menu, moving past the
+last entry stops at the end of the menu and moving before the first
+stops at its start, and no summary of the entry is echoed (Transient
+does that when `transient-enable-menu-navigation' is `verbose').  Other
+menus call FN unchanged."
+  (if (not (and (window-live-p transient--window)
+                (buffer-local-value 'pichat-transient--no-wrap
+                                    (window-buffer transient--window))))
+      (funcall fn n)
+    (with-selected-window transient--window
+      (condition-case nil
+          (forward-button n nil)
+        (error (goto-char (if (< n 0) (point-min) (point-max))))))))
+
+(defun pichat-transient--forward-without-wrap (fn n)
+  "Around advice for `transient-forward-button' (FN), moving N entries."
+  (pichat-transient--move-without-wrap fn n))
+
+(defun pichat-transient--backward-without-wrap (fn n)
+  "Around advice for `transient-backward-button' (FN), moving N entries."
+  (pichat-transient--move-without-wrap (lambda (m) (funcall fn (- m))) (- n)))
+
+(advice-add 'transient-forward-button :around
+            #'pichat-transient--forward-without-wrap)
+(advice-add 'transient-backward-button :around
+            #'pichat-transient--backward-without-wrap)
 
 (defun pichat-transient-fill (text)
   "Fill each line of TEXT to fit a menu line in the selected frame.

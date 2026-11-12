@@ -4116,6 +4116,138 @@
               (funcall (car callbacks) (if (eq picker 'model) '("fixture") :cancel)))
             (should-not (plist-get settings-scope :pending))))))))
 
+(defconst pichat-test-jobs--accepted-tools
+  '(:builtins ("read") :mcp (("docs" . "search"))
+    :extensions ("ext_alpha") :emacs ("emacs_alpha"))
+  "An accepted Tools selection varying every selection key.")
+
+(defconst pichat-test-jobs--stale-tools
+  '((other . (:builtins ("grep") :mcp nil :extensions ("ext_beta") :emacs nil))
+    (empty . (:builtins nil :mcp nil :extensions nil :emacs nil))
+    (baseline . nil)
+    (cancel . :cancel))
+  "Valid stale Tools returns: another selection, explicit empty, baseline, Cancel.")
+
+(defun pichat-test-jobs--captured-tools (scope)
+  "Return the Tools SCOPE's draft captures at the submission boundary."
+  (plist-get (plist-get (pichat-test-job-composer-spec scope) :configuration) :tools))
+
+(defmacro pichat-test-jobs--with-tools-pickers (callbacks shows &rest body)
+  "Run BODY collecting Tools picker CALLBACKS and counting menu SHOWS."
+  (declare (indent 2) (debug t))
+  (let ((show (make-symbol "show")))
+    `(let ((,show (symbol-function 'pichat-job--settings-show)))
+       (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                 ((symbol-function 'pichat-job--settings-show)
+                  (lambda (scope) (cl-incf ,shows) (funcall ,show scope)))
+                 ((symbol-function 'pichat-tool-picker-open)
+                  (lambda (_preset _selection _directory _transport _executable cb &rest _)
+                    (push cb ,callbacks))))
+         ,@body))))
+
+(ert-deftest pichat-jobs-composer-accepted-tools-return-cannot-change-installed-draft ()
+  "A replayed accepted Tools callback must not touch the draft it installed.
+The later picker, if any, keeps its token and its own Apply/Cancel decides."
+  (dolist (mode '(new saved))
+    (dolist (later '(none cancel apply))
+      (pcase-dolist (`(,label . ,stale) pichat-test-jobs--stale-tools)
+        (ert-info ((format "%s, later picker %s, stale %s" mode later label))
+          (pichat-test-with-job-views
+            (let ((spec (pichat-test-job-spec project-dir)) job (callbacks nil) (shows 0))
+              (if (eq mode 'new) (pichat-job--compose executor 'new spec)
+                (setq job (pichat-job-save store spec))
+                (pichat-jobs--show-detail executor 'jobs job)
+                (pichat-test-job-press "Edit…"))
+              (let ((scope settings-scope))
+                (pichat-test-jobs--with-tools-pickers callbacks shows
+                  (call-interactively #'pichat-job-settings-tools)
+                  (let ((accepted (car callbacks)))
+                    (funcall accepted (copy-tree pichat-test-jobs--accepted-tools))
+                    (should-not (plist-get scope :pending))
+                    (let ((installed (copy-tree (plist-get scope :draft) t))
+                          (captured (pichat-test-jobs--captured-tools scope))
+                          token)
+                      (unless (eq later 'none)
+                        (call-interactively #'pichat-job-settings-tools)
+                        (setq token (plist-get scope :pending)))
+                      (setq shows 0)
+                      ;; Duplicate delivery of the already accepted return.
+                      (funcall accepted (copy-tree stale))
+                      (should (= shows 0))
+                      (should (eq token (plist-get scope :pending)))
+                      (should (equal installed (plist-get scope :draft)))
+                      (should (eq scope settings-scope))
+                      (pcase later
+                        ('cancel (funcall (car callbacks) :cancel))
+                        ('apply (funcall (car callbacks) '(:builtins ("find") :mcp nil))))
+                      (should-not (plist-get scope :pending))
+                      ;; Replaying after the later picker settled is inert too.
+                      (let ((settled (copy-tree (plist-get scope :draft) t)))
+                        (setq shows 0)
+                        (funcall accepted (copy-tree stale))
+                        (should (= shows 0))
+                        (should (equal settled (plist-get scope :draft))))
+                      (if (eq later 'apply)
+                          (should (equal (plist-get (pichat-test-jobs--captured-tools scope)
+                                                    :builtins)
+                                         ["find"]))
+                        (should (equal installed (plist-get scope :draft)))
+                        (should (equal captured (pichat-test-jobs--captured-tools scope))))
+                      (when (eq mode 'saved)
+                        (call-interactively #'pichat-job-edit-save)
+                        (should (equal (plist-get (plist-get (plist-get (pichat-job-record store 'jobs job)
+                                                                        :spec)
+                                                             :configuration)
+                                                  :tools)
+                                       (if (eq later 'apply)
+                                           (pichat-job-launch--tools
+                                            (pichat-tool-selection-resolve
+                                             (pichat-presets-resolve 'review)
+                                             '(:builtins ("find") :mcp nil)))
+                                         captured)))))))
+                (should (equal (pichat-job-records store 'runs) []))))))))))
+
+(ert-deftest pichat-jobs-composer-accepted-tools-return-after-close-is-inert ()
+  "Closed, replaced, dead and submitted scopes ignore a replayed accepted return."
+  (dolist (close '(cancel replace kill submit))
+    (pcase-dolist (`(,label . ,stale) pichat-test-jobs--stale-tools)
+      (ert-info ((format "%s, stale %s" close label))
+        (pichat-test-with-job-views
+          (pop-to-buffer (generate-new-buffer "*PiChat Composer Origin*"))
+          (pichat-job--compose executor 'new (pichat-test-job-spec project-dir))
+          (let ((scope settings-scope) (callbacks nil) (shows 0))
+            (pichat-test-jobs--with-tools-pickers callbacks shows
+              (call-interactively #'pichat-job-settings-tools)
+              (let ((accepted (car callbacks)))
+                (funcall accepted (copy-tree pichat-test-jobs--accepted-tools))
+                (let ((installed (copy-tree (plist-get scope :draft) t))
+                      (captured (pichat-test-jobs--captured-tools scope)))
+                  (pcase close
+                    ('cancel (call-interactively #'pichat-job-settings-cancel))
+                    ('replace (pichat-job--compose executor 'new))
+                    ('kill (kill-buffer (current-buffer)))
+                    ('submit (cl-letf (((symbol-function 'pichat-job-executor-pump) #'ignore))
+                               (call-interactively #'pichat-job-composer-run))))
+                  (should (plist-get scope :closed))
+                  (let ((current settings-scope)
+                        (current-draft (copy-tree (plist-get settings-scope :draft) t))
+                        (runs (copy-tree (pichat-job-store-data store) t)))
+                    (setq shows 0)
+                    (funcall accepted (copy-tree stale))
+                    (should (= shows 0))
+                    (should (equal installed (plist-get scope :draft)))
+                    (should (eq current settings-scope))
+                    (should (equal current-draft (plist-get settings-scope :draft)))
+                    (should (equal runs (pichat-job-store-data store)))
+                    (when (eq close 'replace) (should-not (plist-get current :pending)))
+                    (if (eq close 'submit)
+                        (should (equal captured
+                                       (plist-get (plist-get (plist-get (aref (pichat-job-records store 'runs) 0)
+                                                                        :spec)
+                                                             :configuration)
+                                                  :tools)))
+                      (should (equal (pichat-job-records store 'runs) [])))))))))))))
+
 (ert-deftest pichat-jobs-composer-preparation-blocks-reentrant-final-actions ()
   (dolist (mode '(new edit))
     (pichat-test-with-job-views

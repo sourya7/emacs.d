@@ -1862,10 +1862,17 @@ its prefix while waiting for the model-list process."
   (add-hook 'kill-buffer-hook #'pichat-job--settings-origin-killed nil t)
   (pichat-job--settings-show scope))
 
+(defun pichat-job--settings-picker-owner-p (scope token)
+  "Whether TOKEN is current SCOPE's exact pending picker.
+A picker callback must check this before mutating anything it captured:
+after its first return the token is retired, and an applied private draft
+has become SCOPE's installed draft."
+  (and (eq (plist-get scope :pending) token)
+       (pichat-job--settings-current-p scope)))
+
 (defun pichat-job--settings-finish-picker (scope token draft)
   "Apply DRAFT only for SCOPE's exact pending TOKEN; nil retains prior choices."
-  (when (and (eq (plist-get scope :pending) token)
-             (pichat-job--settings-current-p scope))
+  (when (pichat-job--settings-picker-owner-p scope token)
     (setf (plist-get scope :pending) nil)
     (when draft (setf (plist-get scope :draft) draft))
     (pichat-job--settings-show scope)))
@@ -1877,8 +1884,7 @@ its prefix while waiting for the model-list process."
          (process
           (pichat--list-models-async
            nil (lambda (models)
-                 (when (and (eq (plist-get scope :pending) token)
-                            (pichat-job--settings-current-p scope))
+                 (when (pichat-job--settings-picker-owner-p scope token)
                    (condition-case err
                        (let ((model (pichat--read-model-table-choice "Job model: " models t)))
                          (setf (plist-get (plist-get draft :profile) :model) model)
@@ -1963,10 +1969,14 @@ its prefix while waiting for the model-list process."
                       (pichat-presets-resolve (plist-get profile :preset))
                       (plist-get profile :tools) directory transport pichat-pi-executable
                       (lambda (selection)
-                        (unless (eq selection :cancel)
-                          (setf (plist-get profile :tools) selection))
-                        (pichat-job--settings-finish-picker
-                         scope token (unless (eq selection :cancel) draft)))
+                        ;; Fence first: once applied, PROFILE is part of the
+                        ;; installed draft, so a duplicate or stale return
+                        ;; must not write to it.
+                        (when (pichat-job--settings-picker-owner-p scope token)
+                          (unless (eq selection :cancel)
+                            (setf (plist-get profile :tools) selection))
+                          (pichat-job--settings-finish-picker
+                           scope token (unless (eq selection :cancel) draft))))
                       (let ((model (plist-get profile :model))) (and (stringp model) model))
                       (plist-get scope :tool-discovery)))))
                 (_ (user-error "Unknown execution setting")))

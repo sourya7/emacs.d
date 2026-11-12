@@ -256,8 +256,10 @@ whole-menu Save/Cancel/quit. Discovery/model choices are fixture-only, not norma
 provider lookups. Batch cases cover no-op capture/schedule/history preservation,
 write/validation failure, stale/deleted/dead/retargeted origins and cross-buffer
 late callbacks. Shared-composer cases also exercise chat-origin draft/attachment
-preservation, duplicate callbacks during a later picker in the same scope, owned
-discovery cleanup, reentrant final actions during capture/confirmation and
+preservation, duplicate callbacks during a later picker in the same scope,
+replayed already-applied Tools returns (which must leave the installed draft,
+the later picker's token and the menu untouched, also after close, replacement,
+origin death, save or submission), owned discovery cleanup, reentrant final actions during capture/confirmation and
 post-commit dispatch failure without duplicate submission. Instruction drafts must retain plain text, not editor display
 properties; the saved-editor scenario also collects garbage after editor cleanup.
 Admission cases exercise legacy resource metadata as inert historical data alongside

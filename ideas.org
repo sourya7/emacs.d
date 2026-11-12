@@ -55,3 +55,5 @@ want to see it work with the plans command and its json output rather than havin
 ** PLANNED move the idea to plan outside of emacs.d since its global skill
 - Completion: Previously marked DONE; normalized to the intake-supported terminal state. Implementation remains complete.
 - Review: The =idea-to-plan= skill is installed globally from the shared skills repository; no project-local copy remains.
+** pichat archive and search should skip job runs
+** transient menu for pichat should be accessible in mobile devices. currently i can scroll sideways easily

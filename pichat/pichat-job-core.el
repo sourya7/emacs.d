@@ -207,9 +207,21 @@ A declared prompt requires nonblank INPUT; undeclared jobs reject it."
     (when-let* ((event (plist-get run key)))
       (unless (pichat-job-followup-event-p event)
         (pichat-job--fail "Invalid follow-up event"))))
-  (when (and (plist-get run :event)
-             (not (equal (plist-get (plist-get run :trigger) :kind) "lifecycle")))
-    (pichat-job--fail "Follow-up context requires lifecycle provenance"))
+  ;; A follow-up repeated or continued from Jobs keeps its envelope; it is
+  ;; still a follow-up, so it takes no input and dispatches nothing itself.
+  ;; `pichat-job--validate-links' checks the envelope matches its origin's.
+  (when-let* (((plist-get run :event))
+              (trigger (plist-get run :trigger))
+              ((not (equal (plist-get trigger :kind) "lifecycle"))))
+    (unless (and (equal (plist-get trigger :kind) "manual")
+                 (or (plist-get trigger :repeat-of) (plist-get trigger :continue-of))
+                 (not (plist-get trigger :requested-by))
+                 (not (plist-get run :input))
+                 (not (plist-get run :after-job))
+                 (not (plist-get run :stop-event))
+                 (not (plist-get run :dispatch))
+                 (not (plist-get (plist-get run :spec) :after-job-id)))
+      (pichat-job--fail "Follow-up context requires lifecycle provenance")))
   (when-let* ((dispatch (plist-get run :dispatch)))
     (unless (and (member (plist-get dispatch :state) '("queued" "not-dispatched" "interrupted"))
                  (if (equal (plist-get dispatch :state) "queued")
@@ -422,7 +434,15 @@ A declared prompt requires nonblank INPUT; undeclared jobs reject it."
           (unless (and origin
                        (equal (plist-get (plist-get origin :dispatch) :run-id)
                               (plist-get run :id)))
-            (pichat-job--fail "Unlinked or duplicate lifecycle run")))))))
+            (pichat-job--fail "Unlinked or duplicate lifecycle run"))))
+      (when-let* ((event (plist-get run :event))
+                  (trigger (plist-get run :trigger))
+                  ((not (equal (plist-get trigger :kind) "lifecycle"))))
+        (let ((previous (gethash (or (plist-get trigger :repeat-of)
+                                     (plist-get trigger :continue-of))
+                                 runs)))
+          (unless (and previous (equal event (plist-get previous :event)))
+            (pichat-job--fail "Repeated follow-up context differs from its earlier run")))))))
 
 (defun pichat-job--read-bytes (file)
   "Read bounded local FILE without decoding or evaluating it, or return nil."
@@ -803,12 +823,15 @@ Return :context and optional :warning requiring review before submission."
 
 (defun pichat-job-prompt (run)
   "Return the exact prompt for RUN without changing its original scope."
-  (let ((instructions (concat (plist-get (plist-get run :spec) :instructions)
-                              (pichat-job-input-section (plist-get run :input))))
-        (continuation (plist-get run :continuation)))
+  (let* ((own (concat (plist-get (plist-get run :spec) :instructions)
+                      (pichat-job-input-section (plist-get run :input))))
+         ;; A follow-up's envelope stays with its instructions, also when the
+         ;; follow-up is continued from Jobs.
+         (instructions (if-let* ((event (plist-get run :event)))
+                           (pichat-job-followup-prompt own event)
+                         own))
+         (continuation (plist-get run :continuation)))
     (cond
-     ((plist-get run :event)
-      (pichat-job-followup-prompt instructions (plist-get run :event)))
      ((not continuation) instructions)
      (t
       (concat
@@ -845,7 +868,8 @@ the caller, avoiding another evidence read after a user confirmation."
 OPTIONS accepts :spec, :job-id, :repeat-of, :continue-of, :guidance, :capture
 and :queue-limit, with the semantics of `pichat-job-enqueue', and :input, the
 run input text.  A job whose definition declares input requires it; Repeat and
-Continue work copy the earlier run's input unless :input is given.
+Continue work copy the earlier run's input unless :input is given.  Repeat and
+Continue work of a follow-up keep its envelope (:event) and take no input.
 Legacy manual submission delegates here; lifecycle dispatch uses the same data
 constructor inside its originating transition's atomic transaction."
   (when (or (plist-get options :destination) (plist-get options :scheduled))
@@ -870,6 +894,8 @@ constructor inside its originating transition's atomic transaction."
          (capture (plist-get options :capture))
          (event (plist-get options :event))
          (lifecycle (and event t))
+         ;; Envelope of a follow-up being repeated or continued.
+         (inherited nil)
          (input nil)
          (runs (plist-get data :runs))
          (limit (or (plist-get options :queue-limit) 20)))
@@ -895,7 +921,13 @@ constructor inside its originating transition's atomic transaction."
         (unless (equal (plist-get origin :state) "finished")
           (pichat-job--fail "Previous run must stop and uncertainty must be resolved first"))
         (setq job-id (plist-get origin :job-id)
-              spec (or spec original))
+              spec (or spec original)
+              inherited (plist-get origin :event))
+        (when inherited
+          (when (plist-get options :input)
+            (pichat-job--fail "A follow-up run takes no run input"))
+          (when (plist-get spec :after-job-id)
+            (pichat-job--fail "A follow-up run cannot start another after-run job")))
         (when continue-of
           (unless (pichat-job-continuable-p origin)
             (pichat-job--fail "Only interrupted or review-needed work can be continued"))
@@ -920,10 +952,11 @@ constructor inside its originating transition's atomic transaction."
       (pichat-job--fail "Unknown or mismatched execution destination"))
     (when (and (plist-get options :schedule-trigger) (plist-get spec :input))
       (pichat-job--fail "Jobs that take run input cannot be scheduled"))
-    ;; Follow-ups and scheduled runs take no input; manual runs must match the
-    ;; declaration.  Repeat and continuation reuse the earlier run's input.
+    ;; Follow-ups (also repeated ones) and scheduled runs take no input; manual
+    ;; runs must match the declaration.  Repeat and continuation reuse the
+    ;; earlier run's input.
     (setq input
-          (unless (or lifecycle (plist-get options :schedule-trigger))
+          (unless (or lifecycle inherited (plist-get options :schedule-trigger))
             (pichat-job-input-check
              spec (or (plist-get options :input)
                       (and (plist-get spec :input) (or repeat-of continue-of)
@@ -947,8 +980,8 @@ constructor inside its originating transition's atomic transaction."
                       :attempt nil :reason nil :summary nil :runtime-id nil :session-file nil)))
       (when (plist-get options :destination)
         (setf (plist-get run :destination) (pichat-job--copy (plist-get options :destination))))
-      (when lifecycle
-        (setf (plist-get run :event) (pichat-job--copy event)))
+      (when (or lifecycle inherited)
+        (setf (plist-get run :event) (pichat-job--copy (or event inherited))))
       (when input
         (setf (plist-get run :input) (copy-sequence input)))
       (when (and (not lifecycle) (plist-get spec :after-job-id))

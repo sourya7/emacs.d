@@ -1391,7 +1391,10 @@ SAVE creates a definition only.  Failures retain a recoverable detached draft."
                 (setq spec (pichat-job--submission-spec))))
             ;; Repeat and continuation reuse the earlier run's input.  Ask only
             ;; when there is none to reuse and the definition declares a prompt.
-            (unless save
+            ;; A repeated or continued follow-up keeps its envelope instead.
+            (unless (or save
+                        (and (or continuation (plist-get draft :repeat-of))
+                             (plist-get (plist-get scope :run) :event)))
               (setq input (or (and (or continuation (plist-get draft :repeat-of))
                                    (plist-get spec :input)
                                    (plist-get (plist-get scope :run) :input))
@@ -1484,6 +1487,12 @@ SAVE creates a definition only.  Failures retain a recoverable detached draft."
                                 (or (plist-get draft :repeat-of) (plist-get draft :continue-of))
                                 (plist-get (plist-get scope :run) :input))))
           (insert "Run input (reused from the earlier run):\n" input "\n\n"))
+        ;; A follow-up keeps the envelope of the run whose stop it handles.
+        (when-let* ((event (and (or (plist-get draft :repeat-of) (plist-get draft :continue-of))
+                                (plist-get (plist-get scope :run) :event))))
+          (insert (format "After run of (kept from the earlier run): %s · %s\n\n"
+                          (pichat-jobs--display (plist-get event :title))
+                          (plist-get event :run-id))))
         (when (plist-get draft :continue-of)
           (insert "Additional guidance:\n" (plist-get draft :guidance) "\n\n"))
         (when-let* ((run (and (plist-get draft :continue-of) (plist-get scope :run))))

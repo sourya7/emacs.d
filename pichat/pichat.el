@@ -1546,30 +1546,17 @@ to the unchanged launcher; a superseded listing is ignored."
      (nth 1 scope) transport)))
 
 (transient-define-suffix pichat-launch-model ()
-  "Stage this launch's model without changing Pi's global default.
-Selecting a preset restores its model policy; this overrides it for this
-launch only."
+  "Toggle this launch's model override without changing Pi's global default.
+Without an override, list models and stage the chosen one for this launch
+only.  With an override, clear it so the launch follows the preset's model
+policy (its model, or Pi's default) again."
   (interactive)
   (let* ((args (transient-args 'pichat-launch))
-         (context (transient-scope))
-         (profile (pichat--launch-profile-from-arguments args context))
-         (preset (plist-get profile :preset))
-         (preset-model (unless (eq preset 'default)
-                         (pichat-presets-model preset)))
-         (choices (append (when (stringp preset-model)
-                            (list (format "Preset model (%s)" preset-model)))
-                          '("Pi default model" "Select or enter model…"
-                            "Choose when launching")))
-         (choice (completing-read "Model: " choices nil t)))
-    (cond
-     ((string-prefix-p "Preset model" choice)
-      (pichat--launch-stage context args :model nil))
-     ((equal choice "Pi default model")
-      (pichat--launch-stage context args
-                            :model (and (stringp preset-model) 'default)))
-     ((equal choice "Choose when launching")
-      (pichat--launch-stage context args :model 'prompt))
-     (t (pichat--launch-select-model context args profile)))))
+         (context (transient-scope)))
+    (if (plist-get context :model)
+        (pichat--launch-stage context args :model nil)
+      (pichat--launch-select-model
+       context args (pichat--launch-profile-from-arguments args context)))))
 
 (defun pichat--launch-preset-definition (profile context name)
   "Return the definition to save as NAME from PROFILE and launcher CONTEXT.

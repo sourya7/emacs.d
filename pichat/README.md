@@ -560,7 +560,7 @@ display behavior.
 | `n` | Independent runtime | Start an additional runtime instead of reusing the preferred one |
 | `t` | Target | Use inferred, local, or a configured runtime target |
 | `e` | Ephemeral | Start Pi with `--no-session`; implies independent |
-| `m` | Model | Stage this launch's model: the preset's model, Pi's default, a listed or entered ID, or a choice when launching; a concrete or deferred choice implies independent |
+| `m` | Model | List models and stage a listed or entered ID for this launch (implies independent); with a model staged, `m` clears it back to the preset's model or Pi's default |
 | `p` | Preset | Choose a named tool/prompt preset; explicit selection implies independent and restores its model |
 | `x` | Tools | Choose that preset's built-ins, extension tools and direct MCP tools for a new independent runtime |
 | `s` | Conversation | Default, new independent conversation, existing chat route, or select a saved session |
@@ -568,8 +568,8 @@ display behavior.
 | `c` | Save preset as… | Save the selected preset, Tools and model under a name; see [Saving presets from the launcher](#saving-presets-from-the-launcher) |
 | `RET` | Open / launch | Execute the normalized profile; the action label names the runtime it uses (preferred or independent) and the preset |
 
-The switches compose. For example, `g e`, then `m` **Choose when launching**,
-creates an independent global, ephemeral runtime and asks for its model at `RET`. `n` alone creates an independent
+The switches compose. For example, `g e`, then `m` and a model, creates an
+independent global, ephemeral runtime with that model. `n` alone creates an independent
 persistent/default-model runtime in the current scope. `g` alone opens the
 preferred global runtime. With no switches, PiChat opens the preferred current
 runtime. The picker starts at `default (manual)`; this policy reuses the
@@ -744,7 +744,8 @@ and Tools applied in the launcher were already checked. Complete local
 which is the same as omitting it: Pi's normal model policy. Naming the preset
 in the launcher (or a programmatic profile with no `:model`) uses its model as a
 run-local model, verified at startup like `m`; an unavailable model fails
-startup instead of falling back. `m` overrides it for one launch. The launcher's
+startup instead of falling back. `m` overrides it for one launch; pressing `m`
+again clears the override and restores the preset's model. The launcher's
 `default` preset choice keeps Pi's default model so that it can reuse the
 preferred runtime, even when `pichat-default-preset` declares a model.
 Reconfiguring a runtime keeps its active model; selecting a preset there does
@@ -764,9 +765,8 @@ The launcher returns with the new name selected and the same effective tools,
 prompts and model; nothing is launched. A saved preset records the effective
 built-in, extension, Emacs-defined and MCP tools, the source preset's own prompt
 sources (not `pichat-append-system-prompt`, which still applies to every
-preset), and the model: an exact ID, or `default` for Pi's default policy. A
-**Choose when launching** model cannot be saved; pick a concrete model or the
-default first. Target, scope, persistence, conversation and runtime state are
+preset), and the model: an exact ID, or `default` for Pi's default policy.
+Target, scope, persistence, conversation and runtime state are
 not saved. Saving does not start, stop or reconfigure a runtime, or change Pi's
 global model or `pichat-default-preset`. Tools Apply/Cancel stay run-local; only
 `c` saves. Save several names to keep several presets; all appear under `p`.
@@ -877,10 +877,11 @@ in its complete command instead.
 An independent runtime is a separate Pi RPC process retained in the manager but
 not marked `★` as the scope's preferred runtime. “Independent” does not mean
 Pi's `new_session` operation inside an existing runtime. For a run-local model,
-`m` either lists and prompts for models immediately (**Select or enter
-model…**, staging the choice in the launcher) or defers that prompt until `RET`
-(**Choose when launching**), before creating the target runtime. PiChat then
-passes the exact selection through that process's startup `--model`. A preset
+`m` lists models for the launch destination and stages the choice in the
+launcher; when a model is already staged, `m` instead clears it, so the launch
+follows the preset's model or Pi's default. There is no separate choice for Pi's
+default over a preset's model; select the `default` preset or a preset without
+a model. PiChat then passes the exact selection through that process's startup `--model`. A preset
 model (see [Preset MCP tools and models](#preset-mcp-tools-and-models)) is used
 the same way. Model listings superseded by another `m` or launcher are ignored.
 The model prompt also accepts an unlisted `provider/model-id` when that provider appears

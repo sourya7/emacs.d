@@ -138,7 +138,6 @@
                   (should (equal before (pichat-test-presets-live--file custom-file))))
                 ;; m: list real (offline) models and stage a concrete one.
                 (pichat-test-presets-live--expect
-                 "\\`Model: " "Select or enter model…"
                  "Model for this launch" "pichat-fake/pichat-fake")
                 (execute-kbd-macro (kbd "m"))
                 (pichat-test-presets-live--wait-menu
@@ -162,10 +161,19 @@
                   (execute-kbd-macro (kbd "c"))
                   (pichat-test-presets-live--wait-menu 'pichat-launch "web-search" "refusal returns")
                   (should (equal saved (pichat-test-presets-live--file custom-file))))
-                ;; A second name with Pi's default model policy.
-                (pichat-test-presets-live--expect "\\`Model: " "Pi default model")
+                ;; A second name with Pi's default model policy: clear the
+                ;; preset so no model is staged or inherited.
+                (execute-kbd-macro (kbd "p"))
+                (pichat-test-presets-live--wait-menu 'pichat-launch "Model Pi default" "web-search cleared")
+                ;; m stages a listed model; m again resets to the default.
+                (pichat-test-presets-live--expect
+                 "Model for this launch" "pichat-fake/pichat-fake")
                 (execute-kbd-macro (kbd "m"))
-                (pichat-test-presets-live--wait-menu 'pichat-launch "Model Pi default" "default model staged")
+                (pichat-test-presets-live--wait-menu
+                 'pichat-launch "Model pichat-fake/pichat-fake" "override staged")
+                (execute-kbd-macro (kbd "m"))
+                (pichat-test-presets-live--wait-menu 'pichat-launch "Model Pi default" "override reset")
+                (should-not (plist-get (transient-scope) :model))
                 (pichat-test-presets-live--expect "Preset name" "review-fast")
                 (execute-kbd-macro (kbd "c"))
                 (pichat-test-presets-live--wait-menu 'pichat-launch "review-fast" "review-fast selected")
@@ -173,19 +181,11 @@
                 ;; Both appear in p; selecting web-search restores its model.
                 ;; A set Transient option clears on its first key press.
                 (execute-kbd-macro (kbd "p"))
-                (pichat-test-presets-live--wait-menu 'pichat-launch "default (manual)" "preset cleared")
+                (pichat-test-presets-live--wait-menu 'pichat-launch "default: manual" "preset cleared")
                 (pichat-test-presets-live--expect "Preset" "web-search")
                 (execute-kbd-macro (kbd "p"))
                 (pichat-test-presets-live--wait-menu
                  'pichat-launch "Model pichat-fake/pichat-fake" "preset model restored")
-                ;; A model chosen at launch cannot be saved; no name is asked.
-                (pichat-test-presets-live--expect "\\`Model: " "Choose when launching")
-                (execute-kbd-macro (kbd "m"))
-                (pichat-test-presets-live--wait-menu 'pichat-launch "choose when launching" "deferred model")
-                (let ((before (pichat-test-presets-live--file custom-file)))
-                  (execute-kbd-macro (kbd "c"))
-                  (pichat-test-presets-live--wait-menu 'pichat-launch "Save preset as" "refused save")
-                  (should (equal before (pichat-test-presets-live--file custom-file))))
                 (should-not pichat-test-presets-live--answers)
                 (should (equal '(web-search review-fast) (mapcar #'car pichat-saved-presets)))
                 (should-not (pichat-session-list))

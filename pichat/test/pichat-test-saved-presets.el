@@ -322,19 +322,30 @@ Reopening the launcher records its (ARGS . SCOPE) in `staged'."
                      (plist-get (pichat--launch-profile-from-arguments
                                  '("--preset=pinned") context)
                                 :model)))
-      (dolist (case '(("Pi default model" default)
-                      ("Choose when launching" prompt)
-                      ("Preset model (provider/model)" nil)))
-        (pichat-test-with-launcher context '("--preset=pinned")
-          (cl-letf (((symbol-function 'completing-read)
-                     (lambda (_prompt choices &rest _)
-                       (should (member "Preset model (provider/model)" choices))
-                       (car case))))
+      ;; Without an override, m lists models directly and stages the choice.
+      (pichat-test-with-launcher context '("--preset=pinned")
+        (cl-letf (((symbol-function 'pichat--launch-select-model)
+                   (lambda (ctx args _profile)
+                     (pichat--launch-stage ctx args :model "other/model"))))
+          (pichat-launch-model))
+        (should (equal '("--preset=pinned") (caar staged)))
+        (should (equal "other/model" (plist-get (cdar staged) :model)))
+        ;; The suffix never mutates the draft it was invoked from.
+        (should-not (plist-get context :model)))
+      ;; With an override, m clears it without listing models.
+      (let ((overridden (list :directory "/tmp/" :model "other/model")))
+        (pichat-test-with-launcher overridden '("--preset=pinned")
+          (cl-letf (((symbol-function 'pichat--launch-select-model)
+                     (lambda (&rest _) (ert-fail "Reset listed models"))))
             (pichat-launch-model))
           (should (equal '("--preset=pinned") (caar staged)))
-          (should (eq (cadr case) (plist-get (cdar staged) :model)))
-          ;; The suffix never mutates the draft it was invoked from.
-          (should-not (plist-get context :model))))
+          (should-not (plist-get (cdar staged) :model))
+          (should (equal "other/model" (plist-get overridden :model)))
+          ;; The preset's model applies again.
+          (should (equal "provider/model"
+                         (plist-get (pichat--launch-profile-from-arguments
+                                     '("--preset=pinned") (cdar staged))
+                                    :model)))))
       (let ((profile (pichat--launch-profile-from-arguments
                       nil (list :model "other/model"))))
         (should (equal "other/model" (plist-get profile :model)))
@@ -363,9 +374,7 @@ Reopening the launcher records its (ARGS . SCOPE) in `staged'."
                (lambda (_time _repeat function &rest args) (apply function args))))
       (pichat-test-with-launcher context nil
         (cl-letf (((symbol-function 'completing-read)
-                   (lambda (prompt &rest _)
-                     (if (equal prompt "Model: ") "Select or enter model…"
-                       "fixture/chosen"))))
+                   (lambda (&rest _) "fixture/chosen")))
           (pichat-launch-model)
           (pichat-launch-model)
           (should (= 2 (length callbacks)))
@@ -380,9 +389,7 @@ Reopening the launcher records its (ARGS . SCOPE) in `staged'."
       ;; Cancelling the model prompt returns to the unchanged draft.
       (pichat-test-with-launcher context nil
         (cl-letf (((symbol-function 'completing-read)
-                   (lambda (prompt &rest _)
-                     (if (equal prompt "Model: ") "Select or enter model…"
-                       (signal 'quit nil)))))
+                   (lambda (&rest _) (signal 'quit nil))))
           (pichat-launch-model)
           (funcall (car callbacks) '(("fixture" . "chosen")))
           (should staged)
@@ -390,9 +397,7 @@ Reopening the launcher records its (ARGS . SCOPE) in `staged'."
       ;; Opening another launcher also supersedes a pending listing.
       (pichat-test-with-launcher context nil
         (cl-letf (((symbol-function 'completing-read)
-                   (lambda (prompt &rest _)
-                     (if (equal prompt "Model: ") "Select or enter model…"
-                       "fixture/chosen"))))
+                   (lambda (&rest _) "fixture/chosen")))
           (pichat-launch-model)
           (pichat-launch context)
           (setq staged nil)

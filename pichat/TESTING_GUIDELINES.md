@@ -286,9 +286,9 @@ screens separately before closing a visible-layout acceptance task.
 ## Saved preset live check
 
 `pichat-test-presets-live-ui.el` drives the real launcher `p`, `x` Tools (with
-the offline MCP fixture), `m` model listing (offline fake provider) and `c` Save
-preset as keys, including replacement refusal, Tools Cancel and an unsaveable
-model choice, then reloads the saved presets in a fresh Emacs. It uses a private
+the offline MCP fixture), `m` model listing and reset (offline fake provider)
+and `c` Save preset as keys, including replacement refusal and Tools Cancel,
+then reloads the saved presets in a fresh Emacs. It uses a private
 `custom-file`, never the user's, and launches no runtime. It needs a terminal, so
 run it in a separate `emacs -Q -nw` (for example under `script` when no tty is
 available) with the result/exit wrapper above and selector

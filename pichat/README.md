@@ -1208,10 +1208,19 @@ browsing. Older Markdown-only captures remain readable with a labelled fallback;
 PiChat never reconstructs historical evidence from a subsequently continued file.
 Finished runs with saved-session references offer **Continue in chat…** under
 **Actions**: an explicit
-new ordinary runtime on the captured target using the current default preset,
-not rerunning the job. New prompts extend the same saved Pi session file, not a
+new ordinary runtime on the captured target using the run's captured preset and
+tools (not the current default preset; reconfigure the chat afterwards to change
+them) and the saved session's model, not rerunning the job. New prompts extend
+the same saved Pi session file, not a
 clone, but cannot alter the historical run report or captured transcript.
-Managed duplicate writers are refused; uncertain execution must be resolved first.
+Mutating Emacs tools keep their approval rules. A job tool called from this chat
+acts as a chat, not as the run: `pichat_job_run_now` starts a new
+[run chain](#review-loops) at round 1, without **Requested by**.
+Managed duplicate writers are refused. When the run's own runtime still hosts
+the saved session (for example a manually released run), the confirmation names
+its runtime ID and buffer and offers to stop it and continue; any other hosting
+runtime is refused with its runtime ID and buffer and is never stopped.
+Uncertain execution must be resolved first.
 Job-owned chats allow
 inspection and existing extension UI responses, not additional prompts, source
 switching, reconfiguration or preferred designation; use Jobs to repeat/cancel.
@@ -1350,7 +1359,8 @@ input; one that does not refuses input and behaves as before.
   It is separate from Continue work's additional instructions.
 - Scheduled runs have no input, so a job that declares one cannot be scheduled.
   A follow-up never asks either: it runs without input and reads its origin's
-  input from the stop envelope.
+  input from the stop envelope. Repeat and Continue work of a follow-up keep
+  its envelope and take no input either.
 
 Input is plain text from you or another job, added to the prompt; it adds no
 permission the job's instructions and tools do not already give.
@@ -1504,7 +1514,25 @@ reviewer should stop and report its intended input, so you can resume it later.
 **Limits and failures.** There is no quota detector or automatic retry. The
 reviewer sees the worker's outcome and error in the envelope. A failed run,
 worker or reviewer, triggers nothing further and needs attention in Jobs; resume
-with **Repeat** on it, which stays in the chain and keeps the round.
+with **Repeat** on it (or **Continue work** on a failed, cancelled or released
+one), which stays in the chain and keeps the round.
+
+- Repeat and Continue work of a follow-up, such as a reviewer, keep its stop
+  envelope: the new run's prompt carries the same envelope (Continue work adds
+  its guidance before it), so the reviewer reviews as before. The run takes no
+  input and has no after-run job. Its details show it as a repeat or
+  continuation, it is listed in the run chain, and `pichat_job_run_inspect`
+  returns `repeat_of` or `continue_of`, `after_run_of` (the envelope's run) and
+  `chain_root`.
+- The envelope describes the worker run as it stopped. If you repeated the
+  worker since, a repeated reviewer still sees the older run's envelope; it
+  should judge the work itself (for a plan loop, the plan's workspace).
+- **Continue in chat** on a reviewer run keeps the reviewer's preset and tools,
+  including `pichat_job_run_now`, but a restart from that chat starts a new
+  chain at round 1 (see Continue in chat under [Jobs](#jobs)).
+- Run records of a repeated or continued follow-up are refused by earlier
+  PiChat versions, which validate the job store strictly. Do not downgrade
+  PiChat after using them; stores written before remain valid.
 
 **Authorization.** The follow-up prompt always tells the reviewer to act only
 within its own job instructions: unless those instructions authorise it, it must
@@ -2615,7 +2643,10 @@ approval by default; their prompts name the job, its target and directory.
   started `pichat-jobs-max-notified-runs` runs since the user's last message
   is refused.
 - `pichat_job_run_inspect` returns one job run's state, result, reason, run
-  `input` if any, `requested_by` if a job run started it, its chain `round` and,
+  `input` if any, `requested_by` if a job run started it, `repeat_of` or
+  `continue_of` for a Repeat or Continue work, `after_run_of` for a follow-up
+  (also when repeated or continued), its chain's first run `chain_root` and
+  `round` and,
   once finished, its final response (up to 4000 characters, truncation marked)
   from the captured run-end evidence, so it stays readable after the run's chat
   is closed. If the evidence is missing or changed, the stored 2000-character

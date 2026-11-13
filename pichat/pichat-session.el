@@ -37,6 +37,9 @@
   input-guard
   ;; Monotonic local mutation intent; read-only RPC requests do not advance it.
   (input-generation 0)
+  ;; Messages the user sent from the chat (prompt, command, steering or
+  ;; follow-up); prompts PiChat or Jobs send for it do not advance it.
+  (user-input-generation 0)
   buffer
   stderr-buffer
   stop-requested-p
@@ -191,6 +194,15 @@ buffer-local sessions-browser session, then an existing live session for
       (and (fboundp 'pichat-session-for-directory)
            (pichat-session-for-directory default-directory))
       (and (boundp 'pichat-current-session) pichat-current-session)))
+
+(defun pichat-session-note-user-input (session)
+  "Record that the user sent SESSION a message from its chat.
+Call it for the user's own prompts, commands, steering and follow-up
+messages, not for prompts PiChat or Jobs send.  It ends a series of job runs
+the chat started in response to notifications (see
+`pichat-jobs-max-notified-runs')."
+  (when session
+    (cl-incf (pichat-session-user-input-generation session))))
 
 (defun pichat-session-note-state (session state)
   "Set SESSION state to STATE."

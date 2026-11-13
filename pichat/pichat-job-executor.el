@@ -27,6 +27,16 @@
 Runs you start from Jobs (Run job, Repeat, Continue work) are never refused.
 The default fits three review rounds of a worker and a reviewer, plus spares."
   :type 'natnum :group 'pichat-jobs)
+(defcustom pichat-jobs-max-notified-runs 8
+  "Maximum job runs a chat may start between two of the user's messages.
+A chat that starts a saved job with the `pichat_job_run_now' tool is sent a
+message when the run chain finishes, and may answer it by starting another
+run.  The tool counts every run the chat started since the user's last
+message (prompt, command, steering or follow-up) and refuses past this
+limit; the user's next message resets the count.  PiChat's own messages do
+not reset it.  Runs started from Jobs, by schedules or by job runs are not
+counted; `pichat-jobs-max-chain-runs' bounds the latter."
+  :type 'natnum :group 'pichat-jobs)
 (defcustom pichat-jobs-control-timeout 30
   "Seconds to wait for readiness, settlement sync or cancellation.
 Running work and user interaction have no implicit timeout."
@@ -36,7 +46,9 @@ Running work and user interaction have no implicit timeout."
   store contexts pumping schedules schedule-error schedules-closed
   (conversations (make-hash-table :test #'equal))
   ;; Run chains started from a chat, keyed by root run ID; memory only.
-  (chains (make-hash-table :test #'equal)))
+  (chains (make-hash-table :test #'equal))
+  ;; Per chat runtime: (USER-INPUT-GENERATION . RUNS STARTED SINCE); memory only.
+  (chat-run-counts (make-hash-table :test #'eq :weakness 'key)))
 (cl-defstruct (pichat-job-execution (:constructor pichat-job-execution--create))
   executor id token session process generation source handlers timer watch
   submitted accepted started settled settlement cancelling cleanup retired failure
@@ -82,6 +94,22 @@ finish reported) and :delivery (the delivery of the last finish; see
   (when-let* ((address (pichat-job-conversation-address session)))
     (puthash root (list :root root :chat address :lost nil :finished nil :delivery nil)
              (pichat-job-executor-chains executor))))
+
+(defun pichat-job-executor-chat-runs (executor session)
+  "Return the number of runs chat SESSION started since the user's last message.
+Only runs EXECUTOR counted with `pichat-job-executor-chat-run-started' are
+included."
+  (let ((entry (gethash session (pichat-job-executor-chat-run-counts executor))))
+    (if (and entry (eql (car entry) (pichat-session-user-input-generation session)))
+        (cdr entry)
+      0)))
+
+(defun pichat-job-executor-chat-run-started (executor session)
+  "Count one more run that chat SESSION started in EXECUTOR; return the count."
+  (let ((count (1+ (pichat-job-executor-chat-runs executor session))))
+    (puthash session (cons (pichat-session-user-input-generation session) count)
+             (pichat-job-executor-chat-run-counts executor))
+    count))
 
 (defun pichat-job-executor-chain-entry (executor root)
   "Return EXECUTOR's remembered entry for chain ROOT, or nil."

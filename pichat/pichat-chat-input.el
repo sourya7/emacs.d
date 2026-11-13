@@ -407,6 +407,7 @@ changed by this operation."
     (pichat-backend-check-submit
      pichat-chat-session message attachments nil)
     (pichat-chat--record-prompt-history message)
+    (pichat-session-note-user-input pichat-chat-session)
     (let* ((buffer (current-buffer))
            (record (list :text text
                          :attachments attachments

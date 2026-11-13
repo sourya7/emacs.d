@@ -2009,6 +2009,7 @@ Nested calls in another buffer establish an independent transaction."
   (interactive "sSteer: ")
   (unless pichat-chat-session (user-error "No PiChat session"))
   (pichat-backend-require-capability pichat-chat-session 'queue "Steering")
+  (pichat-session-note-user-input pichat-chat-session)
   (pichat-rpc-steer pichat-chat-session message))
 
 (defun pichat-chat-follow-up (message)
@@ -2016,6 +2017,7 @@ Nested calls in another buffer establish an independent transaction."
   (interactive "sFollow-up: ")
   (unless pichat-chat-session (user-error "No PiChat session"))
   (pichat-backend-require-capability pichat-chat-session 'queue "Follow-up")
+  (pichat-session-note-user-input pichat-chat-session)
   (pichat-rpc-follow-up pichat-chat-session message))
 
 (defun pichat-chat-set-steering-mode (mode)

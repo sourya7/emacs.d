@@ -1106,6 +1106,68 @@ chat's own synchronization) are left unanswered."
       (should (equal before (funcall handlers)))
       (should-not sent))))
 
+;;; Limiting runs a chat starts in response to notifications
+
+(defconst pichat-test-chat-run-limit-error
+  (concat "already started 2 job runs since the user.s last message, "
+          "the limit (pichat-jobs-max-notified-runs); stop")
+  "The refusal of a third chat-started run with a limit of 2.")
+
+(ert-deftest pichat-job-tools-chat-run-limit-refuses-until-the-user-writes ()
+  (pichat-test-with-chain-delivery
+    (let* ((pichat-jobs-max-notified-runs 2)
+           (jobs (cl-loop repeat 3 collect (pichat-job-save store (pichat-test-job-spec project-dir))))
+           (buffer (pichat-session-buffer session))
+           (start (lambda (n) (pichat-test-chain-start (nth n jobs) session)))
+           (finish (lambda (run)
+                     (pichat-test-chain-end executor run "completed")
+                     (pichat-test-chain-answer (car sent) "started"))))
+      ;; Each finish is answered with another run; PiChat's own messages do
+      ;; not reset the count.
+      (funcall finish (funcall start 0))
+      (funcall finish (funcall start 1))
+      (should (= 2 (length sent)))
+      (let ((before (length (pichat-job-records store 'runs))))
+        (pichat-test-job-tool-error "pichat_job_run_now" (list :job_id (nth 2 jobs))
+                                    pichat-test-chat-run-limit-error session)
+        (should (= before (length (pichat-job-records store 'runs)))))
+      ;; The user's prompt resets it.
+      (with-current-buffer buffer
+        (pichat-chat--set-input-text "Carry on")
+        (pichat-chat-send-input))
+      (should (equal "Carry on" (plist-get (plist-get (car sent) :payload) :message)))
+      (funcall finish (funcall start 2))
+      (funcall finish (funcall start 0))
+      (pichat-test-job-tool-error "pichat_job_run_now" (list :job_id (nth 1 jobs))
+                                  pichat-test-chat-run-limit-error session)
+      ;; So do the user's follow-up and steering messages.
+      (with-current-buffer buffer (pichat-chat-follow-up "And then"))
+      (funcall finish (funcall start 1))
+      (funcall finish (funcall start 2))
+      (pichat-test-job-tool-error "pichat_job_run_now" (list :job_id (nth 0 jobs))
+                                  pichat-test-chat-run-limit-error session)
+      (with-current-buffer buffer (pichat-chat-steer "Next"))
+      (should (pichat-test-chain-start (nth 0 jobs) session)))))
+
+(ert-deftest pichat-job-tools-chat-run-limit-leaves-job-runs-and-jobs-alone ()
+  (pichat-test-with-chain-chat
+    (let* ((pichat-jobs-max-notified-runs 1)
+           (jobs (cl-loop repeat 3 collect (pichat-job-save store (pichat-test-job-spec project-dir))))
+           (worker (cdr (pichat-test-job-tools-worker executor store (nth 2 jobs)))))
+      (pichat-test-chain-start (nth 0 jobs) session)
+      (pichat-test-job-tool-error "pichat_job_run_now" (list :job_id (nth 1 jobs))
+                                  "the limit (pichat-jobs-max-notified-runs)" session)
+      ;; A job run is bounded by its chain's limit only.
+      (dotimes (_ 2)
+        (pichat-job-cancel-queued
+         store (pichat-test-chain-start (nth 1 jobs) worker)))
+      ;; Runs from Jobs and calls without a calling chat are not counted.
+      (pichat-job-cancel-queued
+       store (pichat-job-executor-submit-options executor (list :job-id (nth 1 jobs))))
+      (pichat-test-chain-start (nth 1 jobs) nil)
+      (should (= 1 (pichat-job-executor-chat-runs executor session)))
+      (should (= 0 (pichat-job-executor-chat-runs executor worker))))))
+
 (ert-deftest pichat-job-tools-approval-names-the-job-and-run ()
   (pichat-test-with-job-tools
     (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))

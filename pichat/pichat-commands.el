@@ -64,6 +64,7 @@ capture it before prompting.  Quit at either prompt cancels silently."
                  (message (and args
                                (string-trim (concat "/" (plist-get cmd :name) " " args)))))
             (when (and message (pichat-command--current-p current-p))
+              (pichat-session-note-user-input session)
               (pichat-backend-submit-prompt session message)))
         (quit nil)))))
 

@@ -2461,6 +2461,87 @@
       (should-error (pichat-jobs--open-saved executor id) :type 'user-error)
       (should-not (pichat-session-list)))))
 
+(ert-deftest pichat-jobs-continue-in-chat-keeps-captured-preset-and-handles-live-runtime ()
+  (pichat-test-with-job-executor ()
+    (let* ((pichat-default-preset 'coding)
+           (file (expand-file-name "session.jsonl" project-dir))
+           (spec (pichat-job-launch-capture
+                  "Review" "Review the work." project-dir
+                  '(:preset review :model "pichat-fake/pichat-fake" :target local
+                    :tools (:builtins ("read") :emacs ("pichat_job_run_now")))))
+           (captured (pichat-job-launch-prepare spec))
+           (id (pichat-job-enqueue store spec))
+           (token (plist-get (pichat-job-claim store id) :attempt))
+           (own (pichat-session-make :cwd project-dir :emacs-cwd project-dir
+                                     :session-file file :process-generation 1))
+           (other (pichat-session-make :cwd project-dir :emacs-cwd project-dir
+                                       :session-file file :process-generation 1))
+           (processes (list (pichat-test--make-unit-process own)
+                            (pichat-test--make-unit-process other)))
+           opened prompts)
+      (with-temp-file file (insert "{}\n"))
+      (pichat-job-advance store id token "running"
+                          (list :runtime-id (pichat-session-runtime-id own) :session-file file))
+      (pichat-job-advance store id token "settling")
+      (pichat-job-advance store id token "finished"
+                          '(:result "completed" :safe-to-release t :synchronized t))
+      (unwind-protect
+          (cl-letf (((symbol-function 'pichat-sessions-open-file-independently)
+                     (lambda (&rest args)
+                       (push args opened)
+                       ;; A successful open releases its reservation when ready.
+                       (funcall (plist-get (cdr args) :ready) nil)))
+                    ((symbol-function 'yes-or-no-p)
+                     (lambda (prompt) (push prompt prompts) t)))
+            ;; Without a live runtime: the captured preset and tools, not the default.
+            (pichat-jobs--open-saved executor id)
+            (let ((options (plist-get (cdr (pop opened)) :launch-options)))
+              (should-not (plist-get options :preset))
+              (should (equal (plist-get options :preset-spec)
+                             (pichat-session-preset-spec (car captured))))
+              (should (equal (plist-get options :tools)
+                             (pichat-session-tool-selection (car captured))))
+              ;; The prepared chat runtime receives that exact configuration.
+              (let ((chat (pichat-prepare-session project-dir nil options)))
+                (should (eq 'review (pichat-session-preset-name chat)))
+                (should (equal (pichat-session-preset-spec chat)
+                               (pichat-session-preset-spec (car captured))))
+                (should (member "pichat_job_run_now"
+                                (plist-get (pichat-session-tool-selection chat) :emacs)))))
+            (should (string-match-p "\\`Continue in chat using the job's preset ‘review’"
+                                    (pop prompts)))
+            (should (= 0 (hash-table-count pichat--source-reservations)))
+            ;; Another live runtime hosting the file is named, never stopped.
+            (pichat-register-session other)
+            (let ((err (should-error (pichat-jobs--open-saved executor id) :type 'user-error)))
+              (should (string-match-p (regexp-quote (pichat-session-runtime-id other))
+                                      (cadr err))))
+            (should (pichat-session-alive-p other))
+            (should-not (or opened prompts))
+            (pichat-rpc-stop other)
+            ;; The run's own live runtime: offer to stop it, then continue.
+            (pichat-register-session own)
+            (should (eq own (pichat-job-executor-run-session executor
+                                                             (pichat-job-record store 'runs id))))
+            (cl-letf (((symbol-function 'yes-or-no-p)
+                       (lambda (prompt) (push prompt prompts) nil)))
+              (pichat-jobs--open-saved executor id))
+            (should (string-match-p
+                     (concat "\\`This run's runtime "
+                             (regexp-quote (pichat-session-runtime-id own))
+                             " is still running\\. Stop it and continue in chat")
+                     (pop prompts)))
+            (should (pichat-session-alive-p own))
+            (should-not opened)
+            (pichat-jobs--open-saved executor id)
+            (should (string-match-p "Stop it and continue" (pop prompts)))
+            (should-not (pichat-session-alive-p own))
+            (should (= 1 (length opened)))
+            (should (= 0 (hash-table-count pichat--source-reservations))))
+        (dolist (process processes)
+          (when (process-live-p process) (delete-process process))
+          (when (buffer-live-p (process-buffer process)) (kill-buffer (process-buffer process))))))))
+
 (when pichat-test-include-integration
   (ert-deftest pichat-integration-job-complete-report-survives-restart-and-render-failure ()
     (let ((markdown (concat "# Complete response\n\n" (make-string 5000 ?x) "\n\nThe end.")))

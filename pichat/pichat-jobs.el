@@ -581,33 +581,60 @@ before anything is queued; the store checks it again."
         pichat-jobs--filter job-id pichat-jobs--attention-only nil pichat-jobs--kind 'runs)
   (pichat-jobs-refresh))
 
+(defun pichat-jobs--runtime-label (session)
+  "Return SESSION's runtime ID and, when it has a live chat, its buffer name."
+  (let ((buffer (pichat-session-buffer session)))
+    (if (buffer-live-p buffer)
+        (format "%s (buffer %s)" (pichat-session-runtime-id session) (buffer-name buffer))
+      (format "%s" (pichat-session-runtime-id session)))))
+
 (defun pichat-jobs--open-saved (owner id)
   "Explicitly open finished run ID's saved Pi session independently.
-Use captured transport/path context and the current default preset, not job
-instructions.  Guard against managed duplicate writers and concurrent opens."
+Use the run's captured transport/path context, preset and tools, not job
+instructions.  When the run's own runtime still hosts the saved session, offer
+to stop it first; any other hosting runtime is named in the refusal.  Guard
+against managed duplicate writers and concurrent opens."
   (let* ((run (pichat-job-record (pichat-job-executor-store owner) 'runs id))
          (spec (plist-get run :spec))
          (source (car (pichat-job-launch-prepare spec)))
          (transport (pichat-session-transport source))
+         (preset (pichat-session-preset-spec source))
          (file (plist-get run :session-file)))
     (unless (and (equal (plist-get run :state) "finished") file)
       (user-error "Resolve this execution before opening its saved session independently"))
     (let* ((host-file (pichat-transport-runtime-file-name transport file))
-           (key (pichat--selected-file-key transport file)))
-      (when (pichat--selected-file-conflict key)
-        (user-error "A managed runtime still hosts this saved session; open or stop it first"))
+           (key (pichat--selected-file-key transport file))
+           (conflict (pichat--selected-file-conflict key))
+           (own (and conflict
+                     (eq conflict (pichat-job-executor-run-session owner run))
+                     (pichat-session-alive-p conflict)
+                     (not (plist-get (pichat-reconfigure-source-claim conflict) :key))
+                     conflict)))
+      (when (and conflict (not own))
+        (user-error "Runtime %s still hosts this saved session; open or stop it first"
+                    (pichat-jobs--runtime-label conflict)))
       (unless (and (file-regular-p host-file) (file-readable-p host-file))
         (user-error "The captured saved session is not readable on its target"))
       (when (yes-or-no-p
-             (format "Continue in chat using preset ‘%s’ on %s? "
-                     pichat-default-preset (pichat-transport-label transport)))
+             (format "%sontinue in chat using the job's preset ‘%s’ and tools on %s? "
+                     (if own
+                         (format "This run's runtime %s is still running. Stop it and c"
+                                 (pichat-jobs--runtime-label own))
+                       "C")
+                     (plist-get preset :name) (pichat-transport-label transport)))
+        (when own
+          (pichat-stop-session own)
+          (when-let* ((other (pichat--selected-file-conflict key)))
+            (user-error "Runtime %s still hosts this saved session; try again once it has stopped"
+                        (pichat-jobs--runtime-label other))))
         (let ((token (pichat--claim-selected-file key)) (previous pichat-current-session))
           (condition-case err
               (pichat-sessions-open-file-independently
                (pichat-sessions--emacs-file file source)
                :cwd (pichat-session-runtime-cwd source)
                :owner-directory (plist-get spec :directory) :source-session source
-               :launch-options (list :persistence 'persistent :preset pichat-default-preset)
+               :launch-options (list :persistence 'persistent :preset-spec preset
+                                     :tools (pichat-session-tool-selection source))
                :readiness 'transcript-ready
                :ready (lambda (_session) (pichat--release-selected-file key token))
                :error-callback (lambda (response _session)

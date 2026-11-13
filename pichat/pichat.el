@@ -662,14 +662,29 @@ as do presets whose MCP baseline is first checked at the destination."
   "Prepare a runtime rooted at CWD without registering or starting it.
 SCOPE is the immutable (KEY CWD LABEL) owner scope.  LAUNCH-OPTIONS supports
 `:persistence', `:preset', `:tools', `:transport' and run-local `:model'.
+Instead of a `:preset' name, `:preset-spec' may supply an already resolved
+preset snapshot (for example a job's captured preset); the preset registry is
+then not consulted.
 The returned runtime captures resolved configuration and path context.  It does
 not become current/preferred and no RPC process or chat is created."
   (when (plist-member launch-options :execution)
     (user-error "Obsolete :execution option; select a PiChat :preset instead"))
-  (let* ((preset-name (let ((choice (plist-get launch-options :preset)))
-                        (if (or (null choice) (eq choice 'default))
-                            pichat-default-preset choice)))
-         (preset-spec (pichat-presets-resolve preset-name))
+  (when (and (plist-get launch-options :preset)
+             (plist-get launch-options :preset-spec))
+    (user-error "Use either a PiChat :preset name or a :preset-spec snapshot"))
+  (when-let* ((captured (plist-get launch-options :preset-spec)))
+    (unless (and (listp captured) (plist-get captured :name)
+                 (symbolp (plist-get captured :name)))
+      (user-error "Invalid PiChat preset snapshot: %S" captured)))
+  (let* ((captured (plist-get launch-options :preset-spec))
+         (preset-name (if captured
+                          (plist-get captured :name)
+                        (let ((choice (plist-get launch-options :preset)))
+                          (if (or (null choice) (eq choice 'default))
+                              pichat-default-preset choice))))
+         (preset-spec (if captured
+                          (pichat-presets--copy captured)
+                        (pichat-presets-resolve preset-name)))
          (tool-selection (pichat-tool-selection-resolve preset-spec
                                                (plist-get launch-options :tools)))
          (transport-override (plist-get launch-options :transport))
@@ -745,8 +760,8 @@ Callers may install owning handlers/chat before starting."
 (defun pichat-start-session (&optional cwd scope launch-options)
   "Start an independent PiChat runtime rooted at CWD and return it.
 SCOPE is an optional immutable (KEY CWD LABEL) owner scope.
-LAUNCH-OPTIONS supports `:persistence', `:preset', `:tools', `:transport'
-and run-local `:model'."
+LAUNCH-OPTIONS supports `:persistence', `:preset' (or a resolved
+`:preset-spec'), `:tools', `:transport' and run-local `:model'."
   (interactive)
   (let ((session (pichat-prepare-session cwd scope launch-options)))
     (pichat-start-prepared-session session)

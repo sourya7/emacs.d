@@ -84,6 +84,41 @@ Unlike live authority, this remains valid after the captured process stops."
          (eql (plist-get destination :source-generation)
               (buffer-local-value 'pichat-chat--source-generation buffer)))))
 
+(defun pichat-job-conversation-address (session)
+  "Return SESSION's exact live chat and source for later notices, or nil.
+The result has the shape of `pichat-job-conversation-capture' without the
+history and input fields, so only `pichat-job-conversation-notice-p' applies,
+never live authority.  Unlike a capture, the chat may be busy (for example
+running the tool call that asks for it).  Nil without an owned chat buffer
+or a live runtime."
+  (let ((buffer (pichat-chat-owned-buffer session)))
+    (when (and buffer (pichat-session-alive-p session))
+      (list :session session :process (pichat-session-process session) :buffer buffer
+            :destination
+            (list :runtime-id (pichat-session-runtime-id session)
+                  :session-id (pichat-session-id session)
+                  :session-file (pichat-session-session-file session)
+                  :process-generation (pichat-session-process-generation session)
+                  :source-generation (buffer-local-value 'pichat-chat--source-generation buffer))))))
+
+(defun pichat-job-conversation-address-lost (address)
+  "Return why ADDRESS can no longer receive a notice, or nil while it can.
+The reasons are short user-facing texts: the chat was closed, its runtime
+stopped or restarted, or its Pi session source changed."
+  (let ((session (plist-get address :session)) (buffer (plist-get address :buffer))
+        (destination (plist-get address :destination)))
+    (cond
+     ((pichat-job-conversation-notice-p address)
+      (unless (pichat-session-alive-p session) "Chat runtime stopped"))
+     ((not (and (pichat-session-p session) (buffer-live-p buffer)
+                (eq buffer (pichat-chat-owned-buffer session))))
+      "Chat closed")
+     ((not (and (eq (plist-get address :process) (pichat-session-process session))
+                (eql (plist-get destination :process-generation)
+                     (pichat-session-process-generation session))))
+      "Chat runtime stopped or restarted")
+     (t "Chat's Pi session changed"))))
+
 (defun pichat-job-conversation-unchanged-p (capture)
   "Whether CAPTURE's input intent and complete canonical history are unchanged."
   (and (pichat-job-conversation-source-p capture)

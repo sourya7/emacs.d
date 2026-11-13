@@ -30,6 +30,7 @@
 (declare-function pichat-session-runtime-id "pichat-session")
 (declare-function pichat-job-executor-cancel "pichat-job-executor")
 (declare-function pichat-job-executor-session-run "pichat-job-executor")
+(declare-function pichat-job-executor-chain-remember "pichat-job-executor")
 (declare-function pichat-job-records "pichat-job-core")
 (declare-function pichat-job-record "pichat-job-core")
 (declare-function pichat-job-input-check "pichat-job-core")
@@ -352,7 +353,18 @@ so a job run can never start its own saved job."
                             (plist-get chain :root) (length (plist-get chain :members)))))
            (run-id (pichat-job-executor-submit-options
                     owner (append (list :job-id id :input input)
-                                  (when caller (list :requested-by caller)))))
+                                  (when caller (list :requested-by caller)))
+                    ;; A chat caller starts a new chain: remember the chat
+                    ;; before anything can finish the run.
+                    (unless caller
+                      (lambda (new)
+                        ;; The run is committed: never turn this into an error.
+                        (condition-case err
+                            (when pichat-tools-calling-session
+                              (pichat-job-executor-chain-remember
+                               owner new pichat-tools-calling-session))
+                          (error (message "PiChat could not remember the starting chat: %s"
+                                          (error-message-string err))))))))
            (run (pichat-job-record store 'runs run-id))
            (waiting (pichat-job-tools--waiting-reason store run)))
       (pichat-tools-json

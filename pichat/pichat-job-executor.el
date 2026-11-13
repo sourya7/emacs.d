@@ -34,7 +34,9 @@ Running work and user interaction have no implicit timeout."
 
 (cl-defstruct (pichat-job-executor (:constructor pichat-job-executor--create))
   store contexts pumping schedules schedule-error schedules-closed
-  (conversations (make-hash-table :test #'equal)))
+  (conversations (make-hash-table :test #'equal))
+  ;; Run chains started from a chat, keyed by root run ID; memory only.
+  (chains (make-hash-table :test #'equal)))
 (cl-defstruct (pichat-job-execution (:constructor pichat-job-execution--create))
   executor id token session process generation source handlers timer watch
   submitted accepted started settled settlement cancelling cleanup retired failure
@@ -44,6 +46,13 @@ Running work and user interaction have no implicit timeout."
   "Dynamic execution ownership; never supplied by stored instructions.")
 (defvar pichat-job-executor-changed-hook nil
   "Hook called with an executor after a durable change.  UI handlers read caches.")
+(defvar pichat-job-executor-chain-finished-functions nil
+  "Abnormal hook run once per finish of a run chain started from a chat.
+Each function is called with the executor, the chain's entry (see
+`pichat-job-executor-chain-remember') and the chain (see `pichat-job-chain').
+The entry's :lost is non-nil when the starting chat can no longer receive a
+notice; its :chat is then nil.  A chain finishes again after a Repeat or
+Continue from Jobs adds a run to it.  Errors are reported, not propagated.")
 
 (defun pichat-job-executor-open (store)
   "Own STORE for execution and explicitly reconcile interrupted work.
@@ -55,8 +64,60 @@ Do not call while another executor owns STORE.  No queued work is replayed."
     (pichat-job-executor-schedule-refresh executor)
     executor))
 
+(defun pichat-job-executor-chain-remember (executor root session)
+  "Remember chat SESSION as the starting chat of EXECUTOR's chain ROOT.
+Call it for a new run that a chat (not a job run) started, so ROOT is a chain
+root.  Nothing is stored in the run record; the entry lasts until ROOT is
+deleted or Emacs exits.  Return the entry, or nil when SESSION has no owned
+chat buffer or live runtime.  The entry is a plist: :root, :chat (the
+address from `pichat-job-conversation-address', dropped once the chat is
+gone), :lost (why it is gone), :finished (the member run IDs of the last
+finish reported) and :delivery (for the delivering function)."
+  (when-let* ((address (pichat-job-conversation-address session)))
+    (puthash root (list :root root :chat address :lost nil :finished nil :delivery nil)
+             (pichat-job-executor-chains executor))))
+
+(defun pichat-job-executor-chain-entry (executor root)
+  "Return EXECUTOR's remembered entry for chain ROOT, or nil."
+  (gethash root (pichat-job-executor-chains executor)))
+
+(defun pichat-job-executor--chains-check (executor)
+  "Report each remembered chain of EXECUTOR that finished since its last report.
+A chain is finished when every member is finished or uncertain.  An after-run
+job is queued in the same transaction as its predecessor's stop, so a chain
+never looks finished between two of its runs.  A finish is identified by its
+member runs: releasing an uncertain run does not report again, a Repeat or
+Continue added to the chain does.  Entries whose root was deleted are
+forgotten, and a chat that is gone is dropped, keeping why."
+  (let ((table (pichat-job-executor-chains executor))
+        (store (pichat-job-executor-store executor)))
+    (dolist (root (hash-table-keys table))
+      (when-let* ((entry (gethash root table)))
+        (let ((chain (condition-case nil (pichat-job-chain store root)
+                       (pichat-job-error nil))))
+          (if (not (and chain (equal root (plist-get chain :root))))
+              (remhash root table)
+            (when-let* ((chat (plist-get entry :chat))
+                        (lost (pichat-job-conversation-address-lost chat)))
+              (setf (plist-get entry :chat) nil
+                    (plist-get entry :lost) lost))
+            (let ((members (append (plist-get chain :members) nil)))
+              (when (seq-every-p (lambda (run) (member (plist-get run :state) '("finished" "uncertain")))
+                                 members)
+                (let ((finish (mapcar (lambda (run) (plist-get run :id)) members)))
+                  (unless (equal finish (plist-get entry :finished))
+                    ;; Mark first: a function may cause nested changes.
+                    (setf (plist-get entry :finished) finish)
+                    (dolist (function pichat-job-executor-chain-finished-functions)
+                      (condition-case err (funcall function executor entry chain)
+                        (error (message "PiChat chain notification failed: %s"
+                                        (error-message-string err)))))))))))))))
+
 (defun pichat-job-executor--changed (executor)
-  "Notify cached consumers of EXECUTOR."
+  "Notify cached consumers of EXECUTOR.
+First report remembered run chains that finished."
+  (condition-case err (pichat-job-executor--chains-check executor)
+    (error (message "PiChat chain check failed: %s" (error-message-string err))))
   (dolist (handler pichat-job-executor-changed-hook)
     (condition-case err (funcall handler executor)
       (error (message "PiChat Jobs view update failed: %s" (error-message-string err))))))

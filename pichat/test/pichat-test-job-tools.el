@@ -634,6 +634,200 @@ The execution is registered with EXECUTOR but has no process."
       (should (equal (pichat-session-runtime-id session)
                      (plist-get (funcall inspect) :runtime_id))))))
 
+;;; Chains started from a chat
+
+(defmacro pichat-test-with-chain-chat (&rest body)
+  "Run BODY with Jobs tools, an inert chat SESSION and a FINISHES log.
+FINISHES lists (ROOT MEMBER-IDS LOST) per reported chain finish, newest
+first.  Nothing is pumped, so runs start only when the test claims them."
+  (declare (indent 0) (debug t))
+  `(pichat-test-with-conversation-job
+     (pichat-job-tools-register)
+     (let* ((pichat-jobs-file (pichat-job-store-file store))
+            (pichat-jobs--executor executor)
+            (pichat-jobs--owned-store nil)
+            (finishes nil)
+            (pichat-job-executor-chain-finished-functions
+             (list (lambda (_executor entry chain)
+                     (push (list (plist-get entry :root)
+                                 (mapcar (lambda (run) (plist-get run :id))
+                                         (plist-get chain :members))
+                                 (plist-get entry :lost))
+                           finishes)))))
+       (cl-letf (((symbol-function 'pichat-job-executor-pump) #'ignore))
+         ,@body))))
+
+(defun pichat-test-chain-start (job session)
+  "Start saved JOB with pichat_job_run_now from chat SESSION; return the run ID."
+  (plist-get (pichat-test-job-tool-ok "pichat_job_run_now" (list :job_id job) session)
+             :run_id))
+
+(defun pichat-test-chain-end (executor run result)
+  "Claim queued RUN in EXECUTOR's store and end it with RESULT.
+RESULT is completed, failed or uncertain.  Report the change as the
+executor does."
+  (let* ((store (pichat-job-executor-store executor))
+         (token (plist-get (pichat-job-claim store run) :attempt)))
+    (pcase result
+      ("completed" (pichat-test-job-tools-finish store run))
+      ("failed" (pichat-job-advance store run token "finished"
+                                    '(:result "failed" :safe-to-release t :reason "Broke")))
+      ("uncertain"
+       (pichat-job-advance store run token "running" '(:runtime-id "pichat-runtime-gone"))
+       (pichat-job-advance store run token "uncertain" '(:reason "Process lost"))))
+    (pichat-job-executor--changed executor)))
+
+(defun pichat-test-chain-followup (store run)
+  "Return the run STORE queued after RUN as its after-run job."
+  (plist-get (plist-get (pichat-job-record store 'runs run) :dispatch) :run-id))
+
+(ert-deftest pichat-job-tools-chat-started-chain-reports-its-end-once ()
+  ;; The worker's stop queues the reviewer in the same transaction, so the
+  ;; chain is reported after the reviewer, not after the worker.
+  (pichat-test-with-chain-chat
+    (let* ((reviewer (pichat-job-save store (plist-put (pichat-test-job-spec project-dir)
+                                                       :title "Reviewer")))
+           (worker (pichat-job-save store (plist-put (pichat-test-job-spec project-dir)
+                                                     :after-job-id reviewer)))
+           (root (pichat-test-chain-start worker session))
+           (entry (pichat-job-executor-chain-entry executor root)))
+      (should (eq session (plist-get (plist-get entry :chat) :session)))
+      (should (equal "conversation-source"
+                     (plist-get (plist-get (plist-get entry :chat) :destination) :session-id)))
+      (pichat-test-chain-end executor root "completed")
+      (let ((review (pichat-test-chain-followup store root)))
+        (should review)
+        (should-not finishes)
+        (pichat-test-chain-end executor review "completed")
+        (should (equal (list (list root (list root review) nil)) finishes))
+        ;; Later changes elsewhere do not report the same finish again.
+        (pichat-job-executor--changed executor)
+        (pichat-job-enqueue store (pichat-test-job-spec project-dir))
+        (pichat-job-executor--changed executor)
+        (should (= 1 (length finishes)))
+        ;; Nothing is stored in the run records.
+        (should-not (string-match-p "conversation-source"
+                                    (format "%S" (pichat-job-records store 'runs))))))))
+
+(ert-deftest pichat-job-tools-chat-started-chain-waits-for-a-reviewer-restart ()
+  (pichat-test-with-chain-chat
+    (let* ((reviewer (pichat-job-save store (plist-put (pichat-test-job-spec project-dir)
+                                                       :title "Reviewer")))
+           (worker (pichat-job-save store (plist-put (pichat-test-job-spec project-dir)
+                                                     :after-job-id reviewer)))
+           (root (pichat-test-chain-start worker session))
+           review restart review-2)
+      (pichat-test-chain-end executor root "completed")
+      (setq review (pichat-test-chain-followup store root))
+      ;; The reviewer restarts the worker before it stops itself.
+      (let* ((token (plist-get (pichat-job-claim store review) :attempt))
+             (review-session (pichat-session-make :cwd project-dir)))
+        (puthash review (pichat-job-execution--create :executor executor :id review :token token
+                                                      :session review-session)
+                 (pichat-job-executor-contexts executor))
+        (setq restart (pichat-test-chain-start worker review-session))
+        ;; A job run's restart continues the chain; it is not a new chat chain.
+        (should-not (pichat-job-executor-chain-entry executor restart))
+        (pichat-job-advance store review token "running" '(:runtime-id "pichat-runtime-gone"))
+        (pichat-job-advance store review token "settling")
+        (pichat-job-advance store review token "finished"
+                            '(:result "completed" :safe-to-release t :synchronized t))
+        (remhash review (pichat-job-executor-contexts executor))
+        (pichat-job-executor--changed executor))
+      (should-not finishes)
+      (pichat-test-chain-end executor restart "completed")
+      (setq review-2 (pichat-test-chain-followup store restart))
+      (should-not finishes)
+      (pichat-test-chain-end executor review-2 "completed")
+      (should (equal (list (list root (list root review restart review-2) nil)) finishes)))))
+
+(ert-deftest pichat-job-tools-chat-started-chains-report-failed-cancelled-and-uncertain-ends ()
+  (pichat-test-with-chain-chat
+    (let* ((jobs (cl-loop repeat 3 collect (pichat-job-save store (pichat-test-job-spec project-dir))))
+           (failed (pichat-test-chain-start (nth 0 jobs) session))
+           (cancelled (pichat-test-chain-start (nth 1 jobs) session))
+           (uncertain (pichat-test-chain-start (nth 2 jobs) session)))
+      (pichat-test-chain-end executor failed "failed")
+      (should (equal (list (list failed (list failed) nil)) finishes))
+      ;; The chat may cancel its own run; it is still told.
+      (pichat-test-job-tool-ok "pichat_job_run_cancel" (list :run_id cancelled) session)
+      (should (equal (list cancelled (list cancelled) nil) (car finishes)))
+      (pichat-test-chain-end executor uncertain "uncertain")
+      (should (equal (list uncertain (list uncertain) nil) (car finishes)))
+      (should (= 3 (length finishes)))
+      ;; Releasing the uncertain run is not a new finish.
+      (pichat-job-executor-resolve executor uncertain "Inspected")
+      (should (equal "finished" (plist-get (pichat-job-record store 'runs uncertain) :state)))
+      (should (= 3 (length finishes))))))
+
+(ert-deftest pichat-job-tools-chat-started-chain-reports-again-after-a-repeat ()
+  (pichat-test-with-chain-chat
+    (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (root (pichat-test-chain-start job session))
+           repeat)
+      (pichat-test-chain-end executor root "failed")
+      (should (= 1 (length finishes)))
+      ;; Repeat from Jobs joins the chain, which finishes again.
+      (setq repeat (pichat-job-executor-submit-options executor (list :repeat-of root)))
+      (should (= 1 (length finishes)))
+      (pichat-test-chain-end executor repeat "completed")
+      (should (equal (list root (list root repeat) nil) (car finishes)))
+      (should (= 2 (length finishes))))))
+
+(ert-deftest pichat-job-tools-runs-started-from-jobs-report-no-chain-end ()
+  (pichat-test-with-chain-chat
+    (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (other (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (run (pichat-job-executor-submit-options executor (list :job-id job))))
+      (pichat-test-chain-end executor run "completed")
+      ;; A tool call without a calling chat remembers nothing either.
+      (let ((plain (pichat-test-chain-start other nil)))
+        (should-not (pichat-job-executor-chain-entry executor plain))
+        (pichat-test-chain-end executor plain "completed"))
+      (should (= 0 (hash-table-count (pichat-job-executor-chains executor))))
+      (should-not finishes))))
+
+(ert-deftest pichat-job-tools-chat-started-chain-forgets-deleted-runs-and-a-closed-chat ()
+  (pichat-test-with-chain-chat
+    (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (other (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (deleted (pichat-test-chain-start job session))
+           (closed (pichat-test-chain-start other session)))
+      ;; Deleting a finished chain forgets it.
+      (pichat-test-chain-end executor deleted "completed")
+      (pichat-job-executor-delete-chain executor deleted (list deleted))
+      (should-not (pichat-job-executor-chain-entry executor deleted))
+      ;; A closed chat is dropped at the next change; the finish is still
+      ;; reported, with the reason, so it can be shown as not notified.
+      (kill-buffer (pichat-session-buffer session))
+      (pichat-job-executor--changed executor)
+      (let ((entry (pichat-job-executor-chain-entry executor closed)))
+        (should-not (plist-get entry :chat))
+        (should (equal "Chat closed" (plist-get entry :lost))))
+      (pichat-test-chain-end executor closed "completed")
+      (should (equal (list closed (list closed) "Chat closed") (car finishes))))))
+
+(ert-deftest pichat-job-tools-chat-address-notices-a-stopped-or-switched-chat ()
+  (pichat-test-with-conversation-job
+    (let ((address (pichat-job-conversation-address session)))
+      (should address)
+      (should-not (pichat-job-conversation-address-lost address))
+      ;; Busy is fine: the address does not need an idle chat.
+      (setf (pichat-session-streaming-p session) t)
+      (should (equal address (pichat-job-conversation-address session)))
+      (should-not (pichat-job-conversation-address-lost address))
+      (setf (pichat-session-id session) "other-source")
+      (should (equal "Chat's Pi session changed" (pichat-job-conversation-address-lost address)))
+      (setf (pichat-session-id session) "conversation-source")
+      (setf (pichat-session-process-generation session) 2)
+      (should (equal "Chat runtime stopped or restarted"
+                     (pichat-job-conversation-address-lost address)))
+      (setf (pichat-session-process-generation session) 1)
+      (delete-process process)
+      (should (equal "Chat runtime stopped" (pichat-job-conversation-address-lost address)))
+      ;; Without a live runtime there is nothing to remember.
+      (should-not (pichat-job-conversation-address session)))))
+
 (ert-deftest pichat-job-tools-approval-names-the-job-and-run ()
   (pichat-test-with-job-tools
     (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))
@@ -750,6 +944,13 @@ The execution is registered with EXECUTOR but has no process."
              (inspect-args (expand-file-name "inspect-args.json" project-dir))
              (cancel-args (expand-file-name "cancel-args.json" project-dir))
              (chat-status (expand-file-name "chat-status.json" project-dir))
+             (finishes nil)
+             (pichat-job-executor-chain-finished-functions
+              (list (lambda (_executor entry chain)
+                      (push (list (plist-get entry :root)
+                                  (plist-get (plist-get entry :chat) :session)
+                                  (length (plist-get chain :members)))
+                            finishes))))
              (script
               `(:turns
                 [(:expectTool (:name "pichat_job_run_now")
@@ -775,6 +976,8 @@ The execution is registered with EXECUTOR but has no process."
                 (pichat-test-job-wait store run "finished")
                 (should (equal "completed" (plist-get (pichat-job-record store 'runs run) :result)))
                 (pichat-test-assert-provider-script-consumed status-file)
+                ;; The chat that started the run is told once that its chain ended.
+                (should (equal (list (list run chat 1)) finishes))
                 ;; A pending run to cancel; nothing pumps until the cancel.
                 (let ((queued (pichat-job-enqueue store nil other)))
                   (with-temp-file inspect-args (insert (json-serialize (list :run_id run))))

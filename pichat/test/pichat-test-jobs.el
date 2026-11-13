@@ -4607,5 +4607,26 @@ The later picker, if any, keeps its token and its own Apply/Cancel decides."
         (should (equal (list alone) (mapcar (lambda (run) (plist-get run :id))
                                             (append (pichat-job-records store 'runs) nil))))))))
 
+(ert-deftest pichat-jobs-session-file-names-excludes-borrowed-conversations ()
+  (let* ((store (pichat-job--make-store
+                 :file "/fixture/jobs.json"
+                 :data (list :version 1 :jobs []
+                             :runs (vector
+                                    '(:id "a" :session-file "/s/job.jsonl")
+                                    '(:id "b" :session-file nil)
+                                    '(:id "c" :session-file "/s/chat.jsonl"
+                                      :destination (:kind "conversation"))))))
+         (pichat-jobs--executor nil)
+         (pichat-jobs--owned-store store)
+         (names (pichat-jobs-session-file-names)))
+    (should (gethash "job.jsonl" names))
+    (should-not (gethash "chat.jsonl" names))
+    (should (= 1 (hash-table-count names))))
+  ;; Unreadable metadata never blocks saved-session browsing.
+  (cl-letf (((symbol-function 'pichat-job-store-open)
+             (lambda (_file) (error "Corrupt"))))
+    (let ((pichat-jobs--executor nil) (pichat-jobs--owned-store nil))
+      (should (= 0 (hash-table-count (pichat-jobs-session-file-names)))))))
+
 (provide 'pichat-test-jobs)
 ;;; pichat-test-jobs.el ends here

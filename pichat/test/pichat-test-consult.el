@@ -9,6 +9,8 @@
 (require 'pichat-test-support)
 (require 'pichat-consult)
 
+(defvar consult--narrow)
+
 (ert-deftest pichat-consult-on-demand-load-registers-embark-in-either-order ()
   (skip-unless (and (require 'consult nil t) (require 'embark nil t)))
   (dolist (embark-first '(nil t))
@@ -289,6 +291,50 @@
     (should (equal original (plist-get record :first-user-prompt)))
     (should (equal original (plist-get record :title)))
     (should (equal "skill-session" (plist-get record :session-id)))))
+
+(ert-deftest pichat-consult-narrowing-separates-job-run-sessions ()
+  (let* ((jobs (make-hash-table :test #'equal))
+         (context (list :job-session-files jobs))
+         (decode (lambda (id file)
+                   (pichat-consult--decode-candidate
+                    (json-serialize (pichat-test-archive--metadata
+                                     :sessionId id :sessionFile file)
+                                    :false-object :json-false :null-object nil)
+                    '(:identity test) context)))
+         (_ (puthash "job.jsonl" t jobs))
+         ;; A different directory still matches: hosts may map runtime paths.
+         (job (funcall decode "job" "/host/sessions/job.jsonl"))
+         (chat (funcall decode "chat" "/sessions/chat.jsonl")))
+    (should (plist-get (pichat-consult--candidate-record job) :job-session))
+    (should-not (plist-get (pichat-consult--candidate-record chat) :job-session))
+    (let ((consult--narrow ?c))
+      (should (pichat-consult--session-narrow-predicate chat))
+      (should-not (pichat-consult--session-narrow-predicate job)))
+    (let ((consult--narrow ?j))
+      (should-not (pichat-consult--session-narrow-predicate chat))
+      (should (pichat-consult--session-narrow-predicate job)))
+    (let ((consult--narrow nil))
+      (should (pichat-consult--session-narrow-predicate chat))
+      (should (pichat-consult--session-narrow-predicate job)))))
+
+(ert-deftest pichat-consult-search-initially-narrows-to-chats-when-hiding-jobs ()
+  (dolist (hide '(t nil))
+    (let ((pichat-sessions-hide-job-sessions hide)
+          read-options)
+      (cl-letf (((symbol-function 'consult--async-transform) #'ignore)
+                ((symbol-function 'pichat-consult--archive-process-collection)
+                 #'ignore)
+                ((symbol-function 'pichat-consult--preview-state) #'ignore)
+                ((symbol-function 'pichat-sessions-job-session-file-names)
+                 (lambda () (make-hash-table :test #'equal)))
+                ((symbol-function 'consult--read)
+                 (lambda (_items &rest options)
+                   (setq read-options options)
+                   nil)))
+        (pichat-consult--search '(:identity test) '(:cwd "/p")))
+      (should (equal pichat-consult--session-narrow-keys
+                     (plist-get (plist-get read-options :narrow) :keys)))
+      (should (eq (and hide ?c) (plist-get read-options :initial-narrow))))))
 
 (ert-deftest pichat-consult-archive-identities-use-hidden-exact-uniqueness ()
   (let* ((search-fields

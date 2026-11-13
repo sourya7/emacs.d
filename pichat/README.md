@@ -2147,6 +2147,15 @@ as in `↑↓2`, because a session can have both a parent and children. Set
 `pichat-consult-relation-indicator-style` to `ascii` for `P`, `P!`, `P?`, `CN`,
 and combined forms such as `P/C2`.
 
+Saved-session browsers hide Pi sessions recorded by job runs by default
+(`pichat-sessions-hide-job-sessions`). Jobs metadata is read without starting
+Jobs; scheduled continuations borrow an existing chat and remain visible. The
+archive-backed picker starts narrowed to chats: use Consult narrowing key `j`
+for job-run sessions only, `c` for chats, or widen (for example `DEL` on empty
+input) to show both. Narrowing filters each bounded archive result batch, so
+hidden job-run sessions still count toward `pichat-consult-session-search-limit`.
+The basic picker omits job-run sessions while the option is non-nil.
+
 An archive compatibility title remains the explicit session name, complete
 transcript's first prompt, or session ID. The displayed title prefers an
 explicit name and then a conservatively identified prompt introduced by the

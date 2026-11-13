@@ -43,6 +43,7 @@
                               selection-only jump-function))
 (declare-function pichat-consult-show-current-relations
                   "pichat-consult" (capability session))
+(declare-function pichat-jobs-session-file-names "pichat-jobs")
 
 (defvar pichat-current-session)
 (defvar pichat-chat-stop-session-on-kill)
@@ -66,6 +67,30 @@ rows."
   :type '(integer :tag "Title columns")
   :safe (lambda (value) (and (integerp value) (<= 12 value 120)))
   :group 'pichat)
+
+(defcustom pichat-sessions-hide-job-sessions t
+  "Whether saved-session browsers initially hide job-run Pi sessions.
+A job-run session is a saved session file recorded by an independent job
+run; scheduled continuations borrow an existing chat and are never hidden.
+The archive-backed Consult picker starts narrowed to chats and can widen
+or narrow to jobs with Consult narrowing keys (`c' chats, `j' jobs).  The
+basic picker omits job-run sessions while this is non-nil."
+  :type 'boolean
+  :group 'pichat)
+
+(defun pichat-sessions-job-session-file-names ()
+  "Return a hash table of saved-session file names written by job runs.
+Keys are file names without directories, so runtime- and host-visible paths
+of the same saved session file match.  Reading never starts Jobs execution."
+  (if (and (or (featurep 'pichat-jobs) (require 'pichat-jobs nil t))
+           (fboundp 'pichat-jobs-session-file-names))
+      (pichat-jobs-session-file-names)
+    (make-hash-table :test #'equal)))
+
+(defun pichat-sessions-job-session-file-p (file table)
+  "Return non-nil when saved session FILE is a key of job-run TABLE."
+  (and (stringp file) (hash-table-p table)
+       (gethash (file-name-nondirectory file) table)))
 
 (defvar-local pichat-sessions-session nil)
 
@@ -1739,6 +1764,13 @@ When INCLUDE-RECORD is non-nil, also return the exact completion record."
          (files (if session
                     (pichat-sessions--files session)
                   (pichat-sessions--files)))
+         (files (if pichat-sessions-hide-job-sessions
+                    (let ((jobs (pichat-sessions-job-session-file-names)))
+                      (cl-remove-if
+                       (lambda (file)
+                         (pichat-sessions-job-session-file-p file jobs))
+                       files))
+                  files))
          (choices (pichat-sessions--file-choices files root)))
     (unless choices
       (user-error "No Pi session files found under %s" root))

@@ -129,6 +129,33 @@
       ;; selected CWD must reuse the cached summary rather than parse again.
       (should (= 2 parse-count)))))
 
+(ert-deftest pichat-session-completion-basic-picker-hides-job-run-sessions ()
+  (pichat-test-with-temp-dir root
+    (let* ((chat (expand-file-name "one/session_chat-id.jsonl" root))
+           (job (expand-file-name "two/session_job-id.jsonl" root))
+           (pichat-sessions--summary-cache (make-hash-table :test #'equal))
+           (jobs (make-hash-table :test #'equal)))
+      (puthash "session_job-id.jsonl" t jobs)
+      (pichat-test-session-completion--write-session
+       chat "chat-id" "/fixture/chat" "Chat session")
+      (pichat-test-session-completion--write-session
+       job "job-id" "/fixture/job" "Job session")
+      (dolist (hide '(t nil))
+        (let ((pichat-sessions-hide-job-sessions hide)
+              offered)
+          (cl-letf (((symbol-function 'pichat-sessions--root-dir)
+                     (lambda () root))
+                    ((symbol-function 'pichat-sessions--files)
+                     (lambda () (list chat job)))
+                    ((symbol-function 'pichat-sessions-job-session-file-names)
+                     (lambda () jobs))
+                    ((symbol-function 'completing-read)
+                     (lambda (&rest arguments)
+                       (setq offered (all-completions "" (nth 1 arguments)))
+                       (car offered))))
+            (pichat-sessions--choose-basic-file))
+          (should (= (if hide 1 2) (length offered))))))))
+
 (ert-deftest pichat-session-completion-searches-bounded-aliases-without-displaying-them ()
   (let* ((record (list :candidate "12345678  Named session"
                        :file "/sessions/group/session_12345678-abcd.jsonl"

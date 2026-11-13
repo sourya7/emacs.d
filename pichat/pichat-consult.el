@@ -529,6 +529,12 @@ runtime never marks its own project as current."
                        (pichat-archive-normalize-recent object)))
              (record (plist-put record :archive-capability capability))
              (record (plist-put record :browse-context browse-context))
+             (record (plist-put
+                      record :job-session
+                      (and (pichat-sessions-job-session-file-p
+                            (plist-get record :session-file)
+                            (plist-get browse-context :job-session-files))
+                           t)))
              (identity (pichat-consult--candidate-identity record))
              (uniqueness-key
               (format "%s\0%s" (or (plist-get record :session-id) "")
@@ -1306,11 +1312,26 @@ original Consult candidate still carries `consult--candidate'."
     (cl-pushnew #'pichat-consult--embark-session-action
                 (alist-get action embark-around-action-hooks))))
 
+(defconst pichat-consult--session-narrow-keys
+  '((?c . "Chats") (?j . "Jobs"))
+  "Consult narrowing keys separating chat sessions from job-run sessions.")
+
+(defun pichat-consult--session-narrow-predicate (candidate)
+  "Return non-nil when CANDIDATE matches the active session narrowing."
+  (let ((job (plist-get (pichat-consult--candidate-record candidate)
+                        :job-session)))
+    (pcase consult--narrow
+      (?c (not job))
+      (?j job)
+      (_ t))))
+
 (defun pichat-consult--search
     (capability project &optional initial selection-function selection-only
                 jump-function)
   "Run Consult archive search for CAPABILITY and selected PROJECT.
-SELECTION-FUNCTION, when non-nil, receives the selected saved FILE and CWD."
+SELECTION-FUNCTION, when non-nil, receives the selected saved FILE and CWD.
+Candidates narrow with `c' (chats) and `j' (job-run sessions); the reader
+starts narrowed to chats when `pichat-sessions-hide-job-sessions' is non-nil."
   (let* ((cwd (plist-get project :cwd))
          (scope-label (or cwd "all projects"))
          (consult-async-split-style 'none)
@@ -1319,7 +1340,9 @@ SELECTION-FUNCTION, when non-nil, receives the selected saved FILE and CWD."
                                :project project :input (or initial "")
                                :selection-only selection-only
                                :selection-function selection-function
-                               :jump-function jump-function))
+                               :jump-function jump-function
+                               :job-session-files
+                               (pichat-sessions-job-session-file-names)))
          (builder (lambda (input)
                     (plist-put browse-context :input input)
                     (pichat-consult--search-command capability cwd input)))
@@ -1345,7 +1368,10 @@ SELECTION-FUNCTION, when non-nil, receives the selected saved FILE and CWD."
            :history '(:input pichat-consult--session-history)
            :initial initial :state (pichat-consult--preview-state)
            :preview-key pichat-consult-session-preview-key
-           :keymap pichat-consult-session-minibuffer-map :sort nil)))
+           :keymap pichat-consult-session-minibuffer-map :sort nil
+           :narrow (list :predicate #'pichat-consult--session-narrow-predicate
+                         :keys pichat-consult--session-narrow-keys)
+           :initial-narrow (and pichat-sessions-hide-job-sessions ?c))))
     (cond
      (pichat-consult--pending-action
       (funcall (car pichat-consult--pending-action)

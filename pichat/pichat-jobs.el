@@ -64,6 +64,27 @@ same object, rather than reopening behind a definition import's back."
       (setq pichat-jobs--executor (pichat-job-executor-open store))))
   pichat-jobs--executor)
 
+(defun pichat-jobs-session-file-names ()
+  "Return a hash table of saved-session file names recorded by job runs.
+Keys are file names without directories.  Scheduled continuations borrow an
+existing chat's Pi session and are excluded.  Use the executor's store when
+Jobs is running; otherwise read `pichat-jobs-file' without retaining it, so
+browsing never initializes, reconciles or executes Jobs.  Unreadable job
+metadata yields an empty table rather than blocking saved-session browsing."
+  (let ((table (make-hash-table :test #'equal)))
+    (condition-case nil
+        (let ((store (or (and pichat-jobs--executor
+                              (pichat-job-executor-store pichat-jobs--executor))
+                         pichat-jobs--owned-store
+                         (pichat-job-store-open pichat-jobs-file))))
+          (seq-doseq (run (plist-get (pichat-job-store-data store) :runs))
+            (let ((file (plist-get run :session-file)))
+              (when (and (stringp file) (not (string-empty-p file))
+                         (not (pichat-job-conversation-p run)))
+                (puthash (file-name-nondirectory file) t table)))))
+      (error nil))
+    table))
+
 (defun pichat-jobs--store ()
   "Return current buffer's owning store without initialization or execution."
   (pichat-job-executor-store (or pichat-jobs--owner

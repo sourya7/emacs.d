@@ -53,6 +53,11 @@ Each function is called with the executor, the chain's entry (see
 The entry's :lost is non-nil when the starting chat can no longer receive a
 notice; its :chat is then nil.  A chain finishes again after a Repeat or
 Continue from Jobs adds a run to it.  Errors are reported, not propagated.")
+(defvar pichat-job-executor-chain-forgotten-functions nil
+  "Abnormal hook run when a remembered chain's entry is forgotten.
+Each function is called with the executor and the entry, after the entry is
+removed because its root run was deleted; it releases what the entry's
+delivery still holds.  Errors are reported, not propagated.")
 
 (defun pichat-job-executor-open (store)
   "Own STORE for execution and explicitly reconcile interrupted work.
@@ -72,7 +77,8 @@ deleted or Emacs exits.  Return the entry, or nil when SESSION has no owned
 chat buffer or live runtime.  The entry is a plist: :root, :chat (the
 address from `pichat-job-conversation-address', dropped once the chat is
 gone), :lost (why it is gone), :finished (the member run IDs of the last
-finish reported) and :delivery (for the delivering function)."
+finish reported) and :delivery (the delivery of the last finish; see
+`pichat-job-executor-chain-delivery-text')."
   (when-let* ((address (pichat-job-conversation-address session)))
     (puthash root (list :root root :chat address :lost nil :finished nil :delivery nil)
              (pichat-job-executor-chains executor))))
@@ -80,6 +86,18 @@ finish reported) and :delivery (for the delivering function)."
 (defun pichat-job-executor-chain-entry (executor root)
   "Return EXECUTOR's remembered entry for chain ROOT, or nil."
   (gethash root (pichat-job-executor-chains executor)))
+
+(defun pichat-job-executor-chain-delivery-text (entry)
+  "Describe the delivery of chain ENTRY's last finish to its chat, or nil.
+The delivery is a plist with :state (sending, waiting, sent, queued or
+not-notified) and :reason; it lasts only while Emacs runs."
+  (when-let* ((delivery (plist-get entry :delivery)))
+    (pcase (plist-get delivery :state)
+      ("sending" "Sending to the starting chat")
+      ("waiting" "Waiting for the starting chat's compaction to finish")
+      ("sent" "Sent to the starting chat")
+      ("queued" "Sent; queued after the starting chat's current work")
+      (_ (concat "Not notified: " (or (plist-get delivery :reason) "unknown reason"))))))
 
 (defun pichat-job-executor--chains-check (executor)
   "Report each remembered chain of EXECUTOR that finished since its last report.
@@ -96,7 +114,12 @@ forgotten, and a chat that is gone is dropped, keeping why."
         (let ((chain (condition-case nil (pichat-job-chain store root)
                        (pichat-job-error nil))))
           (if (not (and chain (equal root (plist-get chain :root))))
-              (remhash root table)
+              (progn
+                (remhash root table)
+                (dolist (function pichat-job-executor-chain-forgotten-functions)
+                  (condition-case err (funcall function executor entry)
+                    (error (message "PiChat chain cleanup failed: %s"
+                                    (error-message-string err))))))
             (when-let* ((chat (plist-get entry :chat))
                         (lost (pichat-job-conversation-address-lost chat)))
               (setf (plist-get entry :chat) nil

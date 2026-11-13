@@ -662,14 +662,14 @@ first.  Nothing is pumped, so runs start only when the test claims them."
   (plist-get (pichat-test-job-tool-ok "pichat_job_run_now" (list :job_id job) session)
              :run_id))
 
-(defun pichat-test-chain-end (executor run result)
+(defun pichat-test-chain-end (executor run result &optional evidence)
   "Claim queued RUN in EXECUTOR's store and end it with RESULT.
-RESULT is completed, failed or uncertain.  Report the change as the
-executor does."
+RESULT is completed, failed or uncertain; a completed run may have
+EVIDENCE.  Report the change as the executor does."
   (let* ((store (pichat-job-executor-store executor))
          (token (plist-get (pichat-job-claim store run) :attempt)))
     (pcase result
-      ("completed" (pichat-test-job-tools-finish store run))
+      ("completed" (pichat-test-job-tools-finish store run evidence))
       ("failed" (pichat-job-advance store run token "finished"
                                     '(:result "failed" :safe-to-release t :reason "Broke")))
       ("uncertain"
@@ -827,6 +827,284 @@ executor does."
       (should (equal "Chat runtime stopped" (pichat-job-conversation-address-lost address)))
       ;; Without a live runtime there is nothing to remember.
       (should-not (pichat-job-conversation-address session)))))
+
+;;; Delivering the chain's finish to the chat
+
+(defmacro pichat-test-with-chain-delivery (&rest body)
+  "Run BODY like `pichat-test-with-chain-chat', delivering to the chat.
+SENT lists the prompts PiChat sent, newest first, each a plist with
+:session, :type, :payload, :success and :failure; nothing is answered
+until the test calls `pichat-test-chain-answer'.  Other RPC calls (the
+chat's own synchronization) are left unanswered."
+  (declare (indent 0) (debug t))
+  `(pichat-test-with-chain-chat
+     (let ((pichat-job-executor-chain-finished-functions
+            (list #'pichat-job-tools-chain-deliver))
+           (sent nil))
+       (cl-letf (((symbol-function 'pichat-rpc-send)
+                  (lambda (session type payload &optional success failure)
+                    (pichat-rpc--require-operation-ownership session type)
+                    (when (equal type "prompt")
+                      (push (list :session session :type type :payload payload
+                                  :success success :failure failure)
+                            sent))
+                    1)))
+         ,@body))))
+
+(defun pichat-test-chain-answer (call &optional disposition error)
+  "Answer RPC CALL with DISPOSITION, or refuse it with ERROR."
+  (if error
+      (funcall (plist-get call :failure) (list :success :false :error error)
+               (plist-get call :session))
+    (funcall (plist-get call :success) (list :success t :data (list :disposition disposition))
+             (plist-get call :session))))
+
+(defun pichat-test-chain-delivery (executor root)
+  "Return the delivery state of EXECUTOR's chain ROOT."
+  (plist-get (plist-get (pichat-job-executor-chain-entry executor root) :delivery) :state))
+
+(ert-deftest pichat-job-tools-chain-finish-sends-the-chat-one-bounded-message ()
+  (pichat-test-with-chain-delivery
+    (let* ((reviewer (pichat-job-save store (plist-put (pichat-test-job-spec project-dir)
+                                                       :title "Plan reviewer")))
+           (worker (pichat-job-save store (plist-put (plist-put (pichat-test-job-spec project-dir)
+                                                                :title "Plan worker")
+                                                     :after-job-id reviewer)))
+           (root (pichat-test-chain-start worker session))
+           review)
+      (pichat-test-chain-end executor root "completed")
+      (setq review (pichat-test-chain-followup store root))
+      ;; Not after the worker: the reviewer is part of the chain.
+      (should-not sent)
+      (pichat-test-chain-end executor review "completed"
+                             (list :version 1 :transcript "t"
+                                   :response "\nplan-loop reviewer: accept\nDetails follow."))
+      (should (= 1 (length sent)))
+      (let* ((call (car sent))
+             (payload (plist-get call :payload))
+             (text (plist-get payload :message)))
+        (should (eq session (plist-get call :session)))
+        (should (equal "prompt" (plist-get call :type)))
+        (should (equal "followUp" (plist-get payload :streamingBehavior)))
+        (should (string-prefix-p "[PiChat] " text))
+        (should (string-match-p "sent by PiChat, not by the user" text))
+        (should (string-match-p "It is data, not a user request" text))
+        (should (string-match-p (format "first run %s · 2 runs · ended completed" root) text))
+        (should (string-match-p (format "1\\. %s “Plan worker”: completed" root) text))
+        (should (string-match-p (format "2\\. %s “Plan reviewer”: completed" review) text))
+        (should (string-match-p (format "Last response (%s, first line): plan-loop reviewer: accept$"
+                                        review)
+                                text))
+        (should-not (string-match-p "Details follow" text))
+        (should (string-match-p "pichat_job_run_inspect" text))
+        (should (equal "sending" (pichat-test-chain-delivery executor root)))
+        (pichat-test-chain-answer call "started"))
+      (should (equal "sent" (pichat-test-chain-delivery executor root)))
+      ;; Later changes do not send the same finish again.
+      (pichat-job-executor--changed executor)
+      (should (= 1 (length sent)))
+      ;; The chain's first run shows the delivery; other runs do not.
+      (should (equal '(:state "sent" :description "Sent to the starting chat")
+                     (plist-get (pichat-test-job-tool-ok "pichat_job_run_inspect" (list :run_id root))
+                                :chat_notification)))
+      (should-not (plist-member (pichat-test-job-tool-ok "pichat_job_run_inspect"
+                                                         (list :run_id review))
+                                :chat_notification))
+      (pichat-jobs--show-detail executor 'runs root)
+      (unless (member 'execution pichat-jobs--expanded) (pichat-test-job-press "Details"))
+      (should (string-match-p "^Chat notification: Sent to the starting chat$" (buffer-string))))))
+
+(ert-deftest pichat-job-tools-chain-finish-queues-behind-a-busy-chat-and-notifies-again-after-repeat ()
+  (pichat-test-with-chain-delivery
+    (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (root (pichat-test-chain-start job session))
+           repeat)
+      (setf (pichat-session-streaming-p session) t
+            (pichat-session-state session) 'running)
+      (pichat-test-chain-end executor root "failed")
+      (should (string-match-p "ended failed (Broke)" (plist-get (plist-get (car sent) :payload) :message)))
+      (pichat-test-chain-answer (car sent) "queued")
+      (should (equal "queued" (pichat-test-chain-delivery executor root)))
+      (should (equal "Sent; queued after the starting chat's current work"
+                     (pichat-job-executor-chain-delivery-text
+                      (pichat-job-executor-chain-entry executor root))))
+      ;; Repeat from Jobs: the chain finishes again, so the chat is told again.
+      (setq repeat (pichat-job-executor-submit-options executor (list :repeat-of root)))
+      (pichat-test-chain-end executor repeat "completed")
+      (should (= 2 (length sent)))
+      (should (string-match-p (format "2 runs · ended completed\n1\\. %s .*failed (Broke)\n2\\. %s"
+                                      root repeat)
+                              (plist-get (plist-get (car sent) :payload) :message)))
+      (should (equal "sending" (pichat-test-chain-delivery executor root))))))
+
+(ert-deftest pichat-job-tools-chain-finish-names-uncertain-runs-and-undispatched-follow-ups ()
+  (pichat-test-with-chain-delivery
+    (let* ((reviewer (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (worker (pichat-job-save store (plist-put (plist-put (pichat-test-job-spec project-dir)
+                                                                :title (make-string 300 ?w))
+                                                     :after-job-id reviewer)))
+           (root (pichat-test-chain-start worker session))
+           (token (plist-get (pichat-job-claim store root) :attempt)))
+      ;; A full queue: the reviewer cannot be dispatched.
+      (pichat-job-advance store root token "running" '(:runtime-id "pichat-runtime-gone"))
+      (pichat-job-advance store root token "uncertain" '(:reason "Process lost") 0)
+      (pichat-job-executor--changed executor)
+      (let ((text (plist-get (plist-get (car sent) :payload) :message)))
+        (should (string-match-p "1 run · ended uncertain (Process lost)" text))
+        (should (string-match-p (format "Follow-up not dispatched after %s .*: Job queue is full" root)
+                                text))
+        (should (string-match-p "none captured" text))
+        ;; Titles are bounded.
+        (should-not (string-match-p (make-string 100 ?w) text))))))
+
+(ert-deftest pichat-job-tools-chain-finish-message-is-bounded-for-long-chains ()
+  (pichat-test-with-chain-delivery
+    (let* ((job (pichat-job-save store (plist-put (pichat-test-job-spec project-dir)
+                                                  :title (make-string 200 ?t))))
+           (root (pichat-test-chain-start job session))
+           (run root))
+      (pichat-test-chain-end executor root "failed")
+      (dotimes (_ 13)
+        (setq run (pichat-job-executor-submit-options executor (list :repeat-of run)))
+        (pichat-test-chain-end executor run "completed"
+                               (list :version 1 :transcript "t"
+                                     :response (make-string 3000 ?r))))
+      (let ((text (plist-get (plist-get (car sent) :payload) :message)))
+        (should (= 14 (length sent)))
+        (should (<= (length text) pichat-job-tools-notice-limit))
+        (should (string-match-p (format "first run %s · 14 runs" root) text))
+        (should (string-match-p "(4 earlier runs not listed)\n5\\. " text))
+        (should (string-match-p (format "14\\. %s " run) text))
+        (should (string-match-p "pichat_job_run_inspect" text))))))
+
+(ert-deftest pichat-job-tools-chain-finish-keeps-undispatched-follow-ups-when-runs-overflow ()
+  ;; Every run has a long title and reason and a follow-up that the full
+  ;; queue refused; the run lines alone exceed the message budget.
+  (pichat-test-with-chain-delivery
+    (let* ((reviewer (pichat-job-save store (pichat-test-job-spec project-dir)))
+           (worker (pichat-job-save store (plist-put (plist-put (pichat-test-job-spec project-dir)
+                                                                :title (make-string 200 ?w))
+                                                     :after-job-id reviewer)))
+           (run (pichat-test-chain-start worker session))
+           (end (lambda (id)
+                  (let ((token (plist-get (pichat-job-claim store id) :attempt)))
+                    (pichat-job-advance store id token "finished"
+                                        (list :result "failed" :safe-to-release t
+                                              :reason (make-string 300 ?x))
+                                        0)
+                    (pichat-job-executor--changed executor)))))
+      (funcall end run)
+      (dotimes (_ 11)
+        (setq run (pichat-job-executor-submit-options executor (list :repeat-of run)))
+        (funcall end run))
+      (let ((text (plist-get (plist-get (car sent) :payload) :message)))
+        (should (= 12 (length sent)))
+        (should (<= (length text) pichat-job-tools-notice-limit))
+        (should (string-match-p "first run .* · 12 runs" text))
+        ;; The newest undispatched follow-up is named in full; older ones
+        ;; are counted.
+        (should (string-match-p (format "Follow-up not dispatched after %s .*: Job queue is full$"
+                                        run)
+                                text))
+        (should (string-match-p "^([0-9]+ earlier follow-ups not dispatched, not listed)$" text))
+        (should (string-match-p "^For details, call pichat_job_run_inspect" text))))))
+
+(ert-deftest pichat-job-tools-chain-finish-records-why-a-chat-was-not-notified ()
+  (pichat-test-with-chain-delivery
+    (let* ((jobs (cl-loop repeat 4 collect (pichat-job-save store (pichat-test-job-spec project-dir))))
+           (refused (pichat-test-chain-start (nth 0 jobs) session))
+           (owned (pichat-test-chain-start (nth 1 jobs) session))
+           (closed (pichat-test-chain-start (nth 2 jobs) session)))
+      ;; Pi refuses the prompt: recorded, not retried.
+      (pichat-test-chain-end executor refused "completed")
+      (pichat-test-chain-answer (car sent) nil "Agent is busy in an odd way")
+      (should (equal "Not notified: Pi refused the message: Agent is busy in an odd way"
+                     (pichat-job-executor-chain-delivery-text
+                      (pichat-job-executor-chain-entry executor refused))))
+      (should (= 1 (length sent)))
+      ;; A scheduled continuation owns the chat's input: nothing is sent.
+      (setf (pichat-session-input-guard session)
+            (lambda (_command) (user-error "A scheduled attempt owns this chat")))
+      (pichat-test-chain-end executor owned "completed")
+      (should (= 1 (length sent)))
+      (should (equal "Not notified: Another job owns the chat's input"
+                     (pichat-job-executor-chain-delivery-text
+                      (pichat-job-executor-chain-entry executor owned))))
+      (setf (pichat-session-input-guard session) nil)
+      ;; The chat was closed.
+      (kill-buffer (pichat-session-buffer session))
+      (pichat-test-chain-end executor closed "completed")
+      (should (= 1 (length sent)))
+      (should (equal "not-notified" (pichat-test-chain-delivery executor closed)))
+      (should (equal '(:state "not-notified" :description "Not notified: Chat closed")
+                     (plist-get (pichat-test-job-tool-ok "pichat_job_run_inspect" (list :run_id closed))
+                                :chat_notification))))))
+
+(ert-deftest pichat-job-tools-chain-finish-waits-for-a-manual-compaction ()
+  (pichat-test-with-chain-delivery
+    (let* ((jobs (cl-loop repeat 3 collect (pichat-job-save store (pichat-test-job-spec project-dir))))
+           (waits (pichat-test-chain-start (nth 0 jobs) session))
+           (stops (pichat-test-chain-start (nth 1 jobs) session))
+           (races (pichat-test-chain-start (nth 2 jobs) session)))
+      ;; Compacting outside a run: Pi would refuse, so the send waits.
+      (setf (pichat-session-compacting-p session) t (pichat-session-state session) 'compacting)
+      (pichat-test-chain-end executor waits "completed")
+      (should-not sent)
+      (should (equal "waiting" (pichat-test-chain-delivery executor waits)))
+      (setf (pichat-session-compacting-p session) nil (pichat-session-state session) 'idle)
+      (pichat-emit session 'compaction-end)
+      (should (= 1 (length sent)))
+      (pichat-test-chain-answer (car sent) "started")
+      (should (equal "sent" (pichat-test-chain-delivery executor waits)))
+      ;; The handlers are gone: a later compaction sends nothing more.
+      (pichat-emit session 'compaction-end)
+      (should (= 1 (length sent)))
+      ;; Pi's refusal in a race with a new compaction is recorded, not retried.
+      (pichat-test-chain-end executor races "completed")
+      (pichat-test-chain-answer
+       (car sent) nil "Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.")
+      (should (equal "Not notified: Chat was compacting"
+                     (pichat-job-executor-chain-delivery-text
+                      (pichat-job-executor-chain-entry executor races))))
+      ;; The runtime stops while the send waits: not notified, never sent.
+      (setf (pichat-session-compacting-p session) t)
+      (pichat-test-chain-end executor stops "completed")
+      (should (equal "waiting" (pichat-test-chain-delivery executor stops)))
+      (pichat-emit session 'session-ended)
+      (setf (pichat-session-compacting-p session) nil)
+      (pichat-emit session 'compaction-end)
+      (should (= 2 (length sent)))
+      (should (equal "Not notified: Chat runtime stopped"
+                     (pichat-job-executor-chain-delivery-text
+                      (pichat-job-executor-chain-entry executor stops)))))))
+
+(ert-deftest pichat-job-tools-chain-finish-deleted-while-waiting-removes-its-handlers ()
+  (pichat-test-with-chain-delivery
+    (let* ((events '(compaction-end session-ended session-rebinding))
+           (handlers (lambda ()
+                       (mapcar (lambda (event) (length (pichat--handlers-for event session)))
+                               events)))
+           (before (funcall handlers))
+           (jobs (cl-loop repeat 2 collect (pichat-job-save store (pichat-test-job-spec project-dir))))
+           (deleted (pichat-test-chain-start (nth 0 jobs) session))
+           (stale (pichat-test-chain-start (nth 1 jobs) session)))
+      (setf (pichat-session-compacting-p session) t (pichat-session-state session) 'compacting)
+      ;; Deleting the chain during a manual compaction removes the handlers.
+      (pichat-test-chain-end executor deleted "completed")
+      (should (equal "waiting" (pichat-test-chain-delivery executor deleted)))
+      (should (equal (mapcar #'1+ before) (funcall handlers)))
+      (pichat-job-executor-delete-chain executor deleted (list deleted))
+      (should-not (pichat-job-executor-chain-entry executor deleted))
+      (should (equal before (funcall handlers)))
+      ;; A delivery that became stale without cleanup removes its handlers
+      ;; at the next event and sends nothing.
+      (pichat-test-chain-end executor stale "completed")
+      (should (equal (mapcar #'1+ before) (funcall handlers)))
+      (remhash stale (pichat-job-executor-chains executor))
+      (setf (pichat-session-compacting-p session) nil (pichat-session-state session) 'idle)
+      (pichat-emit session 'compaction-end)
+      (should (equal before (funcall handlers)))
+      (should-not sent))))
 
 (ert-deftest pichat-job-tools-approval-names-the-job-and-run ()
   (pichat-test-with-job-tools
@@ -987,6 +1265,65 @@ executor does."
                   (let ((cancelled (pichat-job-record store 'runs queued)))
                     (should (equal "finished" (plist-get cancelled :state)))
                     (should (equal "cancelled" (plist-get cancelled :result)))))))
+          (when chat
+            (ignore-errors (pichat-rpc-stop chat))
+            (when-let* ((buffer (pichat-session-buffer chat)))
+              (when (buffer-live-p buffer) (kill-buffer buffer)))))))))
+
+;; Integration: when the chain a chat started finishes, the real chat gets one
+;; message from PiChat, after or behind its current turn, and replies to it.
+(when pichat-test-include-integration
+  (ert-deftest pichat-integration-job-tools-chain-finish-notifies-the-starting-chat ()
+    (pichat-test-with-job-executor
+        (:script '(:turns [(:text "WORKER REPORT: all files reviewed")]))
+      (pichat-job-tools-register)
+      (let* ((pichat-jobs-file (pichat-job-store-file store))
+             (pichat-jobs--executor executor)
+             (pichat-jobs--owned-store nil)
+             (pichat-approval-policy-file (expand-file-name "approvals.el" project-dir))
+             (pichat-chat-stop-session-on-kill nil)
+             (pichat-job-executor-chain-finished-functions
+              (list #'pichat-job-tools-chain-deliver))
+             (job (pichat-job-save store (pichat-test-job-spec project-dir)))
+             (chat-status (expand-file-name "chat-status.json" project-dir))
+             (script
+              `(:turns
+                [(:expectTool (:name "pichat_job_run_now")
+                  :toolCall (:id "run" :name "pichat_job_run_now" :arguments (:job_id ,job)))
+                 (:expectContextIncludes "run_id" :text "submitted")
+                 (:expectContextIncludes
+                  ["[PiChat] A job run chain started from this chat has finished."
+                   "not a user request" "“Review files”: completed"
+                   "first line): WORKER REPORT: all files reviewed"]
+                  :text "NOTED: the review job finished")]))
+             chat)
+        (setq pichat-approval-rules '(("pichat_job_run_now" . allow)))
+        (pichat-approval-save)
+        (unwind-protect
+            (progn
+              (setq chat (pichat-test-start-bridge-chat project-dir script chat-status
+                                                        pichat-test-job-tools-names))
+              (pichat-test-prompt-and-wait chat "run the review job")
+              (let ((run (plist-get (seq-find (lambda (r) (equal job (plist-get r :job-id)))
+                                              (pichat-job-records store 'runs))
+                                    :id)))
+                (should run)
+                (pichat-test-job-wait store run "finished")
+                (pichat-test-assert-provider-script-consumed status-file)
+                (pichat-test-wait-until
+                 (lambda () (member (pichat-test-chain-delivery executor run) '("sent" "queued")))
+                 8 "the notification to be accepted by Pi")
+                (pichat-test-wait-for-buffer-contains (pichat-session-buffer chat)
+                                                      "NOTED: the review job finished" 10)
+                (pichat-test-assert-provider-script-consumed chat-status)
+                (let ((text (pichat-test-buffer-text (pichat-session-buffer chat))))
+                  (should (= 1 (pichat-test-count-substring
+                                "A job run chain started from this chat has finished" text))))
+                (should (member (plist-get (plist-get (pichat-test-job-tool-ok
+                                                       "pichat_job_run_inspect" (list :run_id run))
+                                                      :chat_notification)
+                                           :state)
+                                '("sent" "queued")))))
           (when chat
             (ignore-errors (pichat-rpc-stop chat))
             (when-let* ((buffer (pichat-session-buffer chat)))

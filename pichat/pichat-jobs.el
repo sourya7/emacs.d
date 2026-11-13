@@ -1153,6 +1153,10 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
                               (lambda () (pichat-jobs--show-detail owner 'runs origin)))
           (insert "\n")))
       (pichat-jobs--insert-chain owner record)
+      ;; Only a chain started from a chat has one; kept while Emacs runs.
+      (when-let* ((text (pichat-job-executor-chain-delivery-text
+                         (pichat-job-executor-chain-entry owner id))))
+        (insert "Chat notification: " (replace-regexp-in-string "[\n\r\t]+" " " text) "\n"))
       (unless (member (plist-get (plist-get record :dispatch) :state) '("not-dispatched" "interrupted"))
         (pichat-jobs--insert-followup owner record))
       (insert (format "Workspace: %s · Target: %s\n"

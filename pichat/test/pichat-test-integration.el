@@ -918,6 +918,195 @@ clears MCP stays empty; an ineligible baseline or missing model starts nothing."
                                    :data) :disposition)))
         (pichat-test-wait-for-raw-event session "agent_settled" 8 settled))))
 
+  ;; Prompts sent with streamingBehavior "followUp" by PiChat itself rather
+  ;; than the chat input (job-chain finish notifications).  Each case records
+  ;; Pi's disposition and where the prompt lands in the conversation.
+
+  (defun pichat-test--follow-up-prompt (session message)
+    "Send MESSAGE to SESSION as a followUp prompt; return (OK . DATA-OR-RESPONSE)."
+    (let (result)
+      (pichat-rpc-prompt session message nil "followUp"
+                         (lambda (response _session)
+                           (setq result (cons t (plist-get response :data))))
+                         (lambda (response _session)
+                           (setq result (cons nil response))))
+      (pichat-test-wait-until (lambda () result) 5 "followUp prompt response")))
+
+  (defun pichat-test--user-texts (session)
+    "Return the text of SESSION's user messages, each truncated to 40 chars."
+    (mapcar (lambda (message)
+              (truncate-string-to-width (pichat-render-message-text message) 40))
+            (cl-remove-if-not
+             (lambda (message) (equal "user" (plist-get message :role)))
+             (plist-get (plist-get (pichat-test-rpc-call session "get_messages")
+                                   :data)
+                        :messages))))
+
+  (ert-deftest pichat-integration-follow-up-prompt-queues-during-auto-retry ()
+    (pichat-test-with-integration-session
+        (session :no-session t
+                 :settings '(:retry (:enabled t :maxRetries 3 :baseDelayMs 1000))
+                 :script '(:turns [(:error "WebSocket error")
+                                   (:text "recovered")
+                                   (:expectContextIncludes "notice during retry"
+                                    :text "notice reply")]))
+      (pichat-test-rpc-call session "set_auto_retry" '(:enabled t))
+      (let ((settled (pichat-test-count-raw-events session "agent_settled")))
+        (pichat-test-rpc-call session "prompt" (list :message "retry me"))
+        (pichat-test-wait-for-raw-event session "auto_retry_start" 8)
+        (should (equal '(t :disposition "queued")
+                       (pichat-test--follow-up-prompt session "notice during retry")))
+        (pichat-test-wait-for-raw-event session "agent_settled" 10 settled)
+        (should (= (1+ settled) (pichat-test-count-raw-events session "agent_settled"))))
+      (should (equal '("retry me" "notice during retry")
+                     (pichat-test--user-texts session)))))
+
+  (ert-deftest pichat-integration-follow-up-prompt-runs-after-exhausted-retry ()
+    (pichat-test-with-integration-session
+        (session :no-session t
+                 :settings '(:retry (:enabled t :maxRetries 1 :baseDelayMs 1000))
+                 :script '(:turns [(:error "WebSocket error")
+                                   (:error "WebSocket error")
+                                   (:expectContextIncludes "notice after failure"
+                                    :text "notice reply")]))
+      (pichat-test-rpc-call session "set_auto_retry" '(:enabled t))
+      (let ((settled (pichat-test-count-raw-events session "agent_settled")))
+        (pichat-test-rpc-call session "prompt" (list :message "retry me"))
+        (pichat-test-wait-for-raw-event session "auto_retry_start" 8)
+        (should (equal '(t :disposition "queued")
+                       (pichat-test--follow-up-prompt session "notice after failure")))
+        (pichat-test-wait-for-raw-event session "agent_settled" 10 settled))
+      (should (equal '("retry me" "notice after failure")
+                     (pichat-test--user-texts session)))))
+
+  (ert-deftest pichat-integration-follow-up-prompt-queues-during-threshold-compaction ()
+    (pichat-test-with-integration-session
+        (session :settings '(:compaction
+                             (:enabled t :reserveTokens 1000 :keepRecentTokens 100))
+                 :script '(:turns [(:text "h1" :usage (:input 500 :output 20))
+                                   (:text "h2" :usage (:input 127500 :output 20))
+                                   (:text "summary" :delayMs 1000)
+                                   (:expectContextIncludes "notice during compaction"
+                                    :text "notice reply")]))
+      (pichat-test-prompt-and-wait session (concat "one " (make-string 2000 ?a)))
+      (pichat-test-rpc-call session "set_auto_compaction" '(:enabled t))
+      (let ((settled (pichat-test-count-raw-events session "agent_settled")))
+        (pichat-test-rpc-call session "prompt"
+                              (list :message (concat "two " (make-string 2000 ?b))))
+        (pichat-test-wait-for-raw-event session "compaction_start" 8)
+        (should (plist-get (plist-get (pichat-test-rpc-call session "get_state") :data)
+                           :isCompacting))
+        (should (equal '(t :disposition "queued")
+                       (pichat-test--follow-up-prompt session "notice during compaction")))
+        (pichat-test-wait-for-raw-event session "agent_settled" 10 settled)
+        (should (= (1+ settled) (pichat-test-count-raw-events session "agent_settled"))))
+      (should (equal "notice during compaction"
+                     (car (last (pichat-test--user-texts session)))))))
+
+  (ert-deftest pichat-integration-follow-up-prompt-queues-during-overflow-compaction ()
+    (pichat-test-with-integration-session
+        (session :settings '(:compaction
+                             (:enabled t :reserveTokens 1000 :keepRecentTokens 100))
+                 :script '(:turns [(:text "h1") (:text "h2")
+                                   (:error "maximum context length exceeded")
+                                   (:text "summary" :delayMs 1000)
+                                   (:text "after overflow")
+                                   (:expectContextIncludes "notice during overflow"
+                                    :text "notice reply")]))
+      (pichat-test-prompt-and-wait session (concat "one " (make-string 5000 ?a)))
+      (pichat-test-prompt-and-wait session (concat "two " (make-string 5000 ?b)))
+      (pichat-test-rpc-call session "set_auto_compaction" '(:enabled t))
+      (let ((settled (pichat-test-count-raw-events session "agent_settled")))
+        (pichat-test-rpc-call session "prompt" (list :message "overflow me"))
+        (pichat-test-wait-for-raw-event session "compaction_start" 8)
+        (should (equal '(t :disposition "queued")
+                       (pichat-test--follow-up-prompt session "notice during overflow")))
+        (pichat-test-wait-for-raw-event session "agent_settled" 10 settled))
+      (should (equal '("overflow me" "notice during overflow")
+                     (last (pichat-test--user-texts session) 2)))))
+
+  (ert-deftest pichat-integration-follow-up-prompt-is-rejected-during-manual-compaction ()
+    (pichat-test-with-integration-session
+        (session :settings '(:compaction
+                             (:enabled t :reserveTokens 1000 :keepRecentTokens 100))
+                 :script '(:turns [(:text "h1" :usage (:input 500 :output 20))
+                                   (:text "h2" :usage (:input 700 :output 20))
+                                   (:text "summary" :delayMs 1000)
+                                   (:expectContextIncludes "notice after compaction"
+                                    :text "notice reply")]))
+      (pichat-test-prompt-and-wait session (concat "one " (make-string 2000 ?a)))
+      (pichat-test-prompt-and-wait session (concat "two " (make-string 2000 ?b)))
+      (let ((ends (pichat-test-count-raw-events session "compaction_end"))
+            compacted)
+        (pichat-rpc-send session "compact" nil
+                         (lambda (&rest _) (setq compacted 'ok))
+                         (lambda (&rest _) (setq compacted 'failed)))
+        (pichat-test-wait-for-raw-event session "compaction_start" 5)
+        ;; Manual compaction runs outside an agent run: Pi is not streaming,
+        ;; so a followUp prompt is refused rather than queued.
+        (let ((state (plist-get (pichat-test-rpc-call session "get_state") :data))
+              (result (pichat-test--follow-up-prompt session "notice during compaction")))
+          (should (plist-get state :isCompacting))
+          (should-not (plist-get state :isStreaming))
+          (should-not (car result))
+          (should (string-match-p "compaction is in progress"
+                                  (plist-get (cdr result) :error))))
+        (pichat-test-wait-for-raw-event session "compaction_end" 8 ends)
+        (pichat-test-wait-until (lambda () compacted) 8 "compact response")
+        (should (eq 'ok compacted)))
+      (let ((settled (pichat-test-count-raw-events session "agent_settled")))
+        (should (equal '(t :disposition "started")
+                       (pichat-test--follow-up-prompt session "notice after compaction")))
+        (pichat-test-wait-for-raw-event session "agent_settled" 8 settled))
+      (should-not (member "notice during compaction" (pichat-test--user-texts session)))))
+
+  (ert-deftest pichat-integration-chat-renders-follow-up-prompts-it-did-not-submit ()
+    (pichat-test-with-integration-session
+        (session :no-session t
+                 :script '(:turns [(:text "busy reply" :delayMs 700)
+                                   (:expectContextIncludes "notice while busy"
+                                    :text "reply to busy notice")
+                                   (:expectContextIncludes "notice while idle"
+                                    :text "reply to idle notice")]))
+      (let ((pichat-chat-render-markdown nil)
+            (pichat-chat-stop-session-on-kill nil)
+            buffer)
+        (unwind-protect
+            (let ((settled (pichat-test-count-raw-events session "agent_settled")))
+              (setq buffer (pichat-chat-open session))
+              (with-current-buffer buffer
+                (goto-char (point-max))
+                (insert "user work")
+                (pichat-chat-send-input))
+              (pichat-test-wait-for-raw-event session "agent_start" 3)
+              (should (equal '(t :disposition "queued")
+                             (pichat-test--follow-up-prompt session "notice while busy")))
+              (pichat-test-wait-until
+               (lambda ()
+                 (with-current-buffer buffer
+                   (equal '(0 . 1) pichat-chat--queue-counts)))
+               3 "chat to count the queued follow-up")
+              (pichat-test-wait-for-raw-event session "agent_settled" 8 settled)
+              (with-current-buffer buffer
+                (pichat-chat--set-input-text "unsent draft"))
+              (setq settled (pichat-test-count-raw-events session "agent_settled"))
+              (should (equal '(t :disposition "started")
+                             (pichat-test--follow-up-prompt session "notice while idle")))
+              (pichat-test-wait-for-raw-event session "agent_settled" 8 settled)
+              (pichat-test-wait-for-buffer-contains buffer "reply to idle notice")
+              (let ((text (pichat-test-buffer-text buffer)))
+                (should (string-match-p
+                         (concat "user work\\(.\\|\n\\)*busy reply"
+                                 "\\(.\\|\n\\)*notice while busy"
+                                 "\\(.\\|\n\\)*reply to busy notice"
+                                 "\\(.\\|\n\\)*notice while idle"
+                                 "\\(.\\|\n\\)*reply to idle notice")
+                         text)))
+              (with-current-buffer buffer
+                (should (equal '(0 . 0) pichat-chat--queue-counts))
+                (should (equal "unsent draft" (pichat-chat--input-text)))))
+          (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
   (ert-deftest pichat-integration-simple-prompt-streams-through-real-pi ()
     (pichat-test-with-integration-session
         (session :no-session t

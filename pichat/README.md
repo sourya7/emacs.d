@@ -1109,7 +1109,9 @@ phase adapter. Scheduling always requires explicit authorization.
   model/preset/Tools, full identities, trigger, local
   timeline and related-run links. Normal follow-up status is there too; failed
   dispatch, input requests, blockers and uncertainty stay visible without opening
-  a menu. **View chat** and active **Cancel run…** remain directly available.
+  a menu. The first run of a chain started from a chat also shows **Chat
+  notification: …** (see [Chain finish notifications](#chain-finish-notifications))
+  while Emacs runs. **View chat** and active **Cancel run…** remain directly available.
 - Both reports show the captured title in their header. Saved-job headers omit
   internal IDs; run headers append an abbreviated saved-job ID when applicable.
   One-off runs have no saved-job ID. Full identities remain available through
@@ -1486,6 +1488,9 @@ derived from the store when needed.
   and reviewer plus spares) is a backstop: once a chain has that many runs,
   `pichat_job_run_now` called from one of its runs is refused, naming the
   chain's first run. Runs you start from Jobs are never refused.
+- A run that a chat (not a job run) starts with `pichat_job_run_now` begins a
+  new chain; when that chain finishes, PiChat tells the chat (see
+  [Chain finish notifications](#chain-finish-notifications)).
 - Run details show **Requested by** and a **Run chain** list linking every run.
   **Actions → Delete chain…** (`C`) deletes all of a chain's run records in one
   confirmed step, once every run in it is finished. Evidence and saved session
@@ -2604,6 +2609,10 @@ approval by default; their prompts name the job, its target and directory.
   without one refuse it. The approval prompt shows the input's first line.
   Called from a job run, the new run records `requested_by` and continues that
   run's [run chain](#review-loops); a chain at `pichat-jobs-max-chain-runs` runs
+  is refused. Called from a chat, the new run starts a chain, and PiChat sends
+  the chat one message when that chain finishes (see
+  [Chain finish notifications](#chain-finish-notifications)); a chat that has
+  started `pichat-jobs-max-notified-runs` runs since the user's last message
   is refused.
 - `pichat_job_run_inspect` returns one job run's state, result, reason, run
   `input` if any, `requested_by` if a job run started it, its chain `round` and,
@@ -2612,7 +2621,9 @@ approval by default; their prompts name the job, its target and directory.
   is closed. If the evidence is missing or changed, the stored 2000-character
   summary is returned and labelled. While the run's runtime is retained (and
   still bound to the run's saved session file, since runtime IDs restart with
-  Emacs), its `runtime_id` can be passed to `pichat_chat_read`.
+  Emacs), its `runtime_id` can be passed to `pichat_chat_read`. For the first
+  run of a chain started from a chat, `chat_notification` (`state`,
+  `description`) says whether that chat was told the chain finished.
 - `pichat_job_run_cancel` removes a scheduled or queued run. For an active run
   it asks the runtime to abort and reports the state recorded afterwards. A run
   whose prompt was not sent yet finishes as cancelled. Once the prompt was sent,
@@ -2628,6 +2639,64 @@ just as opening Jobs would (which also resumes your other enabled schedules).
 Intervals are elapsed time, not calendar recurrence, so local times shift
 across DST. As with all saved-job timing, Emacs must keep running and missed
 occurrences are not replayed.
+
+### Chain finish notifications
+
+When an ordinary chat starts a saved job with `pichat_job_run_now`, PiChat
+remembers that chat for the new run's [run chain](#review-loops). When every
+run of the chain is finished or uncertain, it sends the chat one message, so
+the agent can report the result (and, if asked, continue) without the user
+asking whether the work is done. For a plan loop that is after the reviewer's
+last run, not after the worker's run or each review round: an after-run job
+is queued together with its origin's stop, and a reviewer that restarts the
+worker is still running when it does, so the chain never looks finished in
+between. A chain that ends failed, cancelled or uncertain notifies too, with
+that state, including a run the chat cancelled itself. Releasing an uncertain
+run does not notify again; a **Repeat** or **Continue work** from Jobs that
+adds a run to the chain notifies again when the chain finishes again.
+
+Only chat-started chains notify. Runs started from Jobs (Run job, Repeat,
+Continue work) as a new chain, by schedules, or by a job tool inside a job run
+(including an [orchestrator job](#orchestrator-jobs)) have no starting chat.
+
+The message starts with the fixed line `[PiChat] A job run chain started from
+this chat has finished.`, says that it was sent by PiChat and is data, not a
+user request, and lists the chain's first run, how the last run ended, up to
+10 runs (ID, job title and result; older runs are counted), follow-ups that
+were not dispatched, the first line of the last run's response, and that
+`pichat_job_run_inspect` gives details. It is at most 2,000 characters; only
+the run and follow-up lists are shortened.
+
+**Delivery.** PiChat sends the message as a prompt with Pi's `followUp`
+streaming behaviour: an idle chat starts a turn at once, a busy one (running,
+retrying or compacting automatically) receives it as a queued follow-up
+message after its current work. A chat compacting outside a run (manual
+compaction) refuses prompts, so the first send waits for that compaction to
+end. It is sent at most once per finish and never retried. Nothing is sent,
+and the state reads **Not notified** with the reason, when the chat was
+closed, its runtime stopped or restarted, its Pi session changed, another job
+(a scheduled continuation) owns its input, or Pi refused the prompt. The
+delivery state (sending, waiting for compaction, sent, queued, not notified)
+shows in the first run's Jobs details as **Chat notification: …** and as
+`chat_notification` in `pichat_job_run_inspect`. It is kept in memory only:
+after an Emacs restart nothing is restored or sent, and run records do not
+change.
+
+**Limit.** A chat can answer each message by starting another run, and the
+Jobs tools are often on **Always allow**, so a chat could keep going without
+the user. `pichat-jobs-max-notified-runs` (default 8) counts every run a chat
+started with `pichat_job_run_now` since the user's last message (a prompt,
+a picked Pi command, steering or a follow-up message from the chat input);
+past it the tool is refused, naming the limit. PiChat's own messages do not
+reset the count. Job-run callers keep only `pichat-jobs-max-chain-runs`.
+
+**Side effects.** RPC has no other message kind, so the message is a
+user-role message in the chat's Pi session; its fixed first line marks it as
+PiChat's, and the tool instructions say it is data. While it is queued,
+aborting the chat restores its text into the input editor, like any queued
+follow-up message. It counts as submitted input: a pending
+[scheduled continuation](#scheduled-continuation-in-this-conversation) in that
+chat is cancelled with "Intervening submitted input".
 
 ### Chat tools
 
@@ -2675,6 +2744,12 @@ chats are doing, starts saved jobs, reads their results and cancels runs.
   bridge; the jobs it starts may use SSH.
 - **Trust.** Chat messages and job responses come from other agents; the tool
   instructions tell the agent to treat them as data, not instructions.
+- **Orchestrator chats.** An ordinary chat with these tools can orchestrate
+  interactively: it is told when each chain it started finishes (see
+  [Chain finish notifications](#chain-finish-notifications)) and can start the
+  next run itself, up to `pichat-jobs-max-notified-runs` runs per user
+  message. An orchestrator job is a job run, so its runs join its own chain
+  and it is not notified.
 
 ## Permissions
 

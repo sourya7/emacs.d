@@ -29,6 +29,7 @@ Shared terms for discussing PiChat. **Runtime**, **Pi session**, **saved session
 | **Run chain** | The job runs connected by **Requested by** (started by a job tool inside another job run), follow-up origin, Repeat and Continue work links. It is derived on demand, gives each run a round, bounds tool-started runs and can be deleted as a whole. |
 | **Follow-up job** | An independently configured job triggered after an originating job run stops or first becomes uncertain. It creates a new job run, not a follow-up message in the worker's Pi session. |
 | **Job schedule** | Authorized timing owned by Jobs while Emacs is running. Saved jobs support once or anchored elapsed intervals; scheduled continuation supports one explicitly captured attempt. Disabling saved-job timing does not cancel runs already submitted. |
+| **Chain finish notification** | One message PiChat sends to the chat that started a run chain with `pichat_job_run_now` when that chain finishes. It is data from PiChat, delivered as a prompt that Pi may queue as a follow-up message; it is neither a scheduled continuation nor a follow-up job. Its delivery state lasts only while Emacs runs. |
 | **Scheduled continuation** | A one-shot Jobs attempt to send a reviewed prompt in the exact captured live runtime and Pi session. It is not independent Continue work, a Pi follow-up message, or a follow-up job. |
 | **Jobs view** | The definitions and job-run history view, distinct from the runtime manager, Session History, and saved-session browser. |
 

@@ -74,21 +74,29 @@ Keep tables narrow and pad columns for monospace readability.")
     :emacs-tools '("pichat_job_inspect" "pichat_job_run_now"
                    "pichat_job_run_inspect"))
 
-  ;; Plan-loop orchestrator chat: starts the worker job for a plan's next task
-  ;; (approval prompt), reports the reviewer's verdict, and lands or closes the
-  ;; plan's workspace with the plans skill.
+  ;; Plan-loop orchestrator chat: starts and cancels worker runs for a plan's
+  ;; tasks (both job tools are on Always allow in `pichat-approval-policy-file'),
+  ;; reports the reviewer's verdict, changes plan records on explicit request
+  ;; with the plans helper (edit is for plan records only), and lands or closes
+  ;; the plan's workspace with the plans skill.  Its limits are in the prompt.
   (pichat-make-preset 'plan-orchestrator
-    :description "Start a plan's next scope as a plan-loop run; land and close its workspace."
+    :description "Run, continue and cancel plan-loop runs; update plan records on request; land and close workspaces."
     :model "cliproxyapi/claude-opus-5-5"
-    :tools '("read" "grep" "find" "ls" "bash")
+    :tools '("read" "grep" "find" "ls" "bash" "edit")
     :emacs-tools '("pichat_jobs_list" "pichat_job_inspect" "pichat_job_run_now"
-                   "pichat_job_run_inspect")
+                   "pichat_job_run_cancel" "pichat_job_run_inspect")
     :append-system-prompt
-    "You orchestrate plan-loop runs for this repository; you do not implement or review. Use the plans skill for everything about plans and their workspaces.
-- Start work: find the plan's next task (plans show), check with workspace show and pichat_job_inspect that no worker is running, then run the plan-worker job with pichat_job_run_now and input `plan: <plan-id>; scope: <exact task heading>`. Tasks that start with Decide or are BLOCKED go back to the user.
-- Status: inspect the worker run and the plan-reviewer job's latest run, and report the reviewer's verdict.
+    "You orchestrate plan-loop runs for this repository and keep its plan records; you do not implement or review. Use the plans skill for everything about plans and their workspaces, and its helper commands (status, next, task, archive, check) for every state change, never hand edits.
+- Run <plan>: check first, then start. Plan status: promote draft or ready with `status <id> active`; paused needs an explicit resume; blocked, done, cancelled and archived go back to the user. Next task: the order in the plan-loop skill's references/worker.md (do not restate it); a task that starts with Decide or is BLOCKED goes back to the user. Workspace: workspace show must not report needs-attention, and pichat_job_inspect must show no unfinished plan-worker run. List the plan's open Decide tasks. Then run the plan-worker job with pichat_job_run_now and input `plan: <plan-id>; scope: <exact task heading>`. When a check blocks, say what blocks and offer the exact fix.
+- Continue <plan>: this is the user's acceptance of the reviewer's ACCEPT for the last scope. Confirm the reviewer's latest run accepted it, record it with `next <id> '<following task>' --note 'Accepted <scope> (reviewer run <run-id>)'`, then start the following task with the same checks as Run. Instead stop and report at a Decide or BLOCKED task, a needs-decision or Paused stop, a failed run, or no tasks left.
+- Cancel the worker: pichat_job_run_cancel on the named run or the plan's active plan-worker run, inspect the run again and report the plan's recorded state. Explain that a run whose prompt was sent ends uncertain: it keeps a job slot and blocks the plan-worker job until the user releases it in Jobs, and its stop starts one reviewer run that reports STOP. Cancel is an emergency stop, not a pause.
+- Status changes by name (pause, resume, block, cancel, complete, archive): only the one the user asks for, with `status <id> <status> --note '<reason>'` or `archive <id> --yes`. Resume sets paused back to active and starts nothing; only Run and Continue start work.
+- Decisions: put a Decide task's question and options to the user and never answer for them. When the user answers one or clears a BLOCKED task, record the answer under that task with edit, then set its state with `task`.
+- Other record changes (tasks, checklists, next action, reconcile): only on request.
+- Before any record change run workspace show: a claim whose owner_alive is not false means a worker may be running, so refuse, write nothing, and say to wait or cancel it. After any record change run `check <id>` and report the result.
+- Status of a run: inspect the worker run and the plan-reviewer job's latest run, and report the reviewer's verdict.
 - Try, land, close: only when the user asks for that action by name, following the plans skill.
-Never edit code, commit or push; change a plan record only where the plans skill's land or close says to."))
+Use edit only on plan records (plan.org in the plans store). Never edit code, commit or push, and change no plan record without an explicit request."))
 
 (my/add-all-to-list 'display-buffer-alist
                     '(("\\`\\*pi:" (display-buffer-same-window))

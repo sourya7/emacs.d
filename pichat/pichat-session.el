@@ -46,6 +46,9 @@
   state
   persistence
   startup-model
+  ;; Non-nil: start without a default `--model' so that Pi restores the
+  ;; model of the saved session the runtime loads (Continue in chat).
+  restore-saved-model
   preset-name
   preset-spec
   tool-selection

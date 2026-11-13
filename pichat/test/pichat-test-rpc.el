@@ -84,6 +84,27 @@
                      "--model" "run/model")
                    (pichat-rpc-build-command session)))))
 
+(ert-deftest pichat-rpc-build-command-restoring-saved-model-omits-default-model ()
+  (let ((pichat-rpc-command nil)
+        (pichat-pi-executable "/opt/pi")
+        (pichat-pi-default-args '("--mode" "rpc"))
+        (pichat-default-model "default/model")
+        (pichat-pi-session-dir nil)
+        (pichat-bridge-extension-file nil)
+        (pichat-pi-extra-args '("--offline")))
+    ;; Pi's `--model' would outrank the model of the session it loads.
+    (should-not (member "--model"
+                        (pichat-rpc-build-command
+                         (pichat-prepare-session
+                          default-directory nil '(:restore-saved-model t)))))
+    (should (member "default/model"
+                    (pichat-rpc-build-command
+                     (pichat-prepare-session default-directory nil nil))))
+    (should-error (pichat-prepare-session
+                   default-directory nil
+                   '(:restore-saved-model t :model "run/model"))
+                  :type 'user-error)))
+
 (ert-deftest pichat-rpc-build-command-inserts-ephemeral-flag-before-extra-args ()
   (let ((pichat-rpc-command nil)
         (pichat-pi-executable "/opt/pi")

@@ -1210,7 +1210,10 @@ Finished runs with saved-session references offer **Continue in chat…** under
 **Actions**: an explicit
 new ordinary runtime on the captured target using the run's captured preset and
 tools (not the current default preset; reconfigure the chat afterwards to change
-them) and the saved session's model, not rerunning the job. New prompts extend
+them) and the saved session's model, not rerunning the job. PiChat passes no
+`--model` (not even `pichat-default-model`), because Pi's `--model` would replace
+the model Pi restores from the saved session; a `--model` in
+`pichat-pi-extra-args` still takes precedence. New prompts extend
 the same saved Pi session file, not a
 clone, but cannot alter the historical run report or captured transcript.
 Mutating Emacs tools keep their approval rules. A job tool called from this chat

@@ -664,7 +664,9 @@ SCOPE is the immutable (KEY CWD LABEL) owner scope.  LAUNCH-OPTIONS supports
 `:persistence', `:preset', `:tools', `:transport' and run-local `:model'.
 Instead of a `:preset' name, `:preset-spec' may supply an already resolved
 preset snapshot (for example a job's captured preset); the preset registry is
-then not consulted.
+then not consulted.  A non-nil `:restore-saved-model' (refused together with
+`:model') omits `pichat-default-model', so that Pi restores the model of the
+saved session the runtime then loads.
 The returned runtime captures resolved configuration and path context.  It does
 not become current/preferred and no RPC process or chat is created."
   (when (plist-member launch-options :execution)
@@ -672,6 +674,9 @@ not become current/preferred and no RPC process or chat is created."
   (when (and (plist-get launch-options :preset)
              (plist-get launch-options :preset-spec))
     (user-error "Use either a PiChat :preset name or a :preset-spec snapshot"))
+  (when (and (plist-get launch-options :model)
+             (plist-get launch-options :restore-saved-model))
+    (user-error "Use either a run-local :model or :restore-saved-model"))
   (when-let* ((captured (plist-get launch-options :preset-spec)))
     (unless (and (listp captured) (plist-get captured :name)
                  (symbolp (plist-get captured :name)))
@@ -727,6 +732,8 @@ not become current/preferred and no RPC process or chat is created."
                    :preset-spec preset-spec
                    :tool-selection tool-selection
                    :startup-model (plist-get normalized-options :model)
+                   :restore-saved-model
+                   (and (plist-get launch-options :restore-saved-model) t)
                    :scope-key (nth 0 scope)
                    :owner-scope-key (nth 0 scope)
                    :owner-scope-label (nth 2 scope))))
@@ -761,7 +768,8 @@ Callers may install owning handlers/chat before starting."
   "Start an independent PiChat runtime rooted at CWD and return it.
 SCOPE is an optional immutable (KEY CWD LABEL) owner scope.
 LAUNCH-OPTIONS supports `:persistence', `:preset' (or a resolved
-`:preset-spec'), `:tools', `:transport' and run-local `:model'."
+`:preset-spec'), `:tools', `:transport' and run-local `:model' (or
+`:restore-saved-model'; see `pichat-prepare-session')."
   (interactive)
   (let ((session (pichat-prepare-session cwd scope launch-options)))
     (pichat-start-prepared-session session)

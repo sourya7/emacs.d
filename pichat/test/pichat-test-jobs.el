@@ -365,6 +365,49 @@
           (should-not (string-match-p "LATER_REPLY" (buffer-string)))
           (should (equal (pichat-job-record store 'runs id) record))))))
 
+  (ert-deftest pichat-integration-job-continue-in-chat-keeps-saved-session-model ()
+    ;; The job's model differs from the default model a plain runtime would use.
+    (pichat-test-with-job-executor (:script '(:turns [(:text "JOB_MODEL_RESULT")]))
+      (let* ((spec (pichat-job-launch-capture
+                    "Review files" "Inspect the supplied files." project-dir
+                    '(:preset review :model "pichat-fake/pichat-fake-reasoning"
+                      :target local :tools (:builtins ("read")))))
+             (captured (car (pichat-job-launch-prepare spec)))
+             (id (pichat-job-executor-submit executor spec))
+             (runtime (pichat-job-execution-session
+                       (gethash id (pichat-job-executor-contexts executor))))
+             reopened)
+        (should (equal pichat-default-model "pichat-fake/pichat-fake"))
+        (pichat-test-job-wait store id "finished")
+        (pichat-test-assert-provider-script-consumed status-file)
+        (should (equal (pichat-session-model-label runtime)
+                       "pichat-fake/pichat-fake-reasoning"))
+        (kill-buffer (pichat-session-buffer runtime))
+        (with-temp-file script-file (insert "{\"turns\":[]}"))
+        (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+          (pichat-jobs--open-saved executor id))
+        (pichat-test-wait-until
+         (lambda ()
+           (cl-some (lambda (session)
+                      (and (not (eq session runtime))
+                           (equal (pichat-session-session-file session)
+                                  (pichat-session-session-file runtime))
+                           (pichat-chat-canonical-entry-cache session)
+                           (setq reopened session)))
+                    (pichat-session-list)))
+         12 "Continue in chat to load the saved session")
+        ;; Pi loaded the saved session's model, not `pichat-default-model'.
+        (should (equal (pichat-session-model-label reopened)
+                       "pichat-fake/pichat-fake-reasoning"))
+        (should-not (member "--model" (pichat-session-rpc-command reopened)))
+        ;; The captured preset and tools are kept as before.
+        (should (eq 'review (pichat-session-preset-name reopened)))
+        (should (equal (pichat-session-preset-spec reopened)
+                       (pichat-session-preset-spec captured)))
+        (should (equal (pichat-session-tool-selection reopened)
+                       (pichat-session-tool-selection captured)))
+        (pichat-test-assert-provider-script-consumed status-file))))
+
   (ert-deftest pichat-integration-job-acceptance-is-not-completion-or-kill-permission ()
     (pichat-test-with-job-executor
         (:script '(:turns [(:text "Delayed result" :delayMs 700)]))
@@ -2501,8 +2544,16 @@
                              (pichat-session-preset-spec (car captured))))
               (should (equal (plist-get options :tools)
                              (pichat-session-tool-selection (car captured))))
+              ;; Pi restores the saved session's model: no run-local or
+              ;; default `--model' is passed.
+              (should-not (plist-get options :model))
+              (should (plist-get options :restore-saved-model))
               ;; The prepared chat runtime receives that exact configuration.
-              (let ((chat (pichat-prepare-session project-dir nil options)))
+              (let ((chat (let ((pichat-default-model "pichat-fake/other-default"))
+                            (pichat-prepare-session project-dir nil options))))
+                (should-not (member "--model"
+                                    (let ((pichat-default-model "pichat-fake/other-default"))
+                                      (pichat-rpc-build-command chat))))
                 (should (eq 'review (pichat-session-preset-name chat)))
                 (should (equal (pichat-session-preset-spec chat)
                                (pichat-session-preset-spec (car captured))))

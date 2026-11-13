@@ -53,7 +53,9 @@ such as `anthropic/claude-sonnet-4-5', avoids ambiguous model matches.
 
 This setting is ignored when `pichat-rpc-command' is non-nil because that
 variable supplies the complete process command.  A later `--model' in
-`pichat-pi-extra-args' takes precedence according to Pi's argument parsing."
+`pichat-pi-extra-args' takes precedence according to Pi's argument parsing.
+It is also not passed to a runtime that restores a saved session's model,
+such as a job run's Continue in chat, since `--model' would replace that model."
   :type '(choice (const :tag "Use Pi's configured default" nil)
                  (string :tag "Provider/model"))
   :group 'pichat)
@@ -267,8 +269,12 @@ The session snapshot controls `--no-session', preset flags and the model."
         (append (list executable)
                 pichat-pi-default-args
                 (and transport (pichat-transport-pi-args transport))
+                ;; A runtime that restores a saved session's model must not
+                ;; pass a default: Pi's `--model' outranks the saved model.
                 (when (and (not remote-p)
                            (not startup-model)
+                           (not (and session
+                                     (pichat-session-restore-saved-model session)))
                            (stringp pichat-default-model)
                            (not (string-blank-p pichat-default-model)))
                   (list "--model" pichat-default-model))

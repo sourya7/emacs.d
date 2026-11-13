@@ -591,9 +591,10 @@ before anything is queued; the store checks it again."
 (defun pichat-jobs--open-saved (owner id)
   "Explicitly open finished run ID's saved Pi session independently.
 Use the run's captured transport/path context, preset and tools, not job
-instructions.  When the run's own runtime still hosts the saved session, offer
-to stop it first; any other hosting runtime is named in the refusal.  Guard
-against managed duplicate writers and concurrent opens."
+instructions; Pi restores the saved session's model (no default `--model').
+When the run's own runtime still hosts the saved session, offer to stop it
+first; any other hosting runtime is named in the refusal.  Guard against
+managed duplicate writers and concurrent opens."
   (let* ((run (pichat-job-record (pichat-job-executor-store owner) 'runs id))
          (spec (plist-get run :spec))
          (source (car (pichat-job-launch-prepare spec)))
@@ -634,7 +635,8 @@ against managed duplicate writers and concurrent opens."
                :cwd (pichat-session-runtime-cwd source)
                :owner-directory (plist-get spec :directory) :source-session source
                :launch-options (list :persistence 'persistent :preset-spec preset
-                                     :tools (pichat-session-tool-selection source))
+                                     :tools (pichat-session-tool-selection source)
+                                     :restore-saved-model t)
                :readiness 'transcript-ready
                :ready (lambda (_session) (pichat--release-selected-file key token))
                :error-callback (lambda (response _session)

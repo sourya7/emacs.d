@@ -154,9 +154,15 @@ every definition row."
 
 (defun pichat-jobs--context (spec)
   "Return a compact workspace/target label from captured SPEC."
-  (format "%s · %s"
-          (plist-get (plist-get (plist-get spec :configuration) :transport) :label)
-          (file-name-nondirectory (directory-file-name (plist-get spec :directory)))))
+  (let* ((directory (plist-get spec :directory))
+         (transport (plist-get (plist-get spec :configuration) :transport))
+         (label (plist-get transport :label)))
+    (propertize
+     (pichat-jobs--display
+      (concat (file-name-nondirectory (directory-file-name directory))
+              (unless (equal (plist-get transport :kind) "local")
+                (concat " · " label))))
+     'help-echo directory)))
 
 (defun pichat-jobs--select (id)
   "Restore exact row ID when present; never match visible titles."
@@ -195,6 +201,8 @@ every definition row."
                   (window-body-width)))
          (narrow (< width 110))
          (title-width (if narrow (max 10 (min 20 (/ width 4))) 24))
+         (jobs (pichat-job-records store 'jobs))
+         (scheduled (seq-some (lambda (job) (plist-get job :schedule)) jobs))
          (active (seq-count (lambda (run) (member (plist-get run :state)
                                                  pichat-job--active-states)) runs))
          (attention (seq-count (lambda (run) (pichat-jobs--attention-p pichat-jobs--owner run)) runs))
@@ -206,14 +214,11 @@ every definition row."
     (setq tabulated-list-format
           (if (eq pichat-jobs--kind 'jobs)
               (vconcat (list (list "Job" title-width t))
-                       (unless narrow (list '("Schedule" 26 nil)))
-                       (list '("Latest run" 20 nil) '("Project / target" 0 t)))
-            (if narrow
-                (vector (list "Work" title-width t)
-                        '("Queued" 16 pichat-jobs--queued-less-p)
-                        '("State / result" 0 nil))
-              [("Work" 24 t) ("Queued" 20 pichat-jobs--queued-less-p) ("State" 20 nil)
-               ("Result" 14 nil) ("Trigger" 8 nil) ("Project / target" 0 t)])))
+                       (when scheduled (list '("Schedule" 26 nil)))
+                       (list '("Latest run" 20 nil) '("Project" 0 t)))
+            (vector (list "Work" title-width t)
+                    (list "When" (if narrow 16 20) #'pichat-jobs--queued-less-p)
+                    '("Result" 16 nil) '("Project" 0 t))))
     ;; A sort column can disappear when changing tabs or narrowing the view.
     (unless (assoc (car tabulated-list-sort-key) (append tabulated-list-format nil))
       (setq tabulated-list-sort-key nil))
@@ -225,11 +230,11 @@ every definition row."
                         (latest (pichat-jobs--latest store id runs)))
                    (list id (vconcat
                              (list (pichat-jobs--display (plist-get spec :title)))
-                             (unless narrow
+                             (when scheduled
                                (list (pichat-job-schedule-ui-status (plist-get job :schedule))))
                              (list (if latest (pichat-jobs--status pichat-jobs--owner latest) "Never run")
-                                   (pichat-jobs--display (pichat-jobs--context spec)))))))
-               (append (pichat-job-records store 'jobs) nil))
+                                   (pichat-jobs--context spec))))))
+               (append jobs nil))
             (cl-loop for run in (reverse (append runs nil))
                      when (and (or (null pichat-jobs--filter)
                                    (equal pichat-jobs--filter (plist-get run :job-id)))
@@ -240,7 +245,8 @@ every definition row."
                      (list (plist-get run :id)
                            (vconcat
                             (list (concat (pichat-jobs--display (plist-get (plist-get run :spec) :title))
-                                          (unless (plist-get run :job-id) " [unsaved]"))
+                                          (unless (plist-get run :job-id)
+                                            (propertize " ·" 'face 'shadow 'help-echo "No saved job")))
                                   (let ((queued (if (pichat-job-conversation-p run)
                                                     (plist-get run :queued-at) (plist-get run :created-at))))
                                     (propertize
@@ -248,17 +254,13 @@ every definition row."
                                                   (if narrow "%Y-%m-%d %H:%M" "%Y-%m-%d %H:%M:%S")) "—")
                                      'pichat-job-queued-at queued
                                      'help-echo (if queued (pichat-jobs--local-time queued) "Not queued"))))
-                            (if narrow (list (pichat-jobs--status pichat-jobs--owner run))
-                              (list (pichat-jobs--state pichat-jobs--owner run)
-                                    (pichat-jobs--result run)
-                                    (pichat-jobs--trigger-label run)))
-                            (unless narrow
-                              (list (pichat-jobs--display (pichat-jobs--context (plist-get run :spec))))))))))
+                            (list (pichat-jobs--status pichat-jobs--owner run)
+                                  (pichat-jobs--context (plist-get run :spec))))))))
     (tabulated-list-init-header)
     (setq mode-line-process
-          (format "%d/%d active · %d attention [%s%s]"
-                  active pichat-jobs-max-concurrency attention
+          (format "%s · %d need attention · %d/%d active%s"
                   (if (eq pichat-jobs--kind 'jobs) "Jobs" "Runs")
+                  attention active pichat-jobs-max-concurrency
                   (cond (pichat-jobs--attention-only ": Needs attention")
                         (chain
                          (format ": Run chain of %s · %d runs"
@@ -304,8 +306,14 @@ ends the filter instead of showing an empty list."
 
 (defun pichat-jobs--status (owner run)
   "Return the relevant cached execution/result summary of RUN in OWNER."
-  (if (equal (plist-get run :state) "finished") (pichat-jobs--result run)
-    (pichat-jobs--state owner run)))
+  (propertize
+   (if (equal (plist-get run :state) "finished") (pichat-jobs--result run)
+     (pichat-jobs--state owner run))
+   'face (cond ((equal (plist-get run :result) "failed") 'error)
+               ((pichat-jobs--attention-p owner run) 'warning)
+               ((equal (plist-get run :result) "completed") 'success)
+               ((equal (plist-get run :result) "cancelled") 'shadow)
+               (t 'default))))
 
 (defun pichat-jobs-toggle ()
   "Switch Jobs/Runs, restoring the selected job when returning from history."
@@ -759,7 +767,7 @@ before anything is queued; the store checks it again."
                                   (append (plist-get preset :emacs-tools) nil))
                            (equal (append mcp nil)
                                   (append (plist-get preset :mcp) nil))))
-                  "Preset defaults: " "Selected: ")
+                  "Preset defaults: " "")
               (if (seq-empty-p builtins) "no built-ins" (string-join (append builtins nil) ", "))
               (if (seq-empty-p extensions) "" (format " · %d extension tools" (length extensions)))
               (if (seq-empty-p mcp) "" (format " · %d MCP tools" (length mcp)))
@@ -776,7 +784,7 @@ before anything is queued; the store checks it again."
 
 (defun pichat-jobs--insert-run-times (record)
   "Insert RECORD's local timeline without inventing unknown finish times."
-  (insert "Times (local):\n")
+  (insert "Times (local): ")
   (dolist (field (append (if (pichat-job-conversation-p record)
                             '((:created-at . "Scheduled") (:queued-at . "Queued"))
                           '((:created-at . "Queued")))
@@ -790,7 +798,9 @@ before anything is queued; the store checks it again."
                                  (or (equal (plist-get record :state) "uncertain")
                                      (plist-get record :resolved-at)))
                             "Not established" "Not recorded"))))
-        (insert (format "  %-9s %s\n" (concat (cdr field) ":") display))))))
+        (unless (eq (car field) :created-at) (insert " · "))
+        (insert (format "%s: %s" (cdr field) display)))))
+  (insert "\n"))
 
 (defun pichat-jobs--show-detail (owner kind id &optional section)
   "Display exact OWNER/KIND/ID's cached SECTION, never executing work."
@@ -1435,7 +1445,7 @@ group adds view commands; it is offered even when no row is at point."
          (execution (gethash id (pichat-job-executor-contexts owner)))
          (session (and execution (pichat-job-execution-session execution)))
          (state (plist-get record :state)))
-    (insert (format "%s · %s\n\n"
+    (insert (format "%s · %s\n"
                     (cond ((equal state "finished") (pichat-jobs--result record))
                           ((and (equal state "settling") execution
                                 (pichat-job-execution-cleanup execution))
@@ -1461,9 +1471,6 @@ group adds view commands; it is offered even when no row is at point."
       (let ((trigger (plist-get record :trigger)))
         (insert "Scheduled for: " (pichat-job-schedule-ui-time (plist-get trigger :due)) "\n"
                 "Run now requested: " (pichat-job-schedule-ui-time (plist-get trigger :dispatched-at)) "\n\n")))
-    (when (equal (plist-get (plist-get record :event) :completeness) "partial")
-      (insert "Previous run context is partial or unavailable.\n"))
-
     (when (equal state "queued")
       (let ((decision (pichat-job-admission (pichat-job-executor-store owner) id pichat-jobs-max-concurrency)))
         (insert (format "Waiting reason: %s\n" (or (plist-get decision :reason) "Ready for dispatch")))))
@@ -1500,7 +1507,9 @@ group adds view commands; it is offered even when no row is at point."
       (insert "\n")
       (insert (format "Run: %s\n" id))
       (when-let* ((job-id (plist-get record :job-id))) (insert "Job: " job-id "\n"))
-      (insert "Trigger: " (pichat-jobs--trigger-label record) "\n\n")
+      (insert "Trigger: " (pichat-jobs--trigger-label record) "\n")
+      (when (equal (plist-get (plist-get record :event) :completeness) "partial")
+        (insert "Previous run context is partial or unavailable.\n"))
       (insert "Instructions:\n")
       (pichat-jobs--insert-instructions (plist-get spec :instructions))
       (when-let* ((input (plist-get record :input)))
@@ -1552,12 +1561,17 @@ group adds view commands; it is offered even when no row is at point."
                         (pichat-jobs--summary-time latest))
               "Never run")
             "\n")
-    (pichat-job-schedule-ui-insert owner record)
+    (let ((schedule (plist-get record :schedule)))
+      (unless (and (equal (plist-get (plist-get schedule :rule) :kind) "once")
+                   (not (eq (plist-get schedule :enabled) t))
+                   (equal (plist-get (plist-get schedule :last) :state) "submitted"))
+        (pichat-job-schedule-ui-insert owner record)))
     (when (pichat-job-source-diverged-p record)
       (insert (propertize "Saved edits differ from last import; reimport requires replacement confirmation.\n"
                           'face 'warning)))
     (insert (format "Workspace: %s · %s\n\n"
-                    (plist-get spec :directory)
+                    (propertize (abbreviate-file-name (plist-get spec :directory))
+                                'help-echo (plist-get spec :directory))
                     (plist-get (plist-get (plist-get spec :configuration) :transport) :label)))
     (pichat-jobs--disclosure 'definition "Details")
     (when (member 'definition pichat-jobs--expanded)
@@ -1601,8 +1615,7 @@ group adds view commands; it is offered even when no row is at point."
      (t
       (if (eq kind 'jobs)
           (pichat-jobs--render-job owner record)
-        (pichat-jobs--render-run owner record))
-      (insert "\n\n")))
+        (pichat-jobs--render-run owner record))))
     (let ((job-id (if (eq kind 'jobs) id (plist-get record :job-id))))
       (setq header-line-format
             (concat (propertize

@@ -1079,9 +1079,15 @@ phase adapter. Scheduling always requires explicit authorization.
 - Deleted runs' saved session files stay hidden from saved-session browsing:
   every deletion records their file names in the job store
   (`deleted-session-files`). Stores without that list load unchanged.
-  Compact Runs tables show Work, Queued, and State / result;
-  queue times use local date/time to the minute; Project / target stays in wide tables and
-  run details. Compact Jobs tables retain their project/target context.
+  Runs tables show Work, When, Result and Project at every width. When keeps
+  chronological sorting and local queue times (to the minute in narrow views).
+  Result shows the outcome once finished, otherwise the current state; faces
+  distinguish success, failure, attention and cancellation. A quiet `·` after
+  Work marks a run without a saved job. Project shows the directory name with
+  its full path as help text, and appends the target only for non-local work.
+  Jobs shows Job, Latest run and Project, adding Schedule only when a definition
+  has timing. The mode line shows the list, attention count, active/limit and
+  any active filter.
 - `M-x pichat-job-definitions` (Jobs `i`, Evil `g i`) discovers authored job
   files for the current project and effective global agent root; a prefix selects
   another project. Like Jobs, it uses native sortable column headers, width-aware
@@ -1122,6 +1128,8 @@ phase adapter. Scheduling always requires explicit authorization.
   summary, schedule and workspace/target. Completed summaries use the recorded
   finish time; older records without one label their queue time instead. Enabled
   schedules show their next occurrence; disabled timing does not imply authorization.
+  A dispatched one-shot is hidden from the summary but stays in Details as
+  occurrence history. Workspace paths abbreviate the home directory.
   Imported jobs show **Imported from** in Details; identity/root and internal job
   IDs remain available through Actions → **Inspect raw settings…**, not normal
   job details. Replacement warnings remain visible when saved edits differ.
@@ -1135,7 +1143,8 @@ phase adapter. Scheduling always requires explicit authorization.
 - Run reports put the compact outcome/time and rendered answer first. **Details**
   expands the original instructions, continuation guidance, workspace/target,
   model/preset/Tools, full identities, trigger, local
-  timeline and related runs. Normal follow-up status is there too; failed
+  timeline (one line) and related runs. Partial previous-run context is noted
+  there rather than above the answer. Normal follow-up status is there too; failed
   dispatch, input requests, blockers and uncertainty stay visible without opening
   a menu. The first run of a chain started from a chat also shows **Chat
   notification: …** (see [Chain finish notifications](#chain-finish-notifications))
@@ -1654,8 +1663,8 @@ schedules offer only Run job for additional manual work; their anchor and next
 occurrence remain unchanged. **Disable** prevents
 future submissions but does not cancel queued or active work. Remove schedule and
 delete job invalidate the old timer ownership; deletion retains its existing
-unfinished-run guard. The wide Jobs table separates Schedule from Latest run;
-narrow layouts retain timing in definition details only.
+unfinished-run guard. The Jobs table separates Schedule from Latest run whenever
+any definition has timing; an all-None Schedule column is omitted.
 
 **Initialize Jobs once per Emacs session** (open `M-x pichat-jobs` or New job) to
 restore enabled timers. Merely loading PiChat does not initialize the store.

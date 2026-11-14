@@ -244,7 +244,7 @@
               (should (eq (key-binding (kbd "g i")) #'pichat-job-definitions))
               (setq pichat-jobs--owner executor)
               (pichat-jobs-refresh)
-              (should (string-match-p "0 attention \\[" mode-line-process))
+              (should (string-match-p "Jobs · 0 need attention · 0/3 active" mode-line-process))
               (should (eq (key-binding (kbd "g a")) #'pichat-jobs-actions))
               (should (eq (key-binding (kbd "a")) #'evil-append))
               (should (eq (key-binding (kbd "f")) #'evil-find-char))

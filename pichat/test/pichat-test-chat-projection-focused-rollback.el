@@ -115,22 +115,6 @@
    :statuses (copy-tree pichat-chat--status-lines)
    :tool-overlays (pichat-test-focused-rollback--tool-overlay-state)))
 
-(defun pichat-test-focused-rollback--start (draft text path)
-  "Populate DRAFT with live TEXT and a located read tool for PATH."
-  (pichat-pi-live-draft-apply
-   draft
-   (pichat-test-incremental--assistant-event
-    "message_update"
-    (list (list :type "text" :text text)
-          (pichat-test-incremental--tool-call
-           "rollback-tool" "read" (list :path path)))))
-  (let ((record (pichat-tool-enrichment-build
-                 "rollback-tool" "read" (list :path path))))
-    (setq record (plist-put record :source-generation
-                            pichat-chat--source-generation)
-          record (plist-put record :host-path "/tmp/rollback-tool"))
-    (puthash "rollback-tool" record pichat-chat--tool-enrichments)))
-
 (defun pichat-test-focused-rollback--candidate (draft type text path)
   "Apply candidate TYPE with TEXT and read-tool PATH to DRAFT."
   (pichat-pi-live-draft-apply
@@ -155,8 +139,8 @@
            (pichat-chat-collapse-tools-by-default nil)
            (pichat-chat-tool-default-display 'output))
        (pichat-test-with-chat-buffer (buffer session)
-         (pichat-test-focused-rollback--start
-          pichat-chat--live-draft "committed prose" "old.el")
+         (pichat-test-focused-rollback--candidate
+          pichat-chat--live-draft "message_update" "committed prose" "old.el")
          (pichat-chat--project-live-tail)
          (should (overlayp
                   (plist-get
@@ -171,122 +155,90 @@
     (should-error (funcall failure-function))
     (should (equal before (pichat-test-focused-rollback--state)))))
 
-(ert-deftest pichat-chat-focused-rollback-restores-fragment-insertion-failure ()
-  (pichat-test-focused-rollback--with-buffer
-    (pichat-test-focused-rollback--candidate
-     pichat-chat--live-draft "message_update" "changed prose" "insert.el")
-    (let ((original (symbol-function 'pichat-chat--protect-region)))
-      (pichat-test-focused-rollback--assert-failure-restores
-       (lambda ()
-         (cl-letf (((symbol-function 'pichat-chat--protect-region)
-                    (lambda (beg end)
-                      (funcall original beg end)
-                      (when (>= beg (marker-position pichat-chat--live-start))
-                        (error "injected insertion failure")))))
-           (pichat-chat--project-live-tail)))))))
+(ert-deftest pichat-chat-focused-rollback-restores-exact-state-after-each-edit-stage ()
+  ;; Each case fails after its stage changed text, properties or overlays.
+  ;; Indexing failure is covered with prompt edits by
+  ;; `pichat-chat-prompt-undo-survives-projection-failure-and-retry'.
+  (dolist (case
+           (list
+            (list 'insertion "message_update" "changed prose"
+                  'pichat-chat--protect-region
+                  (lambda (original beg end)
+                    (funcall original beg end)
+                    (when (>= beg (marker-position pichat-chat--live-start))
+                      (error "injected insertion failure"))))
+            (list 'decoration "message_update" "changed prose"
+                  'pichat-chat-tool-ui-decorate-block
+                  (lambda (original &rest args)
+                    (apply original args)
+                    (error "injected decoration failure")))
+            ;; A final Markdown candidate replaces the whole live region.
+            (list 'fontification "message_end" "changed **Markdown**"
+                  'pichat-chat--markdown-fontify-region
+                  (lambda (original beg end)
+                    (funcall original beg end)
+                    (error "injected Markdown fontification failure")))
+            (list 'pre-commit "message_update" "changed prose"
+                  'pichat-chat--commit-live-projection-result
+                  (lambda (_original &rest _args)
+                    (error "injected post-edit pre-commit failure")))))
+    (pcase-let ((`(,stage ,type ,text ,symbol ,wrapper) case))
+      (ert-info ((format "stage=%s" stage))
+        (pichat-test-focused-rollback--with-buffer
+          (when (eq stage 'fontification)
+            (setq pichat-chat-markdown-mode t))
+          (pichat-test-focused-rollback--candidate
+           pichat-chat--live-draft type text (format "%s.el" stage))
+          (let ((original (symbol-function symbol)))
+            (pichat-test-focused-rollback--assert-failure-restores
+             (lambda ()
+               (cl-letf (((symbol-function symbol)
+                          (apply-partially wrapper original))
+                         ;; Real faces without the optional Markdown mode.
+                         ((symbol-function
+                           'pichat-markdown-fontification-apply-region)
+                          (lambda (beg end)
+                            (put-text-property beg end 'font-lock-face
+                                               'font-lock-keyword-face)
+                            t)))
+                 (pichat-chat--project-live-tail))))))))))
 
-(ert-deftest pichat-chat-focused-rollback-restores-indexing-failure ()
-  (pichat-test-focused-rollback--with-buffer
-    (pichat-test-focused-rollback--candidate
-     pichat-chat--live-draft "message_update" "changed prose" "index.el")
-    (pichat-test-focused-rollback--assert-failure-restores
-     (lambda ()
-       (cl-letf (((symbol-function 'pichat-chat--index-canonical-tools)
-                  (lambda (&rest _args) (error "injected indexing failure"))))
-         (pichat-chat--project-live-tail))))))
-
-(ert-deftest pichat-chat-focused-rollback-restores-decoration-failure ()
-  (pichat-test-focused-rollback--with-buffer
-    (pichat-test-focused-rollback--candidate
-     pichat-chat--live-draft "message_update" "changed prose" "decorate.el")
-    (let ((original (symbol-function 'pichat-chat-tool-ui-decorate-block)))
-      (pichat-test-focused-rollback--assert-failure-restores
-       (lambda ()
-         (cl-letf (((symbol-function 'pichat-chat-tool-ui-decorate-block)
-                    (lambda (&rest args)
-                      (apply original args)
-                      (error "injected decoration failure"))))
-           (pichat-chat--project-live-tail)))))))
-
-(ert-deftest pichat-chat-focused-rollback-restores-fontification-failure ()
-  (pichat-test-focused-rollback--with-buffer
-    (setq pichat-chat-markdown-mode t)
-    (pichat-test-focused-rollback--candidate
-     pichat-chat--live-draft "message_end"
-     "changed **Markdown**" "markdown.el")
-    (let ((original
-           (symbol-function 'pichat-chat--markdown-fontify-region)))
-      (pichat-test-focused-rollback--assert-failure-restores
-       (lambda ()
-         (cl-letf (((symbol-function
-                     'pichat-markdown-fontification-apply-region)
-                    (lambda (beg end)
-                      (put-text-property beg end 'font-lock-face
-                                         'font-lock-keyword-face)
-                      t))
-                   ((symbol-function 'pichat-chat--markdown-fontify-region)
-                    (lambda (beg end)
-                      (funcall original beg end)
-                      (error "injected Markdown fontification failure"))))
-           (pichat-chat--project-live-tail)))))))
-
-(ert-deftest pichat-chat-focused-rollback-restores-post-edit-pre-commit-failure ()
-  (pichat-test-focused-rollback--with-buffer
-    (pichat-test-focused-rollback--candidate
-     pichat-chat--live-draft "message_update" "changed prose" "commit.el")
-    (pichat-test-focused-rollback--assert-failure-restores
-     (lambda ()
-       (cl-letf (((symbol-function
-                   'pichat-chat--commit-live-projection-result)
-                  (lambda (&rest _args)
-                    (error "injected post-edit pre-commit failure"))))
-         (pichat-chat--project-live-tail))))))
-
-(ert-deftest pichat-chat-ordinary-live-update-uses-focused-rollback-only ()
-  (pichat-test-focused-rollback--with-buffer
-    (goto-char (point-max))
-    (insert "unsent draft")
-    (pichat-test-focused-rollback--candidate
-     pichat-chat--live-draft "message_update" "changed prose" "focused.el")
-    (let ((full 0) (focused 0)
-          (modified-before (buffer-modified-p))
-          (full-original (symbol-function 'pichat-chat--projection-snapshot))
-          (focused-original
-           (symbol-function 'pichat-chat--focused-live-snapshot)))
-      (cl-letf (((symbol-function 'pichat-chat--projection-snapshot)
-                 (lambda () (cl-incf full) (funcall full-original)))
-                ((symbol-function 'pichat-chat--focused-live-snapshot)
-                 (lambda (&rest args)
-                   (cl-incf focused)
-                   (apply focused-original args))))
-        (pichat-chat--project-live-tail))
-      (should (= 1 focused))
-      (should (zerop full))
-      (should (equal "unsent draft" (pichat-chat--input-text)))
-      (should (eq modified-before (buffer-modified-p)))
-      (let ((prefix (buffer-substring (point-min) pichat-chat--input-start))
-            (pending-undo-list t))
-        (undo-start)
-        (undo-more 1)
-        (should (equal "" (pichat-chat--input-text)))
-        (should (equal-including-properties
-                 prefix (buffer-substring (point-min) pichat-chat--input-start)))))))
-
-(ert-deftest pichat-chat-compatibility-status-update-uses-full-rollback ()
-  (pichat-test-focused-rollback--with-buffer
-    (pichat-test-focused-rollback--candidate
-     pichat-chat--live-draft "message_update" "changed prose" "fallback.el")
-    (let ((full 0)
-          (original (symbol-function 'pichat-chat--projection-snapshot)))
-      (cl-letf (((symbol-function
-                   'pichat-chat--compatibility-diagnostics-text)
-                 (lambda (_transcript) "[forced compatibility change]"))
-                ((symbol-function 'pichat-chat--projection-snapshot)
-                 (lambda () (cl-incf full) (funcall original))))
-        (pichat-chat--project-live-tail))
-      (should (= 1 full))
-      (should (string-match-p "changed prose"
-                              (pichat-test-buffer-text buffer))))))
+(ert-deftest pichat-chat-live-update-rollback-path-keeps-draft-and-prompt-undo ()
+  ;; An ordinary update uses only the focused transaction; a compatibility
+  ;; status change needs the full one.  Both leave the draft, the modified
+  ;; flag and the prompt's undo history alone.
+  (dolist (compatibility-change '(nil t))
+    (ert-info ((format "compatibility-change=%s" compatibility-change))
+      (pichat-test-focused-rollback--with-buffer
+        (goto-char (point-max))
+        (insert "unsent draft")
+        (pichat-test-focused-rollback--candidate
+         pichat-chat--live-draft "message_update" "changed prose" "path.el")
+        (let ((modified-before (buffer-modified-p))
+              (compatibility
+               (symbol-function 'pichat-chat--compatibility-diagnostics-text)))
+          (pichat-test-counting-projection-snapshots (full focused)
+            (cl-letf (((symbol-function
+                        'pichat-chat--compatibility-diagnostics-text)
+                       (lambda (transcript)
+                         (if compatibility-change
+                             "[forced compatibility change]"
+                           (funcall compatibility transcript)))))
+              (pichat-chat--project-live-tail))
+            (should (equal (if compatibility-change '(1 0) '(0 1))
+                           (list full focused))))
+          (should (string-match-p "changed prose"
+                                  (pichat-test-buffer-text buffer)))
+          (should (equal "unsent draft" (pichat-test-draft-text)))
+          (should (eq modified-before (buffer-modified-p)))
+          (let ((prefix (buffer-substring (point-min) pichat-chat--input-start))
+                (pending-undo-list t))
+            (undo-start)
+            (undo-more 1)
+            (should (equal "" (pichat-test-draft-text)))
+            (should (equal-including-properties
+                     prefix (buffer-substring
+                             (point-min) pichat-chat--input-start)))))))))
 
 (defun pichat-test-focused-rollback--source-tables ()
   "Return source-scoped presentation tables in the current chat."
@@ -300,8 +252,8 @@
   (dolist (path '(focused full canonical))
     (dolist (condition '(error quit))
       (pichat-test-focused-rollback--with-buffer
-        (pichat-chat--set-input-text "unsent draft")
-        (pichat-chat--style-live-input)
+        (goto-char (point-max))
+        (insert "unsent draft")
         (pichat-test-focused-rollback--candidate
          pichat-chat--live-draft "message_update" "candidate prose" "new.el")
         (dolist (table (pichat-test-focused-rollback--source-tables))
@@ -397,7 +349,7 @@
       (should (= (1+ generation) pichat-chat--source-generation))
       (should (equal process-generation (pichat-session-process-generation session)))
       (should-not (pichat-chat-draft-current-p target))
-      (should (equal "unsent draft" (pichat-chat--input-text)))
+      (should (equal "unsent draft" (pichat-test-draft-text)))
       (should (eq pending pichat-chat--pending-attachments))
       (should (eq recovery pichat-chat--recoverable-submissions))
       (should-not (marker-position start))
@@ -443,25 +395,6 @@
       (should (eq enrichment (gethash "rollback-tool" pichat-chat--tool-enrichments)))
       (should (zerop (hash-table-count pichat-chat--tool-auxiliary-details))))))
 
-(ert-deftest pichat-chat-focused-rollback-after-prompt-edits-preserves-private-undo ()
-  (pichat-test-focused-rollback--with-buffer
-    (goto-char (point-max))
-    (insert "unsent draft")
-    (pichat-test-focused-rollback--candidate
-     pichat-chat--live-draft "message_update" "candidate prose" "new.el")
-    (set-buffer-modified-p nil)
-    (let ((before (buffer-string))
-          (undo-before (copy-tree buffer-undo-list))
-          caught)
-      (cl-letf (((symbol-function 'pichat-chat--index-canonical-tools)
-                 (lambda (&rest _) (error "injected index failure"))))
-        (condition-case err (pichat-chat--project-live-tail)
-          (error (setq caught err))))
-      (should (equal '(error "injected index failure") caught))
-      (should (equal-including-properties before (buffer-string)))
-      (should (equal undo-before buffer-undo-list))
-      (should (equal "unsent draft" (pichat-chat--input-text))))))
-
 (defun pichat-test-focused-rollback--edit-prompt ()
   "Make ordinary insertion/deletion history and begin an undo sequence."
   (goto-char (point-max))
@@ -478,7 +411,7 @@ When RESUMED is non-nil, the first prompt edit has already been undone."
   (let ((prefix (buffer-substring (point-min) pichat-chat--input-start)))
     (dolist (expected (if resumed '("unsent" "") '("unsent draft!" "unsent" "")))
       (undo-more 1)
-      (should (equal expected (pichat-chat--input-text)))
+      (should (equal expected (pichat-test-draft-text)))
       (should (equal-including-properties
                prefix (buffer-substring (point-min) pichat-chat--input-start))))))
 
@@ -586,7 +519,7 @@ When RESUMED is non-nil, the first prompt edit has already been undone."
                              (unless (eq path 'replacement) (funcall replace candidate)))))
                   (should (pichat-chat--project-live-tail))))
               (should (equal (if resumed "unsent draft!" "unsent draft")
-                             (pichat-chat--input-text)))
+                             (pichat-test-draft-text)))
               (pichat-test-focused-rollback--undo-prompt resumed))))))))
 
 (ert-deftest pichat-chat-prompt-property-undo-survives-prefix-shrink ()
@@ -606,9 +539,9 @@ When RESUMED is non-nil, the first prompt edit has already been undone."
         (should (get-text-property pichat-chat--input-start 'pichat-test-property))
         (undo-more 1)
         (should-not (get-text-property pichat-chat--input-start 'pichat-test-property))
-        (should (equal "unsent draft" (pichat-chat--input-text)))
+        (should (equal "unsent draft" (pichat-test-draft-text)))
         (undo-more 1)
-        (should (equal "" (pichat-chat--input-text)))
+        (should (equal "" (pichat-test-draft-text)))
         (should (equal-including-properties
                  prefix (buffer-substring (point-min) pichat-chat--input-start)))))))
 

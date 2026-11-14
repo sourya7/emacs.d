@@ -21,6 +21,28 @@ for this fixture; window layout and tool display remain the caller's policy."
            (with-current-buffer ,buffer ,@body))
        (when (buffer-live-p ,buffer) (kill-buffer ,buffer)))))
 
+(cl-defmacro pichat-test-counting-projection-snapshots ((full focused) &rest body)
+  "Run BODY with FULL and FOCUSED counting projection transactions.
+FULL counts complete projection snapshots and FOCUSED counts focused live
+snapshots taken while BODY runs; both are bound to integers in BODY.  This is
+the one place tests observe which rollback transaction a projection used."
+  (declare (indent 1))
+  (let ((full-original (make-symbol "full-original"))
+        (focused-original (make-symbol "focused-original")))
+    `(let ((,full 0) (,focused 0)
+           (,full-original (symbol-function 'pichat-chat--projection-snapshot))
+           (,focused-original
+            (symbol-function 'pichat-chat--focused-live-snapshot)))
+       (cl-letf (((symbol-function 'pichat-chat--projection-snapshot)
+                  (lambda (&rest args)
+                    (cl-incf ,full)
+                    (apply ,full-original args)))
+                 ((symbol-function 'pichat-chat--focused-live-snapshot)
+                  (lambda (&rest args)
+                    (cl-incf ,focused)
+                    (apply ,focused-original args))))
+         ,@body))))
+
 (defun pichat-test-tool-event (id name args &optional stop-reason)
   "Return a message-end event declaring tool ID NAME ARGS and STOP-REASON."
   (list :type "message_end"

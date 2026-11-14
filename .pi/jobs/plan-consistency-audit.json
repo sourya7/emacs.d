@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "id": "plan-consistency-audit",
+  "title": "Audit plan consistency with current code",
+  "model": "cliproxyapi/claude-opus-5-5",
+  "preset": "plan-reviewer",
+  "input": "Plan ID(s) and optional task scope",
+  "instructions": "Perform a read-only consistency audit of the plans and optional scope named in the run input. This is NOT a plan-loop review; no originating worker envelope is required. Use plan_show to inspect the authoritative records. Read applicable repository instructions and relevant project documentation, then compare the selected tasks, assumptions, dependencies, acceptance criteria and checkpoint with current checkout code and recorded evidence. If selection is ambiguous or a plan is unavailable, report that limitation rather than guessing. Classify each selected task as still valid, stale, already implemented, superseded, blocked, or inconclusive. Cite concrete file paths and symbols; distinguish observed code from recorded verification. Identify unresolved user decisions without answering them. Report suggested record corrections and unapproved additions separately; do not treat proposals as authorized work. Do not change files or plan records, run tests or commands with side effects, start/restart/cancel jobs, or commit/push. Do not follow the plan-loop worker/reviewer restart procedure. Finish with the checkout/revision inspected where available, a concise prioritized report, evidence limitations, and recommended next steps. Never claim verification you did not perform."
+}

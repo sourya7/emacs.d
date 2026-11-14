@@ -61,6 +61,32 @@
           (should (equal "concurrent\n\nreport" (pichat-chat-draft-text target)))
           (should (> pichat-chat--editor-generation before)))))))
 
+(ert-deftest pichat-chat-draft-text-keeps-point-and-window-point ()
+  (pichat-test-with-unit-session (session proc)
+    (pichat-test-with-chat-buffer (chat session)
+      (let ((target (pichat-chat-draft-capture chat)))
+        (pichat-chat-draft-replace target "keep this draft")
+        (save-window-excursion
+          (delete-other-windows)
+          (let* ((reader (selected-window))
+                 (other (split-window-right))
+                 (inside (- (point-max) 6)))
+            (set-window-buffer reader chat)
+            (set-window-buffer other chat)
+            (set-window-point other (point-min))
+            (goto-char inside)
+            (should (equal "keep this draft" (pichat-chat-draft-text target)))
+            (should (= inside (point)))
+            (should (= inside (window-point reader)))
+            (should (= (point-min) (window-point other)))
+            ;; Reading from another buffer leaves the chat's point alone too.
+            (with-temp-buffer
+              (should (equal "keep this draft"
+                             (pichat-chat-draft-text target))))
+            (should (= inside (point)))
+            (should (= inside (window-point reader)))
+            (should (= (point-min) (window-point other)))))))))
+
 (ert-deftest pichat-chat-test-fixture-cleans-buffer-after-error-without-stopping-runtime ()
   (pichat-test-with-unit-session (session proc)
     (let (opened)

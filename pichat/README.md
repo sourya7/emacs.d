@@ -2351,7 +2351,9 @@ runtime, and its exact captured Pi session source (including the reported
 saved-session pathname). These are draft-editing operations, **not** prompt
 submission: a stopped runtime can still receive draft text, while sending
 requires the separate live RPC submission path. They do not alter pending
-images or recoverable submissions.
+images or recoverable submissions. Reading with `pichat-chat-draft-text` keeps
+the chat's point and window points; replacing or appending leaves point in the
+new draft.
 
 If PiChat learns a saved-session pathname after an action captured a nil
 pathname—even for the same Pi session ID—the old action is conservatively

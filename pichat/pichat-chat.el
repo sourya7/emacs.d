@@ -4797,10 +4797,13 @@ This is an edit-only guard; a stopped runtime is still a valid draft target."
     (user-error "PiChat draft destination changed; capture it again")))
 
 (defun pichat-chat-draft-text (target)
-  "Return TARGET's current editable text, including concurrent edits."
+  "Return TARGET's current editable text, including concurrent edits.
+Reading does not move point or window point in TARGET's buffer."
   (pichat-chat-draft--require-current target)
   (with-current-buffer (pichat-chat-draft-target-buffer target)
-    (pichat-chat--insert-prompt)
+    ;; `pichat-chat--insert-prompt' leaves point at the buffer end for
+    ;; editing callers; reading must keep the user's point.
+    (save-excursion (pichat-chat--insert-prompt))
     (buffer-substring-no-properties pichat-chat--input-start (point-max))))
 
 (defun pichat-chat-draft-replace (target text &optional point-offset)

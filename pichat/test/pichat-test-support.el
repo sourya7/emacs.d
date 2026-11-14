@@ -331,11 +331,8 @@ have been seen."
 
 (defun pichat-test-draft-text (&optional buffer)
   "Return chat BUFFER's unsent draft through the public draft API.
-BUFFER defaults to the current buffer.  Point is kept: reading the draft
-through `pichat-chat-draft-text' moves point to the end of the buffer."
-  (with-current-buffer (or buffer (current-buffer))
-    (save-excursion
-      (pichat-chat-draft-text (pichat-chat-draft-capture)))))
+BUFFER defaults to the current buffer."
+  (pichat-chat-draft-text (pichat-chat-draft-capture buffer)))
 
 (defun pichat-test-set-draft (text &optional buffer)
   "Replace chat BUFFER's unsent draft with TEXT through the public draft API.

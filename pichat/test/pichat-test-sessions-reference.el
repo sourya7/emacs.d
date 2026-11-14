@@ -76,6 +76,25 @@
       (should-not pichat-archive--processes)
       (should-not (featurep 'pichat-jobs)))))
 
+(ert-deftest pichat-chat-new-session-confirms-only-discarding-conversation ()
+  (dolist (persistence '(persistent ephemeral))
+    (dolist (streaming '(nil t))
+      (dolist (answer '(nil t))
+        (let* ((session (pichat-session-make :persistence persistence :streaming-p streaming))
+               (risk (or (eq persistence 'ephemeral) streaming))
+               prompts started)
+          (with-temp-buffer
+            (setq-local pichat-chat-session session)
+            (cl-letf (((symbol-function 'yes-or-no-p)
+                       (lambda (text) (push text prompts) answer))
+                      ((symbol-function 'pichat-backend-start-new-conversation)
+                       (lambda (owner _callback)
+                         (should (eq owner session))
+                         (setq started t))))
+              (pichat-chat-new-session)))
+          (should (equal prompts (and risk '("Discard conversation? "))))
+          (should (eq started (or (not risk) answer))))))))
+
 (ert-deftest pichat-chat-new-session-cancellation-does-not-refresh-or-claim-success ()
   (let ((session (pichat-session-make))
         callback

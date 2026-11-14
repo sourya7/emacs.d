@@ -303,7 +303,7 @@
         (pichat-job-executor-cancel executor id)
         (pichat-jobs-detail-refresh)
         (let ((actions (pichat-test-job-actions)))
-          (dolist (label '("Repeat…" "Continue work…" "Continue in chat…" "Save as job…"))
+          (dolist (label '("Repeat…" "Continue work…" "Continue in chat" "Save as job…"))
             (should-not (member label actions))))
         (should (string-match-p "Not sent:" (buffer-string)))
         (should-error (pichat-jobs--repeat executor id) :type 'user-error)))))

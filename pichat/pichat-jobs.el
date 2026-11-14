@@ -382,9 +382,8 @@ files are retained."
     (unless (equal (plist-get run :state) "finished")
       (user-error "Only finished runs can be deleted"))
     (when (y-or-n-p
-           (format "Delete run ‘%s’ (%s, %s)? Evidence and saved session retained. "
-                   (pichat-jobs--display (plist-get (plist-get run :spec) :title))
-                   (pichat-jobs--local-time (plist-get run :created-at)) id))
+           (format "Delete run ‘%s’? "
+                   (pichat-jobs--display (plist-get (plist-get run :spec) :title))))
       (pichat-job-executor-delete-run owner id)
       (message "Run deleted; evidence and saved session retained"))))
 
@@ -399,9 +398,7 @@ files are retained."
       (user-error "%d run%s in this chain %s not finished; wait or cancel first"
                   open (if (= open 1) "" "s") (if (= open 1) "is" "are")))
     (when (y-or-n-p
-           (format "Delete all %d runs in the chain of ‘%s’? Evidence and saved sessions retained. "
-                   (length members)
-                   (pichat-jobs--display (plist-get (plist-get (car members) :spec) :title))))
+           (format "Delete %d runs? " (length members)))
       (pichat-job-executor-delete-chain owner id (mapcar (lambda (run) (plist-get run :id)) members))
       (message "%d runs deleted; evidence and saved sessions retained" (length members)))))
 
@@ -633,7 +630,7 @@ In Runs, \\[pichat-jobs-mark] marks a run with its whole run chain for deletion,
 (same keys in Evil).
 \\[pichat-jobs-actions] m marks old runs (`pichat-jobs-mark-old-runs').
 \\[pichat-jobs-release-reservation] releases an uncertain run's scheduling
-reservation after inspection and confirmation.  With Evil, use g R."
+reservation after a nonempty inspection note.  With Evil, use g R."
   (setq tabulated-list-padding 1)
   ;; Keep native sortable column headings above the rows, with the compact
   ;; overview/filter always visible below rather than replacing those headings.
@@ -701,10 +698,8 @@ before anything is queued; the store checks it again."
 (defun pichat-jobs--cancel (owner id)
   "Confirm cancellation of exact OWNER/ID, not merely its visible row."
   (let ((run (pichat-job-record (pichat-job-executor-store owner) 'runs id)))
-    (when (yes-or-no-p (format "Cancel %s (%s) at %s in %s? "
-                               (plist-get (plist-get run :spec) :title) id
-                               (plist-get (plist-get (plist-get (plist-get run :spec) :configuration) :transport) :label)
-                               (plist-get (plist-get run :spec) :directory)))
+    (when (yes-or-no-p (format "Cancel ‘%s’? "
+                               (pichat-jobs--display (plist-get (plist-get run :spec) :title))))
       (pichat-job-executor-cancel owner id))))
 
 (defun pichat-jobs-release-reservation ()
@@ -716,13 +711,14 @@ before anything is queued; the store checks it again."
                         (or (tabulated-list-get-id) (user-error "No run selected"))))
 
 (defun pichat-jobs--resolve (owner id)
-  "Explicitly acknowledge manual inspection of uncertain OWNER/ID."
+  "Explicitly acknowledge manual inspection of uncertain OWNER/ID.
+A nonempty note releases capacity; queued jobs may start.  This does not
+stop running tools or verify shutdown.  An empty note cancels."
   (unless (equal (plist-get (pichat-job-record (pichat-job-executor-store owner)
                                              'runs id) :state) "uncertain")
     (user-error "This run has no uncertain reservation to release"))
   (let ((ack (read-string "Inspection note: ")))
-    (when (and (not (string-blank-p ack))
-               (yes-or-no-p "Release reservation? Queued jobs may start; running tools are not stopped. "))
+    (when (not (string-blank-p ack))
       (pichat-job-executor-resolve owner id ack))))
 
 (defun pichat-jobs--repeat (owner id)
@@ -870,13 +866,9 @@ managed duplicate writers and concurrent opens."
                     (pichat-jobs--runtime-label conflict)))
       (unless (and (file-regular-p host-file) (file-readable-p host-file))
         (user-error "The captured saved session is not readable on its target"))
-      (when (yes-or-no-p
-             (format "%sontinue in chat using the job's preset ‘%s’ and tools on %s? "
-                     (if own
-                         (format "This run's runtime %s is still running. Stop it and c"
-                                 (pichat-jobs--runtime-label own))
-                       "C")
-                     (plist-get preset :name) (pichat-transport-label transport)))
+      (when (or (not own)
+                (yes-or-no-p (format "Stop runtime %s first? "
+                                    (pichat-session-runtime-id own))))
         (when own
           (pichat-stop-session own)
           (when-let* ((other (pichat--selected-file-conflict key)))
@@ -1232,7 +1224,7 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
        (when (> (length (plist-get (pichat-job-chain store (plist-get record :id)) :members)) 1)
          '((work "C" "Delete chain…" delete-chain)))
        (when (and finished (not (pichat-job-conversation-p record)) (plist-get record :session-file))
-         '((work "i" "Continue in chat…" open-saved)))
+         '((work "i" "Continue in chat" open-saved)))
        (when (pichat-jobs--cancellable-p owner record) '((work "k" "Cancel run…" cancel)))
        (when (equal (plist-get record :state) "uncertain")
          '((work "R" "Release reservation…" release)))
@@ -1766,9 +1758,8 @@ SAVE creates a definition only.  Failures retain a recoverable detached draft."
             (when continuation
               (setq capture (pichat-job-continuation-context
                              store (pichat-job-record store 'runs continuation)))
-              (when-let* ((warning (plist-get capture :warning)))
-                (unless (yes-or-no-p
-                         (concat warning ". Continue with incomplete previous run context? "))
+              (when (plist-get capture :warning)
+                (unless (yes-or-no-p "Context incomplete; continue? ")
                   (user-error "Continuation not submitted"))))
             ;; Capture/confirmation may have processed asynchronous events.
             (unless (and (pichat-job--settings-current-p scope)
@@ -2060,7 +2051,7 @@ This stages the time only; Schedule remains a separate explicit action."
           (when pending
             (unless (member (plist-get pending :state) '("scheduled" "queued"))
               (user-error "Active/uncertain work cannot be replaced; inspect Jobs"))
-            (unless (yes-or-no-p "Replace the pending scheduled attempt in this runtime? ")
+            (unless (yes-or-no-p "Replace pending attempt? ")
               (user-error "Pending attempt retained")))
           (pichat-job-executor-conversation-schedule
            owner capture (plist-get draft :instructions) due pending
@@ -2498,10 +2489,6 @@ Empty input removes it.  Jobs that take run input cannot be scheduled."
               (unless (pichat-job--settings-current-p scope)
                 (user-error "Job changed; reopen Edit"))
               (unless (equal spec (plist-get (plist-get scope :job) :spec))
-                (when (and (plist-get (plist-get scope :job) :source)
-                           (not (yes-or-no-p
-                                 "Save native edits without changing authored file? Reimport may replace instructions/settings. ")))
-                  (user-error "Save cancelled; authored file and saved job unchanged"))
                 (unless (pichat-job--settings-current-p scope)
                   (user-error "Job changed; reopen Edit"))
                 (pichat-job-save (pichat-jobs--store) spec id))

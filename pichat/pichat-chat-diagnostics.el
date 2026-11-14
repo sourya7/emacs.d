@@ -586,16 +586,16 @@ inspectors rebuild only their explicitly opened bounded raw snapshot."
     (pichat-show-diagnostics)))
 
 (defun pichat-diagnostics-show-raw ()
-  "Confirm opening sensitive raw details for the safe inspector's owner."
+  "Open sensitive raw details for the safe inspector's owner.
+Raw details may contain secrets, paths and prompt content.
+Review before sharing."
   (interactive)
   (unless (and (derived-mode-p 'pichat-diagnostics-mode)
                (not (derived-mode-p 'pichat-transport-diagnostics-mode)))
     (user-error "Open raw details from a safe PiChat diagnostics inspector"))
-  ;; Reject forgotten owners before prompting.  Resolve again after the prompt,
-  ;; since the registry may change while Emacs waits for the user's answer.
+  ;; Explicit inspection still rejects forgotten owners.
   (pichat-chat-diagnostics--session)
-  (when (y-or-n-p "Raw details may contain secrets, paths and prompt content. Open? ")
-    (pichat-show-transport-diagnostics)))
+  (pichat-show-transport-diagnostics))
 
 (defun pichat-chat-diagnostics--safe-record-line (record)
   "Return RECORD's safe summary with only available optional metadata.

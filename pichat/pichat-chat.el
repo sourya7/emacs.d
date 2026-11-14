@@ -2061,7 +2061,9 @@ A successful unrelated new session clears Session History source navigation."
   (unless pichat-chat-session (user-error "No PiChat session"))
   (pichat-backend-require-capability
    pichat-chat-session 'new-conversation "New session")
-  (when (yes-or-no-p "Start a new Pi session? ")
+  (when (or (not (or (eq (pichat-session-persistence pichat-chat-session) 'ephemeral)
+                         (pichat-session-streaming-p pichat-chat-session)))
+            (yes-or-no-p "Discard conversation? "))
     (pichat-backend-start-new-conversation
      pichat-chat-session
      (lambda (response session)

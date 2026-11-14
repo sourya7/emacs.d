@@ -506,14 +506,11 @@ preferred runtime."
              (reservation (pichat--selected-file-reserved-p key)))
         (when conflict
           (pcase (car (read-multiple-choice
-                       "This saved conversation is hosted by another PiChat runtime: "
-                       '((?o "Open existing chat")
-                         (?r "Reconfigure existing runtime")
+                       (format "Open in runtime %s: " (pichat-session-runtime-id conflict))
+                       '((?o "Open")
                          (?c "Cancel"))))
             (?o (pichat-chat-open conflict)
                 (user-error "Opened existing chat; no new writer was started"))
-            (?r (pichat-chat-open conflict)
-                (user-error "Open the existing chat's launcher and select r"))
             (_ (user-error "Selected saved conversation launch cancelled"))))
         (when reservation
           (user-error "A PiChat launch is already loading this saved conversation"))
@@ -1237,7 +1234,7 @@ Return a name without changing state."
                     (concat "  " description)))))
          (chosen (completing-read prompt choices nil t nil history initial)))
     (when (and tools (not (equal chosen initial))
-               (not (yes-or-no-p "Discard customized Tools for the new preset? ")))
+               (not (yes-or-no-p "Discard Tools changes? ")))
       (user-error "Preset change cancelled"))
     chosen))
 
@@ -1397,7 +1394,7 @@ model and conversation are shown by their own menu entries."
                       (eq buffer (pichat-session-buffer session)))
            (user-error "Current conversation requires the originating chat"))
          (pcase (car (read-multiple-choice
-                      "Normal launch choices will not apply to this conversation: "
+                      "Current conversation (ignore launch choices): "
                       '((?o "Open existing chat")
                         (?r "Reconfigure this runtime")
                         (?c "Cancel"))))
@@ -1827,9 +1824,7 @@ says when it does not, and what blocks it."
         (message "PiChat runtime unchanged")
       (when (plist-get scope :blockers)
         (user-error "%s" (string-join (plist-get scope :blockers) "; ")))
-      (when (yes-or-no-p
-             (format "Restart this runtime with %s? "
-                     (plist-get (plist-get draft :preset-spec) :name)))
+      (when (yes-or-no-p "Restart runtime? ")
         (pichat-reconfigure-restart
          origin draft
          (lambda (success reason)
@@ -1838,18 +1833,14 @@ says when it does not, and what blocks it."
                     (if reason (format ": %s" reason) ""))))))))
 
 (defun pichat--reconfigure-recovery-run (choice)
-  "Confirm and execute the failed-runtime recovery CHOICE."
+  "Execute the explicitly selected failed-runtime recovery CHOICE."
   (let ((session (plist-get (transient-scope) :session)))
-    (when (yes-or-no-p
-           (pcase choice
-             ('retry "Retry this runtime restart? ")
-             ('restore "Restore the previous runtime configuration? ")))
-      (pichat-reconfigure-recover
-       session choice
-       (lambda (success reason)
-         (message "PiChat runtime %s%s"
-                  (if success "recovered" "recovery failed")
-                  (if reason (format ": %s" reason) "")))))))
+    (pichat-reconfigure-recover
+     session choice
+     (lambda (success reason)
+       (message "PiChat runtime %s%s"
+                (if success "recovered" "recovery failed")
+                (if reason (format ": %s" reason) ""))))))
 
 (transient-define-suffix pichat-reconfigure-retry ()
   "Retry the requested captured configuration."

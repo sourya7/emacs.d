@@ -193,8 +193,7 @@ selected implicitly.  Otherwise use the source project scope."
   "Write TEXT from LABEL to a runtime-accessible file and return its reference."
   (when (> (length text) pichat-reference-snapshot-large-threshold)
     (unless (yes-or-no-p
-             (format "Write large PiChat reference from %s (%d chars)? "
-                     label (length text)))
+             (format "Write %d-char reference? " (length text)))
       (user-error "Temporary reference cancelled")))
   (let* ((ssh-default (and (null pichat-reference-temp-directory)
                            pichat-reference--transport

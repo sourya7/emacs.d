@@ -698,6 +698,30 @@
     (pichat--release-selected-file key token)
     (should-not (pichat--selected-file-reserved-p key))))
 
+(ert-deftest pichat-launch-hosted-saved-session-offers-only-open-or-cancel ()
+  (pichat-test-with-temp-dir dir
+    (let* ((file (expand-file-name "saved.jsonl" dir))
+           (selection (pichat-sessions-selection file dir pichat-transport-local))
+           (profile (list :scope (list "global|local|hosted-test" dir "test")
+                          :target 'local :reuse 'new :persistence 'persistent
+                          :conversation (list :kind 'saved :selection selection)))
+           (host (pichat-session-make)))
+      (write-region "{}\n" nil file nil 'silent)
+      (dolist (choice '(?c ?o))
+        (let (opened)
+          (cl-letf (((symbol-function 'pichat--selected-file-conflict) (lambda (_) host))
+                    ((symbol-function 'read-multiple-choice)
+                     (lambda (prompt choices &rest _)
+                       (should (equal prompt (format "Open in runtime %s: "
+                                                     (pichat-session-runtime-id host))))
+                       (should (equal choices '((?o "Open") (?c "Cancel"))))
+                       (list choice)))
+                    ((symbol-function 'pichat-chat-open) (lambda (owner) (setq opened owner)))
+                    ((symbol-function 'pichat-sessions-open-file-independently)
+                     (lambda (&rest _) (ert-fail "Started another writer"))))
+            (should-error (pichat--open-launch-profile profile dir) :type 'user-error))
+          (should (eq opened (and (eq choice ?o) host))))))))
+
 (ert-deftest pichat-launch-selected-file-reservation-blocks-racing-writers ()
   (pichat-test-with-temp-dir dir
     (let* ((file (expand-file-name "saved.jsonl" dir))
@@ -836,7 +860,7 @@
                         ((symbol-function 'pichat-reconfigure-restart)
                          (lambda (&rest _) (ert-fail "Confirmation declined"))))
                 (pichat-reconfigure-execute)
-                (should (equal "Restart this runtime with coding? " prompt))
+                (should (equal "Restart runtime? " prompt))
                 (should (process-live-p proc)))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
@@ -861,7 +885,7 @@
                       ((symbol-function 'pichat-reconfigure-restart)
                        (lambda (&rest _) (ert-fail "Confirmation declined"))))
               (pichat-reconfigure-execute)
-              (should (equal "Restart this runtime with coding? " prompt))
+              (should (equal "Restart runtime? " prompt))
               (setq scope (list :session session))
               (dolist (empty '(nil t))
                 (setf (pichat-session-restart-operation session)
@@ -869,11 +893,16 @@
                 (should (string-match-p
                          (if empty "new Pi session" "Snapshot retained\\'")
                          (pichat--reconfigure-recovery-description)))
-                (pichat--reconfigure-recovery-run 'retry)
-                (should (equal "Retry this runtime restart? " prompt))
-                (pichat--reconfigure-recovery-run 'restore)
-                (should (equal "Restore the previous runtime configuration? "
-                               prompt)))
+                (let (choices)
+                  (cl-letf (((symbol-function 'yes-or-no-p)
+                             (lambda (&rest _) (ert-fail "Recovery needs no confirmation")))
+                            ((symbol-function 'pichat-reconfigure-recover)
+                             (lambda (owner choice _callback)
+                               (should (eq session owner))
+                               (push choice choices))))
+                    (pichat--reconfigure-recovery-run 'retry)
+                    (pichat--reconfigure-recovery-run 'restore))
+                  (should (equal '(restore retry) choices))))
               (should (process-live-p proc))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 

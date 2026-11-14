@@ -813,8 +813,9 @@
       (cl-letf (((symbol-function 'yes-or-no-p)
                  (lambda (prompt) (setq confirmation prompt) nil)))
         (pichat-test-job-press "Cancel run…"))
-      (should (string-match-p (regexp-quote project-dir) confirmation))
-      (should (string-match-p "local" confirmation))
+      (should (equal (format "Cancel ‘%s’? "
+                             (plist-get (plist-get (pichat-job-record store 'runs id) :spec) :title))
+                     confirmation))
       (pichat-job-executor--advance execution "running")
       (with-current-buffer chat
         (pichat-chat--on-extension-ui-request
@@ -854,7 +855,7 @@
       (pichat-job-executor-resolve executor id "Fixture inspected: no tool calls or descendants")
       (let ((original (pichat-job-record store 'runs id)))
         (pichat-jobs--show-detail executor 'runs id)
-        (should-not (string-match-p "Repeat…\\|Continue in chat…" (buffer-string)))
+        (should-not (string-match-p "Repeat…\\|Continue in chat" (buffer-string)))
         (should-not (string-match-p "Actions…" (buffer-string)))
         (pichat-test-job-goto-button "Details")
         (should (looking-at "▸ Details"))

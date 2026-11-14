@@ -947,9 +947,12 @@ working directory determines the new runtime's project and display routing."
   (let ((session (pichat-session-manager--session-at-point)))
     (unless (pichat-session-alive-p session)
       (user-error "Selected PiChat runtime is not live"))
-    (when (yes-or-no-p
-           (format "Stop PiChat runtime %s? "
-                   (pichat-session-manager--session-label session)))
+    (when (cond
+           ((eq (pichat-session-persistence session) 'ephemeral)
+            (yes-or-no-p "Discard conversation? "))
+           ((pichat-session-streaming-p session)
+            (yes-or-no-p "Abort running turn? "))
+           (t t))
       (pichat-stop-session session)
       (pichat-session-manager-refresh))))
 

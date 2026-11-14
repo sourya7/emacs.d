@@ -210,9 +210,7 @@ The current selection is the default.  This stages timing only."
     ;; Pure preparation checks captured configuration; do not launch or discover.
     (pichat-job-launch-prepare (plist-get expected :spec))
     (when (yes-or-no-p
-           (format "Enable ‘%s’ %s, next %s? Emacs must be running; missed ticks are not replayed. "
-                   (pichat-jobs--display (plist-get (plist-get expected :spec) :title))
-                   (pichat-job-schedule-ui-rule-label rule) (pichat-job-schedule-ui-time next)))
+           (format "Enable, next %s? " (pichat-job-schedule-ui-time next)))
       (unless (equal expected (pichat-job-record (pichat-job-executor-store owner) 'jobs id))
         (user-error "Job changed; review its schedule again"))
       (pichat-job-executor-schedule-enable owner id t))))

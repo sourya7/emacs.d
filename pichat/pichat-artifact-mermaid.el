@@ -254,7 +254,7 @@ create from racing a successful removal of a not-yet-existing container."
                 ('availability
                  (unless success (error "Docker daemon unavailable; see diagnostics"))
                  (if (yes-or-no-p
-                      (format "Download Mermaid image %s? " (pichat-artifact-mermaid--job-image job)))
+                      (format "Pull image %s? " (pichat-artifact-mermaid--job-image job)))
                      (pichat-artifact-mermaid--stage job 'pull
                                                    (list "pull" (pichat-artifact-mermaid--job-image job)))
                    (error "Image download declined; nothing rendered")))

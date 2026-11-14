@@ -598,7 +598,9 @@ the process's working directory to that cwd.
 Selected saved sessions require persistent storage and the same target as the
 selected file. Changed target/path context, missing files, and PiChat runtimes
 hosting or retaining an uncertain restart writer claim for the file block a
-second writer; concurrent PiChat launches reserve the file until synchronization
+second writer; for a file already hosted elsewhere the choice is `Open in runtime
+N:` with Open/Cancel (reconfiguration remains in that chat's launcher).
+Concurrent PiChat launches reserve the file until synchronization
 succeeds or fails. This Emacs-local managed-runtime check cannot detect external
 Pi processes. Canceling the picker leaves the prior selection untouched. The ordinary saved-session browser still
 uses its own independent-open ownership and actions.
@@ -621,9 +623,9 @@ navigation history), PiChat instead confirms fresh empty entries and restarts
 into a **new Pi session ID**; the old nonexistent file cannot be reloaded. The
 runtime identity, manager row, chat, unsent draft, and owner scope remain;
 compose editors for the empty source are retargeted, while extension-owned
-state is reset. A failed
-post-stop attempt retains the last synchronized conversation as a read-only
-snapshot. Reopen `r` from that chat for **Retry requested**, **Restore previous**,
+state is reset. Retry requested and Restore previous run directly, without
+another confirmation. A failed post-stop attempt retains the last synchronized
+conversation as a read-only snapshot. Reopen `r` from that chat for **Retry requested**, **Restore previous**,
 or **Leave stopped**. A quit during the restart is handled like an error and
 still propagates: before the snapshot is staged nothing is changed; afterwards
 the attempt fails once, the previous preset, Tools and model stay installed,
@@ -965,7 +967,9 @@ Manager keys:
   with its recorded project (using archive-backed Consult when available, with
   the basic file picker as fallback);
 - `e` — name the selected session through its backend;
-- `k` — stop only the selected live runtime;
+- `k` — stop only the selected live runtime; idle persistent runtimes stop
+  directly, ephemeral runtimes ask `Discard conversation?`, and a running turn
+  in a persistent runtime asks `Abort running turn?`;
 - `d` — forget and clean up a stopped or failed runtime;
 - `m` — make the selected live runtime preferred for its owner scope;
 - `D` — show that runtime's unified cached diagnostics;
@@ -1178,7 +1182,7 @@ phase adapter. Scheduling always requires explicit authorization.
   conversation preview, diagnostics,
   response copy/source, repeat, chat continuation, saving and related navigation
   when applicable. **Continue work…** comes first for recoverable runs; it remains
-  distinct from **Continue in chat…**. Uncertain runs offer reservation release and
+  distinct from **Continue in chat**. Uncertain runs offer reservation release and
   supported remote-exit inspection, retaining their existing safeguards.
   Commands recheck the exact report or list row and its current state (a row
   hidden by a filter or a switched list is refused); closing the menu does nothing.
@@ -1261,7 +1265,7 @@ starting Pi or reading the current saved session file, including after Emacs
 restart. It has no fork/switch actions and is not Session History or saved-session
 browsing. Older Markdown-only captures remain readable with a labelled fallback;
 PiChat never reconstructs historical evidence from a subsequently continued file.
-Finished runs with saved-session references offer **Continue in chat…** under
+Finished runs with saved-session references offer **Continue in chat** under
 **Actions**: an explicit
 new ordinary runtime on the captured target using the run's captured preset and
 tools (not the current default preset; reconfigure the chat afterwards to change
@@ -1274,10 +1278,10 @@ clone, but cannot alter the historical run report or captured transcript.
 Mutating Emacs tools keep their approval rules. A job tool called from this chat
 acts as a chat, not as the run: `pichat_job_run_now` starts a new
 [run chain](#review-loops) at round 1, without **Requested by**.
-Managed duplicate writers are refused. When the run's own runtime still hosts
-the saved session (for example a manually released run), the confirmation names
-its runtime ID and buffer and offers to stop it and continue; any other hosting
-runtime is refused with its runtime ID and buffer and is never stopped.
+Managed duplicate writers are refused. No preset/tools confirmation is needed.
+When the run's own live runtime still hosts the saved session (for example a manually released run), PiChat asks
+`Stop runtime N first?`; any other hosting runtime is refused with its runtime
+ID and buffer and is never stopped.
 Uncertain execution must be resolved first.
 Job-owned chats allow
 inspection and existing extension UI responses, not additional prompts, source
@@ -1295,7 +1299,7 @@ insufficient. Cleanup failure retains uncertainty, the slot and captured evidenc
 A run that finishes **Completed** then forgets its stopped runtime: it leaves
 the runtime manager and `pichat_chats_list`, and its read-only chat buffer is
 killed. A chat shown in a window stays until you kill it; its runtime is
-forgotten then. The report, **Preview conversation**, **Continue in chat…**
+forgotten then. The report, **Preview conversation**, **Continue in chat**
 and **Diagnostics** (the recorded execution note) work without it. Set
 `pichat-jobs-forget-completed-runtimes` to nil to keep completed runtimes.
 Runs that fail, are cancelled or become uncertain keep their read-only chat and
@@ -1388,8 +1392,9 @@ saved jobs or run history. Ordinary unchanged reimport is a true no-op, includin
 captured settings, timestamps and the last modifying import path. Explicit
 **Use current settings** prepares recapture and still requires Save.
 
-Native saved-job edits never write back into source files. Reimport over native
-edits requires reviewed replacement confirmation. Updates preserve timing,
+Native saved-job Save needs no extra confirmation and never writes back into
+source files. Reimport over native edits requires reviewed replacement
+confirmation. Updates preserve timing,
 follow-ups, queued captures and historical evidence. Stale source/store errors
 require fixing the source and discovering/reviewing again, not editing runtime
 metadata. Project files are untrusted data; import is not a Pi trust gate or a
@@ -1855,9 +1860,10 @@ Uncertain runs display **Needs inspection** in the existing table and report,
 without extra scheduling columns or sections. Their reservations still occupy
 global admission capacity, not a workspace lock. Same-job waits offer **Actions → Blocking run**.
 **Release reservation…** (under Actions or via the selected-row command)
-asks for an inspection note and confirms that queued jobs may start and running
-tools are not stopped. It records an explicit human acknowledgement as Needs
-review, not verified shutdown or success. Cancelling the prompts changes nothing.
+asks only for an inspection note; an empty note or cancellation changes nothing.
+Submitting a note may start queued jobs and does not stop running tools. It
+records an explicit human acknowledgement as Needs review, not verified shutdown
+or success.
 Release does not retry or continue work; **Continue work…** is separate. Its resolution
 time is separate from verified finish time. Older records without timeline fields
 show unavailable times rather than inferring them from the last metadata update.
@@ -1947,7 +1953,7 @@ See `GLOSSARY.md` for source, runtime and process-generation distinctions.
 Inspector keys:
 
 - `g` (Evil Normal `g r`) — rebuild the current safe or raw snapshot.
-- Safe view `r` — ask before opening sensitive raw details for that runtime.
+- Safe view `r` — open sensitive raw details for that runtime directly.
   The raw view can contain stderr, failed RPC responses, command arguments,
   recent RPC events, paths, prompt content, and credentials. It retains bounded
   records/values; **review before sharing**. Direct explicit inspection remains
@@ -2085,7 +2091,8 @@ Chat keys:
 - `M-<up>` / `M-<down>` — browse submitted prompt history
 - `M-x pichat-chat-steer` / `M-x pichat-chat-follow-up` — queue messages during a run
 - `M-x pichat-chat-set-steering-mode` / `M-x pichat-chat-set-follow-up-mode` — configure Pi queue delivery
-- `C-c C-n` — new session
+- `C-c C-n` — new session; asks `Discard conversation?` only for an ephemeral
+  runtime or a running turn
 - `C-c C-e` — name current session
 - `C-c C-m` — cycle model
 - `C-c C-t` — cycle thinking level when supported by the selected model
@@ -2307,23 +2314,23 @@ cancellation or failure leaves Session History and the chat editor unchanged.
 Pi's fork response restores historical prompt text only; historical image
 attachments are not restored.
 
-Cloning asks for confirmation, rebinds to a new session, waits for its refreshed
-identity, and focuses the chat prompt. The existing draft and image attachment
+Cloning rebinds to a new session without another confirmation, waits for its
+refreshed identity, and focuses the chat prompt. The existing draft and image attachment
 lifecycle are preserved. Cancellation, RPC failure (including an empty session),
 or state-sync failure is reported without an extra repaint or a false success
 message.
 
 Branch preview keys:
 
-- `f` — resolve the nearest preceding user prompt on this exact branch, then
-  confirm its summary and entry ID before forking
+- `f` — fork the nearest preceding user prompt on this exact branch without
+  another confirmation
 - `t` — return to the exact originating Session History buffer
 - `d` — show raw details for the selected preview entry
 - `q` — close the preview
 
 A preview remains readable after its owning session rebinds, but is marked stale
-and cannot fork. If the resolved historical user prompt contained images, the
-confirmation explains that Pi restores its text only.
+and cannot fork. If the resolved historical user prompt contained images, a
+message explains that Pi restores its text only.
 
 Source back/forward navigation is scoped to one Pi RPC session and is available
 only when both the source and target have nonblank persisted session-file paths;

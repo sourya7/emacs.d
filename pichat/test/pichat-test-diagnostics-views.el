@@ -261,7 +261,7 @@
               (should-not (string-match-p "hidden\\|/private/path" text)))))
       (when (buffer-live-p report) (kill-buffer report)))))
 
-(ert-deftest pichat-diagnostics-raw-action-confirms-and-refreshes-bounded-owner-snapshot ()
+(ert-deftest pichat-diagnostics-raw-action-opens-directly-and-refreshes-bounded-owner-snapshot ()
   (pichat-test-with-clean-state
     (save-window-excursion
       (let* ((session (pichat-register-session (pichat-session-make :state 'stopped)))
@@ -270,7 +270,7 @@
              (origin (generate-new-buffer " *diagnostics-ui-origin*"))
              (pichat-diagnostics-view-event-limit 1)
              (pichat-diagnostics-view-value-limit 80)
-             safe raw prompt)
+             safe raw)
         (unwind-protect
             (progn
               (switch-to-buffer origin)
@@ -278,13 +278,7 @@
               (should-not (get-buffer (format "*PiChat Transport Diagnostics %s*"
                                              (pichat-session-runtime-id session))))
               (cl-letf (((symbol-function 'y-or-n-p)
-                         (lambda (text) (setq prompt text) nil)))
-                (call-interactively (key-binding (kbd "r"))))
-              (should (string-match-p "secrets, paths and prompt content" prompt))
-              (should (eq safe (current-buffer)))
-              (should-not (get-buffer (format "*PiChat Transport Diagnostics %s*"
-                                             (pichat-session-runtime-id session))))
-              (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+                         (lambda (&rest _) (ert-fail "Explicit raw inspection needs no prompt"))))
                 (setq raw (call-interactively (key-binding (kbd "r")))))
               (should (eq raw (current-buffer)))
               (should (eq session pichat-diagnostics--owner))
@@ -305,7 +299,7 @@
           (dolist (buffer (list safe raw origin))
             (when (buffer-live-p buffer) (kill-buffer buffer))))))))
 
-(ert-deftest pichat-diagnostics-raw-action-revalidates-owner-after-warning ()
+(ert-deftest pichat-diagnostics-raw-action-rejects-forgotten-owner ()
   (pichat-test-with-clean-state
     (let ((session (pichat-register-session (pichat-session-make :state 'stopped)))
           report)
@@ -313,9 +307,7 @@
           (cl-letf (((symbol-function 'pichat-view-display) #'ignore))
             (setq report (pichat-show-diagnostics session))
             (with-current-buffer report
-              (cl-letf (((symbol-function 'y-or-n-p)
-                         (lambda (&rest _) (pichat-forget-session session) t)))
-                (should-error (pichat-diagnostics-show-raw) :type 'user-error))
+              (pichat-forget-session session)
               (cl-letf (((symbol-function 'y-or-n-p)
                          (lambda (&rest _) (ert-fail "Prompted for forgotten owner"))))
                 (should-error (pichat-diagnostics-show-raw) :type 'user-error)))

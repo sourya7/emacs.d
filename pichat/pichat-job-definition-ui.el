@@ -432,7 +432,7 @@ STORE names after-run jobs; without it the field shows the saved job ID."
             (user-error "Owning store changed; discover and review again"))
           (let ((replace (pichat-job-import-review-diverged review)))
             (when (and replace
-                       (not (yes-or-no-p "Replace reviewed native instructions/settings with this import? ")))
+                       (not (yes-or-no-p "Overwrite native edits? ")))
               (user-error "Import cancelled; nothing saved"))
             (unless (and (pichat-job-definition-ui--current-p session)
                          (eq (current-buffer) origin) (eq review (plist-get session :review))

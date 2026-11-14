@@ -115,15 +115,18 @@
        (pichat-sessions--preview-nearest-user
         (pichat-sessions--preview-path model "assistant-only"))))))
 
-(ert-deftest pichat-sessions-preview-fork-confirms-summary-id-and-image-limit ()
+(ert-deftest pichat-sessions-preview-fork-targets-branch-and-reports-image-limit ()
   (pichat-test-sessions-preview--with-history
     (pichat-sessions--goto-id "alternate-leaf")
     (cl-letf (((symbol-function 'pop-to-buffer) #'ignore))
       (pichat-sessions-preview-branch-at-point))
-    (let (prompt sent-id sent-session)
+    (let (notice sent-id sent-session)
       (with-current-buffer "*PiChat Branch Preview*"
         (cl-letf (((symbol-function 'yes-or-no-p)
-                   (lambda (text) (setq prompt text) t))
+                   (lambda (&rest _) (ert-fail "Fork needs no confirmation")))
+                  ((symbol-function 'message)
+                   (lambda (format-string &rest args)
+                     (setq notice (apply #'format format-string args))))
                   ((symbol-function 'pichat-rpc-fork)
                    (lambda (rpc-session id _success &optional _error)
                      (setq sent-session rpc-session sent-id id)
@@ -131,9 +134,7 @@
           (pichat-sessions-preview-fork)))
       (should (eq session sent-session))
       (should (equal "alternate-user" sent-id))
-      (should (string-match-p "Alternate prompt" prompt))
-      (should (string-match-p "alternate-user" prompt))
-      (should (string-match-p "text only" prompt)))))
+      (should (string-match-p "text only" notice)))))
 
 (ert-deftest pichat-sessions-preview-no-user-sends-no-fork ()
   (let* ((session (pichat-session-make :id "session" :session-file "/one"))

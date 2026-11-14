@@ -2623,7 +2623,7 @@ semantics and receives the original response data."
 
 ;;;###autoload
 (defun pichat-sessions-preview-fork ()
-  "Confirm and fork from the nearest user prompt in this preview path."
+  "Fork from the nearest user prompt in this preview path."
   (interactive)
   (unless (pichat-sessions-preview--source-current-p)
     (pichat-sessions-preview--mark-stale)
@@ -2633,21 +2633,16 @@ semantics and receives the original response data."
          (entry (plist-get target :entry))
          (message (plist-get entry :message))
          (id (plist-get target :id))
-         (summary (pichat-sessions--shorten
-                   (pichat-render-message-text message) 80))
          (images (pichat-sessions--preview-message-has-images-p message)))
     (unless target
       (user-error "No preceding user message exists on this branch"))
-    (when (yes-or-no-p
-           (format "Fork from “%s” (%s)%s? "
-                   summary id
-                   (if images "; historical images are not restored (text only)"
-                     "")))
-      (pichat-sessions--request-fork
-       (pichat-sessions--capture-fork-context
-        pichat-sessions-preview--session
-        pichat-sessions-preview--source-token
-        id entry (current-buffer))))))
+    (when images
+      (message "Historical images are not restored (text only)"))
+    (pichat-sessions--request-fork
+     (pichat-sessions--capture-fork-context
+      pichat-sessions-preview--session
+      pichat-sessions-preview--source-token
+      id entry (current-buffer)))))
 
 ;;;###autoload
 (defun pichat-sessions-switch-at-point ()
@@ -2774,12 +2769,9 @@ constructs or sends a source path.  Use `pichat-sessions-browse-files' instead."
   (interactive)
   (unless pichat-sessions-session
     (user-error "No PiChat session to clone"))
-  (if (yes-or-no-p
-       "Clone the current active branch (not the selected history row)? ")
-      (pichat-sessions--request-clone
-       (pichat-sessions--capture-clone-context
-        pichat-sessions-session (current-buffer)))
-    (message "PiChat clone cancelled; session history was unchanged")))
+  (pichat-sessions--request-clone
+   (pichat-sessions--capture-clone-context
+    pichat-sessions-session (current-buffer))))
 
 (defun pichat-sessions--focus-navigated-session
     (session direction target source)

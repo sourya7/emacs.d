@@ -62,6 +62,26 @@ When PATHLESS, start with a known Pi session ID but no saved-file path."
                     (should (equal baseline
                                    (pichat-test-reference--draft-state)))))))))))))
 
+(ert-deftest pichat-reference-large-snapshot-confirms-shortly-before-writing ()
+  (pichat-test-with-temp-dir dir
+    (let ((pichat-reference-temp-directory dir)
+          (pichat-reference-snapshot-large-threshold 3)
+          (pichat-reference--transport pichat-transport-local)
+          (pichat-reference--path-context nil))
+      (dolist (text '("ab" "abc" "abcd"))
+        (dolist (answer '(nil t))
+          (let ((before (length (directory-files dir nil "\\.txt\\'"))) prompts)
+            (cl-letf (((symbol-function 'yes-or-no-p)
+                       (lambda (question) (push question prompts) answer)))
+              (if (and (> (length text) 3) (not answer))
+                  (should-error (pichat-reference--write-temp-reference "fixture" text)
+                                :type 'user-error)
+                (should (string-match-p "fixture"
+                                        (pichat-reference--write-temp-reference "fixture" text)))))
+            (should (equal prompts (and (> (length text) 3) '("Write 4-char reference? "))))
+            (should (= (length (directory-files dir nil "\\.txt\\'"))
+                       (+ before (if (or (<= (length text) 3) answer) 1 0))))))))))
+
 (ert-deftest pichat-reference-rejects-source-change-during-file-prompt ()
   (pichat-test-reference--collect-scenario
    (lambda (_session chat)

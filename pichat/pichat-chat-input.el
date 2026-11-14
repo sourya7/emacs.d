@@ -260,7 +260,7 @@ changed by this operation."
      ((string-empty-p current)
       (pichat-chat--set-input-text text)
       'inserted)
-     ((yes-or-no-p "Replace the current PiChat draft with the fork prompt? ")
+     ((yes-or-no-p "Replace draft? ")
       (pichat-chat--set-input-text text)
       'replaced)
      (t

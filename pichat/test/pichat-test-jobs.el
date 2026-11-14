@@ -4048,6 +4048,31 @@
               (pichat-job-definition-ui-cancel)))
         (when (buffer-live-p source) (kill-buffer source))))))
 
+(ert-deftest pichat-job-files-redraw-keeps-unselected-window-row ()
+  ;; A resize redraw while a confirmation minibuffer is selected must not move
+  ;; the picker window's row, or Save rejects the staged import as retargeted.
+  (pichat-test-with-job-executor ()
+    (pichat-test-job-author project-dir)
+    (with-temp-file (expand-file-name ".pi/jobs/a.json" project-dir)
+      (insert "{\"version\":1,\"id\":\"a-other\",\"title\":\"A other\","
+              "\"instructions\":\"x\",\"directory\":\".\",\"model\":\"pichat-fake/pichat-fake\","
+              "\"preset\":\"review\"}"))
+    (save-window-excursion
+      (let* ((picker (pichat-job-definitions project-dir))
+             (window (get-buffer-window picker))
+             (other (split-window window)))
+        (with-current-buffer picker
+          (goto-char (point-min))
+          (forward-line 1)
+          (let ((id (tabulated-list-get-id)))
+            (should id)
+            (set-window-point window (point))
+            (select-window other)
+            (pichat-job-definition-ui--render-discovery)
+            (goto-char (window-point window))
+            (should (equal id (tabulated-list-get-id)))))
+        (kill-buffer picker)))))
+
 (ert-deftest pichat-job-files-changed-store-and-retargeted-origins-cannot-save ()
   (pichat-test-with-job-executor ()
     (let* ((record (pichat-test-job-author project-dir))

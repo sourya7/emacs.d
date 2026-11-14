@@ -75,7 +75,15 @@ Only Save writes the saved job.  Run and timing are separate actions."
                   (window-body-width)))
          (title-width (if (< width 110) (max 10 (min 20 (/ width 4))) 24))
          (files (length pichat-job-definition-ui--definitions))
-         (diagnostics (length pichat-job-definition-ui--diagnostics)))
+         (diagnostics (length pichat-job-definition-ui--diagnostics))
+         ;; Re-rendering can happen in redisplay while another window (e.g. a
+         ;; confirmation minibuffer) is selected; keep every window on its row so
+         ;; reselecting it does not silently retarget the staged import.
+         (rows (mapcar (lambda (window)
+                         (save-excursion
+                           (goto-char (window-point window))
+                           (list window (tabulated-list-get-id) (current-column))))
+                       windows)))
     (setq tabulated-list-format
           (vector (list "Job" title-width t) '("Scope" 8 t) '("File" 0 t))
           tabulated-list-entries
@@ -99,7 +107,16 @@ Only Save writes the saved job.  Run and timing are separate actions."
                    (if (car roots) (pichat-jobs--display (abbreviate-file-name (car roots))) "omitted"))
            t t))
     (tabulated-list-init-header)
-    (tabulated-list-print t)))
+    (tabulated-list-print t)
+    (pcase-dolist (`(,window ,id ,column) rows)
+      (when (and id (window-live-p window) (not (eq window (selected-window))))
+        (save-excursion
+          (goto-char (point-min))
+          (while (and (not (eobp)) (not (equal id (tabulated-list-get-id))))
+            (forward-line 1))
+          (unless (eobp)
+            (move-to-column column)
+            (set-window-point window (point))))))))
 
 (defun pichat-job-definition-ui-refresh ()
   "Explicitly rediscover the exact roots captured by this discovery view."

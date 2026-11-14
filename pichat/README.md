@@ -1963,6 +1963,28 @@ until expiration, dismissal or process replacement. Retained history stays
 available in the inspectors below, within the existing record limit.
 See `GLOSSARY.md` for source, runtime and process-generation distinctions.
 
+Raw transport evidence is bounded **before copying or printing**, separately
+from inspector display limits. Each failure's message, condition, program,
+stderr, response and command share a 64 KiB string-byte / 1,024-value capture
+budget; an event gets the same budget. Individual strings retain at most
+16 KiB, without text properties. Nesting is limited to 16 levels; cycles,
+repeated containers, opaque objects and exhausted traversal budgets become
+`pichat-omitted`, while shortened strings say `[truncated by PiChat]`.
+Snapshots are inspection data, not replayable RPC records.
+
+Independent safety ceilings retain at most 20 failures and 512 events per
+runtime: 1.25 MiB and 32 MiB of captured string bytes respectively, plus bounded
+structure, omission-marker and metadata overhead. Slots are conservatively
+charged the whole capture allowance. `pichat-diagnostics-record-limit` and
+`pichat-rpc-event-log-limit` can lower those counts; larger settings do not
+raise the safety ceilings. Event count `nil` now means the safety ceiling only,
+not unlimited retention. The stderr character and inspector formatting limits
+can lower the corresponding excerpts further. These bounds do not limit RPC
+input/JSON decoding, event delivery to consumers, canonical transcripts,
+attachments or recoverable submissions, nor do they certify peak process
+memory. Notice acknowledgment, recovery and source/process expiry remain
+independent of the retained evidence.
+
 Inspector keys:
 
 - `g` (Evil Normal `g r`) — rebuild the current safe or raw snapshot.

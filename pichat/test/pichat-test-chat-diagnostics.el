@@ -472,5 +472,129 @@
           (should-not (buffer-live-p output)))
       (when (buffer-live-p output) (kill-buffer output)))))
 
+(ert-deftest pichat-diagnostics-capture-bounds-strings-and-detaches-properties ()
+  (let* ((session (pichat-session-make))
+         (secret (propertize (concat "token=private " (make-string 1000000 ?界))
+                             'display (make-string 1000000 ?x)))
+         (record (pichat-chat-diagnostics-record
+                  session :origin 'rpc-response :message secret
+                  :condition (list 'error secret) :program secret
+                  :stderr secret :response (vector secret secret secret))))
+    (should-not (string-match-p "private" (plist-get record :summary)))
+    (let ((text (plist-get record :message)))
+      (should (<= (string-bytes text)
+                  (+ pichat-diagnostic-raw-string-limit 30)))
+      (should (string-suffix-p "[truncated by PiChat]" text))
+      (should-not (text-properties-at 0 text))
+      (aset secret 0 ?X)
+      (should (string-prefix-p "token=" text)))
+    ;; Later values share a byte allowance, not one allowance per field.
+    (cl-labels ((bytes (value)
+                  (cond
+                   ((stringp value)
+                    (string-bytes
+                     (string-remove-suffix "[truncated by PiChat]" value)))
+                   ((consp value) (+ (bytes (car value)) (bytes (cdr value))))
+                   ((vectorp value) (apply #'+ (mapcar #'bytes value)))
+                   (t 0))))
+      (should (<= (apply #'+
+                         (mapcar (lambda (key) (bytes (plist-get record key)))
+                                 '(:message :condition :program :stderr
+                                   :response :command)))
+                  pichat-diagnostic-raw-byte-limit)))
+    (should (string-match-p "pichat-omitted\\|truncated by PiChat"
+                            (prin1-to-string (plist-get record :response))))))
+
+(ert-deftest pichat-diagnostics-capture-handles-deep-wide-vector-and-cyclic-values ()
+  (let* ((cycle (list "cycle"))
+         (deep "leaf")
+         (session (pichat-session-make)))
+    (setcdr cycle cycle)
+    (dotimes (_ 1000) (setq deep (vector deep)))
+    (dolist (value (list cycle deep (make-vector 100000 "v")
+                         (make-list 100000 "wide")
+                         (make-hash-table :test #'equal)))
+      ;; No full serialization/copy-tree is allowed before applying budgets.
+      (let* ((record (cl-letf (((symbol-function 'copy-tree)
+                               (lambda (&rest _) (error "Unbounded copy")))
+                              ((symbol-function 'pp-to-string)
+                               (lambda (&rest _) (error "Premature print"))))
+                       (pichat-chat-diagnostics-record
+                        session :origin 'rpc-dispatch :response value)))
+             (raw (plist-get record :response))
+             (printed (prin1-to-string raw)))
+        (should (< (length printed) 20000))
+        (should (string-match-p "pichat-omitted" printed))
+        (should (string-match-p "pichat-omitted"
+                                (pichat-chat-diagnostics--print-value value)))))))
+
+(ert-deftest pichat-diagnostics-small-raw-values-are-independent-and-unchanged ()
+  (let* ((text (copy-sequence "original"))
+         (input (list :data (vector (list :text text))))
+         (record (pichat-chat-diagnostics-record
+                  nil :origin 'rpc-response :response input)))
+    (should (equal input (plist-get record :response)))
+    (aset text 0 ?X)
+    (aset (plist-get input :data) 0 nil)
+    (should (equal '(:data [(:text "original")])
+                   (plist-get record :response)))))
+
+(ert-deftest pichat-diagnostics-event-capture-does-not-trim-consumer-data ()
+  (pichat-test-with-unit-session (session _proc)
+    (let* ((text (make-string 1000000 ?x))
+           (event (list :type "message_update" :payload (vector text)))
+           received)
+      (pichat-on 'rpc-event
+                 (lambda (_session _kind plist)
+                   (setq received (plist-get plist :raw))) session)
+      (pichat-rpc--dispatch-public-event session event)
+      (should (eq event received))
+      (should (= 1000000 (length (aref (plist-get received :payload) 0))))
+      (let ((raw (car (pichat-session-event-log session))))
+        (should (string-match-p "truncated by PiChat" (prin1-to-string raw)))
+        (setcar event :changed)
+        (should (equal "message_update" (plist-get raw :type)))))))
+
+(ert-deftest pichat-diagnostics-safety-ceilings-survive-unlimited-count-settings ()
+  (pichat-test-with-unit-session (session _proc)
+    (let ((pichat-rpc-event-log-limit nil)
+          (pichat-diagnostics-record-limit 10000))
+      (dotimes (index 520)
+        (pichat-rpc--dispatch-public-event
+         session (list :type "test_event" :index index)))
+      (dotimes (index 25)
+        (pichat-chat-diagnostics-record session :origin 'rpc-response
+                                        :message (number-to-string index)))
+      (should (= pichat-diagnostic-event-slots
+                 (length (pichat-session-event-log session))))
+      (should (= 519 (plist-get (car (pichat-session-event-log session)) :index)))
+      (should (= pichat-diagnostic-record-slots
+                 (length (pichat-session-diagnostics session))))
+      (should (equal "24" (plist-get (pichat-chat-diagnostics-latest session)
+                                    :message))))))
+
+(ert-deftest pichat-diagnostics-evidence-exhaustion-does-not-change-notice-lifetimes ()
+  (let* ((session (pichat-session-make))
+         (pichat-diagnostics-notice-timeout nil)
+         (record (pichat-chat-diagnostics-record
+                  session :origin 'rpc-response :command "compact"
+                  :message "No model selected."
+                  :condition (make-list 100000 "detail")
+                  :response (make-vector 100000 "response")))
+         (capture (pichat-chat-notices-recovery session nil "compact")))
+    (should (eq 'provider-not-configured (plist-get record :category)))
+    (should (equal (list record) (plist-get capture :records)))
+    (pichat-chat-notices-resolve session capture)
+    (should-not (pichat-chat-notices-current session))
+    (should (eq record (pichat-chat-diagnostics-latest session)))
+    (dolist (epoch '(source process))
+      (let ((later (pichat-chat-diagnostics-record
+                    session :origin 'rpc-response :message "later")))
+        (if (eq epoch 'source)
+            (cl-incf (pichat-session-diagnostic-source-generation session))
+          (setf (pichat-session-process-generation session) 'replacement))
+        (should-not (pichat-chat-notices-current session))
+        (should (eq later (pichat-chat-diagnostics-latest session)))))))
+
 (provide 'pichat-test-chat-diagnostics)
 ;;; pichat-test-chat-diagnostics.el ends here

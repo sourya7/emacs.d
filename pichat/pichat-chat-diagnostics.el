@@ -31,7 +31,8 @@ must not fetch data or mutate their collectors.")
   :group 'pichat)
 
 (defcustom pichat-diagnostics-record-limit 20
-  "Maximum number of diagnostic records retained per session."
+  "Maximum number of diagnostic records retained per session.
+A fixed safety ceiling of 20 records also applies, independently of this option."
   :type 'positive-integer
   :group 'pichat-diagnostics)
 
@@ -44,7 +45,8 @@ failures; expiration never deletes retained diagnostic history."
   :group 'pichat-diagnostics)
 
 (defcustom pichat-diagnostics-stderr-limit 100000
-  "Maximum number of stderr characters retained in one diagnostic record."
+  "Maximum stderr characters retained in one diagnostic record.
+The independent raw string-byte and shared snapshot budgets also apply."
   :type 'positive-integer
   :group 'pichat-diagnostics)
 
@@ -148,10 +150,11 @@ runtime for a forgotten owner; leave the existing snapshot readable."
 
 (defun pichat-chat-diagnostics--text (value)
   "Return VALUE as plain text without signaling."
-  (cond
-   ((stringp value) value)
-   ((null value) "")
-   (t (condition-case nil (format "%s" value) (error "")))))
+  (let ((value (pichat-diagnostic-copy-raw value)))
+    (cond
+     ((stringp value) value)
+     ((null value) "")
+     (t (condition-case nil (format "%s" value) (error ""))))))
 
 (defun pichat-chat-diagnostics--condition-symbol (condition)
   "Return the condition symbol from CONDITION, if available."
@@ -162,7 +165,8 @@ runtime for a forgotten owner; leave the existing snapshot readable."
 CONDITION and PROGRAM refine local process-start failures.  Return nil rather
 than guessing when a message merely mentions credentials, permissions, status
 codes, or missing files in unrelated output."
-  (let* ((message (string-trim (pichat-chat-diagnostics--text text)))
+  (let* ((program (pichat-chat-diagnostics--text program))
+         (message (string-trim (pichat-chat-diagnostics--text text)))
          (lower (downcase message))
          (condition-symbol
           (pichat-chat-diagnostics--condition-symbol condition))
@@ -259,7 +263,8 @@ codes, or missing files in unrelated output."
 (cl-defun pichat-chat-diagnostics-summary
     (&key origin category message exit-status setup-kind)
   "Return a bounded normal-chat summary for a diagnostic record."
-  (let* ((setup-kind (or setup-kind (pichat-chat-diagnostics-setup-kind)))
+  (let* ((message (pichat-chat-diagnostics--text message))
+         (setup-kind (or setup-kind (pichat-chat-diagnostics-setup-kind)))
          (text
           (pcase origin
             ('process-start
@@ -309,10 +314,9 @@ codes, or missing files in unrelated output."
 
 (defun pichat-chat-diagnostics--bounded-raw (text limit)
   "Return raw TEXT bounded to LIMIT characters."
-  (when (stringp text)
-    (if (> (length text) limit)
-        (concat (substring text 0 limit) "\n[truncated by PiChat]")
-      text)))
+  (if (and (stringp text) (> (length text) limit))
+      (concat (substring-no-properties text 0 limit) "\n[truncated by PiChat]")
+    text))
 
 (defun pichat-chat-diagnostics-context (session)
   "Return SESSION's process and source lifetime identity."
@@ -326,10 +330,27 @@ codes, or missing files in unrelated output."
              category command (context (pichat-chat-diagnostics-context session)))
   "Create and retain one bounded diagnostic record for SESSION."
   (let* ((setup-kind (pichat-chat-diagnostics-setup-kind session))
+         ;; Classification and safe presentation use their own bounded prefix,
+         ;; independent of raw capture exhaustion and user stderr settings.
          (classification
           (or category
               (pichat-chat-diagnostics-classify
                origin (or stderr message) condition program)))
+         (summary (pichat-chat-diagnostics-summary
+                   :origin origin :category classification :message message
+                   :exit-status exit-status :setup-kind setup-kind))
+         (budget (pichat-diagnostic-raw-budget))
+         ;; Capture small control metadata first.  Large evidence must not
+         ;; consume the command used to correlate compaction notice recovery.
+         (command (pichat-diagnostic-copy-raw command budget))
+         (exit-status (pichat-diagnostic-copy-raw exit-status budget))
+         (message (pichat-diagnostic-copy-raw message budget))
+         (condition (pichat-diagnostic-copy-raw condition budget))
+         (program (pichat-diagnostic-copy-raw program budget))
+         (stderr (pichat-chat-diagnostics--bounded-raw
+                  (pichat-diagnostic-copy-raw stderr budget)
+                  pichat-diagnostics-stderr-limit))
+         (response (pichat-diagnostic-copy-raw response budget))
          (record
           (list :domain 'transport :severity 'error :origin origin
                 :notice-context context :notice-state nil
@@ -337,19 +358,14 @@ codes, or missing files in unrelated output."
                 (when pichat-diagnostics-notice-timeout
                   (+ (float-time) (max 0 pichat-diagnostics-notice-timeout)))
                 :category classification
-                :summary
-                (pichat-chat-diagnostics-summary
-                 :origin origin :category classification :message message
-                 :exit-status exit-status :setup-kind setup-kind)
+                :summary summary
                 :message message
                 :condition condition
                 :program program
-                :stderr (pichat-chat-diagnostics--bounded-raw
-                         stderr pichat-diagnostics-stderr-limit)
+                :stderr stderr
                 :exit-status exit-status
-                ;; RPC dispatch may annotate its RESPONSE after recording it.
-                ;; Keep the explicit raw value independent and acyclic.
-                :response (and response (copy-tree response))
+                ;; Independent bounded evidence, never a dispatchable response.
+                :response response
                 :command command
                 :setup-kind setup-kind
                 :time (current-time))))
@@ -357,7 +373,8 @@ codes, or missing files in unrelated output."
       (setf (pichat-session-diagnostics session)
             (cons record
                   (seq-take (pichat-session-diagnostics session)
-                            (max 0 (1- pichat-diagnostics-record-limit))))))
+                            (max 0 (1- (min pichat-diagnostics-record-limit
+                                            pichat-diagnostic-record-slots)))))))
     record))
 
 (defun pichat-chat-diagnostics-latest (session)
@@ -570,7 +587,7 @@ are reported in the echo area and *Messages*, not the cached inspector."
   "Return an explicitly inspectable bounded representation of VALUE."
   (pichat-chat-diagnostics--bounded-raw
    (condition-case err
-       (pp-to-string value)
+       (pp-to-string (pichat-diagnostic-copy-raw value))
      (error (format "<unprintable: %s>" (error-message-string err))))
    pichat-diagnostics-view-value-limit))
 

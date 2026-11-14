@@ -165,9 +165,11 @@ is consuming stdin.  Any earlier process output releases the queue immediately."
   :group 'pichat)
 
 (defcustom pichat-rpc-event-log-limit 500
-  "Maximum number of recent raw Pi events retained per session.
-Set to nil to retain all events."
-  :type '(choice (const :tag "Unlimited" nil) positive-integer)
+  "Maximum number of recent bounded raw Pi event snapshots per session.
+Nil disables this user count limit, not the independent safety ceiling of
+512 snapshots (32 MiB string bytes plus bounded structural/marker overhead).
+Consumers still receive the complete event, not the diagnostic snapshot."
+  :type '(choice (const :tag "Safety ceiling only" nil) positive-integer)
   :group 'pichat)
 
 (defconst pichat-rpc--event-map
@@ -871,13 +873,13 @@ must not update public state or become conversation/prompt acceptance events."
          (normalized (if (eq event-symbol 'rpc-event)
                          'pi-rpc-event
                        event-symbol)))
-    (push event (pichat-session-event-log session))
-    (when (and pichat-rpc-event-log-limit
-               (> (length (pichat-session-event-log session))
-                  pichat-rpc-event-log-limit))
-      (setcdr (nthcdr (1- pichat-rpc-event-log-limit)
-                      (pichat-session-event-log session))
-              nil))
+    (let ((limit (max 1 (min (or pichat-rpc-event-log-limit
+                                 pichat-diagnostic-event-slots)
+                             pichat-diagnostic-event-slots))))
+      (push (pichat-diagnostic-copy-raw event)
+            (pichat-session-event-log session))
+      (when (> (length (pichat-session-event-log session)) limit)
+        (setcdr (nthcdr (1- limit) (pichat-session-event-log session)) nil)))
     (pcase normalized
       ('agent-start
        (setf (pichat-session-streaming-p session) t

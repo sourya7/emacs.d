@@ -14,6 +14,7 @@
 (require 'pichat-job-conversation)
 
 (declare-function pichat-session-by-runtime-id "pichat" (runtime-id))
+(declare-function pichat-forget-session "pichat" (session))
 
 (defgroup pichat-jobs nil "Reviewed background and existing-conversation jobs." :group 'pichat)
 (defcustom pichat-jobs-max-concurrency 3
@@ -37,6 +38,17 @@ limit; the user's next message resets the count.  PiChat's own messages do
 not reset it.  Runs started from Jobs, by schedules or by job runs are not
 counted; `pichat-jobs-max-chain-runs' bounds the latter."
   :type 'natnum :group 'pichat-jobs)
+(defcustom pichat-jobs-forget-completed-runtimes t
+  "Whether a job run that completes successfully forgets its runtime.
+When non-nil, once a job run in its own runtime finishes with result
+Completed and the runtime has stopped, the runtime is forgotten: it leaves
+the runtime manager and `pichat_chats_list', and its read-only chat buffer
+is killed.  A chat shown in a window is kept until you kill it; its runtime
+is forgotten then.  The run's report, Preview conversation, Continue in chat
+and Diagnostics (the recorded execution note) do not need the runtime.
+Runs that fail, are cancelled or become uncertain keep their runtime for
+inspection, and runs in an existing conversation never forget it."
+  :type 'boolean :group 'pichat-jobs)
 (defcustom pichat-jobs-control-timeout 30
   "Seconds to wait for readiness, settlement sync or cancellation.
 Running work and user interaction have no implicit timeout."
@@ -488,13 +500,56 @@ SSH reuses the verified-lifetime observer, never the local endpoint's sentinel."
                            (if success
                                (progn (pichat-process-lifetime-confirm process)
                                       (finish)
-                                      (pichat-process-lifetime-cleanup process))
+                                      (pichat-process-lifetime-cleanup process)
+                                      (pichat-job-executor--forget-runtime execution))
                              (pichat-job-executor--uncertain execution failure))))))
               (error (pichat-job-executor--uncertain execution (error-message-string err)))))
         (pichat-backend-stop-session session)
         (if (pichat-session-alive-p session)
             (pichat-job-executor--uncertain execution "Local process did not stop")
-          (finish)))))))
+          (finish)
+          (pichat-job-executor--forget-runtime execution)))))))
+
+(defun pichat-job-executor--forget-session (execution session)
+  "Forget stopped runtime SESSION of retired EXECUTION.
+Clear EXECUTION's reference first, so Diagnostics uses the recorded note."
+  (when (eq (pichat-job-execution-session execution) session)
+    (setf (pichat-job-execution-session execution) nil))
+  (when (fboundp 'pichat-forget-session)
+    (condition-case err (pichat-forget-session session)
+      (error (message "PiChat could not forget the job's runtime: %s"
+                      (error-message-string err))))))
+
+(defun pichat-job-executor--forget-on-kill ()
+  "Forget the completed job runtime of the chat buffer being killed."
+  (when-let* ((execution pichat-job-executor--buffer-execution)
+              (session (pichat-job-execution-session execution)))
+    (when (eq session (bound-and-true-p pichat-chat-session))
+      (pichat-job-executor--forget-session execution session))))
+
+(defun pichat-job-executor--forget-runtime (execution)
+  "Forget completed EXECUTION's stopped runtime and kill its chat buffer.
+Only with `pichat-jobs-forget-completed-runtimes', for a retired owned
+execution whose durable run finished with result completed.  A chat buffer
+shown in a window is kept; its runtime is forgotten when it is killed."
+  (let ((session (pichat-job-execution-session execution)))
+    (when (and pichat-jobs-forget-completed-runtimes session
+               (pichat-job-execution-retired execution)
+               (not (pichat-job-execution-borrowed execution))
+               (not (pichat-session-alive-p session))
+               (let ((run (condition-case nil (pichat-job-executor--run execution)
+                            (pichat-job-error nil))))
+                 (and (equal (plist-get run :state) "finished")
+                      (equal (plist-get run :result) "completed"))))
+      (let ((buffer (pichat-chat-owned-buffer session)))
+        (if (and buffer (get-buffer-window buffer t))
+            (with-current-buffer buffer
+              (add-hook 'kill-buffer-hook #'pichat-job-executor--forget-on-kill nil t))
+          (pichat-job-executor--forget-session execution session)
+          (when buffer
+            (condition-case err (kill-buffer buffer)
+              (error (message "PiChat could not close the job's chat: %s"
+                              (error-message-string err))))))))))
 
 (defun pichat-job-executor--guard (execution command)
   "Permit owned input or read-only COMMAND for EXECUTION's inspection chat."

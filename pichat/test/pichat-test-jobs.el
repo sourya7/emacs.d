@@ -165,14 +165,15 @@
                   (let* ((origin (pichat-job-record store 'runs id))
                          (child-id (plist-get (plist-get origin :dispatch) :run-id)))
                     (pichat-test-job-wait store child-id "finished")
-                    (let* ((child (pichat-job-record store 'runs child-id))
-                           (runtime (pichat-job-execution-session
-                                     (gethash child-id (pichat-job-executor-contexts executor)))))
+                    (let ((child (pichat-job-record store 'runs child-id)))
                       (should (equal (plist-get child :result) "completed"))
                       (should (equal (plist-get (plist-get child :spec) :configuration)
                                      (plist-get handler-spec :configuration)))
-                      (should (equal (plist-get (pichat-session-model runtime) :provider) "pichat-reviewer"))
-                      (should-not (pichat-session-alive-p runtime))
+                      ;; Both completed runs forgot their stopped runtimes; the
+                      ;; reviewer provider's consumed script shows which ran.
+                      (should-not (pichat-job-execution-session
+                                   (gethash child-id (pichat-job-executor-contexts executor))))
+                      (should-not (pichat-session-list))
                       (should-not (plist-get child :dispatch)))
                     (should (equal received "Worker completed"))
                     (should (equal origin (pichat-job-record store 'runs id)))
@@ -257,15 +258,16 @@
           (should (file-exists-p (plist-get run :session-file))))
         (should (pichat-job-execution-accepted execution))
         (should (pichat-job-execution-settled execution))
-        (should (pichat-chat-canonical-entry-cache runtime))
         (should (eq (current-buffer) original-buffer))
         (should (eq (selected-window) original-window))
         (should (eq pichat-current-session current))
         (should-not (pichat-session-default-p runtime))
-        (should-not (get-buffer-window (pichat-session-buffer runtime) t))
+        ;; Completion forgot the stopped runtime and killed its undisplayed chat.
+        (should-not (pichat-session-alive-p runtime))
+        (should-not (pichat-session-list))
+        (should-not (pichat-session-buffer runtime))
+        (should-not (pichat-job-execution-session execution))
         (should-error (pichat-rpc-prompt runtime "Do not send another turn") :type 'user-error)
-        (should (member "This runtime is owned by a job; use its job actions"
-                        (pichat-reconfigure--chat-blockers runtime)))
         (pichat-test-assert-provider-script-consumed status-file))))
 
   (ert-deftest pichat-integration-job-saved-session-open-never-reruns-or-duplicates-writer ()
@@ -277,7 +279,8 @@
         (pichat-test-job-wait store id "finished")
         (pichat-test-assert-provider-script-consumed status-file)
         (should-not (pichat-session-alive-p runtime))
-        (should (buffer-local-value 'buffer-read-only (pichat-session-buffer runtime)))
+        (should-not (memq runtime (pichat-session-list)))
+        (should-not (pichat-session-buffer runtime))
         (let ((record (pichat-job-record store 'runs id))
               (file (pichat-session-session-file runtime)) reopened)
           (pichat-test-job-report executor 'runs id)
@@ -288,7 +291,6 @@
           (should buffer-read-only)
           (should (string-match-p "DEPENDENCY_RESULT" (buffer-string)))
           (pichat-view-quit)
-          (kill-buffer (pichat-session-buffer runtime))
           ;; A saved-session open must not consume another model turn.
           (with-temp-file script-file (insert "{\"turns\":[]}"))
           (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
@@ -353,7 +355,7 @@
         (pichat-test-assert-provider-script-consumed status-file)
         (should (equal (pichat-session-model-label runtime)
                        "pichat-fake/pichat-fake-reasoning"))
-        (kill-buffer (pichat-session-buffer runtime))
+        (should-not (pichat-session-buffer runtime))
         (with-temp-file script-file (insert "{\"turns\":[]}"))
         (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
           (pichat-jobs--open-saved executor id))
@@ -398,7 +400,14 @@
           (should (eq (window-buffer window) (pichat-session-buffer runtime)))
           (should buffer-read-only)
           (should (string-match-p "Delayed result" (buffer-string)))
-          (should-not (pichat-session-alive-p runtime)))
+          (should-not (pichat-session-alive-p runtime))
+          ;; A displayed chat keeps its completed runtime until it is killed.
+          (should (memq runtime (pichat-session-list)))
+          (should (member "This runtime is owned by a job; use its job actions"
+                          (pichat-reconfigure--chat-blockers runtime)))
+          (should (kill-buffer (pichat-session-buffer runtime)))
+          (should-not (memq runtime (pichat-session-list)))
+          (should-not (pichat-job-execution-session execution)))
         (pichat-test-assert-provider-script-consumed status-file))))
 
   (ert-deftest pichat-integration-job-sync-failure-retains-slot-not-workspace-lock ()

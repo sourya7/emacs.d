@@ -689,8 +689,8 @@
                    (execution (gethash id (pichat-job-executor-contexts executor))))
               (pichat-test-job-wait store id "finished")
               (should (eq (current-buffer) origin))
-              (should-not (get-buffer-window
-                           (pichat-session-buffer (pichat-job-execution-session execution)) t))
+              ;; The completed run forgot its runtime and killed its hidden chat.
+              (should-not (pichat-job-execution-session execution))
               (call-interactively #'pichat-jobs)
               (call-interactively (key-binding (kbd "TAB")))
               (goto-char (point-min))
@@ -729,7 +729,6 @@
               (pichat-test-job-press "Preview conversation")
               (should buffer-read-only)
               (should (string-match-p "LIVE_JOB_RESULT" (buffer-string)))
-              (should-not (pichat-session-alive-p (pichat-job-execution-session execution)))
               (pichat-view-quit)
               (should (derived-mode-p 'pichat-jobs-detail-mode)))
             (pichat-test-assert-provider-script-consumed status-file)

@@ -1283,10 +1283,17 @@ its concurrency slot. During that stop barrier the report status says **Answer c
 Stopping runtime**; finished reports show no pending-cleanup message.
 SSH additionally requires verified actual-Pi exit; transport EOF alone is
 insufficient. Cleanup failure retains uncertainty, the slot and captured evidence.
-An existing chat remains read-only; stopped manager entries are retained until
-explicitly forgotten. Runtime, saved Pi session and durable run evidence have
-independent lifetimes. Pending input, cancellation and uncertain execution do not
-automatically discard their runtime tracking.
+A run that finishes **Completed** then forgets its stopped runtime: it leaves
+the runtime manager and `pichat_chats_list`, and its read-only chat buffer is
+killed. A chat shown in a window stays until you kill it; its runtime is
+forgotten then. The report, **Preview conversation**, **Continue in chat…**
+and **Diagnostics** (the recorded execution note) work without it. Set
+`pichat-jobs-forget-completed-runtimes` to nil to keep completed runtimes.
+Runs that fail, are cancelled or become uncertain keep their read-only chat and
+stopped manager entry until explicitly forgotten, and so does a scheduled
+continuation's borrowed conversation. Runtime, saved Pi session and durable run
+evidence have independent lifetimes. Pending input, cancellation and uncertain
+execution do not automatically discard their runtime tracking.
 
 Execution settings are captured, including resolved preset prompts, Tools,
 model, command and target/path mappings. Instruction/name edits preserve them.
@@ -2714,10 +2721,10 @@ approval by default; their prompts name the job, its target and directory.
   once finished, its final response (up to 4000 characters, truncation marked)
   from the captured run-end evidence, so it stays readable after the run's chat
   is closed. If the evidence is missing or changed, the stored 2000-character
-  summary is returned and labelled. While the run's runtime is retained (and
-  still bound to the run's saved session file, since runtime IDs restart with
-  Emacs), its `runtime_id` can be passed to `pichat_chat_read`. For the first
-  run of a chain started from a chat, `chat_notification` (`state`,
+  summary is returned and labelled. While the run's runtime is retained (not
+  after a Completed run, which forgets it by default, and still bound to the
+  run's saved session file, since runtime IDs restart with Emacs), its
+  `runtime_id` can be passed to `pichat_chat_read`. For the first run of a chain started from a chat, `chat_notification` (`state`,
   `description`) says whether that chat was told the chain finished.
 - `pichat_job_run_cancel` removes a scheduled or queued run. For an active run
   it asks the runtime to abort and reports the state recorded afterwards. A run
@@ -2803,7 +2810,9 @@ Jobs.
   directory, target, state, whether it is waiting for user input, model,
   preset, whether its chat buffer is open, the `job_run_id` of the latest job
   run it executed, and `self` for the caller. An unnamed job worker is named
-  after its job. Runtime IDs are valid only in the current Emacs session.
+  after its job. A job run that finished Completed has forgotten its runtime
+  by default, so it is not listed. Runtime IDs are valid only in the current
+  Emacs session.
 - `pichat_chat_read` returns the recent user and assistant messages of one
   runtime (`messages`, default 10, at most 30; each message's text up to 1000
   characters, truncation marked). Settled messages come first, then those of

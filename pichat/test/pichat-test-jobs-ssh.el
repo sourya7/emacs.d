@@ -35,11 +35,13 @@
                                          (plist-get (pichat-job-record store 'runs id) :summary)))
                  (should (eq pichat-current-session previous))
                  (should (eq (current-buffer) current-buffer))
-                 (should-not (get-buffer-window (pichat-session-buffer session) t))
                  (should-not (pichat-session-alive-p session))
+                 ;; Completion forgot the stopped runtime after verified exit.
+                 (should-not (memq session (pichat-session-list)))
+                 (should-not (pichat-session-buffer session))
+                 (should-not (pichat-job-execution-session execution))
                  (should (pichat-process-lifetime-confirmed-p (pichat-session-process session)))
                  (should-not (pichat-test-real-ssh--alive-p fixture (pichat-session-process session)))
-                 (should (buffer-local-value 'buffer-read-only (pichat-session-buffer session)))
                  (should (equal (plist-get
                                  (pichat-job-evidence-read store
                                   (plist-get (pichat-job-record store 'runs id) :evidence)) :response)
@@ -65,6 +67,8 @@
        (let* ((store (pichat-job-store-open (expand-file-name "jobs.json" metadata-directory)))
               (executor (pichat-job-executor-open store))
               (pichat-jobs-control-timeout 15)
+              ;; Keep completed runtimes so their process lifetimes can be checked.
+              (pichat-jobs-forget-completed-runtimes nil)
               (profile '(:preset review :target real-ssh :model "pichat-fake/pichat-fake-reasoning"))
               (handler (pichat-job-save
                         store (pichat-job-launch-capture

@@ -1896,7 +1896,7 @@ says when it does not, and what blocks it."
   (interactive)
   (pichat--reconfigure-show scope))
 
-;;;###autoload
+;;;###autoload (autoload 'pichat-launch "pichat" nil t)
 (transient-define-prefix pichat-launch (&optional context)
   "Configure and launch a preferred or independent PiChat runtime."
   :init-value #'pichat--launch-transient-init-value

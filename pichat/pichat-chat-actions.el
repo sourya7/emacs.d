@@ -71,7 +71,7 @@ COMMAND retains responsibility for its own prompts, capabilities and async work.
              (abbreviate-file-name (or (pichat-session-emacs-cwd session)
                                        (pichat-session-cwd session) ""))))))
 
-;;;###autoload
+;;;###autoload (autoload 'pichat-chat-actions "pichat-chat-actions" nil t)
 (transient-define-prefix pichat-chat-actions ()
   "Discover commands for this exact chat; opening/closing does no RPC work.
 Commands recheck the captured chat/source before dispatch and retain their own

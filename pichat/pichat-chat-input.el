@@ -46,6 +46,8 @@
 (defvar-local pichat-chat--in-flight-attachments nil
   "Hash table mapping request IDs to immutable submitted image records.")
 
+(declare-function pichat-chat-draft-capture "pichat-chat" (&optional buffer source-token))
+(declare-function pichat-chat-draft-current-p "pichat-chat" (target))
 (declare-function pichat-chat--clear-input "pichat-chat")
 (declare-function pichat-chat--insert-prompt "pichat-chat")
 (declare-function pichat-chat--input-text "pichat-chat")
@@ -360,9 +362,24 @@ changed by this operation."
   "Attach a bounded image acquired from the system clipboard."
   (interactive)
   (pichat-chat--require-image-input)
-  (pichat-chat--add-attachment
-   (pichat-attachments-read-clipboard
-    (pichat-chat--retained-attachments)))
+  (let* ((origin (current-buffer))
+         (session pichat-chat-session)
+         (target (pichat-chat-draft-capture))
+         (editor-generation pichat-chat--editor-generation)
+         (attachment (pichat-attachments-read-clipboard
+                      (pichat-chat--retained-attachments))))
+    (unless (and (pichat-chat-draft-current-p target)
+                 (eq (pichat-session-buffer session) origin)
+                 (= editor-generation
+                    (buffer-local-value 'pichat-chat--editor-generation origin)))
+      (user-error "PiChat clipboard destination changed; acquire again"))
+    (with-current-buffer origin
+      ;; Output waits can run timers: validate all retained records again,
+      ;; not only the pending list used by `pichat-chat--add-attachment'.
+      (pichat-chat--require-image-input)
+      (pichat-attachments--validate-capacity
+       (pichat-chat--retained-attachments) (plist-get attachment :bytes))
+      (pichat-chat--add-attachment attachment)))
   (message "PiChat: attached clipboard image"))
 
 ;;;###autoload

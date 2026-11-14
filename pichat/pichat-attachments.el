@@ -70,6 +70,12 @@ output is written to the destination."
   :type '(repeat plist)
   :group 'pichat-attachments)
 
+(defcustom pichat-attachments-clipboard-timeout 10
+  "Positive deadline in seconds for stdout clipboard acquisition.
+This does not apply to file-output handlers or interactive screenshots."
+  :type 'number
+  :group 'pichat-attachments)
+
 (defvar pichat-attachments--sequence 0)
 
 (defun pichat-attachments-mime-type (path)
@@ -187,14 +193,61 @@ output is written to the destination."
         (push (format "%d sending" in-flight-count) parts))
       (format "[images · %s]" (string-join (nreverse parts) " · ")))))
 
-(defun pichat-attachments--run-output-command (command arguments path)
-  "Run COMMAND with ARGUMENTS and save binary standard output to PATH."
-  (with-temp-buffer
-    (set-buffer-multibyte nil)
-    (let ((status (apply #'call-process command nil t nil arguments)))
-      (unless (and (integerp status) (zerop status))
-        (error "%s failed with status %s" command status)))
-    (write-region (point-min) (point-max) path nil 'silent)))
+(defun pichat-attachments--run-output-command (command arguments path limit)
+  "Run local COMMAND with ARGUMENTS, capturing at most LIMIT bytes to PATH.
+The invocation owns the process and pipe: quit, overflow, failure and timeout
+release both before returning.  Stderr is discarded, never captured.  No
+partial result is published.  LIMIT bounds retained stdout, not delivered
+chunks, OS buffers or the helper's memory."
+  (unless (and (numberp pichat-attachments-clipboard-timeout)
+               (> pichat-attachments-clipboard-timeout 0))
+    (user-error "Clipboard timeout must be positive"))
+  (let ((default-directory temporary-file-directory)
+        (deadline (+ (float-time) pichat-attachments-clipboard-timeout))
+        process stderr overflow finished)
+    (with-temp-buffer
+      (set-buffer-multibyte nil)
+      (let ((output (current-buffer)))
+        (unwind-protect
+            (progn
+              (setq stderr (make-pipe-process
+                            :name "pichat-clipboard-stderr" :noquery t
+                            :coding 'no-conversion :filter #'ignore))
+              (setq process
+                    (make-process
+                     :name "pichat-clipboard" :command (cons command arguments)
+                     :connection-type 'pipe :noquery t :coding 'no-conversion
+                     :stderr stderr
+                     :sentinel (lambda (proc _event)
+                                 (when (memq (process-status proc) '(exit signal))
+                                   (setq finished t)))
+                     :filter
+                     (lambda (proc chunk)
+                       (unless overflow
+                         (if (> (+ (buffer-size output) (string-bytes chunk))
+                                limit)
+                             (progn (setq overflow t) (delete-process proc))
+                           (with-current-buffer output (insert chunk)))))))
+              ;; Keep the command synchronous to its caller, but service process
+              ;; output and timers and let C-g unwind the owned resources.
+              ;; The terminal sentinel runs after pending stdout is drained;
+              ;; process liveness alone can change before all bytes arrive.
+              (while (and (not finished) (not overflow)
+                          (< (float-time) deadline))
+                (accept-process-output process
+                                       (min 0.05 (max 0 (- deadline (float-time))))))
+              (cond
+               (overflow (user-error "Clipboard image exceeds %d byte capture limit"
+                                     limit))
+               ((not finished) (user-error "Clipboard acquisition timed out"))
+               ((not (and (eq (process-status process) 'exit)
+                          (zerop (process-exit-status process))))
+                (user-error "%s failed with status %s"
+                            command (process-exit-status process))))
+              (let ((coding-system-for-write 'no-conversion))
+                (write-region (point-min) (point-max) path nil 'silent)))
+          (when (processp process) (delete-process process))
+          (when (processp stderr) (delete-process stderr)))))))
 
 (defun pichat-attachments-read-clipboard (existing)
   "Acquire a clipboard image and return a bounded record alongside EXISTING."
@@ -220,7 +273,10 @@ output is written to the destination."
               ('stdout
                (pichat-attachments--run-output-command
                 (plist-get handler :command)
-                (plist-get handler :arguments) path))
+                (plist-get handler :arguments) path
+                (max 0 (min pichat-attachments-max-file-bytes
+                            (- pichat-attachments-max-total-bytes
+                               (pichat-attachments-total-bytes existing))))))
               (_ (error "Invalid PiChat clipboard handler")))
             (pichat-attachments-read-image-file path existing))
         (ignore-errors (delete-file path))))))

@@ -528,18 +528,15 @@
 
 (ert-deftest pichat-attachments-clipboard-and-screenshot-adapters-remain-bounded ()
   (let ((pichat-attachments-clipboard-image-handlers
-         '((:command "fake-clipboard" :arguments nil :output stdout)))
+         '((:command "sh" :arguments ("-c" "printf clipboard") :output stdout)))
         (pichat-attachments-screenshot-command '("fake-screenshot"))
         (pichat-attachments-max-file-bytes 20))
     (cl-letf (((symbol-function 'executable-find) (lambda (_command) t))
               ((symbol-function 'call-process)
                (lambda (command &optional _in destination _display &rest args)
-                 (cond
-                  ((equal command "fake-clipboard")
-                   (ignore destination)
-                   (insert "clipboard"))
-                  ((equal command "fake-screenshot")
-                   (with-temp-file (car (last args)) (insert "screenshot"))))
+                 (ignore destination)
+                 (when (equal command "fake-screenshot")
+                   (with-temp-file (car (last args)) (insert "screenshot")))
                  0)))
       (let ((clipboard (pichat-attachments-read-clipboard nil))
             (screenshot (pichat-attachments-capture-screenshot nil)))
@@ -547,6 +544,136 @@
         (should (= 9 (plist-get clipboard :bytes)))
         (should (equal "image/png" (plist-get screenshot :mimeType)))
         (should (= 10 (plist-get screenshot :bytes)))))))
+
+(ert-deftest pichat-attachments-stdout-clipboard-binary-bounds-and-cleanup ()
+  "Real local helpers preserve bytes and never publish partial captures."
+  (pichat-test-with-temp-dir dir
+    (let ((temporary-file-directory (file-name-as-directory dir))
+          (pichat-attachments-max-file-bytes 8)
+          (pichat-attachments-max-total-bytes 8)
+          (pichat-attachments-clipboard-timeout 0.3))
+      (dolist (case '(("printf '\\000\\377\\200\\015\\012abc'" success)
+                      ("printf 123456789; exec sleep 5" overflow)
+                      ("exec sleep 5" timeout)
+                      ("printf partial; exit 7" failed)
+                      ("exit 0" empty)
+                      ("printf 12345" total)))
+        (let* ((pichat-attachments-clipboard-image-handlers
+                (list (list :command "sh" :arguments (list "-c" (car case))
+                            :output 'stdout)))
+               (before (process-list))
+               (existing (when (eq (cadr case) 'total)
+                           '((:id "retained" :bytes 4)))))
+          (if (eq (cadr case) 'success)
+              (let ((record (pichat-attachments-read-clipboard existing)))
+                (should (= 8 (plist-get record :bytes)))
+                (should (equal (unibyte-string 0 255 128 13 10 97 98 99)
+                               (base64-decode-string (plist-get record :data)))))
+            (should
+             (string-match-p
+              (pcase (cadr case)
+                ((or 'overflow 'total) "capture limit")
+                ('timeout "timed out")
+                ('failed "status 7")
+                ('empty "empty"))
+              (error-message-string
+               (should-error (pichat-attachments-read-clipboard existing)
+                             :type 'user-error)))))
+          (should-not (seq-difference (process-list) before))
+          (should-not (directory-files dir nil "^[^.]"))))
+      ;; Immediate exit after much more than a pipe buffer must not publish
+      ;; success before the last stdout chunks have reached the filter.
+      (let* ((path (expand-file-name "large.bin" dir))
+             (bytes (with-temp-buffer
+                      (set-buffer-multibyte nil)
+                      (should (zerop (call-process "head" nil t nil
+                                                  "-c" "300000" "/dev/urandom")))
+                      (let ((coding-system-for-write 'no-conversion))
+                        (write-region (point-min) (point-max) path nil 'silent))
+                      (buffer-string)))
+             (pichat-attachments-max-file-bytes 300000)
+             (pichat-attachments-max-total-bytes 300000)
+             (pichat-attachments-clipboard-timeout 2)
+             (pichat-attachments-clipboard-image-handlers
+              (list (list :command "cat" :arguments (list path) :output 'stdout)))
+             (before (process-list)))
+        (unwind-protect
+            (let ((record (pichat-attachments-read-clipboard nil)))
+              (should (= 300000 (plist-get record :bytes)))
+              (should (equal bytes (base64-decode-string (plist-get record :data)))))
+          (delete-file path))
+        (should-not (seq-difference (process-list) before))
+        (should-not (directory-files dir nil "^[^.]"))))))
+
+(ert-deftest pichat-attachments-stdout-clipboard-discards-stderr-and-cancels ()
+  (pichat-test-with-temp-dir dir
+    (let ((temporary-file-directory (file-name-as-directory dir))
+          (pichat-attachments-max-file-bytes 8)
+          (pichat-attachments-clipboard-timeout 2)
+          (pichat-attachments-clipboard-image-handlers
+           '((:command "sh" :arguments
+              ("-c" "head -c 100000 /dev/zero >&2; printf ok") :output stdout))))
+      (should (equal "ok" (base64-decode-string
+                           (plist-get (pichat-attachments-read-clipboard nil)
+                                      :data))))
+      (let ((before (process-list))
+            (pichat-attachments-clipboard-image-handlers
+             '((:command "sh" :arguments ("-c" "exec sleep 5") :output stdout))))
+        (cl-letf (((symbol-function 'accept-process-output)
+                   (lambda (&rest _) (signal 'quit nil))))
+          (should (eq 'quit (condition-case nil
+                               (pichat-attachments-read-clipboard nil)
+                             (quit 'quit)))))
+        (should-not (seq-difference (process-list) before)))
+      ;; Spawn errors must release the already-created stderr endpoint too.
+      (let ((before (process-list))
+            (pichat-attachments-clipboard-image-handlers
+             '((:command "missing-pichat-test-command" :output stdout))))
+        (cl-letf (((symbol-function 'executable-find) (lambda (_) t)))
+          (should-error (pichat-attachments-read-clipboard nil)))
+        (should-not (seq-difference (process-list) before)))
+      (should-not (directory-files dir nil "^[^.]")))))
+
+(ert-deftest pichat-chat-clipboard-return-validates-exact-draft-and-capacity ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil) buffer
+          (image '(:id "new" :type "image" :bytes 3 :data "YWJj"
+                       :name "clipboard.png" :mimeType "image/png")))
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (dolist (change '(none source owner editor capacity dead))
+              (with-current-buffer buffer
+                (pichat-chat--set-input-text "keep draft")
+                (setq pichat-chat--pending-attachments nil
+                      pichat-chat--recoverable-submissions
+                      '((:text "recover" :attachments ((:id "old" :bytes 2)))))
+                (let ((pichat-attachments-max-total-bytes 6)
+                      (recovery pichat-chat--recoverable-submissions))
+                  (cl-letf (((symbol-function 'pichat-attachments-read-clipboard)
+                             (lambda (_existing)
+                               (pcase change
+                                 ('source (cl-incf pichat-chat--source-generation))
+                                 ('owner (setf (pichat-session-buffer session) nil))
+                                 ('editor (cl-incf pichat-chat--editor-generation))
+                                 ('capacity
+                                  (puthash "sending" '((:id "flight" :bytes 2))
+                                           pichat-chat--in-flight-attachments))
+                                 ('dead (kill-buffer buffer)))
+                               image)))
+                    (if (eq change 'none)
+                        (progn
+                          (pichat-chat-paste-clipboard-image)
+                          (should (equal (list image) pichat-chat--pending-attachments)))
+                      (should-error (pichat-chat-paste-clipboard-image)
+                                    :type 'user-error)))
+                  (when (buffer-live-p buffer)
+                    (should (equal "keep draft" (pichat-chat--input-text)))
+                    (should (eq recovery pichat-chat--recoverable-submissions))
+                    (unless (eq change 'none)
+                      (should-not pichat-chat--pending-attachments))
+                    (setf (pichat-session-buffer session) buffer))))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
 (provide 'pichat-test-chat-input)
 ;;; pichat-test-chat-input.el ends here

@@ -2503,6 +2503,29 @@ For mapped/container runtimes, or to override either default, set
 to Pi; an unmapped override is rejected before writing. A custom directory
 may not be cleaned automatically by the OS.
 
+## Clipboard image acquisition
+
+`C-c C-u` uses the first available clipboard handler. Stdout handlers (the
+shipped `wl-paste` and `xclip` adapters) run locally beside Emacs with binary
+pipes. Their retained stdout is bounded by the smaller of the per-image limit
+and remaining total attachment capacity; overflow rejects the whole result.
+Stderr is discarded, not retained or mixed into image bytes. These are capture
+bounds, not bounds on delivered chunks, OS buffers or helper memory.
+
+`pichat-attachments-clipboard-timeout` defaults to 10 positive seconds for these
+stdout handlers. Emacs services process output and timers while waiting; `C-g`
+cancels the owning invocation. Completion, overflow, failure, timeout and quit
+release its process endpoints and temporary PNG. This is not proof of helper
+descendant shutdown. A successful image is added only to the original chat's
+unchanged draft/source, with capacity rechecked across pending, in-flight and
+recoverable images. Nothing is sent automatically.
+
+File-output clipboard handlers (such as `pngpaste`) and interactive screenshots
+retain their existing blocking, post-capture validation behavior; this deadline
+does not interrupt screenshot selection. Actual Wayland/X11 clipboard access and
+platform screenshot UI acceptance remain manual checks, not claims from the
+subprocess fixtures.
+
 ## Draft target boundary
 
 Emacs integrations may capture a chat's unsent draft destination with

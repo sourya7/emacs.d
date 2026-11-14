@@ -120,23 +120,30 @@ This does not assert that the active Pi process has an archive capability."
     (with-current-buffer buffer (abort-recursive-edit))))
 
 (defun pichat-consult--report-process-failure
-    (capability stderr exit-status minibuffer-buffer)
+    (capability stderr exit-status minibuffer-buffer current-p)
   "Report archive STDERR and EXIT-STATUS for CAPABILITY.
-Terminate MINIBUFFER-BUFFER only for availability or process failures."
+Return an abort timer for non-caller failures.  Terminate MINIBUFFER-BUFFER
+only while CURRENT-P still validates the originating search generation."
   (let ((failure (pichat-archive-decode-error stderr exit-status)))
     (if (eq (plist-get failure :class) 'caller)
         (message "PiChat archive query error: %s" (plist-get failure :message))
       (pichat-archive-invalidate capability)
       (message "PiChat archive search ended: %s" (plist-get failure :message))
-      (run-at-time 0 nil #'pichat-consult--abort-current-minibuffer
-                   minibuffer-buffer))))
+      (run-at-time 0 nil
+                   (lambda ()
+                     (when (funcall current-p)
+                       (pichat-consult--abort-current-minibuffer
+                        minibuffer-buffer)))))))
 
 (defun pichat-consult--async-archive-process (builder capability)
   "Return a Consult async process stage using BUILDER and CAPABILITY.
 Unlike Consult's generic process stage, this classifies helper failures and
-invalidates an unavailable capability without opening a different picker."
+invalidates an unavailable capability without opening a different picker.
+Capture independent stdout/stderr byte limits at each query's startup.  Retained
+capture is bounded, not delivered chunks or transport/OS buffers.  Every query
+owns its endpoints and timers, including cancellation and stale callbacks."
   (lambda (sink)
-    (let (process process-timer stderr-buffer last-command minibuffer-buffer)
+    (let ((generation 0) stop last-command minibuffer-buffer)
       (lambda (action)
         (cond
           ((eq action 'setup)
@@ -147,121 +154,169 @@ invalidates an unavailable capability without opening a different picker."
            (let ((command (funcall builder action)))
              (unless (equal command last-command)
                (setq last-command command)
-               (when process
-                 (when (timerp process-timer) (cancel-timer process-timer))
-                 (setq process-timer nil)
-                 (process-put process 'pichat-consult-cancelled t)
-                 (delete-process process)
-                 (when (buffer-live-p stderr-buffer)
-                   (kill-buffer stderr-buffer))
-                 (setq process nil stderr-buffer nil))
+               (cl-incf generation)
+               (when stop (funcall stop))
                (when command
-                 (let ((rest "")
-                       (bytes 0)
-                       (flush t))
-                   (setq stderr-buffer
-                         (generate-new-buffer " *pichat-archive-consult-error*"))
-                   (funcall sink [indicator running])
-                   (setq
-                    process
-                    (pichat-transport-make-process
-                     (or (plist-get capability :transport)
-                         pichat-transport-local)
-                     (or (plist-get capability :runtime-cwd)
-                         default-directory)
-                     :name "pichat-archive-consult" :buffer nil
-                     :stderr stderr-buffer :command command
-                     :filter
-                     (lambda (owner output)
-                       (setq bytes (+ bytes (string-bytes output)))
-                       (if (> bytes pichat-archive-output-limit)
-                           (progn
-                             (process-put owner 'pichat-consult-output-limit t)
-                             (delete-process owner))
-                         (when flush
-                           (setq flush nil)
-                           (funcall sink 'flush))
-                         (let ((lines (split-string output "[\r\n]+")))
-                           (if (null (cdr lines))
-                               (setq rest (concat rest (car lines)))
-                             (setcar lines (concat rest (car lines)))
-                             (setq rest (car (last lines))
-                                   lines (butlast lines))
-                             (when lines (funcall sink lines))))))
-                     :sentinel
-                     (lambda (owner _event)
-                       (unless (process-live-p owner)
-                         (let ((cancelled
-                                (process-get owner 'pichat-consult-cancelled))
-                               (output-limit
-                                (process-get owner
-                                             'pichat-consult-output-limit))
-                               (timed-out
-                                (process-get owner 'pichat-consult-timeout))
-                               (exit-status (process-exit-status owner)))
-                           (when (timerp process-timer)
-                             (cancel-timer process-timer))
-                           (setq process-timer nil)
-                           (unless cancelled
-                             (when flush
-                               (setq flush nil)
-                               (funcall sink 'flush))
-                             (when (and (= exit-status 0)
-                                        (not output-limit)
-                                        (not (string-empty-p rest)))
-                               (funcall sink (list rest)))
-                             (funcall sink
-                                      `[indicator ,(if (and (= exit-status 0)
-                                                            (not output-limit))
-                                                       'finished
-                                                     'failed)])
-                             (cond
-                              (timed-out
-                               (pichat-archive-invalidate capability)
-                               (message "PiChat archive search timed out")
-                               (run-at-time
-                                0 nil #'pichat-consult--abort-current-minibuffer
-                                minibuffer-buffer))
-                              (output-limit
-                               (pichat-archive-invalidate capability)
-                               (message "PiChat archive search output was too large")
-                               (run-at-time
-                                0 nil #'pichat-consult--abort-current-minibuffer
-                                minibuffer-buffer))
-                              ((not (= exit-status 0))
-                               (pichat-consult--report-process-failure
-                                capability
-                                (pichat-archive--buffer-text stderr-buffer)
-                                exit-status minibuffer-buffer))))
-                           (when (buffer-live-p stderr-buffer)
-                             (kill-buffer stderr-buffer)))))))
-                   ;; Keep helper JSON separate from Emacs's pipe-exit notice,
-                   ;; as in the RPC transport's diagnostic stderr capture.
-                   (when-let* ((stderr-process (get-buffer-process stderr-buffer)))
-                     (set-process-sentinel stderr-process #'ignore))
-                   (set-process-query-on-exit-flag process nil)
-                   (set-process-coding-system process 'utf-8-unix
-                                              'utf-8-unix)
-                   (when (and pichat-archive-query-timeout
-                              (> pichat-archive-query-timeout 0))
-                     (setq process-timer
-                           (run-at-time
-                            pichat-archive-query-timeout nil
-                            (lambda (owner)
-                              (when (process-live-p owner)
-                                (process-put owner 'pichat-consult-timeout t)
-                                (delete-process owner)))
-                            process))))))
+                 (let ((token generation)
+                       (rest "") (bytes 0) (stderr-bytes 0)
+                       (stdout-limit pichat-archive-output-limit)
+                       (stderr-limit pichat-archive-stderr-limit)
+                       (flush t) process stderr-process stderr-buffer
+                       process-timer overflow-timer abort-timer failure done)
+                   (cl-labels
+                       ((current-p () (and (not done) (= token generation)))
+                        (cleanup ()
+                          (dolist (timer (list process-timer overflow-timer))
+                            (when (timerp timer) (cancel-timer timer)))
+                          (dolist (owner (list process stderr-process
+                                              (and (buffer-live-p stderr-buffer)
+                                                   (get-buffer-process stderr-buffer))))
+                            (when (process-live-p owner) (delete-process owner)))
+                          (when (buffer-live-p stderr-buffer)
+                            (kill-buffer stderr-buffer)))
+                        (cancel ()
+                          (setq done t)
+                          (when (timerp abort-timer) (cancel-timer abort-timer))
+                          (cleanup))
+                        (finish (&optional reason)
+                          (when (current-p)
+                            (let ((exit-status (if process
+                                                   (process-exit-status process) 1))
+                                  (stderr (pichat-archive--buffer-text stderr-buffer)))
+                              ;; Retire all owned resources before calling the
+                              ;; sink, which may reenter or replace this query.
+                              (setq done t)
+                              (cleanup)
+                              (when flush
+                                (setq flush nil)
+                                (funcall sink 'flush))
+                              (when (and (= token generation)
+                                         (not reason) (= exit-status 0)
+                                         (not (string-empty-p rest)))
+                                (funcall sink (list rest)))
+                              (when (= token generation)
+                                (funcall sink
+                                         `[indicator ,(if (and (not reason)
+                                                               (= exit-status 0))
+                                                          'finished 'failed)]))
+                              (when (= token generation)
+                                (if reason
+                                    (progn
+                                      (pichat-archive-invalidate capability)
+                                      (message "PiChat archive search ended: %s" reason)
+                                      (setq abort-timer
+                                            (run-at-time
+                                             0 nil
+                                             (lambda ()
+                                               (when (= token generation)
+                                                 (pichat-consult--abort-current-minibuffer
+                                                  minibuffer-buffer))))))
+                                  (unless (= exit-status 0)
+                                    (setq abort-timer
+                                          (pichat-consult--report-process-failure
+                                           capability stderr exit-status minibuffer-buffer
+                                           (lambda () (= token generation))))))))))
+                        (settle (_owner _event)
+                          ;; Wait for stderr EOF too: the main sentinel can run
+                          ;; before the last diagnostic chunk is delivered.
+                          (when (and process (current-p))
+                            (cond
+                             (failure (finish failure))
+                             ((or (process-live-p process)
+                                  (process-live-p stderr-process)))
+                             (t (finish)))))
+                        (overflow (reason)
+                          (unless failure (setq failure reason))
+                          ;; Do not delete a buffer from its modification hook.
+                          (when (and process (not overflow-timer))
+                            (setq overflow-timer
+                                  (run-at-time 0 nil
+                                               (lambda () (finish failure))))))
+                        (capture-stderr (_owner output)
+                          (when (and (current-p) (buffer-live-p stderr-buffer))
+                            (with-current-buffer stderr-buffer
+                              (let ((inhibit-modification-hooks nil))
+                                (goto-char (point-max))
+                                (insert output))))))
+                     (setq stop #'cancel)
+                     (setq stderr-buffer
+                           (generate-new-buffer " *pichat-archive-consult-error*"))
+                     ;; Install before transport startup: TRAMP may insert into
+                     ;; this buffer while make-process is still running.
+                     (with-current-buffer stderr-buffer
+                       (setq buffer-undo-list t)
+                       (add-hook
+                        'after-change-functions
+                        (lambda (beg end _old)
+                          (when (current-p)
+                            (cl-incf stderr-bytes
+                                     (string-bytes
+                                      (buffer-substring-no-properties beg end)))
+                            (when (or failure (> stderr-bytes stderr-limit))
+                              (overflow "stderr was too large")
+                              (let ((inhibit-modification-hooks t))
+                                (erase-buffer)))))
+                        nil t))
+                     (funcall sink [indicator running])
+                     (condition-case condition
+                         (when (current-p)
+                           (let ((inhibit-modification-hooks nil))
+                             (setq process
+                                   (pichat-transport-make-process
+                                    (or (plist-get capability :transport)
+                                        pichat-transport-local)
+                                    (or (plist-get capability :runtime-cwd)
+                                        default-directory)
+                                    :name "pichat-archive-consult" :buffer nil
+                                    :stderr stderr-buffer :command command
+                                    :coding 'utf-8-unix
+                                    :filter
+                                    (lambda (_owner output)
+                                      (when (and (current-p) (not failure))
+                                        (cl-incf bytes (string-bytes output))
+                                        (if (> bytes stdout-limit)
+                                            (progn
+                                              (overflow "output was too large")
+                                              (when process (finish failure)))
+                                          (when flush
+                                            (setq flush nil)
+                                            (funcall sink 'flush))
+                                          (when (current-p)
+                                            (let ((lines (split-string output "[\r\n]+")))
+                                              (if (null (cdr lines))
+                                                  (setq rest (concat rest (car lines)))
+                                                (setcar lines (concat rest (car lines)))
+                                                (setq rest (car (last lines))
+                                                      lines (butlast lines))
+                                                (when lines (funcall sink lines))))))))
+                                    :sentinel #'settle))))
+                       ((error quit)
+                        (setq failure (error-message-string condition))
+                        (when (eq (car condition) 'quit)
+                          (cancel)
+                          (signal (car condition) (cdr condition)))))
+                     (setq stderr-process
+                           (and (buffer-live-p stderr-buffer)
+                                (get-buffer-process stderr-buffer)))
+                     (when stderr-process
+                       (set-process-sentinel stderr-process #'settle)
+                       (set-process-filter stderr-process #'capture-stderr))
+                     (when (and (current-p) pichat-archive-query-timeout
+                                (> pichat-archive-query-timeout 0))
+                       (setq process-timer
+                             (run-at-time
+                              pichat-archive-query-timeout nil
+                              (lambda () (finish (or failure "timed out"))))))
+                     (cond
+                      ((not (current-p)) (cancel))
+                      ((or failure (not process))
+                       (finish (or failure "helper did not start")))
+                      (t (settle process "startup")))))))
            nil))
           ((memq action '(cancel destroy))
-           (when (timerp process-timer) (cancel-timer process-timer))
-           (setq process-timer nil)
-           (when process
-             (process-put process 'pichat-consult-cancelled t)
-             (delete-process process)
-             (setq process nil))
-           (when (buffer-live-p stderr-buffer) (kill-buffer stderr-buffer))
-           (setq stderr-buffer nil last-command nil)
+           (cl-incf generation)
+           (when stop (funcall stop))
+           (setq stop nil last-command nil)
            (funcall sink action))
           (t (funcall sink action)))))))
 

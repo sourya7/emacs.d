@@ -46,16 +46,15 @@ authoritative when one exists.  Nil disables standalone discovery."
 
 (defcustom pichat-archive-output-limit (* 8 1024 1024)
   "Maximum number of helper stdout bytes accepted by PiChat.
-`pichat-archive-run' captures this limit at startup and rejects overflow
-while capturing, rather than returning a truncated result."
+Archive helpers and Consult streaming searches capture this limit at startup
+and reject overflow while capturing, rather than returning truncated results."
   :type 'natnum
   :group 'pichat-archive)
 
 (defcustom pichat-archive-stderr-limit (* 64 1024)
-  "Maximum number of stderr bytes captured by `pichat-archive-run'.
+  "Maximum stderr bytes captured by archive helpers and Consult searches.
 Captured at startup, independently of the stdout limit.  Overflow terminates
-that helper with a structured error, never a truncated helper diagnostic.
-This does not govern the separate Consult streaming process stage."
+the helper as a process failure, never a truncated helper diagnostic."
   :type 'natnum
   :group 'pichat-archive)
 

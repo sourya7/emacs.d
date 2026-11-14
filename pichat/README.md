@@ -2216,9 +2216,12 @@ cancellation of its status helper;
 request callers may cancel the returned process, and `pichat-archive-reset`
 cancels archive-boundary helpers. Capture buffers, pipe endpoints and timers
 are released before terminal callbacks. Endpoint cleanup does not certify remote
-or descendant shutdown. Consult's separate streaming search stage retains its
-existing stdout/timeout checks; the new stderr limit does not apply there.
-These settings never cap or truncate canonical Pi RPC transcript data.
+or descendant shutdown. Consult's separate streaming search stage captures the
+same independent stdout/stderr limits per query and uses the query timeout.
+Overflow ends that search and invalidates its capability; complete caller errors
+still permit query correction. Supersession, cancel and destroy retire only the
+owning query's endpoints and timers. These settings never cap or truncate
+canonical Pi RPC transcript data.
 
 Archive browsing first offers the current project, all projects, and exact
 nonblank cwd groups returned by the archive. An Embark collect/export rerun

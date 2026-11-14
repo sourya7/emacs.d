@@ -1828,10 +1828,8 @@ This stages the time only; Schedule remains a separate explicit action."
       (use-local-map map))))
 
 (defun pichat-job--invalidate-capture ()
-  "Confirm explicitly re-resolving captured settings before changing execution."
+  "Drop captured settings so changing execution re-resolves preset/target."
   (when (plist-get pichat-job--draft :spec)
-    (unless (yes-or-no-p "Changing execution re-resolves preset/target settings; continue? ")
-      (user-error "Captured settings preserved"))
     (let* ((config (plist-get (plist-get pichat-job--draft :spec) :configuration))
            (target (plist-get (plist-get config :transport) :id)))
       (setf (plist-get pichat-job--draft :profile)

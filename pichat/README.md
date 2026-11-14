@@ -1245,7 +1245,7 @@ automatically discard their runtime tracking.
 
 Execution settings are captured, including resolved preset prompts, Tools,
 model, command and target/path mappings. Instruction/name edits preserve them.
-Changing execution explicitly re-resolves the preset/target after confirmation;
+Changing execution re-resolves the preset/target from current configuration;
 cancelling a sub-picker retains earlier staged choices in the composer.
 Closing the composer discards all staged choices. Model/workspace/target edits preserve
 the selected Tools; changing preset explicitly confirms resetting them.

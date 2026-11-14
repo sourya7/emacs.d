@@ -70,7 +70,7 @@ the implicit local transport instead, with the same simulated Pi replies."
               (plist-put fixture :buffer buffer)
               (with-current-buffer buffer
                 (pichat-chat--apply-sync-response (list :data entries) t nil)
-                (pichat-chat--set-input-text "unsent SSH draft"))
+                (pichat-test-set-draft "unsent SSH draft"))
               (setf (pichat-session-transport session) transport
                     (pichat-session-runtime-cwd session) "/runtime/project/")
               (pichat-register-session session '("fixture-scope" "/host/project/" "fixture"))

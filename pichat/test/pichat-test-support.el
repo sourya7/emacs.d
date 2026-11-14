@@ -329,6 +329,19 @@ have been seen."
       (insert-file-contents-literally file)
       (buffer-string))))
 
+(defun pichat-test-draft-text (&optional buffer)
+  "Return chat BUFFER's unsent draft through the public draft API.
+BUFFER defaults to the current buffer.  Point is kept: reading the draft
+through `pichat-chat-draft-text' moves point to the end of the buffer."
+  (with-current-buffer (or buffer (current-buffer))
+    (save-excursion
+      (pichat-chat-draft-text (pichat-chat-draft-capture)))))
+
+(defun pichat-test-set-draft (text &optional buffer)
+  "Replace chat BUFFER's unsent draft with TEXT through the public draft API.
+BUFFER defaults to the current buffer."
+  (pichat-chat-draft-replace (pichat-chat-draft-capture buffer) text))
+
 (defun pichat-test-count-substring (needle haystack)
   "Return number of non-overlapping NEEDLE occurrences in HAYSTACK."
   (let ((start 0)

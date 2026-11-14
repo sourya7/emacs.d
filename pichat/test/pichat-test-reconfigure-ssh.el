@@ -47,7 +47,7 @@
                       (pichat-entry-cache-leaf-id (pichat-chat-canonical-entry-cache session))))
        (with-current-buffer buffer
          (should (pichat-chat-draft-current-p draft-target))
-         (should (equal "unsent SSH draft" (pichat-chat--input-text)))
+         (should (equal "unsent SSH draft" (pichat-test-draft-text)))
          (should (string-match-p "Final persisted answer" (buffer-string)))
          (should-not pichat-chat--restart-staging))))))
 
@@ -91,7 +91,7 @@
          (should (eq 'manual (pichat-session-preset-name session)))
          (with-current-buffer buffer
            (should-not pichat-chat--restart-staging)
-           (should (equal "unsent SSH draft" (pichat-chat--input-text)))))))))
+           (should (equal "unsent SSH draft" (pichat-test-draft-text)))))))))
 
 (ert-deftest pichat-reconfigure-ssh-shutdown-timeout-retains-obligation-and-snapshot ()
   (pichat-test-ssh-restart--run
@@ -114,7 +114,7 @@
            (goto-char pichat-chat--canonical-start)
            (should (search-forward "Final persisted answer" pichat-chat--canonical-end t))
            (should (get-text-property (1- (point)) 'read-only)))
-         (should (equal "unsent SSH draft" (pichat-chat--input-text))))
+         (should (equal "unsent SSH draft" (pichat-test-draft-text))))
        ;; A late receipt belongs to the timed-out attempt, not a recovery.
        (pichat-test-ssh-restart--watch fixture 0 'done t)
        (should-not (pichat-process-lifetime-confirmed-p original))
@@ -223,22 +223,6 @@
            (should (eq (if (eq choice 'retry) 'coding 'manual)
                        (pichat-session-preset-name session)))))))))
 
-(ert-deftest pichat-reconfigure-ssh-unknown-failed-replacement-blocks-recovery ()
-  (pichat-test-ssh-restart--run
-   (lambda (fixture)
-     (plist-put fixture :unknown-replacement t)
-     (plist-put fixture :rpc-error "get_state")
-     (pichat-test-ssh-restart--begin fixture)
-     (pichat-test-ssh-restart--watch fixture 0 'ready)
-     (pichat-test-ssh-restart--watch fixture 0 'done t)
-     (pichat-test-wait-until (lambda () (plist-get fixture :results)) 2 "unknown replacement failure")
-     (dolist (choice '(retry restore))
-       (pichat-test-ssh-restart--recover fixture choice)
-       (should (= 1 (length (plist-get fixture :starts))))
-       (should (= 1 (length (plist-get fixture :watches))))
-       (should (eq 'failed (plist-get (pichat-session-restart-operation (plist-get fixture :session)) :phase))))
-     (should (= 3 (length (plist-get fixture :results)))))))
-
 (ert-deftest pichat-reconfigure-ssh-captured-destination-survives-configuration-changes ()
   (pichat-test-ssh-restart--run
    (lambda (fixture)
@@ -254,22 +238,6 @@
        (setf (pichat-session-transport session) pichat-transport-local)
        (should-error (pichat-test-ssh-restart--recover fixture 'retry) :type 'user-error)
        (should-not (plist-get fixture :starts))))))
-
-(ert-deftest pichat-reconfigure-ssh-leave-stopped-requires-all-writer-receipts ()
-  (pichat-test-ssh-restart--run
-   (lambda (fixture)
-     (let ((session (plist-get fixture :session)))
-       (pichat-test-ssh-restart--begin fixture)
-       (pichat-test-ssh-restart--watch fixture 0 'ready)
-       (pichat-test-ssh-restart--watch fixture 0 'done nil "Probe disconnected")
-       (should-error (pichat-reconfigure-leave-stopped session) :type 'user-error)
-       (pichat-process-lifetime-confirm (plist-get fixture :original))
-       (should (pichat-reconfigure-leave-stopped session))
-       (should (eq 'left-stopped (plist-get (pichat-session-restart-operation session) :phase)))
-       (should-not (plist-get fixture :starts))
-       (with-current-buffer (plist-get fixture :buffer)
-         (should pichat-chat--restart-staging)
-         (should (equal "unsent SSH draft" (pichat-chat--input-text))))))))
 
 (ert-deftest pichat-reconfigure-ssh-unwritten-restart-commits-new-source-only-after-exit ()
   (pichat-test-ssh-restart--run
@@ -294,7 +262,7 @@
        (should-not (file-exists-p (plist-get fixture :host-file)))
        (with-current-buffer (plist-get fixture :buffer)
          (should-not pichat-chat--restart-staging)
-         (should (equal "unsent SSH draft" (pichat-chat--input-text))))))
+         (should (equal "unsent SSH draft" (pichat-test-draft-text))))))
    t))
 
 (ert-deftest pichat-reconfigure-ssh-reload-verification-failure-retains-original-source ()
@@ -323,7 +291,7 @@
          (with-current-buffer (plist-get fixture :buffer)
            (should (eq retained pichat-chat--entry-cache))
            (should pichat-chat--restart-staging)
-           (should (equal "unsent SSH draft" (pichat-chat--input-text)))
+           (should (equal "unsent SSH draft" (pichat-test-draft-text)))
            (should (string-match-p "Final persisted answer" (buffer-string)))))))))
 
 (ert-deftest pichat-reconfigure-ssh-startup-helper-failure-retains-unknown-writer ()
@@ -389,7 +357,12 @@
          (should-error (call-interactively #'pichat-reconfigure-leave-stopped-action) :type 'user-error)
          (pichat-process-lifetime-confirm (plist-get fixture :original))
          (call-interactively #'pichat-reconfigure-leave-stopped-action)
-         (should (eq 'left-stopped (plist-get (pichat-session-restart-operation session) :phase))))))))
+         (should (eq 'left-stopped (plist-get (pichat-session-restart-operation session) :phase))))
+       ;; Leaving it stopped starts nothing and keeps the snapshot and draft.
+       (should-not (plist-get fixture :starts))
+       (with-current-buffer (plist-get fixture :buffer)
+         (should pichat-chat--restart-staging)
+         (should (equal "unsent SSH draft" (pichat-test-draft-text))))))))
 
 (ert-deftest pichat-reconfigure-ssh-final-start-rejects-changed-transport ()
   (pichat-test-ssh-restart--run
@@ -422,7 +395,7 @@
          (should-not (pichat-session-restart-operation session))
          (with-current-buffer (plist-get fixture :buffer)
            (should-not pichat-chat--restart-staging)
-           (should (equal "unsent SSH draft" (pichat-chat--input-text))))))
+           (should (equal "unsent SSH draft" (pichat-test-draft-text))))))
      (eq race 'file-created))))
 
 (ert-deftest pichat-reconfigure-ssh-unverified-replacement-never-loads-or-commits-source ()
@@ -440,7 +413,7 @@
        (should-not (pichat-session-alive-p (plist-get fixture :session)))
        (with-current-buffer (plist-get fixture :buffer)
          (should pichat-chat--restart-staging)
-         (should (equal "unsent SSH draft" (pichat-chat--input-text)))))
+         (should (equal "unsent SSH draft" (pichat-test-draft-text)))))
      unwritten)))
 
 (ert-deftest pichat-reconfigure-ssh-uncertain-original-blocks-managed-admission ()
@@ -518,7 +491,7 @@
            (should (eq session (pichat--selected-file-conflict key)))
            (with-current-buffer buffer
              (should pichat-chat--restart-staging)
-             (should (equal "unsent SSH draft" (pichat-chat--input-text)))
+             (should (equal "unsent SSH draft" (pichat-test-draft-text)))
              (should (string-match-p "Final persisted answer" (buffer-string))))
            (should-error (pichat-reconfigure-leave-stopped session) :type 'user-error)
            ;; Only independently verified evidence releases this stopped claim.
@@ -623,6 +596,10 @@
        (pichat-test-wait-until (lambda () (plist-get fixture :results)) 2 "unknown writer")
        (dolist (choice '(retry restore))
          (pichat-test-ssh-restart--recover fixture choice)
+         ;; Recovery neither observes nor starts anything for an unknown writer.
+         (should (= 1 (length (plist-get fixture :starts))))
+         (should (= 1 (length (plist-get fixture :watches))))
+         (should (eq 'failed (plist-get (pichat-session-restart-operation session) :phase)))
          (should (eq session (pichat--selected-file-conflict key)))
          (should-error (pichat-forget-session session) :type 'user-error))
        (should (= 1 (length (plist-get fixture :starts))))
@@ -673,7 +650,7 @@
        (should-error (pichat-forget-session session) :type 'user-error)
        (should-not (kill-buffer buffer))
        (with-current-buffer buffer
-         (should (equal "unsent SSH draft" (pichat-chat--input-text)))
+         (should (equal "unsent SSH draft" (pichat-test-draft-text)))
          (should (string-match-p "Final persisted answer" (buffer-string))))
        (pichat-process-lifetime-confirm original)
        (should-not (pichat--selected-file-conflict key))
@@ -732,7 +709,7 @@ the failure reason.  CONFIGURATION must still be installed, object for object."
              (butlast configuration) (butlast (pichat-test-ssh-restart--capture-configuration session)))
     (with-current-buffer (plist-get fixture :buffer)
       (should pichat-chat--restart-staging)
-      (should (equal "unsent SSH draft" (pichat-chat--input-text))))
+      (should (equal "unsent SSH draft" (pichat-test-draft-text))))
     operation))
 
 (ert-deftest pichat-reconfigure-ssh-interrupted-startup-retires-attempt-once ()
@@ -808,7 +785,7 @@ the failure reason.  CONFIGURATION must still be installed, object for object."
              (should (eq 'manual (pichat-session-preset-name session)))
              (with-current-buffer (plist-get fixture :buffer)
                (should-not pichat-chat--restart-staging)
-               (should (equal "unsent SSH draft" (pichat-chat--input-text)))))))
+               (should (equal "unsent SSH draft" (pichat-test-draft-text)))))))
        unwritten))))
 
 (ert-deftest pichat-reconfigure-ssh-interrupted-stop-send-and-verification-retire-once ()
@@ -868,7 +845,7 @@ the failure reason.  CONFIGURATION must still be installed, object for object."
                             (pichat-test-ssh-restart--capture-configuration session)))
              (with-current-buffer (plist-get fixture :buffer)
                (should pichat-chat--restart-staging)
-               (should (equal "unsent SSH draft" (pichat-chat--input-text)))))))))))
+               (should (equal "unsent SSH draft" (pichat-test-draft-text)))))))))))
 
 (ert-deftest pichat-reconfigure-ssh-interrupted-pre-stop-setup-keeps-one-owner ()
   (dolist (point '(observer suspend))
@@ -907,7 +884,7 @@ the failure reason.  CONFIGURATION must still be installed, object for object."
                              (pichat-test-ssh-restart--capture-configuration session)))
               (with-current-buffer (plist-get fixture :buffer)
                 (should-not pichat-chat--restart-staging)
-                (should (equal "unsent SSH draft" (pichat-chat--input-text)))))
+                (should (equal "unsent SSH draft" (pichat-test-draft-text)))))
              ('suspend
               ;; The chat is staged: its snapshot needs a recoverable owner.
               (pichat-test-ssh-restart--should-retain-failure
@@ -948,7 +925,7 @@ the failure reason.  CONFIGURATION must still be installed, object for object."
          (should (= 1 (length (plist-get fixture :starts))))
          (with-current-buffer (plist-get fixture :buffer)
            (should-not pichat-chat--restart-staging)
-           (should (equal "unsent SSH draft" (pichat-chat--input-text))))
+           (should (equal "unsent SSH draft" (pichat-test-draft-text))))
          ;; A replayed continuation cannot restart the committed runtime.
          (should-not (pichat-test-ssh-restart--signal-of
                       (lambda () (funcall continuation t nil))))

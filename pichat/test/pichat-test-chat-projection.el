@@ -65,11 +65,11 @@
                                  (buffer-substring-no-properties
                                   position (+ position (length text)))))))
               (should (equal "draft survives canonical sync"
-                             (pichat-chat--input-text)))
+                             (pichat-test-draft-text)))
               (should (buffer-modified-p))
               (let ((inhibit-message t))
                 (undo 1))
-              (should (string-empty-p (pichat-chat--input-text))))
+              (should (string-empty-p (pichat-test-draft-text))))
         (dolist (entry stable-markers)
           (set-marker (cdr entry) nil))
         (when (buffer-live-p buffer) (kill-buffer buffer)))))))
@@ -112,83 +112,7 @@
               (should (buffer-modified-p))
               (let ((inhibit-message t))
                 (undo 1))
-              (should (string-empty-p (pichat-chat--input-text)))))
-        (when (buffer-live-p buffer) (kill-buffer buffer))))))
-
-(ert-deftest pichat-chat-repaint-preserves-current-draft-input ()
-  (pichat-test-with-unit-session (session proc)
-    (let ((pichat-chat-stop-session-on-kill nil)
-          buffer expected-offset)
-      (unwind-protect
-          (progn
-            (setq buffer (pichat-chat-open session))
-            (with-current-buffer buffer
-              (goto-char (point-max))
-              (insert "unsent draft")
-              (backward-char 5)
-              (setq expected-offset
-                    (- (point)
-                       (marker-position pichat-chat--input-start))))
-            (cl-letf (((symbol-function 'pichat-rpc-get-entries)
-                       (lambda (_session &optional since callback _error)
-                         (funcall (pichat-test--rpc-get-entries-callback
-                                   since callback)
-                                  '(:data (:entries nil)) session))))
-              (with-current-buffer buffer (pichat-chat-repaint)))
-            (with-current-buffer buffer
-              (should (equal "unsent draft" (pichat-chat--input-text)))
-              (should (= expected-offset
-                         (- (point)
-                            (marker-position pichat-chat--input-start))))))
-        (when (buffer-live-p buffer) (kill-buffer buffer))))))
-
-(ert-deftest pichat-chat-source-identity-change-resets-cache-and-full-syncs ()
-  (pichat-test-with-unit-session (session proc)
-    (let* ((pichat-chat-stop-session-on-kill nil)
-           (pichat-chat-render-markdown nil)
-           (fixture (pichat-test-read-json-fixture "canonical-session.json"))
-           (old-data (list :entries (plist-get fixture :entries)
-                           :leafId (plist-get fixture :leafId)))
-           (new-data
-            '(:entries
-              ((:type "message" :id "new-entry" :parentId nil
-                :message (:role "user" :content "New session content.")))
-              :leafId "new-entry"))
-           calls buffer)
-      (setf (pichat-session-id session) "old-session"
-            (pichat-session-session-file session) "/sanitized/old.jsonl"
-            (pichat-session-state session) 'idle)
-      (unwind-protect
-          (progn
-            (setq buffer (pichat-chat-open session))
-            (cl-letf (((symbol-function 'pichat-rpc-get-entries)
-                       (lambda (_session &optional since callback _error)
-                         (funcall (pichat-test--rpc-get-entries-callback
-                                   since callback)
-                                  (list :data old-data) session))))
-              (with-current-buffer buffer (pichat-chat-repaint)))
-            (setf (pichat-session-id session) "new-session"
-                  (pichat-session-session-file session)
-                  "/sanitized/new.jsonl")
-            (cl-letf (((symbol-function 'pichat-rpc-get-entries)
-                       (lambda (_session &optional since callback _error)
-                         (push (and (not (functionp since)) since) calls)
-                         (funcall (pichat-test--rpc-get-entries-callback
-                                   since callback)
-                                  (list :data new-data) session))))
-              (with-current-buffer buffer
-                (pichat-chat--on-state-changed session nil nil)))
-            (with-current-buffer buffer
-              (should (= 1 pichat-chat--source-generation))
-              (should (equal "new-session" pichat-chat--source-session-id))
-              (should (equal '(nil) calls))
-              (should (equal "new-session"
-                             (pichat-entry-cache-session-id
-                              pichat-chat--entry-cache)))
-              (let ((text (buffer-substring-no-properties
-                           (point-min) (point-max))))
-                (should (string-match-p "New session content" text))
-                (should-not (string-match-p "Final persisted answer" text)))))
+              (should (string-empty-p (pichat-test-draft-text)))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
 (ert-deftest pichat-chat-successful-rebind-invalidates-source-before-get-state ()
@@ -257,7 +181,7 @@
               ((:type "message" :id "new-root" :parentId nil
                 :message (:role "user" :content "Authoritative new source.")))
               :leafId "new-root"))
-           stale-success buffer)
+           stale-success calls buffer)
       (setf (pichat-session-id session) "old-session"
             (pichat-session-session-file session) "/sanitized/old.jsonl"
             (pichat-session-state session) 'idle)
@@ -281,11 +205,17 @@
                   "/sanitized/new.jsonl")
             (cl-letf (((symbol-function 'pichat-rpc-get-entries)
                        (lambda (_session &optional since callback _error)
+                         (push (and (not (functionp since)) since) calls)
                          (funcall (pichat-test--rpc-get-entries-callback
                                    since callback)
                                   (list :data new-data) session))))
               (with-current-buffer buffer
                 (pichat-chat--on-state-changed session nil nil)))
+            ;; The new source resets the cache and gets one full sync.
+            (with-current-buffer buffer
+              (should (= 1 pichat-chat--source-generation))
+              (should (equal "new-session" pichat-chat--source-session-id))
+              (should (equal '(nil) calls)))
             (funcall stale-success
                      '(:data
                        (:entries
@@ -302,6 +232,7 @@
               (let ((text (buffer-substring-no-properties
                            (point-min) (point-max))))
                 (should (string-match-p "Authoritative new source" text))
+                (should-not (string-match-p "Final persisted answer" text))
                 (should-not (string-match-p "Stale callback content" text)))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
@@ -580,7 +511,7 @@
            (fixture (pichat-test-read-json-fixture "canonical-session.json"))
            (data (list :entries (plist-get fixture :entries)
                        :leafId (plist-get fixture :leafId)))
-           buffer)
+           buffer expected-offset)
       (setf (pichat-session-id session) (plist-get fixture :sessionId)
             (pichat-session-session-file session) (plist-get fixture :sessionFile))
       (unwind-protect
@@ -589,6 +520,9 @@
             (with-current-buffer buffer
               (goto-char (point-max))
               (insert "unsent draft")
+              (backward-char 5)
+              (setq expected-offset
+                    (- (point) (marker-position pichat-chat--input-start)))
               (set-buffer-modified-p nil))
             (cl-letf (((symbol-function 'pichat-rpc-get-entries)
                        (lambda (_session &optional since callback _error)
@@ -606,7 +540,9 @@
                 (should (string-match-p "Pi compatibility" text)))
               (should (pichat-entry-cache-p pichat-chat--entry-cache))
               (should (pichat-transcript-p pichat-chat--canonical-transcript))
-              (should (equal "unsent draft" (pichat-chat--input-text)))
+              (should (equal "unsent draft" (pichat-test-draft-text)))
+              (should (= expected-offset
+                         (- (point) (marker-position pichat-chat--input-start))))
               (should-not (buffer-modified-p))
               (goto-char (point-min))
               (search-forward "Check the example")

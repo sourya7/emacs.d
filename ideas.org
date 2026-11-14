@@ -10,7 +10,6 @@ the goal is to be able to run things like compact before sending a follow up
 - Existing plan: =pichat-maintainability=, unfinished W21 — Evaluate one thin chat-actions Transient. Planned evaluation, not an implemented consolidation.
 ** review and make sure all pichat buffers have the same consistent header
 - Review: Persistent chat headers are implemented (completed plan =pichat-persistent-context-header=). Jobs and other views still have distinct presentations; an all-buffer consistency audit remains open.
-** add thinking level to pichat launch
 ** command to screenshot emacs visible frame
 - Review: PiChat supports screenshot attachment capture, but no dedicated visible-Emacs-frame command was found.
 ** is there a easy way to browse json in emacs

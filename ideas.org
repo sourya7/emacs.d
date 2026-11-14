@@ -27,5 +27,3 @@ want to see it work with the plans command and its json output rather than havin
 ** automate install and nix equivalent git based config for various maches. think whether we can have a secure way to automate with drone jobs
 ** PLANNED can we combine the continuation within the follow up? kind of seems like related functionalitkes
 - Existing draft: =deliver-queued-follow-ups-after-manual-compaction= explicitly unifies conversational follow-up composition and timed continuation. Not implemented; execution requires separate authorization.
-** make dd delete the draft
-** pichat archive and search should skip job runs

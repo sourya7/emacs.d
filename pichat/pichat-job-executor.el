@@ -1038,6 +1038,17 @@ Retire the members' executions only after the store commits."
       (remhash member (pichat-job-executor-contexts executor))))
   (pichat-job-executor--changed executor))
 
+(defun pichat-job-executor-delete-runs (executor ids)
+  "Delete finished runs IDS from EXECUTOR in one store transaction; return IDS.
+Retire the runs' executions only after the store commits."
+  (let ((deleted (pichat-job-runs-delete (pichat-job-executor-store executor) ids)))
+    (dolist (member deleted)
+      (when-let* ((execution (gethash member (pichat-job-executor-contexts executor))))
+        (pichat-job-executor--retire execution)
+        (remhash member (pichat-job-executor-contexts executor))))
+    (pichat-job-executor--changed executor)
+    deleted))
+
 (defun pichat-job-executor-cancel (executor id)
   "Request cancellation of exact ID owned by EXECUTOR; never equate ack with exit."
   (let* ((run (pichat-job-record (pichat-job-executor-store executor) 'runs id))

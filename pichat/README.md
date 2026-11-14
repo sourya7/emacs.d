@@ -1055,6 +1055,30 @@ phase adapter. Scheduling always requires explicit authorization.
   [run chain](#review-loops) with **Actions → Delete chain…** (`C`) instead.
   Definitions, saved session files and captured evidence are retained; this
   removes history metadata, not files or runtime chats.
+- To prune Runs in batch, `d` marks the run at point together with its whole
+  run chain (the echo area gives the count), `u` unmarks it, `U` clears all
+  marks and `x` deletes every marked run after one `Delete N runs?`
+  confirmation, in one store transaction (the same keys in Evil Normal state).
+  A chain with an unfinished run, or one holding a schedule's last occurrence,
+  cannot be marked. Marks survive refreshes and filters and are cleared when
+  you leave Runs; a chain that gained a run since marking must be marked again.
+  **Actions → Mark old runs…** (`m`, `M-x pichat-jobs-mark-old-runs`) marks
+  Completed runs that finished more than N days ago among the rows shown, so a
+  job or run chain filter narrows it; with a prefix argument it takes every
+  finished result. It marks a chain only when every run in it qualifies and
+  reports how many chains it skipped. Nothing is deleted until you execute the
+  marks; Actions then also offers **Unmark all** (`U`) and **Delete N runs…**
+  (`X`). Nothing is pruned automatically.
+- After a batch deletion whose runs leave evidence files no remaining run
+  references, PiChat asks `Remove N MB of evidence?`. `M-x
+  pichat-jobs-collect-evidence` offers the same for unreferenced evidence
+  already present (for example from earlier single deletions or interrupted
+  commits). Only digest-named files (`<sha256>.json`) that no remaining run
+  references and that were not modified in the last hour are removed; a store
+  changed on disk by another Emacs is refused.
+- Deleted runs' saved session files stay hidden from saved-session browsing:
+  every deletion records their file names in the job store
+  (`deleted-session-files`). Stores without that list load unchanged.
   Compact Runs tables show Work, Queued, and State / result;
   queue times use local date/time to the minute; Project / target stays in wide tables and
   run details. Compact Jobs tables retain their project/target context.
@@ -1127,7 +1151,9 @@ phase adapter. Scheduling always requires explicit authorization.
   permanent Actions label/button in reports. From the list, Actions offers the
   row's job or run commands (without the report-only response entries) plus a
   **List** group: `a` toggles the attention filter (so `a a` / `g a a`) and `F`
-  **Clear filters** appears while Runs is filtered. The List group is offered
+  **Clear filters** appears while Runs is filtered; in Runs, `m` **Mark old
+  runs…**, and while runs are marked `U` **Unmark all** and `X` **Delete N
+  runs…**. The List group is offered
   even when no row is at point. A **Navigate** group lists only the related runs
   that exist: for a run **Previous run** (`P`, Repeat/Continue origin),
   **Triggered by** (`t`, the follow-up's origin), **Requested by** (`u`),
@@ -1196,7 +1222,8 @@ phase adapter. Scheduling always requires explicit authorization.
   exact-source views remain plain text.
 - Optional `pichat-evil-setup` gives the list Normal-state `RET`, `TAB`, `zv`
   preview, `gr` refresh, `gc` new, `gx` run, `ge` edit, `gh` history, `ga`
-  Actions and `gf` attention filter. Native `R` or Evil `g R` invokes **Release
+  Actions and `gf` attention filter; `d`, `u`, `U` and `x` handle Runs marks
+  as natively. Native `R` or Evil `g R` invokes **Release
   reservation** on the selected uncertain run; `M-x
   pichat-jobs-release-reservation` does the same. Report folds and answer links
   use `RET`; these do not take over Vim movement keys. The mode line shows the
@@ -1527,7 +1554,8 @@ derived from the store when needed.
   its status; **Actions → Requested by** and **Run chain** open them.
   **Actions → Delete chain…** (`C`) deletes all of a chain's run records in one
   confirmed step, once every run in it is finished. Evidence and saved session
-  files are kept. Nothing is deleted automatically.
+  files are kept. Runs marks (`d` in Runs) select whole chains for batch
+  deletion. Nothing is deleted automatically.
 
 **One loop per worker job.** A saved job has at most one unfinished run. If two
 loops share a worker job (two plans in one repository), the reviewer's restart is
@@ -1845,7 +1873,8 @@ uncertainty and its slot instead of silently truncating a report or declaring co
 Evidence is published before the metadata reference; interrupted commits may leave
 unreferenced files. Back up/move evidence with metadata. There is no automatic
 pruning of records, evidence, or saved Pi sessions; explicit run deletion retains
-its evidence and saved Pi session file. Archive only when no
+its saved Pi session file, and evidence only goes when you accept the offer
+after a batch deletion or run `M-x pichat-jobs-collect-evidence`. Archive only when no
 work/uncertain executions need preservation. Control waits default to 30 seconds
 (`pichat-jobs-control-timeout`); active model work has no implicit timeout.
 
@@ -2168,8 +2197,9 @@ as in `↑↓2`, because a session can have both a parent and children. Set
 and combined forms such as `P/C2`.
 
 Saved-session browsers hide Pi sessions recorded by job runs by default
-(`pichat-sessions-hide-job-sessions`). Jobs metadata is read without starting
-Jobs; scheduled continuations borrow an existing chat and remain visible. The
+(`pichat-sessions-hide-job-sessions`), including those of deleted runs. Jobs
+metadata is read without starting Jobs; scheduled continuations borrow an
+existing chat and remain visible. The
 archive-backed picker starts narrowed to chats: use Consult narrowing key `j`
 for job-run sessions only, `c` for chats, or widen (for example `DEL` on empty
 input) to show both. Narrowing filters each bounded archive result batch, so

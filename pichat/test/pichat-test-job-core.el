@@ -2048,5 +2048,132 @@
                                  (append (pichat-job-records store 'runs) nil))))
           (should (pichat-job-record store 'jobs worker)))))))
 
+(ert-deftest pichat-job-runs-delete-is-all-or-nothing-over-links-and-schedules ()
+  (pichat-test-job--with-store
+    (let* ((reviewer (pichat-job-save store (plist-put (pichat-test-job--spec) :title "Reviewer")))
+           (worker (pichat-job-save store (plist-put (pichat-test-job--spec) :after-job-id reviewer)))
+           (unrelated (pichat-job-enqueue store nil reviewer))
+           (w1 (pichat-job-enqueue store nil worker)))
+      (pichat-test-job--finish store unrelated "failed")
+      (pichat-test-job--finish store w1 "failed")
+      (let ((r1 (pichat-test-job--followup-of store w1))
+            (refused
+             (lambda (ids)
+               (let ((bytes (pichat-job-store-bytes store)))
+                 (should-error (pichat-job-runs-delete store ids) :type 'pichat-job-error)
+                 (should (equal bytes (pichat-job-store-bytes store)))))))
+        ;; An unfinished member, a missing run and an empty set change nothing.
+        (funcall refused (list w1 r1))
+        (pichat-test-job--finish store r1 "failed")
+        (funcall refused (list w1 r1 "run-missing"))
+        (funcall refused nil)
+        ;; A kept run must not reference a deleted one, in either link direction.
+        (funcall refused (list w1))
+        (funcall refused (list r1))
+        (let ((repeat (pichat-job-enqueue store nil nil nil unrelated)))
+          (pichat-job-cancel-queued store repeat)
+          (funcall refused (list unrelated))
+          ;; A deleted run may link to a kept one.
+          (should (equal (list repeat) (pichat-job-runs-delete store (list repeat)))))
+        (should (equal (list w1 r1 unrelated)
+                       (pichat-job-runs-delete store (list w1 r1 w1 unrelated))))
+        (should (equal [] (pichat-job-records (pichat-job-store-open file) 'runs))))
+      (let ((job (pichat-job-save store (pichat-test-job--spec))))
+        (pichat-job-schedule-set store job '(:kind "once" :start 100))
+        (pichat-job-schedule-enable store job t 99)
+        (let ((id (pichat-job-schedule-dispatch
+                   store job (plist-get (pichat-job-record store 'jobs job) :schedule) 100)))
+          (pichat-job-cancel-queued store id)
+          (should-error (pichat-job-runs-delete store (list id)) :type 'pichat-job-error)
+          (should (pichat-job-record store 'runs id)))))))
+
+(ert-deftest pichat-job-deleted-runs-keep-their-session-files-hidden ()
+  (pichat-test-job--with-store
+    (let ((finish (lambda (file)
+                    (let* ((id (pichat-test-job--enqueue store))
+                           (token (plist-get (pichat-job-claim store id) :attempt)))
+                      (pichat-job-advance store id token "finished"
+                                          (list :result "failed" :safe-to-release t
+                                                :session-file file))
+                      id))))
+      ;; A store written before the list existed loads without it.
+      (should-not (plist-member (pichat-job-store-data store) :deleted-session-files))
+      (pichat-job-run-delete store (funcall finish "/s/one.jsonl"))
+      (pichat-job-runs-delete store (list (funcall finish "/s/two.jsonl")
+                                          (funcall finish "/s/one.jsonl")))
+      (let ((id (funcall finish "/s/three.jsonl")))
+        (pichat-job-chain-delete store id (list id)))
+      (pichat-job-run-delete store (funcall finish nil))
+      (should (equal '("one.jsonl" "two.jsonl" "three.jsonl")
+                     (pichat-job-deleted-session-files store)))
+      ;; Later transactions and a reopened store keep the list.
+      (pichat-job-save store (pichat-test-job--spec))
+      (should (equal '("one.jsonl" "two.jsonl" "three.jsonl")
+                     (pichat-job-deleted-session-files (pichat-job-store-open file))))
+      ;; Borrowed conversations are not job sessions.
+      (let ((data (list :version 1 :jobs [] :runs [])))
+        (pichat-job--hide-sessions
+         data (list '(:session-file "/s/chat.jsonl" :destination (:kind "conversation"))))
+        (should-not (plist-member data :deleted-session-files)))
+      (dolist (bad '("one.jsonl" ["/s/one.jsonl"] [""] [5]))
+        (should-error (pichat-job--validate (list :version 1 :jobs [] :runs []
+                                                  :deleted-session-files bad))
+                      :type 'pichat-job-error)))))
+
+(ert-deftest pichat-job-evidence-cleanup-counts-references-and-guards-files ()
+  (pichat-test-job--with-store
+    (let* ((old (- (float-time) 7200))
+           (save (lambda (response)
+                   (let ((digest (pichat-job-evidence-save
+                                  store (list :version 1 :response response :transcript "T"))))
+                     (set-file-times (pichat-job--evidence-file store digest) old)
+                     digest)))
+           (finish (lambda (digest)
+                     (let* ((id (pichat-test-job--enqueue store))
+                            (token (plist-get (pichat-job-claim store id) :attempt)))
+                       (pichat-job-advance store id token "finished"
+                                           (list :result "failed" :safe-to-release t
+                                                 :evidence digest))
+                       id)))
+           (shared (funcall save "Shared"))
+           (own (funcall save "Own"))
+           (a (funcall finish shared))
+           (_b (funcall finish shared))
+           (c (funcall finish own))
+           (directory (file-name-directory (pichat-job--evidence-file store own)))
+           (fresh (pichat-job-evidence-save store '(:version 1 :response "New" :transcript "T")))
+           (other (expand-file-name "notes.json" directory)))
+      (with-temp-file other (insert "{}"))
+      (set-file-times other old)
+      (should-not (pichat-job-evidence-unreferenced store))
+      (pichat-job-runs-delete store (list a c))
+      ;; The shared file is still referenced; a recent file and a file not
+      ;; named by a digest are never candidates.
+      (should (equal (list (pichat-job--evidence-file store own))
+                     (mapcar #'car (pichat-job-evidence-unreferenced store (list shared own)))))
+      (should (equal (list (pichat-job--evidence-file store own))
+                     (mapcar #'car (pichat-job-evidence-unreferenced store))))
+      (should (= (file-attribute-size (file-attributes (pichat-job--evidence-file store own)))
+                 (cdar (pichat-job-evidence-unreferenced store))))
+      ;; A file referenced again before removal is kept.
+      (let ((files (mapcar #'car (pichat-job-evidence-unreferenced store))))
+        (funcall finish own)
+        (should-not (pichat-job-evidence-remove store files))
+        (should (file-exists-p (car files))))
+      (set-file-times (pichat-job--evidence-file store fresh) old)
+      ;; A store changed on disk is refused before anything is removed.
+      (let ((files (mapcar #'car (pichat-job-evidence-unreferenced store))))
+        (should (equal files (list (pichat-job--evidence-file store fresh))))
+        (let ((bytes (pichat-job-store-bytes store)))
+          (with-temp-file file (insert "Changed externally"))
+          (should-error (pichat-job-evidence-remove store files) :type 'pichat-job-error)
+          (should (file-exists-p (car files)))
+          (let ((coding-system-for-write 'no-conversion))
+            (with-temp-file file (set-buffer-multibyte nil) (insert bytes))))
+        (should (equal files (pichat-job-evidence-remove store files)))
+        (should-not (file-exists-p (car files))))
+      (should (file-exists-p (pichat-job--evidence-file store shared)))
+      (should (file-exists-p other)))))
+
 (provide 'pichat-test-job-core)
 ;;; pichat-test-job-core.el ends here

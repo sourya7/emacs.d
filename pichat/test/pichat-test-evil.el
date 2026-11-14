@@ -248,6 +248,9 @@
               (should (eq (key-binding (kbd "g a")) #'pichat-jobs-actions))
               (should (eq (key-binding (kbd "a")) #'evil-append))
               (should (eq (key-binding (kbd "f")) #'evil-find-char))
+              (dolist (binding '(("d" . pichat-jobs-mark) ("u" . pichat-jobs-unmark)
+                                 ("U" . pichat-jobs-unmark-all) ("x" . pichat-jobs-delete-marked)))
+                (should (eq (key-binding (kbd (car binding))) (cdr binding))))
               (call-interactively (key-binding (kbd "g f")))
               (should pichat-jobs--attention-only)
               (call-interactively (key-binding (kbd "g f")))
@@ -257,6 +260,7 @@
               (evil-emacs-state)
               (should (eq (key-binding (kbd "a")) #'pichat-jobs-actions))
               (should (eq (key-binding (kbd "f")) #'pichat-jobs-attention))
+              (should (eq (key-binding (kbd "x")) #'pichat-jobs-delete-marked))
               (pichat-jobs-refresh)
               (should-not (string-match-p "(a)\\|(g a)" mode-line-process))))
           (with-temp-buffer

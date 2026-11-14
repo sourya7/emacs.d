@@ -38,6 +38,10 @@
 (declare-function pichat-jobs-release-reservation "pichat-jobs" ())
 (declare-function pichat-jobs-history "pichat-jobs" ())
 (declare-function pichat-jobs-attention "pichat-jobs" ())
+(declare-function pichat-jobs-mark "pichat-jobs" ())
+(declare-function pichat-jobs-unmark "pichat-jobs" ())
+(declare-function pichat-jobs-unmark-all "pichat-jobs" ())
+(declare-function pichat-jobs-delete-marked "pichat-jobs" ())
 (declare-function pichat-jobs-detail-refresh "pichat-jobs" ())
 (declare-function pichat-jobs-actions "pichat-jobs" ())
 (declare-function pichat-jobs-detail-tab "pichat-jobs" ())
@@ -181,6 +185,10 @@ remain in their original mode maps."
       (kbd "g h") #'pichat-jobs-history
       (kbd "g a") #'pichat-jobs-actions
       (kbd "g f") #'pichat-jobs-attention
+      (kbd "d") #'pichat-jobs-mark
+      (kbd "u") #'pichat-jobs-unmark
+      (kbd "U") #'pichat-jobs-unmark-all
+      (kbd "x") #'pichat-jobs-delete-marked
       (kbd "q") #'quit-window)
     (evil-define-key* 'normal pichat-job-composer-review-mode-map
       (kbd "q") #'pichat-job-composer-inspection-return)

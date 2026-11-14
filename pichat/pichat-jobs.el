@@ -34,6 +34,9 @@ are not frozen.  Use only one owning Emacs per file."
 (defvar-local pichat-jobs--chain nil
   "Run ID whose run chain filters Runs, or nil.
 The chain is derived again on every refresh, so later members appear.")
+(defvar-local pichat-jobs--marks nil
+  "Run IDs marked for deletion in Runs; always whole run chains.
+Kept across refreshes, pruned of deleted runs and cleared when leaving Runs.")
 (defvar pichat-job--draft nil
   "Dynamically bound private draft for capture and synchronous field adapters.
 Persistent draft ownership belongs to an explicit composer scope, not a buffer.")
@@ -70,7 +73,8 @@ same object, rather than reopening behind a definition import's back."
 (defun pichat-jobs-session-file-names ()
   "Return a hash table of saved-session file names recorded by job runs.
 Keys are file names without directories.  Scheduled continuations borrow an
-existing chat's Pi session and are excluded.  Use the executor's store when
+existing chat's Pi session and are excluded.  Deleted runs' file names, kept
+in the store, stay included.  Use the executor's store when
 Jobs is running; otherwise read `pichat-jobs-file' without retaining it, so
 browsing never initializes, reconciles or executes Jobs.  Unreadable job
 metadata yields an empty table rather than blocking saved-session browsing."
@@ -84,7 +88,9 @@ metadata yields an empty table rather than blocking saved-session browsing."
             (let ((file (plist-get run :session-file)))
               (when (and (stringp file) (not (string-empty-p file))
                          (not (pichat-job-conversation-p run)))
-                (puthash (file-name-nondirectory file) t table)))))
+                (puthash (file-name-nondirectory file) t table))))
+          (dolist (name (pichat-job-deleted-session-files store))
+            (puthash name t table)))
       (error nil))
     table))
 
@@ -193,6 +199,10 @@ every definition row."
                                                  pichat-job--active-states)) runs))
          (attention (seq-count (lambda (run) (pichat-jobs--attention-p pichat-jobs--owner run)) runs))
          (chain (pichat-jobs--chain-members store)))
+    (setq pichat-jobs--marks
+          (and (eq pichat-jobs--kind 'runs)
+               (seq-filter (lambda (id) (seq-find (lambda (run) (equal id (plist-get run :id))) runs))
+                           pichat-jobs--marks)))
     (setq tabulated-list-format
           (if (eq pichat-jobs--kind 'jobs)
               (vconcat (list (list "Job" title-width t))
@@ -270,6 +280,7 @@ every definition row."
                                   :title)))
                         (t ""))))
     (tabulated-list-print t)
+    (pichat-jobs--show-marks)
     ;; Printing remembers buffer point, but erasing the table also moves every
     ;; nonselected window's point marker.  In particular, M-x can trigger a
     ;; resize while the minibuffer is selected, before a row command runs.
@@ -302,7 +313,8 @@ ends the filter instead of showing an empty list."
   (when (eq pichat-jobs--kind 'jobs)
     (setq pichat-jobs--selection (tabulated-list-get-id)))
   (setq pichat-jobs--kind (if (eq pichat-jobs--kind 'jobs) 'runs 'jobs)
-        pichat-jobs--filter nil pichat-jobs--attention-only nil pichat-jobs--chain nil)
+        pichat-jobs--filter nil pichat-jobs--attention-only nil pichat-jobs--chain nil
+        pichat-jobs--marks nil)
   (pichat-jobs-refresh)
   (when (eq pichat-jobs--kind 'jobs) (pichat-jobs--select pichat-jobs--selection)))
 
@@ -385,6 +397,174 @@ files are retained."
       (pichat-job-executor-delete-chain owner id (mapcar (lambda (run) (plist-get run :id)) members))
       (message "%d runs deleted; evidence and saved sessions retained" (length members)))))
 
+;;; Marks and batch deletion
+
+(defun pichat-jobs--show-marks ()
+  "Show `pichat-jobs--marks' as deletion tags on the printed rows."
+  (when (eq pichat-jobs--kind 'runs)
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (when-let* ((id (tabulated-list-get-id)))
+          (tabulated-list-put-tag (if (member id pichat-jobs--marks) "D" " ")))
+        (forward-line 1)))))
+
+(defun pichat-jobs--chain-deletable (store id)
+  "Return (IDS . BLOCKER) for the run chain of run ID in STORE.
+BLOCKER is nil when the whole chain can be deleted, `unfinished' when a
+member is not finished and `scheduled' when a schedule's last occurrence is
+a member."
+  (let* ((members (append (plist-get (pichat-job-chain store id) :members) nil))
+         (ids (mapcar (lambda (run) (plist-get run :id)) members)))
+    (cons ids
+          (cond ((seq-some (lambda (run) (not (equal (plist-get run :state) "finished"))) members)
+                 'unfinished)
+                ((seq-some (lambda (job)
+                             (member (plist-get (plist-get (plist-get job :schedule) :last) :run-id)
+                                     ids))
+                           (pichat-job-records store 'jobs))
+                 'scheduled)))))
+
+(defun pichat-jobs--marks-buffer ()
+  "Signal unless the current buffer is the Runs list."
+  (unless (and (derived-mode-p 'pichat-jobs-mode) (eq pichat-jobs--kind 'runs))
+    (user-error "Marks apply to Runs; press TAB to switch")))
+
+(defun pichat-jobs-mark ()
+  "Mark the run at point, with its whole run chain, for deletion.
+A chain with an unfinished run, or with a schedule's last occurrence,
+cannot be marked."
+  (interactive)
+  (pichat-jobs--marks-buffer)
+  (let* ((id (or (tabulated-list-get-id) (user-error "No run selected")))
+         (chain (pichat-jobs--chain-deletable (pichat-jobs--store) id)))
+    (pcase (cdr chain)
+      ('unfinished (user-error "Run chain has unfinished runs; cannot mark it"))
+      ('scheduled (user-error "A schedule's last occurrence is in this run chain; cannot mark it")))
+    (setq pichat-jobs--marks (seq-union pichat-jobs--marks (car chain)))
+    (pichat-jobs--show-marks)
+    (forward-line 1)
+    (message "Marked %s" (pichat-jobs--runs-count (length (car chain)) t))))
+
+(defun pichat-jobs-unmark ()
+  "Unmark the run at point together with its run chain."
+  (interactive)
+  (pichat-jobs--marks-buffer)
+  (let* ((id (or (tabulated-list-get-id) (user-error "No run selected")))
+         (ids (car (pichat-jobs--chain-deletable (pichat-jobs--store) id))))
+    (setq pichat-jobs--marks (seq-difference pichat-jobs--marks ids))
+    (pichat-jobs--show-marks)
+    (forward-line 1)))
+
+(defun pichat-jobs-unmark-all ()
+  "Remove every deletion mark in Runs."
+  (interactive)
+  (pichat-jobs--marks-buffer)
+  (setq pichat-jobs--marks nil)
+  (pichat-jobs--show-marks)
+  (message "Marks cleared"))
+
+(defun pichat-jobs--runs-count (count &optional chain)
+  "Return \"COUNT run(s)\", noting a run chain when CHAIN and COUNT > 1."
+  (format "%d run%s%s" count (if (= count 1) "" "s")
+          (if (and chain (> count 1)) " (run chain)" "")))
+
+(defun pichat-jobs-mark-old-runs (days &optional all)
+  "Mark Completed runs finished more than DAYS days ago among the shown rows.
+With prefix argument ALL, mark runs with any finished result.  A run chain
+is marked only when every member qualifies; chains with an unfinished run,
+a schedule's last occurrence, or a newer or non-matching run are skipped.
+Nothing is deleted until the marks are executed."
+  (interactive (list (read-number "Mark runs older than (days): " 30) current-prefix-arg))
+  (pichat-jobs--marks-buffer)
+  (when (< days 0) (user-error "Days must not be negative"))
+  (let* ((store (pichat-jobs--store))
+         (cutoff (- (float-time) (* days 86400)))
+         (runs (make-hash-table :test #'equal))
+         (seen (make-hash-table :test #'equal))
+         (marked 0) (chains 0) (blocked 0) (mixed 0))
+    (seq-doseq (run (pichat-job-records store 'runs)) (puthash (plist-get run :id) run runs))
+    (cl-flet ((old-p (id)
+                (let ((run (gethash id runs)))
+                  (and (equal (plist-get run :state) "finished")
+                       (or all (equal (plist-get run :result) "completed"))
+                       (time-less-p (date-to-time (or (plist-get run :finished-at)
+                                                      (plist-get run :created-at)))
+                                    cutoff)))))
+      (dolist (entry tabulated-list-entries)
+        (let ((id (car entry)))
+          (when (and (not (gethash id seen)) (not (member id pichat-jobs--marks)) (old-p id))
+            (let ((chain (pichat-jobs--chain-deletable store id)))
+              (dolist (member (car chain)) (puthash member t seen))
+              (cond ((cdr chain) (cl-incf blocked))
+                    ((not (seq-every-p #'old-p (car chain))) (cl-incf mixed))
+                    (t (setq pichat-jobs--marks (seq-union pichat-jobs--marks (car chain)))
+                       (cl-incf chains)
+                       (cl-incf marked (length (car chain))))))))))
+    (pichat-jobs--show-marks)
+    (message "Marked %s in %d chain%s%s" (pichat-jobs--runs-count marked) chains
+             (if (= chains 1) "" "s")
+             (if (zerop (+ blocked mixed)) ""
+               (format "; skipped %d chain%s with unfinished, scheduled, newer or other runs"
+                       (+ blocked mixed) (if (= (+ blocked mixed) 1) "" "s"))))))
+
+(defun pichat-jobs-delete-marked ()
+  "Delete every marked run after one confirmation, in one store transaction.
+Then offer to remove evidence files no remaining run references."
+  (interactive)
+  (pichat-jobs--marks-buffer)
+  (pichat-jobs--delete-marked pichat-jobs--owner))
+
+(defun pichat-jobs--delete-marked (owner)
+  "Delete the current Runs buffer's marked runs belonging to OWNER."
+  (let* ((store (pichat-job-executor-store owner))
+         (ids pichat-jobs--marks)
+         (buffer (current-buffer)))
+    (unless ids (user-error "No marked runs"))
+    ;; A chain can grow after marking; deleting part of it is refused anyway.
+    (dolist (id ids)
+      (let ((chain (condition-case nil (pichat-jobs--chain-deletable store id)
+                     (pichat-job-error (user-error "A marked run was deleted; mark again")))))
+        (unless (and (null (cdr chain)) (null (seq-difference (car chain) ids)))
+          (user-error "A marked run chain changed; unmark it and mark it again"))))
+    (when (y-or-n-p (format "Delete %s? " (pichat-jobs--runs-count (length ids))))
+      (let ((digests (delete-dups
+                      (delq nil (mapcar (lambda (id)
+                                          (plist-get (pichat-job-record store 'runs id) :evidence))
+                                        ids)))))
+        (pichat-job-executor-delete-runs owner ids)
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer
+            (setq pichat-jobs--marks nil)
+            (pichat-jobs--show-marks)))
+        (message "Deleted %s" (pichat-jobs--runs-count (length ids)))
+        (when digests
+          (pichat-jobs--remove-evidence store digests))))))
+
+(defun pichat-jobs--remove-evidence (store &optional digests)
+  "Offer to remove STORE's unreferenced evidence; return the files removed.
+With DIGESTS, consider only those files.  Files referenced by a remaining
+run, not named by a digest or modified in the last hour are kept."
+  (let* ((files (pichat-job-evidence-unreferenced store digests))
+         (bytes (apply #'+ (mapcar #'cdr files))))
+    (when (and files
+               (y-or-n-p (format "Remove %s of evidence? "
+                                 (file-size-human-readable bytes 'si " " "B"))))
+      (let ((removed (pichat-job-evidence-remove store (mapcar #'car files))))
+        (message "Removed %d evidence file%s" (length removed)
+                 (if (= (length removed) 1) "" "s"))
+        removed))))
+
+;;;###autoload
+(defun pichat-jobs-collect-evidence ()
+  "Offer to remove run evidence files that no job run references.
+Keeps files not named by a digest and files modified in the last hour."
+  (interactive)
+  (let ((store (pichat-job-executor-store (pichat-jobs--engine))))
+    (unless (pichat-jobs--remove-evidence store)
+      (unless (pichat-job-evidence-unreferenced store)
+        (message "No unreferenced evidence")))))
+
 (defun pichat-jobs-history ()
   "Show attempts for the selected saved job."
   (interactive)
@@ -428,6 +608,10 @@ files are retained."
     (define-key map (kbd "h") #'pichat-jobs-history)
     (define-key map (kbd "a") #'pichat-jobs-actions)
     (define-key map (kbd "f") #'pichat-jobs-attention)
+    (define-key map (kbd "d") #'pichat-jobs-mark)
+    (define-key map (kbd "u") #'pichat-jobs-unmark)
+    (define-key map (kbd "U") #'pichat-jobs-unmark-all)
+    (define-key map (kbd "x") #'pichat-jobs-delete-marked)
     (define-key map (kbd "g") #'pichat-jobs-refresh)
     map))
 (define-derived-mode pichat-jobs-mode tabulated-list-mode "PiChat Jobs"
@@ -435,6 +619,11 @@ files are retained."
 \\<pichat-jobs-mode-map>\\[pichat-jobs-details] opens the selected row.
 \\[pichat-jobs-actions] opens Actions for the row at point (Evil: g a), and
 \\[pichat-jobs-attention] toggles the attention filter (Evil: g f).
+In Runs, \\[pichat-jobs-mark] marks a run with its whole run chain for deletion,
+\\[pichat-jobs-unmark] unmarks it and \\[pichat-jobs-unmark-all] clears all marks;
+\\[pichat-jobs-delete-marked] deletes the marked runs after one confirmation
+(same keys in Evil).
+\\[pichat-jobs-actions] m marks old runs (`pichat-jobs-mark-old-runs').
 \\[pichat-jobs-release-reservation] releases an uncertain run's scheduling
 reservation after inspection and confirmation.  With Evil, use g R."
   (setq tabulated-list-padding 1)
@@ -1067,7 +1256,15 @@ clash with any job or run entry."
                    'attention))
        (when (and (eq pichat-jobs--kind 'runs)
                   (or pichat-jobs--filter pichat-jobs--attention-only pichat-jobs--chain))
-         '((list "F" "Clear filters" clear-filters)))))))
+         '((list "F" "Clear filters" clear-filters)))
+       (when (eq pichat-jobs--kind 'runs)
+         (append '((list "m" "Mark old runs…" mark-old))
+                 (when pichat-jobs--marks
+                   (list '(list "U" "Unmark all" unmark-all)
+                         (list 'list "X" (format "Delete %s…"
+                                                 (pichat-jobs--runs-count
+                                                  (length pichat-jobs--marks)))
+                               'delete-marked)))))))))
 
 (defun pichat-jobs--menu-items (scope record)
   "Return every applicable Actions entry of SCOPE for its current RECORD."
@@ -1125,6 +1322,9 @@ A list scope opened without a row returns nil; it offers only list entries."
     (pcase action
       ('attention (pichat-jobs-attention))
       ('clear-filters (pichat-jobs-clear-filters))
+      ('mark-old (call-interactively #'pichat-jobs-mark-old-runs))
+      ('unmark-all (pichat-jobs-unmark-all))
+      ('delete-marked (pichat-jobs--delete-marked owner))
       ('run (pichat-jobs--run-saved owner id))
       ('edit (pichat-job--edit-saved owner id))
       ('delete-job (pichat-jobs--delete-job owner id))

@@ -308,6 +308,13 @@ A declared prompt requires nonblank INPUT; undeclared jobs reject it."
                (vectorp (plist-get data :jobs))
                (vectorp (plist-get data :runs)))
     (pichat-job--fail "Unsupported or invalid PiChat job store"))
+  ;; Added without a version bump: older builds load and preserve it.
+  (when-let* ((hidden (plist-member data :deleted-session-files)))
+    (unless (and (vectorp (cadr hidden))
+                 (seq-every-p (lambda (name) (and (pichat-job--text-p name)
+                                                  (equal name (file-name-nondirectory name))))
+                              (cadr hidden)))
+      (pichat-job--fail "Invalid deleted session file list")))
   (let ((sources (make-hash-table :test #'equal)) ids)
     (dolist (kind '(:jobs :runs))
       (seq-doseq (record (plist-get data kind))
@@ -661,10 +668,108 @@ inspection.  Never change another run's immutable provenance or report."
              (equal id (plist-get (plist-get (plist-get job :schedule) :last) :run-id)))
            (plist-get data :jobs))
       (pichat-job--fail "Schedule history references this run; deletion refused"))
+    (pichat-job--hide-sessions data (list run))
     (setf (plist-get data :runs)
           (vconcat (seq-remove (lambda (other) (equal id (plist-get other :id)))
                                (plist-get data :runs))))
     (pichat-job--commit store data)))
+
+(defun pichat-job--hide-sessions (data runs)
+  "Record deleted RUNS' saved session file names in transaction DATA.
+The top-level `:deleted-session-files' vector keeps them hidden from
+saved-session browsing.  Borrowed conversations are not job sessions."
+  (let ((names (append (plist-get data :deleted-session-files) nil)))
+    (dolist (run runs)
+      (let ((file (plist-get run :session-file)))
+        (when (and (pichat-job--text-p file) (not (pichat-job-conversation-p run)))
+          (let ((name (file-name-nondirectory file)))
+            (unless (or (string-empty-p name) (member name names))
+              (setq names (append names (list name))))))))
+    (when names
+      (setq data (plist-put data :deleted-session-files (vconcat names))))
+    data))
+
+(defun pichat-job-deleted-session-files (store)
+  "Return the saved session file names of runs deleted from STORE."
+  (append (plist-get (pichat-job-store-data store) :deleted-session-files) nil))
+
+(defun pichat-job--run-references (run)
+  "Return the run IDs that RUN's provenance links refer to."
+  (let ((trigger (plist-get run :trigger)))
+    (delq nil (list (plist-get trigger :repeat-of) (plist-get trigger :continue-of)
+                    (plist-get trigger :origin-run) (plist-get trigger :requested-by)
+                    (plist-get (plist-get run :event) :run-id)
+                    (plist-get (plist-get run :dispatch) :run-id)))))
+
+(defun pichat-job-runs-delete (store ids)
+  "Delete the finished runs IDS from STORE in one transaction; return IDS.
+All or nothing: every run must exist and be finished, no run outside IDS
+may link to one of them, and no schedule history may name one.  Whole run
+chains satisfy this.  Evidence files are kept; deleted runs' saved session
+file names stay hidden from saved-session browsing."
+  (let* ((data (pichat-job--copy (pichat-job-store-data store)))
+         (ids (delete-dups (copy-sequence ids)))
+         (runs (mapcar (lambda (id) (pichat-job--find data :runs id)) ids)))
+    (unless ids (pichat-job--fail "No runs to delete"))
+    (unless (seq-every-p (lambda (run) (equal (plist-get run :state) "finished")) runs)
+      (pichat-job--fail "Only finished runs can be deleted; nothing deleted"))
+    ;; Links from deleted runs to kept ones are harmless; the reverse would
+    ;; leave a kept run's provenance dangling.
+    (seq-doseq (run (plist-get data :runs))
+      (unless (member (plist-get run :id) ids)
+        (when (seq-some (lambda (link) (member link ids)) (pichat-job--run-references run))
+          (pichat-job--fail "Another run references a run; nothing deleted"))))
+    (when (seq-some
+           (lambda (job)
+             (member (plist-get (plist-get (plist-get job :schedule) :last) :run-id) ids))
+           (plist-get data :jobs))
+      (pichat-job--fail "Schedule history references a run; nothing deleted"))
+    (pichat-job--hide-sessions data runs)
+    (setf (plist-get data :runs)
+          (vconcat (seq-remove (lambda (run) (member (plist-get run :id) ids))
+                               (plist-get data :runs))))
+    (pichat-job--commit store data)
+    ids))
+
+(defconst pichat-job-evidence-min-age 3600
+  "Seconds an evidence file must be unmodified before it may be removed.
+This protects files another Emacs is about to reference.")
+
+(defun pichat-job-evidence-unreferenced (store &optional digests)
+  "Return (FILE . BYTES) for STORE's evidence files no record references.
+Only regular files named by a digest (`<sha256>.json') and unmodified for
+`pichat-job-evidence-min-age' seconds are candidates.  With DIGESTS, consider
+only those files.  Nothing is removed."
+  (let* ((directory (concat (pichat-job-store-file store) ".evidence/"))
+         (used (make-hash-table :test #'equal))
+         (cutoff (- (float-time) pichat-job-evidence-min-age))
+         result)
+    (when (and (file-directory-p directory)
+               (not (file-symlink-p (directory-file-name directory))))
+      (seq-doseq (run (plist-get (pichat-job-store-data store) :runs))
+        (when-let* ((digest (plist-get run :evidence))) (puthash digest t used)))
+      (dolist (file (directory-files directory t "\\`[a-f0-9]\\{64\\}\\.json\\'"))
+        (let ((digest (file-name-sans-extension (file-name-nondirectory file)))
+              (attributes (file-attributes file)))
+          (when (and (or (null digests) (member digest digests))
+                     (not (gethash digest used))
+                     (eq (file-attribute-type attributes) nil)
+                     (< (float-time (file-attribute-modification-time attributes)) cutoff))
+            (push (cons file (file-attribute-size attributes)) result)))))
+    (nreverse result)))
+
+(defun pichat-job-evidence-remove (store files)
+  "Remove evidence FILES of STORE that are still unreferenced; return them.
+Each file is checked again against the current records and the age guard, so
+a file referenced meanwhile is kept.  A store changed on disk or locked by
+another Emacs is refused before anything is removed."
+  (pichat-job-store-check store)
+  (let ((current (mapcar #'car (pichat-job-evidence-unreferenced store))) removed)
+    (dolist (file files)
+      (when (member file current)
+        (delete-file file)
+        (push file removed)))
+    (nreverse removed)))
 
 (defun pichat-job-schedule-set (store id rule)
   "Save RULE disabled on job ID in STORE, or remove timing when RULE is nil.
@@ -1128,6 +1233,7 @@ references stay consistent.  Evidence and saved session files are retained."
              (member (plist-get (plist-get (plist-get job :schedule) :last) :run-id) ids))
            (plist-get data :jobs))
       (pichat-job--fail "Schedule history references a run in this chain; deletion refused"))
+    (pichat-job--hide-sessions data members)
     (setf (plist-get data :runs)
           (vconcat (seq-remove (lambda (run) (member (plist-get run :id) ids))
                                (plist-get data :runs))))

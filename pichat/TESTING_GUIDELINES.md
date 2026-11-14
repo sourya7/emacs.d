@@ -359,6 +359,43 @@ failed report from Undercover's nonfatal exit hook. Undercover measures Edebug
 forms, not conventional branch coverage; use the report to triage missing
 scenarios, not to justify deletions or replace behavioral assertions.
 
+### Per-test overlap
+
+To find tests that may duplicate others, record which instrumented forms each
+test executes:
+
+```sh
+pichat/test/run-test-overlap.sh
+```
+
+This runs the default suite under Undercover (offline, no real Pi or user
+state), resetting the Edebug counters before each test. It writes per-test
+records, `report.md` and `tests.tsv` to the gitignored `coverage/test-overlap/`.
+The report lists, per test file, tests with unique forms and tests whose forms
+all run in other tests, naming up to three containing tests. Other modes:
+
+- `--selector REGEXP`: record only the matching tests.
+- `--output DIR`: write somewhere else, for example to keep a baseline.
+- `--report-only`: rebuild the report from existing records.
+- `--coupling`: static counts per test file of private (`pichat…--…`) symbol
+  references, `symbol-function` stubs and string-literal assertions; no test
+  run.
+- `--diff DIR_A DIR_B`: list tests whose recorded forms differ between two
+  runs.
+
+The same Undercover dependencies and `PICHAT_COVERAGE_LOAD_PATH` apply as for
+`run-coverage.sh`. The report shares that run's limits, and more:
+`pichat-chat.el` is not instrumented, load-time code belongs to no test, only
+passed tests are compared, and executing a form is not asserting its result.
+
+**Coverage alone never justifies deleting a test.** A contained test is only
+a candidate to read. A test whose forms all run elsewhere can still be the only
+one asserting an outcome, injecting a fault or exercising a race. Remove or
+merge a test only when another named test still protects its behaviour: move
+any assertion the protector lacks, and where practical break the behaviour in
+a scratch copy (never the working tree) to see the protector fail. Prefer
+merging shared guards into one table-driven test over deleting them.
+
 Integration tests must isolate Pi state with temporary `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`, project cwd, and session directory. They must not read normal user credentials, packages, settings, trust decisions, or sessions. CI should pin one supported Pi version and include `pi --version` in failure diagnostics.
 
 ## Synthetic browsing profiles

@@ -175,6 +175,12 @@ Commands appear in native maps, `pichat-evil.el`, `user/pichat.el` General/which
 
 **Recommendation:** keep native and Evil bindings explicit. Route discovery of infrequent actions through shared package Transient prefixes instead of maintaining another long personal menu for each view. Avoid a generated mega-registry unless drift remains a recurring problem.
 
+**W21 resolution (2026-11-14): bounded discovery consolidation.** The new package
+Chat Actions menu replaces personal repaint, saved-session switch, Session History
+and diagnostics discovery entries with `SPC m ?`; native keys, APIs and intentional
+fast paths remain explicit. No generated action registry or Jobs policy sharing.
+See MENU-01 for verification and limits.
+
 ### Existing sharing worth preserving
 
 - `pichat-artifact-result.el` already shares copy/share/source-validation behavior between runner types.
@@ -438,6 +444,26 @@ Capture the owning runtime and source when opening the prefix. Show concise targ
 
 Active model changes must state that Pi RPC `set_model` also updates Pi's persistent default. Distinguish that from launch-only `--model` and PiChat's `pichat-default-model` for future processes.
 
+**W21 resolution (2026-11-14): adopt one thin, deliberately incomplete prefix.**
+W09/W14/W20 are complete. Imenu solves settled-turn selection, not the discovery
+of compose, export, source switching or cached diagnostics in a minimal package
+setup. `pichat-chat-actions` (`C-c C-a`) offers nine existing commands in three
+groups. Suffix closures retain chat/runtime/source/process identity, reject stale
+ownership and source changes (including away/back), and select the captured chat
+before delegation so auxiliary views also retain the correct return origin.
+Opening/closing uses cached data only; stopped-runtime compose remains available.
+The menu owns no settings, asynchronous operations, command policy or universal
+registry. Existing model controls, launch/reconfigure, Jobs and point-sensitive
+actions are intentionally not duplicated. Active-model default semantics remain
+unchanged because no model-changing suffix was added.
+
+Ten focused tests pass. Unit suite: 1417/1428 expected (11 optional/Docker skips);
+full optional-enabled offline real-Pi suite: 1546/1548 expected (two Docker skips),
+zero unexpected. Isolated non-batch terminal Emacs drives native and personal Evil
+entry/Close/Compose/Cancel keys (1/1). Changed production files compile with only
+two existing chat warnings; Emacs 31.1 / Pi 1.5.1. These are programmatic checks,
+not human visual acceptance, real-SSH verification or a discovery-speed claim.
+
 ### MENU-02 — Add a small diagnostics/setup prefix
 
 **Priority: medium.**
@@ -448,17 +474,25 @@ Keep safe cached inspection the default. Clearly mark raw views as potentially s
 
 `pichat-smoke-test` is a development/setup action, not a primary everyday top-level workflow. It belongs here as an advertised entry while remaining callable directly.
 
+**W21 disposition:** defer a separate setup prefix until usage demonstrates need;
+Chat Actions links only to the existing safe cached diagnostics command.
+
 ### MENU-03 — Runtime manager menu can expose, not replace, row commands
 
 `RET`, stop, forget, name, make preferred, diagnostics, and preview already have native row bindings. A `?`-adjacent action prefix could help occasional users, but should call those same implementations and capture the selected **runtime ID**, not whatever row is selected when an async operation completes.
 
 Avoid adding a second bulk-action layer until needed. Ibuffer-style batch deletion is particularly dangerous if it becomes runtime stopping by implication.
 
+**W21 disposition:** defer manager submenus; native row commands are unchanged.
+
 ### MENU-04 — Do not move point-sensitive artifact/tool actions wholesale into Transient
 
 Artifacts already use Embark with structured target identity. Copy/open/run/table-preview actions belong with that target. Tool location, shell output, and rerun actions could be grouped in a point-sensitive submenu, but must capture/validate the original tool and source rather than rediscovering “at point” after a repaint.
 
 Keep direct folding/navigation keys. Transient is suitable for choosing an infrequent action, not repeated local movement.
+
+**W21 resolution:** preserved. No artifact, tool, shell, rendered-response-at-point,
+or folding action enters the delayed menu; their direct keys/Embark targets remain.
 
 ### Menu safety and implementation constraints
 

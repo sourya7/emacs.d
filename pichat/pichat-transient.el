@@ -29,6 +29,7 @@ packages' menus are not affected."
 
 (defconst pichat-transient-prefixes
   '(pichat-launch pichat-reconfigure-menu pichat-reconfigure-recovery
+    pichat-chat-actions
     pichat-jobs-actions-menu pichat-job-edit-menu pichat-job-definition-menu
     pichat-job-schedule-menu
     pichat-tool-picker pichat-tool-picker-server pichat-tool-picker-emacs-group)

@@ -468,8 +468,11 @@ Markup characters remain visible; this is fontification only."
     map)
   "Navigation bindings for the PiChat transcript.")
 
+(autoload 'pichat-chat-actions "pichat-chat-actions" nil t)
+
 (defvar pichat-chat-mode-map
   (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-a") #'pichat-chat-actions)
     (define-key map (kbd "RET") #'pichat-chat-ret)
     (define-key map (kbd "S-<return>") #'newline)
     (define-key map (kbd "C-c C-c") #'pichat-chat-send-input)

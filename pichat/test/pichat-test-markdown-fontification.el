@@ -169,8 +169,11 @@
                 (should (equal source
                                (buffer-substring-no-properties beg end)))
                 (should-not (overlays-in beg end)))
-              (dolist (key '("C-c C-a" "C-c C-<return>"))
-                (should-not (lookup-key pichat-chat-mode-map (kbd key)))))
+              ;; The former alternate-render key stays absent.  C-c C-a is
+              ;; now discovery-only Actions, not a Markdown display toggle.
+              (should-not (lookup-key pichat-chat-mode-map (kbd "C-c C-<return>")))
+              (should (eq (lookup-key pichat-chat-mode-map (kbd "C-c C-a"))
+                          #'pichat-chat-actions)))
         (when (buffer-live-p buffer) (kill-buffer buffer)))))))
 
 (provide 'pichat-test-markdown-fontification)

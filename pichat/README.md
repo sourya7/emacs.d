@@ -1997,7 +1997,7 @@ The chooser explains and omits unavailable Pi actions for backends without the
 required capability; Emacs customization remains available. No setup action is
 automatic, and opening diagnostics never repairs, restarts, or edits a runtime.
 
-This repository's personal menus add chat `SPC m D` for safe diagnostics and
+This repository's personal menus offer chat `SPC m ? D` for safe diagnostics and
 inspector `SPC m r` / `SPC m q` for refresh/return (including raw inspectors).
 The manager's existing `SPC m D` remains unchanged. In Insert state use
 `M-SPC m`; native mode keys remain usable without these personal menus or Evil.
@@ -2094,7 +2094,7 @@ Chat keys:
   submissions already in flight
 - Image-only prompts are controlled by
   `pichat-attachments-allow-image-only-prompts` and are disabled by default
-- `M-x pichat-show-diagnostics` / local `SPC m D` — safe cached diagnostics;
+- `M-x pichat-show-diagnostics` / local `SPC m ? D` — safe cached diagnostics;
   see “Diagnostics: inspect versus setup” above for inspector keys, raw-data
   warnings, setup actions, and ownership rules
 - Ordinary chat status shows only bounded, redacted diagnostic summaries and
@@ -2128,7 +2128,7 @@ Chat keys:
 - At the beginning of the prompt, type `/` and invoke completion-at-point to
   complete currently available Pi commands, templates, and skills
 - `C-c C-p` — open **Session History** for the current session file
-- `C-c C-b` (or the chat-local `SPC m b` menu in this repository) — switch the
+- `C-c C-b` (or chat-local `SPC m ? b` in this repository) — switch the
   active runtime to a selected saved session, keeping its owner scope and tab.
   `C-u C-c C-b` forces the basic picker. In the archive-backed switch picker,
   Consult Embark `j` switches the originating runtime and opens Session History
@@ -2392,6 +2392,26 @@ Additional chat keys:
 - `M-x pichat-chat-export-transcript-to-markdown` — export authoritative
   canonical transcript model data, including complete canonical tool output,
   without reading rendered, folded, or truncated buffer text
+
+## Chat Actions
+
+`C-c C-a` or `M-x pichat-chat-actions` opens a small discovery Transient
+for the originating chat: compose/recover a draft, pick a Pi command (which
+sends), Imenu settled turns, Session History, switch a saved session, repaint
+(fetches authoritative entries), export canonical Markdown, and cached diagnostics.
+Opening or closing the menu neither sends nor fetches anything. Each suffix
+calls the existing command in the captured chat, even if another buffer becomes
+current. A changed source (including away and back), runtime process replacement,
+or lost chat ownership rejects the old menu; reopen it. Stopped chats retain
+applicable draft and cached-transcript commands; each command keeps its own
+capability, liveness and asynchronous validation.
+
+In this configuration, `SPC m ?` (Insert state `M-SPC m ?`) opens the same menu,
+replacing the personal repaint, saved-session switch, Session History and
+diagnostics inventory. Other fast shortcuts, all `M-x` commands and public APIs,
+and direct send/abort/recovery keys are unchanged. Point-sensitive artifact and
+tool actions stay at point/Embark; the menu does not rediscover them later.
+Model controls, launch/reconfigure, Jobs, manager and setup menus remain separate.
 
 ## Native transcript and project navigation
 

@@ -49,7 +49,7 @@
         (should (equal (pichat-job-record store 'runs id)
                        (pichat-job-record (pichat-job-store-open (pichat-job-store-file store)) 'runs id)))
         (dolist (change '(flag instant pending))
-          (let* ((data (pichat-job--copy (pichat-job-store-data store)))
+          (let* ((data (copy-tree (pichat-job-store-data store) t))
                  (run (aref (plist-get data :runs) 0))
                  (trigger (plist-get run :trigger)))
             (pcase change
@@ -58,30 +58,27 @@
               ('pending (setf (plist-get run :state) "scheduled")))
             (should-error (pichat-job--validate data) :type 'pichat-job-error)))))))
 
-(ert-deftest pichat-job-conversation-run-now-reentrant-action-cannot-duplicate-submission ()
-  (pichat-test-with-conversation-job
-    (pichat-test-with-conversation-rpc
-      (let* ((id (pichat-test-job-conversation-schedule executor session))
-             (expected (pichat-job-record store 'runs id))
-             (callback (timer--function (cdr (gethash id (pichat-job-executor-schedules executor)))))
-             (pichat-job-executor-changed-hook
-              (list (lambda (_executor)
-                      (should-not (gethash id (pichat-job-executor-schedules executor)))
-                      (funcall callback)
-                      (should-error (pichat-job-executor-conversation-run-now executor id expected)
-                                    :type 'user-error)))))
-        (pichat-job-executor-conversation-run-now executor id expected)
-        (should (= 1 (seq-count (lambda (type) (equal type "prompt")) commands)))))))
-
 (ert-deftest pichat-job-conversation-run-now-retires-original-timer-and-sends-once ()
   (pichat-test-with-conversation-job
     (pichat-test-with-conversation-rpc
       (let* ((id (pichat-test-job-conversation-schedule executor session))
              (expected (pichat-job-record store 'runs id))
              (timer (cdr (gethash id (pichat-job-executor-schedules executor))))
-             (callback (timer--function timer)))
+             (callback (timer--function timer))
+             (reentered nil)
+             ;; Hooks run during Run now: the timer is already retired, and
+             ;; neither its callback nor a second Run now can submit again.
+             (pichat-job-executor-changed-hook
+              (list (lambda (_executor)
+                      (unless reentered
+                        (setq reentered t)
+                        (should-not (gethash id (pichat-job-executor-schedules executor)))
+                        (funcall callback)
+                        (should-error (pichat-job-executor-conversation-run-now executor id expected)
+                                      :type 'user-error))))))
         (cl-letf (((symbol-function 'pichat-job-launch-prepare) (lambda (&rest _) (ert-fail "Started worker"))))
           (should (equal id (pichat-job-executor-conversation-run-now executor id expected))))
+        (should reentered)
         (should (equal "running" (plist-get (pichat-job-record store 'runs id) :state)))
         (should-not (gethash id (pichat-job-executor-schedules executor)))
         ;; Even an already-delivered native callback cannot consume it again.
@@ -144,7 +141,7 @@
         (with-current-buffer buffer
           (pichat-chat-draft-replace (pichat-chat-draft-capture) "Keep draft")
           (setq pichat-chat--pending-attachments '(fixture-image)))
-        (pichat-jobs--show-detail executor 'runs id)
+        (pichat-test-job-report executor 'runs id)
         (should (member "Run now" (pichat-test-job-actions)))
         (let ((scope pichat-jobs--actions))
           (pichat-job-executor-cancel executor id)
@@ -152,7 +149,7 @@
         (should-not (member "Run now" (pichat-test-job-actions)))
         (should-error (pichat-job-executor-conversation-run-now executor id expected) :type 'user-error)
         (setq id (pichat-test-job-conversation-schedule executor session))
-        (pichat-jobs--show-detail executor 'runs id)
+        (pichat-test-job-report executor 'runs id)
         (pichat-test-job-command "Run now")
         (should-not (member "Run now" (pichat-test-job-actions)))
         (pichat-jobs-detail-refresh)
@@ -299,7 +296,7 @@
   (pichat-test-with-conversation-job
     (pichat-test-with-conversation-rpc
       (let ((id (pichat-test-job-conversation-schedule executor session)))
-        (pichat-jobs--show-detail executor 'runs id)
+        (pichat-test-job-report executor 'runs id)
         (should (string-match-p "Scheduled for:" (buffer-string)))
         (should (string-match-p "This conversation" (buffer-string)))
         (should (member "Cancel run…" (pichat-test-job-actions)))
@@ -317,7 +314,7 @@
       (pichat-test-with-conversation-rpc
         (let ((id (pichat-test-job-conversation-schedule executor session)))
           (when cancelled (pichat-rpc--require-operation-ownership session "prompt"))
-          (pichat-jobs--show-detail executor 'runs id)
+          (pichat-test-job-report executor 'runs id)
           (cl-letf (((symbol-function 'pichat-job-conversation-capture)
                      (lambda (&rest _) (ert-fail "Menu captured conversation")))
                     ((symbol-function 'pichat-job-conversation--digest)
@@ -343,7 +340,7 @@
         (with-current-buffer buffer
           (pichat-chat-draft-replace (pichat-chat-draft-capture) "Keep draft")
           (setq pichat-chat--pending-attachments '(fixture-image)))
-        (pichat-jobs--show-detail executor 'runs id)
+        (pichat-test-job-report executor 'runs id)
         (cl-letf (((symbol-function 'transient-setup)
                    (lambda (_prefix _layout _edit &rest args) (setq scope (plist-get args :scope)))))
           (pichat-test-job-command "Reschedule…")
@@ -379,7 +376,7 @@
         (cl-incf (pichat-session-input-generation session))
         (setf (pichat-session-model session) '(:provider "pichat-fake" :id "pichat-fake-reasoning"))
         (let ((before (pichat-job-record store 'runs id)))
-          (pichat-jobs--show-detail executor 'runs id)
+          (pichat-test-job-report executor 'runs id)
           (should-not (gethash id (pichat-job-executor-conversations executor)))
           (cl-letf (((symbol-function 'transient-setup)
                      (lambda (_prefix _layout _edit &rest args) (setq scope (plist-get args :scope)))))
@@ -401,7 +398,7 @@
       (pichat-test-with-conversation-rpc
         (let ((id (pichat-test-job-conversation-schedule executor session)))
           (pichat-rpc--require-operation-ownership session "prompt")
-          (pichat-jobs--show-detail executor 'runs id)
+          (pichat-test-job-report executor 'runs id)
           (should (member "Reschedule…" (pichat-test-job-actions)))
           (let ((scope pichat-jobs--actions))
             (pcase change
@@ -417,7 +414,7 @@
                (pichat-test-job-conversation-due executor id)
                (let ((execution (gethash id (pichat-job-executor-contexts executor))))
                  (pichat-job-executor--uncertain execution "Inspect possible submission"))
-               (pichat-jobs--show-detail executor 'runs id)))
+               (pichat-test-job-report executor 'runs id)))
             (should-error (pichat-jobs--action scope 'conversation-reschedule) :type 'user-error)
             (unless (eq change 'report)
               (should-not (member "Reschedule…" (pichat-test-job-actions)))))

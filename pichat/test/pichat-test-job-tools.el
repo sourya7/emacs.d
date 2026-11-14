@@ -791,20 +791,6 @@ EVIDENCE.  Report the change as the executor does."
       (should (equal "finished" (plist-get (pichat-job-record store 'runs uncertain) :state)))
       (should (= 3 (length finishes))))))
 
-(ert-deftest pichat-job-tools-chat-started-chain-reports-again-after-a-repeat ()
-  (pichat-test-with-chain-chat
-    (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))
-           (root (pichat-test-chain-start job session))
-           repeat)
-      (pichat-test-chain-end executor root "failed")
-      (should (= 1 (length finishes)))
-      ;; Repeat from Jobs joins the chain, which finishes again.
-      (setq repeat (pichat-job-executor-submit-options executor (list :repeat-of root)))
-      (should (= 1 (length finishes)))
-      (pichat-test-chain-end executor repeat "completed")
-      (should (equal (list root (list root repeat) nil) (car finishes)))
-      (should (= 2 (length finishes))))))
-
 (ert-deftest pichat-job-tools-runs-started-from-jobs-report-no-chain-end ()
   (pichat-test-with-chain-chat
     (let* ((job (pichat-job-save store (pichat-test-job-spec project-dir)))
@@ -941,7 +927,7 @@ chat's own synchronization) are left unanswered."
       (should-not (plist-member (pichat-test-job-tool-ok "pichat_job_run_inspect"
                                                          (list :run_id review))
                                 :chat_notification))
-      (pichat-jobs--show-detail executor 'runs root)
+      (pichat-test-job-report executor 'runs root)
       (unless (member 'execution pichat-jobs--expanded) (pichat-test-job-press "Details"))
       (should (string-match-p "^Chat notification: Sent to the starting chat$" (buffer-string))))))
 

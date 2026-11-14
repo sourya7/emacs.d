@@ -321,6 +321,14 @@ have been seen."
     (let ((status (call-process pichat-test-pi-executable nil t nil "--version")))
       (format "status=%S output=%s" status (string-trim (buffer-string))))))
 
+(defun pichat-test-file-bytes (file)
+  "Return FILE's exact bytes as a unibyte string, or nil when it is absent."
+  (when (file-exists-p file)
+    (with-temp-buffer
+      (set-buffer-multibyte nil)
+      (insert-file-contents-literally file)
+      (buffer-string))))
+
 (defun pichat-test-count-substring (needle haystack)
   "Return number of non-overlapping NEEDLE occurrences in HAYSTACK."
   (let ((start 0)

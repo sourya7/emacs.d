@@ -221,6 +221,19 @@ tools, loaded through the repository bridge.  Return the runtime session."
              (kill-buffer buffer)))))))
 
 
+(declare-function pichat-jobs--show-detail "pichat-jobs")
+(declare-function pichat-job--compose "pichat-jobs")
+
+(defun pichat-test-job-report (owner kind id)
+  "Display OWNER's report for exact KIND (`jobs' or `runs') record ID.
+The single place tests open a report, so view changes touch only this."
+  (pichat-jobs--show-detail owner kind id))
+
+(defun pichat-test-job-compose (owner kind &optional spec)
+  "Open OWNER's shared composer of KIND over the current buffer, staging SPEC.
+The single place tests open a composer without a list or report command."
+  (pichat-job--compose owner kind spec))
+
 (defun pichat-test-job-goto-button (label)
   "Put point at the start of the visible button containing LABEL."
   (goto-char (point-min))

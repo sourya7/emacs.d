@@ -81,17 +81,19 @@ When nil, C-c C-c sends and RET inserts a newline."
   :type 'boolean
   :group 'pichat)
 
-(defcustom pichat-chat-collapse-tools-by-default t
-  "When non-nil, completed tool blocks default to summary display."
-  :type 'boolean
-  :group 'pichat)
+(defvar pichat-chat-collapse-tools-by-default t
+  "Obsolete, ignored legacy setting; use `pichat-chat-tool-default-display'.")
+(make-obsolete-variable 'pichat-chat-collapse-tools-by-default
+                        'pichat-chat-tool-default-display "2026-11-14")
 
 (defcustom pichat-chat-tool-default-display 'summary
   "Default display state for completed tool blocks.
 `summary' shows only the tool header, `args' also shows arguments, and
-`output' shows arguments plus truncated inline output.  When
-`pichat-chat-collapse-tools-by-default' is non-nil, completed tools use
-`summary' regardless of this value."
+`output' shows arguments plus truncated inline output.
+This is the sole completed-tool default; the former collapse boolean is ignored.
+Set globally or buffer-locally.  Changes apply on the next projection (or
+`pichat-chat-repaint'), without restarting Pi.  Explicit per-tool choices take
+precedence.  Parent activity-group disclosure is independent."
   :type '(choice (const :tag "Header only" summary)
                  (const :tag "Header and args" args)
                  (const :tag "Header, args, and output" output))
@@ -2254,7 +2256,7 @@ Signal a user error when thinking control is disabled or unavailable."
   (pichat-chat-tool-ui-views-for-transcript
    transcript live-p pichat-chat--source-generation
    pichat-chat--tool-view-states pichat-chat--live-draft
-   pichat-chat-collapse-tools-by-default pichat-chat-tool-default-display))
+   pichat-chat-tool-default-display))
 
 (defun pichat-chat--render-tool-text-with-path-context
     (enrichments generation notice-format tool node-key context)
@@ -2279,7 +2281,7 @@ Signal a user error when thinking control is disabled or unavailable."
                         transcript nil))))
     (pichat-render-context-create
      :show-thinking pichat-chat-show-thinking
-     :tool-view (pichat-chat--tool-completed-display-state)
+     :tool-view pichat-chat-tool-default-display
      :tool-views (and transcript
                       (pichat-chat--tool-views-for-transcript transcript nil))
      :tool-renderer
@@ -3755,11 +3757,6 @@ ordinary browser opens retain their existing state-ready contract."
 (defun pichat-chat--raw (plist)
   "Return raw event from PLIST."
   (plist-get plist :raw))
-
-(defun pichat-chat--tool-completed-display-state ()
-  "Return the default display state for a completed tool block."
-  (pichat-chat-tool-ui-completed-display-state
-   pichat-chat-collapse-tools-by-default pichat-chat-tool-default-display))
 
 (defun pichat-chat--tool-ui-edit (thunk)
   "Call THUNK with chat buffer editing and view preservation enabled."

@@ -741,6 +741,18 @@ A reference collector function list or generic method is another sensible extens
 
 More generally, distinguish startup-only settings, live runtime settings, future-default settings, and buffer-local display settings. A menu can present those distinctions; it should not invent a second configuration store.
 
+**Resolution (2026-11-14, W19): resolved.** The maintainer approved ignoring the
+legacy boolean immediately, without preserving its override. It is now an obsolete,
+inert variable rather than a Custom option; `pichat-chat-tool-default-display` is
+the sole effective default in canonical and live projection. Pure per-tool policy
+retains explicit-choice precedence and active-live expansion; parent activity-group
+disclosure remains independent. README and option documentation describe global,
+buffer-local and next-projection scope, with no restart or menu-owned store. Two
+new tests cover the 1,440-case policy table and six live-to-canonical/default-change
+scenarios; both fail against the original production definitions. Focused 38/38,
+unit 1,404/1,414 (ten skips), full optional-enabled 1,532/1,534 (two Docker skips),
+zero unexpected on Emacs 31.1 / Pi 1.5.1. No live visual or SSH acceptance claimed.
+
 ## 13. Existing Emacs infrastructure: higher-leverage integrations
 
 These are prioritized **adapters**, not a request to implement every item. Prefer one adapter that opens an existing ecosystem over another custom picker.

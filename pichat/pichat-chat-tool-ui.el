@@ -62,15 +62,13 @@ to the matching live choice."
         (gethash (pichat-chat-tool-ui-live-view-key generation tool-id)
                  view-states))))
 
-(defun pichat-chat-tool-ui-completed-display-state (collapse-p default)
-  "Return completed display state from COLLAPSE-P and DEFAULT."
-  (if collapse-p 'summary default))
-
 (defun pichat-chat-tool-ui-views-for-transcript
-    (transcript live-p generation view-states live-draft collapse-p default)
+    (transcript live-p generation view-states live-draft default)
   "Return per-tool render views for TRANSCRIPT.
 LIVE-P keeps active tools expanded.  GENERATION and VIEW-STATES scope explicit
-choices; LIVE-DRAFT determines whether incomplete live tools are settled."
+choices; LIVE-DRAFT determines whether incomplete live tools are settled.
+Explicit choices win, then active live tools use `output', otherwise DEFAULT.
+Parent activity-group disclosure does not participate in this pure policy."
   (let (views)
     (dolist (node (pichat-transcript-nodes transcript))
       (dolist (content (pichat-transcript-node-content node))
@@ -86,10 +84,7 @@ choices; LIVE-DRAFT determines whether incomplete live tools are settled."
                        (or (eq status 'running)
                            (and (eq status 'incomplete)
                                 (not (pichat-live-draft-settled-p live-draft))))))
-                 (view (or explicit
-                           (if active-p 'output
-                             (pichat-chat-tool-ui-completed-display-state
-                              collapse-p default)))))
+                 (view (or explicit (if active-p 'output default))))
             (push (cons (cons node-key tool-id) view) views)))))
     views))
 

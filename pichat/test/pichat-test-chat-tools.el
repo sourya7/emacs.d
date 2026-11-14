@@ -8,6 +8,102 @@
 
 (require 'pichat-test-support)
 
+(ert-deftest pichat-chat-tool-display-policy-decision-table ()
+  ;; The orchestration adapter supplies one default to the pure policy.  The
+  ;; legacy setting and parent policy must not alter this table.
+  (dolist (default '(summary args output))
+    (dolist (legacy '(nil t))
+      (dolist (group '(collapsed latest expanded))
+        (dolist (live '(nil t))
+          (dolist (settled '(nil t))
+            (dolist (status '(running incomplete done error orphaned))
+              (dolist (explicit '(nil summary args output))
+                (let* ((pichat-chat-tool-default-display default)
+                       (pichat-chat-collapse-tools-by-default legacy)
+                       (pichat-chat-activity-group-display group)
+                       (pichat-chat--source-generation 7)
+                       (pichat-chat--tool-view-states
+                        (make-hash-table :test #'equal))
+                       (pichat-chat--live-draft
+                        (pichat-live-draft-create :settled-p settled))
+                       (transcript
+                        (pichat-transcript-create
+                         :nodes
+                         (list (pichat-transcript-node-create
+                                :key "node"
+                                :content
+                                (list (pichat-transcript-content-create
+                                       :kind 'tool :tool-call-id "tool"
+                                       :status status))))))
+                       (expected
+                        (or explicit
+                            (if (and live
+                                     (or (eq status 'running)
+                                         (and (eq status 'incomplete)
+                                              (not settled))))
+                                'output default))))
+                  (when explicit
+                    (puthash (if live '(live 7 "tool")
+                               '(canonical "node" "tool"))
+                             explicit pichat-chat--tool-view-states))
+                  (ert-info ((format "%S" (list default legacy group live
+                                               settled status explicit)))
+                    (should
+                     (equal (list (cons '("node" . "tool") expected))
+                            (pichat-chat--tool-views-for-transcript
+                             transcript live)))))))))))))
+
+(ert-deftest pichat-chat-tool-default-applies-live-and-after-settlement ()
+  (dolist (default '(summary args output))
+    (dolist (legacy '(nil t))
+      (pichat-test-with-unit-session (session proc)
+        (let* ((pichat-chat-stop-session-on-kill nil)
+               (pichat-chat-render-markdown nil)
+               (pichat-chat-activity-group-display 'expanded)
+               (pichat-chat-collapse-tools-by-default legacy)
+               (pichat-chat-tool-default-display default)
+               (fixture (pichat-test-read-json-fixture "canonical-session.json"))
+               (data (list :entries (plist-get fixture :entries)
+                           :leafId (plist-get fixture :leafId))))
+          (setf (pichat-session-id session) (plist-get fixture :sessionId)
+                (pichat-session-session-file session)
+                (plist-get fixture :sessionFile)
+                (pichat-session-state session) 'idle)
+          (pichat-test-with-chat-buffer (buffer session)
+            (pichat-rpc--process-filter
+             proc
+             "{\"type\":\"tool_execution_start\",\"toolCallId\":\"tool-1\",\"toolName\":\"read_example\",\"args\":{\"path\":\"safe.txt\"}}\n")
+            (with-current-buffer buffer
+              (should (eq 'output (plist-get (gethash "tool-1"
+                                                       pichat-chat--tool-blocks)
+                                            :display-state))))
+            (pichat-rpc--process-filter
+             proc
+             "{\"type\":\"tool_execution_end\",\"toolCallId\":\"tool-1\",\"toolName\":\"read_example\",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"result\"}]},\"isError\":false}\n")
+            (with-current-buffer buffer
+              (should (eq default (plist-get (gethash "tool-1"
+                                                       pichat-chat--tool-blocks)
+                                            :display-state))))
+            (cl-letf (((symbol-function 'pichat-rpc-get-entries)
+                       (lambda (_session &optional since callback _error)
+                         (funcall (pichat-test--rpc-get-entries-callback
+                                   since callback)
+                                  (list :data data) session))))
+              (with-current-buffer buffer (pichat-chat-repaint)))
+            (with-current-buffer buffer
+              (should (eq default (plist-get (gethash "tool-1"
+                                                       pichat-chat--tool-blocks)
+                                            :display-state)))
+              ;; A buffer-local change affects existing unchosen tools on
+              ;; reprojection, not just buffers created after configuration.
+              (setq-local pichat-chat-tool-default-display
+                          (if (eq default 'args) 'output 'args))
+              (pichat-chat--reproject-display-options)
+              (should (eq pichat-chat-tool-default-display
+                          (plist-get (gethash "tool-1" pichat-chat--tool-blocks)
+                                     :display-state)))
+              (should (= 0 (hash-table-count pichat-chat--tool-view-states))))))))))
+
 (ert-deftest pichat-chat-live-markdown-finalizes-only-after-message-end ()
   (pichat-test-with-unit-session (session proc)
     (let ((pichat-chat-stop-session-on-kill nil)

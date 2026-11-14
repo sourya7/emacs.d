@@ -82,7 +82,19 @@ spaces to copied or exported transcript text.
 
 Running tools show their available arguments and output; completed, errored,
 orphaned, and settled-incomplete tools use the configured completed display
-(defaulting to a folded header). Only explicit user fold choices survive live
+(defaulting to a folded header). `pichat-chat-tool-default-display` is the sole
+completed-tool default: `summary` shows the header, `args` adds arguments, and
+`output` adds bounded inline output. The obsolete
+`pichat-chat-collapse-tools-by-default` setting is ignored (both `t` and `nil`);
+remove it from your configuration and set the display option directly. In
+particular, a former `t` no longer overrides a configured `args` or `output`.
+Set the display option globally for all chats, or buffer-locally (for example
+in `pichat-chat-mode-hook`) for one chat. It is read on each projection, not
+captured at startup: existing unchosen tools update on the next projection or
+explicit `pichat-chat-repaint` (`C-c C-v`), without restarting Pi. Explicit
+per-tool choices take precedence; parent activity-group disclosure remains
+independent and can still hide the whole group. No menu-owned setting is stored.
+Only explicit user fold choices survive live
 reprojection and transfer transactionally to matching canonical tools after
 settlement. Group and tool choices are independent: closing and reopening a
 group does not reset a child's selected tool view. Derived file locations appear

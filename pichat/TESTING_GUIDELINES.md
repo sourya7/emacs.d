@@ -239,8 +239,13 @@ save-only creation of a reusable definition. Both use the offline fake provider.
 requires a GUI-capable Emacs and working display for real frame-resize assertions.
 A terminal-only Emacs build cannot supply that check merely by setting DISPLAY.
 The Actions scenario checks the absence of a permanent report label/button and
-drives actual native a/Evil g a entry, quit, raw inspection/return and command keys;
-other scenarios enter report commands and related-run navigation through the same
+drives actual native a/Evil g a entry, quit, raw inspection/return and command keys.
+The list-actions-and-marks scenario drives those entry keys from Runs, Requested
+by navigation, chain-wide d/u/U marks, refresh preservation and x deletion with
+both confirmation answers. It uses only finished fixture records and never
+starts Pi. The manual-flow scenario enters New through M-x so Transient's
+command-loop setup runs before its first suffix key.
+Other scenarios enter report commands and related-run navigation through the same
 contextual menu, including nested timing. The schedule scenario opens Actions →
 Last occurrence to reach its submitted run. Batch cases distinguish that run from
 newer manual attempts, offer no entry for occurrences with no run, check that

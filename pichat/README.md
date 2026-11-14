@@ -947,8 +947,9 @@ Independent profiles from `pichat-launch`, manager-created runtimes, and
 independently opened saved sessions are additional runtimes and do not replace
 that preferred entry unless
 `m` is used in the manager. Stopped, failed, and unexpectedly ended runtimes
-remain inspectable until explicitly forgotten. Killing a chat retains the
-existing `pichat-chat-stop-session-on-kill` behavior and, when configured,
+remain inspectable until explicitly forgotten, except Completed independent job
+runs, which forget their runtimes by default (see Jobs below). Killing a chat
+retains the existing `pichat-chat-stop-session-on-kill` behavior and, when configured,
 forgets that chat's runtime after stopping it. An uncertain SSH restart writer
 blocks both chat closure and Forget, preserving its owner and recovery snapshot
 until all writer exits are verified. Killing or quitting the manager never
@@ -2737,11 +2738,12 @@ approval by default; their prompts name the job, its target and directory.
   once finished, its final response (up to 4000 characters, truncation marked)
   from the captured run-end evidence, so it stays readable after the run's chat
   is closed. If the evidence is missing or changed, the stored 2000-character
-  summary is returned and labelled. While the run's runtime is retained (not
-  after a Completed run, which forgets it by default, and still bound to the
-  run's saved session file, since runtime IDs restart with Emacs), its
-  `runtime_id` can be passed to `pichat_chat_read`. For the first run of a chain started from a chat, `chat_notification` (`state`,
-  `description`) says whether that chat was told the chain finished.
+  summary is returned and labelled. While the run's runtime is retained and
+  still bound to the run's saved session file, its `runtime_id` can be passed
+  to `pichat_chat_read`. Completed independent runs forget it by default;
+  runtime IDs restart with Emacs. For the first run of a chain started from a
+  chat, `chat_notification` (`state`, `description`) says whether that chat was
+  told the chain finished.
 - `pichat_job_run_cancel` removes a scheduled or queued run. For an active run
   it asks the runtime to abort and reports the state recorded afterwards. A run
   whose prompt was not sent yet finishes as cancelled. Once the prompt was sent,

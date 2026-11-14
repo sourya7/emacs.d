@@ -127,6 +127,133 @@
                                (get-text-property (point) 'pichat-node-key))))))
         (when (buffer-live-p chat) (kill-buffer chat))))))
 
+(defun pichat-test-chat-navigation--project (nodes)
+  "Project canonical NODES in the current fixture chat."
+  (let* ((transcript (pichat-transcript-create :nodes nodes))
+         (context (pichat-chat--canonical-render-context transcript)))
+    (pichat-chat--project-canonical
+     nil transcript (pichat-render-canonical transcript context) context)))
+
+(ert-deftest pichat-chat-imenu-indexes-only-settled-users-with-bounded-unique-labels ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil) chat)
+      (unwind-protect
+          (progn
+            (setq chat (pichat-chat-open session))
+            (with-current-buffer chat
+              (should-not (funcall imenu-create-index-function))
+              (pichat-test-chat-navigation--project
+               (list (pichat-test-chat-navigation--node "u1" 'user "same\ntext")
+                     (pichat-test-chat-navigation--node "a1" 'assistant "omit")
+                     (pichat-test-chat-navigation--node "u2" 'user "same\ntext")
+                     (pichat-test-chat-navigation--node
+                      "u3" 'user (make-string 1000 ?x))
+                     (pichat-test-chat-navigation--node "u4" 'user "")))
+              ;; Buffer text, including live user nodes, is not index authority.
+              (pichat-chat--with-buffer-edit
+                (goto-char (marker-position pichat-chat--live-start))
+                (insert (propertize "provisional user" 'pichat-node-role 'user)))
+              (let ((index (funcall imenu-create-index-function)))
+                (should (= 4 (length index)))
+                (should (equal '("1  same text" "2  same text")
+                               (mapcar #'car (seq-take index 2))))
+                (should (<= (string-width (car (nth 2 index))) 83))
+                (should (equal "4  [no text]" (car (nth 3 index)))))))
+        (when (buffer-live-p chat) (kill-buffer chat))))))
+
+(ert-deftest pichat-chat-imenu-resolves-repainted-folded-turns-and-rejects-removed-turns ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil) chat)
+      (unwind-protect
+          (save-window-excursion
+            (setq chat (pichat-chat-open session))
+            (switch-to-buffer chat)
+            (let* ((long (mapconcat #'identity (make-list 12 "long user line") "\n"))
+                   (nodes (list (pichat-test-chat-navigation--node "u1" 'user long)))
+                   item)
+              (pichat-test-chat-navigation--project nodes)
+              (setq item (car (pichat-chat-imenu-create-index)))
+              (imenu--make-index-alist t)
+              (should imenu--index-alist)
+              (should (cl-some (lambda (ov) (overlay-get ov 'display))
+                               pichat-chat-user-ui--overlays))
+              ;; Fresh equal-but-not-eq node keys and a shifted canonical start.
+              (pichat-chat--with-buffer-edit
+                (goto-char (point-min)) (insert "prefix\n"))
+              (pichat-test-chat-navigation--project
+               (list (pichat-test-chat-navigation--node
+                      (copy-sequence "u1") 'user long)))
+              (should-not imenu--index-alist)
+              (imenu item)
+              (should (equal "u1" (get-text-property (point) 'pichat-node-key)))
+              (should (= (point) (marker-position pichat-chat--canonical-start)))
+              (should (cl-some (lambda (ov) (overlay-get ov 'display))
+                               pichat-chat-user-ui--overlays))
+              (pichat-test-chat-navigation--project nil)
+              (should-error (imenu item) :type 'user-error)))
+        (when (buffer-live-p chat) (kill-buffer chat))))))
+
+(ert-deftest pichat-chat-imenu-rejects-rebound-sources-even-after-return-and-buffer-death ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil) chat item)
+      (unwind-protect
+          (save-window-excursion
+            (setq chat (pichat-chat-open session))
+            (with-current-buffer chat
+              (pichat-test-chat-navigation--project
+               (list (pichat-test-chat-navigation--node "u1" 'user "old source")))
+              (setq item (car (pichat-chat-imenu-create-index)))
+              (setq imenu--index-alist (list item))
+              (pichat-chat--reset-for-source "other" "/tmp/other.jsonl" t)
+              (should-not imenu--index-alist)
+              (should-not (pichat-chat-imenu-create-index))
+              (should-error (imenu item) :type 'user-error)
+              (pichat-chat--reset-for-source
+               (pichat-session-id session) (pichat-session-session-file session) t)
+              (pichat-test-chat-navigation--project
+               (list (pichat-test-chat-navigation--node "u1" 'user "new source")))
+              (should-error (imenu item) :type 'user-error))
+            (kill-buffer chat)
+            ;; Captured actions never fall back to whichever chat is selected.
+            (should-error (apply (nth 2 item) (car item) (nth 1 item) (nthcdr 3 item))
+                          :type 'user-error))
+        (when (buffer-live-p chat) (kill-buffer chat))))))
+
+(ert-deftest pichat-chat-imenu-consult-selects-current-turns-without-unsafe-preview ()
+  (skip-unless (require 'consult-imenu nil t))
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil) chat)
+      (unwind-protect
+          (save-window-excursion
+            (setq chat (pichat-chat-open session))
+            (switch-to-buffer chat)
+            (pichat-test-chat-navigation--project
+             (list (pichat-test-chat-navigation--node "u1" 'user "first")
+                   (pichat-test-chat-navigation--node "u2" 'user "second")))
+            (let ((before (point)) selected)
+              ;; Exercise Consult's actual special-item normalization and state
+              ;; callback; only the interactive completion choice is supplied.
+              (cl-letf (((symbol-function 'consult--read)
+                         (lambda (items &rest options)
+                           (setq selected (nth 1 items))
+                           (funcall (plist-get options :state) 'preview selected)
+                           (should (= before (point)))
+                           (funcall (plist-get options :state) 'return selected))))
+                (consult-imenu))
+              (should (equal "u2" (get-text-property (point) 'pichat-node-key)))
+              (pichat-test-chat-navigation--project
+               (list (pichat-test-chat-navigation--node "u3" 'user "replacement")))
+              (cl-letf (((symbol-function 'consult--read)
+                         (lambda (items &rest options)
+                           (should (= 1 (length items)))
+                           (should (string-match-p "replacement" (caar items)))
+                           (pichat-chat--reset-for-source "other" nil t)
+                           (should-error
+                            (funcall (plist-get options :state) 'return (car items))
+                            :type 'user-error))))
+                (consult-imenu))))
+        (when (buffer-live-p chat) (kill-buffer chat))))))
+
 (ert-deftest pichat-navigation-active-target-has-explicit-priority ()
   (with-temp-buffer
     (insert "01234567890123456789")

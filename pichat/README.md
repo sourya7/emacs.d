@@ -2393,6 +2393,41 @@ Additional chat keys:
   canonical transcript model data, including complete canonical tool output,
   without reading rendered, folded, or truncated buffer text
 
+## Native transcript and project navigation
+
+`M-x imenu` in a chat selects settled user turns in the **active canonical
+transcript** (see `GLOSSARY.md`). Labels use bounded canonical prompt text;
+numbered turns remain distinct even with identical text. Selection resolves the
+entry again after repaint and lands on its visible block start, retaining folds
+and the unsent draft. A removed entry, dead chat or changed source rejects an old
+selection, including after switching away and back. Provisional live-tail turns
+are excluded until settlement. This works without a saved session file or a live
+runtime; it never requests RPC data. Use Session History for alternate branches,
+and saved-session browsing for other files.
+
+Optional `M-x consult-imenu` uses the same index without a PiChat picker or
+Consult dependency in the package. These source-validated special items support
+selection, **not Consult preview**; moving through candidates does not jump or
+change disclosure choices.
+
+Project integration belongs in configuration, not another project registry. This
+repository already offers **PiChat** (`P`) in `project-switch-commands` through
+`my/project-pichat` in `core/project.el`. A minimal standalone configuration for
+both the project prefix and project switching is:
+
+```elisp
+(defun my/project-pichat ()
+  (interactive)
+  (let ((default-directory (project-root (project-current t))))
+    (pichat-launch)))
+(with-eval-after-load 'project
+  (define-key project-prefix-map (kbd "P") #'my/project-pichat)
+  (add-to-list 'project-switch-commands '(my/project-pichat "PiChat" ?P) t))
+```
+
+Choose an unused prefix key in your configuration. Opening the launcher does not
+start a runtime; its existing launch and owner-scope policies still apply.
+
 ## Emacs references
 
 `pichat-add-reference` inserts a lightweight reference into a PiChat draft

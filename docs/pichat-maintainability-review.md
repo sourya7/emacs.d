@@ -121,6 +121,10 @@ Next/previous scans are almost the same. Tool block selection explicitly chooses
 
 **Validation:** detached markers, no match, nested blocks, equal positions, folded/hidden children, and boundaries. Preserve semantic differences rather than mechanically merging functions.
 
+**W20 disposition (2026-11-14): not pursued in this prototype.** Native Imenu
+needs source-qualified canonical-node resolution, not shared tool/activity marker
+traversal. Those callers are unchanged; see INFRA-01 for adapter verification.
+
 ### DUP-03 — Extraction left forwarding wrappers in chat
 
 **Priority: high for pruning, low risk after reference validation.**
@@ -775,6 +779,27 @@ These are prioritized **adapters**, not a request to implement every item. Prefe
 No PiChat `imenu-create-index-function` integration was found. The canonical transcript and existing navigation properties already contain the logical identities needed to construct one. Start with settled user turns (bounded prompt labels) and call the existing reveal/jump path. If marker positions alone cannot safely survive projection, use a source-aware resolution path and invalidate Imenu's cache explicitly.
 
 This could replace the proposed additional history-jump picker for common **active transcript** navigation. It does not replace Session History's alternate branches or saved-session search. Measure whether it actually removes custom UI work before adding more surfaces.
+
+**W20 resolution (2026-11-14): adopt the small native adapter; no custom picker.**
+Chat Imenu now indexes settled canonical user turns with bounded, numbered prompt
+labels. Special items retain the owning chat/runtime/source and resolve canonical
+node identities at selection time, rather than trusting old projection positions.
+Source reset and canonical replacement invalidate the native cache; old selections
+reject rebound sources, missing turns and dead chats. Folded targets land at their
+visible block start without changing disclosure choices. Optional Consult selection
+works through the same items; Consult intentionally does not preview special items.
+Four durable regressions cover canonical-only indexing, duplicate/bounded labels,
+repaint/folds/removal, rebinding/death and actual Consult normalization/dispatch.
+Isolated terminal keyboard checks passed native/Consult selection and project-prefix/
+project-switch root context using the existing `core/project.el` wrapper (launcher
+stubbed, no runtime started). The earlier missing-project-integration observation
+is superseded: the repository already has a project-switch PiChat entry. README
+provides an optional prefix recipe; no registry or personal configuration was added.
+DUP-02's broad marker-helper extraction is not pursued by W20: this source-validated
+adapter does not unify tool/activity traversal. Unit 1,407/1,418 (11 optional skips),
+full optional-enabled 1,536/1,538 (two Docker skips), zero unexpected on Emacs 31.1 /
+Pi 1.5.1. Production byte-compilation passes with two existing warnings. Terminal
+checks are programmatic, not human visual review, GUI or real-SSH acceptance.
 
 ### INFRA-02 — Do not force native packages onto incompatible domain models
 

@@ -12,6 +12,7 @@
 (require 'subr-x)
 (require 'pichat-session)
 (require 'pichat-events)
+(require 'imenu)
 (require 'pichat-rpc)
 (require 'pichat-backend)
 (require 'pichat-pi)
@@ -525,6 +526,9 @@ C-c C-y recovers a failed submission.  C-c C-l provides navigation between
 user messages, activity groups, and tool blocks."
   (setq-local truncate-lines nil truncate-partial-width-windows nil)
   (visual-line-mode 1)
+  (setq-local imenu-create-index-function #'pichat-chat-imenu-create-index)
+  (setq-local imenu-auto-rescan t)
+  (setq-local imenu-auto-rescan-maxout most-positive-fixnum)
   (pichat-chat-user-ui-reset)
   (add-hook 'kill-buffer-query-functions
             #'pichat-chat--restart-safe-to-kill-p nil t)
@@ -767,6 +771,7 @@ user messages, activity groups, and tool blocks."
   "Reset state for SESSION-ID/SESSION-FILE and advance source generation.
 When DEFER-SYNC is non-nil, wait for a subsequent authoritative state reply."
   (pichat-chat-user-ui-reset)
+  (setq imenu--index-alist nil)
   (pichat-chat--cancel-live-projection)
   (pichat-chat--cancel-extension-status-projection)
   (pichat-chat--cancel-sync-request)
@@ -2917,7 +2922,8 @@ canonical keys as part of the projection transaction."
           (pichat-chat--adjust-undo-for-prefix-delta
            replace-end
            (- (marker-position pichat-chat--live-end) replace-end))
-          (setq pichat-chat--entry-cache cache
+          (setq imenu--index-alist nil
+                pichat-chat--entry-cache cache
                 pichat-chat--canonical-transcript transcript
                 pichat-chat--live-draft
                 (pichat-live-draft-empty pichat-chat--source-generation)
@@ -4862,6 +4868,62 @@ transaction for an injected insertion failure (W04 is won't-do)."
         (car text-and-point) (cdr text-and-point)
         target #'pichat-chat--compose-source-valid-p)
        nil 'kill))))
+
+(defun pichat-chat-imenu-create-index ()
+  "Index settled user turns in this chat's active canonical transcript.
+Labels are bounded canonical prose, not rendered or provisional text.  Special
+Imenu items resolve source-qualified node identities at selection time; saved
+positions cannot survive repaint safely.  No RPC or optional picker is needed."
+  (when (pichat-transcript-p pichat-chat--canonical-transcript)
+    (let ((target (pichat-chat-draft-capture)) (ordinal 0) items)
+      (dolist (node (pichat-transcript-nodes pichat-chat--canonical-transcript))
+        (when (and (eq 'message (pichat-transcript-node-kind node))
+                   (eq 'user (pichat-transcript-node-role node)))
+          (let* ((text (mapconcat
+                        (lambda (content)
+                          (if (eq 'prose (pichat-transcript-content-kind content))
+                              (or (pichat-transcript-content-text content) "")
+                            ""))
+                        (pichat-transcript-node-content node) ""))
+                 (label (truncate-string-to-width
+                         (string-trim
+                          (replace-regexp-in-string
+                           "[[:space:][:cntrl:]]+" " "
+                           (substring-no-properties text)))
+                         80 nil nil "…")))
+            (push (list (format "%d  %s" (cl-incf ordinal)
+                                (if (string-empty-p label) "[no text]" label))
+                        0 #'pichat-chat--imenu-goto target
+                        (pichat-transcript-node-key node))
+                  items))))
+      (nreverse items))))
+
+(defun pichat-chat--imenu-goto (_name _position target key)
+  "Jump to canonical user node KEY in captured chat TARGET.
+Ignore Imenu's NAME and POSITION.  Like user-turn navigation, land on the
+visible block start without changing the user's disclosure choices."
+  (unless (pichat-chat-draft-current-p target)
+    (user-error "PiChat Imenu source changed; rebuild the index"))
+  (let ((buffer (pichat-chat-draft-target-buffer target)))
+    (with-current-buffer buffer
+      (unless (and (pichat-transcript-p pichat-chat--canonical-transcript)
+                   (cl-some (lambda (node)
+                              (and (eq 'user (pichat-transcript-node-role node))
+                                   (equal key (pichat-transcript-node-key node))))
+                            (pichat-transcript-nodes
+                             pichat-chat--canonical-transcript)))
+        (user-error "PiChat Imenu turn is no longer in the active transcript"))
+      (let ((position (marker-position pichat-chat--canonical-start))
+            (end (marker-position pichat-chat--canonical-end)))
+        (while (and (< position end)
+                    (not (equal key (get-text-property position 'pichat-node-key))))
+          (setq position (next-single-property-change
+                          position 'pichat-node-key nil end)))
+        (unless (< position end)
+          (user-error "PiChat Imenu turn is no longer projected"))
+        (pop-to-buffer buffer)
+        (goto-char position)
+        (set-window-point (selected-window) position)))))
 
 (defun pichat-chat--response-view-refresh (response)
   "Return a refreshed canonical RESPONSE or reject stale source identity."

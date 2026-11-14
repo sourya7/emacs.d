@@ -166,6 +166,16 @@
       (pichat-test-transient-width--capturing scope (pichat-jobs-actions)
         (pichat-test-transient-width--check
          'pichat-jobs-actions-menu scope "c Continue work…" "r Repeat…"))
+      (with-temp-buffer
+        (pichat-jobs-mode)
+        (setq pichat-jobs--owner executor pichat-jobs--kind 'runs)
+        (pichat-jobs-refresh)
+        (pichat-jobs--select run)
+        (pichat-test-transient-width--capturing scope (pichat-jobs-actions)
+          (let ((text (pichat-test-transient-width--check
+                       'pichat-jobs-actions-menu scope "r Repeat…" "^List$"
+                       "a Needs attention only")))
+            (should-not (string-match-p "Copy response Markdown" text)))))
       (pichat-test-transient-width--capturing scope (pichat-job--compose executor 'new spec)
         (pichat-test-transient-width--check
          'pichat-job-edit-menu scope "^New job" "r Run once" "s Save job")

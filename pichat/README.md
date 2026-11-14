@@ -1041,8 +1041,8 @@ phase adapter. Scheduling always requires explicit authorization.
 - `M-x pichat-jobs` opens one global Jobs/Runs view. Native `TAB` switches between
   definitions and attempts, `RET` opens details, `C-o` toggles a read-only details
   preview, `+` creates, `r` runs a selected job's current definition, `e` edits,
-  `h` shows its attempts, `a` toggles the input/review attention filter on/off, and `g`
-  redraws cached state. `q` buries the list. The overview shows active/limit and
+  `h` shows its attempts, `a` opens **Actions** for the row at point, `f` toggles
+  the input/review attention filter on/off, and `g` redraws cached state. `q` buries the list. The overview shows active/limit and
   attention counts plus the current history filter; returning to Jobs restores
   the selected definition. In the Jobs list, `M-x pichat-jobs-delete` deletes the
   selected definition after a short title-based `y`/`n` confirmation. Run history
@@ -1119,8 +1119,13 @@ phase adapter. Scheduling always requires explicit authorization.
   explicit raw inspection (and run **Details**); all operations use exact
   identities, including duplicate titles.
   `q` still returns without a permanent Back hint.
-- Native `a`, or Evil Normal `g a` in detail buffers, opens the context-sensitive
-  **Actions** Transient. There is no permanent Actions label/button in reports. Saved jobs offer **Run job**, **Edit…**, **Run history**
+- Native `a`, or Evil Normal `g a`, opens the context-sensitive **Actions**
+  Transient in reports and for the row at point in Jobs/Runs. There is no
+  permanent Actions label/button in reports. From the list, Actions offers the
+  row's job or run commands (without the report-only response entries) plus a
+  **List** group: `a` toggles the attention filter (so `a a` / `g a a`) and `F`
+  **Clear filters** appears while Runs is filtered. The List group is offered
+  even when no row is at point. Saved jobs offer **Run job**, **Edit…**, **Run history**
   and schedule commands. **Delete job…** (`D`) confirms deletion of that exact
   definition, preserving run history and retiring its schedule timer; it is
   omitted while the job has unfinished work. **Run job** is omitted while this job has unfinished
@@ -1130,7 +1135,8 @@ phase adapter. Scheduling always requires explicit authorization.
   when applicable. **Continue work…** comes first for recoverable runs; it remains
   distinct from **Continue in chat…**. Uncertain runs offer reservation release and
   supported remote-exit inspection, retaining their existing safeguards.
-  Commands recheck the exact report/current state; closing the menu does nothing.
+  Commands recheck the exact report or list row and its current state (a row
+  hidden by a filter or a switched list is refused); closing the menu does nothing.
   **Set schedule…** / **Change…** opens the existing staged timing Transient;
   those timing controls remain saved-job-only. Existing-conversation one-shots
   are authorized separately from their chat's composer. **Run now** consumes an
@@ -1177,12 +1183,12 @@ phase adapter. Scheduling always requires explicit authorization.
   Refresh/resize retain folding choices and reading position; editors and
   exact-source views remain plain text.
 - Optional `pichat-evil-setup` gives the list Normal-state `RET`, `TAB`, `zv`
-  preview, `gr` refresh, `gc` new, `gx` run, `ge` edit, `gh` history and `ga`
-  attention. Native `R` or Evil `g R` invokes **Release reservation** on the
-  selected uncertain run; `M-x pichat-jobs-release-reservation` does the same.
-  Details use buttons with `RET`; these do not take over Vim movement keys.
-  The attention counter's shortcut hint shows `g a` in Evil Normal state and `a`
-  in native Emacs state.
+  preview, `gr` refresh, `gc` new, `gx` run, `ge` edit, `gh` history, `ga`
+  Actions and `gf` attention filter. Native `R` or Evil `g R` invokes **Release
+  reservation** on the selected uncertain run; `M-x
+  pichat-jobs-release-reservation` does the same. Details use buttons with
+  `RET`; these do not take over Vim movement keys. The mode line shows the
+  attention count without a key hint.
 
 Run reports reuse the rendered response view's sanitized Markdown/SHR rendering,
 link policy and exact-source fallback, without requiring the originating runtime.

@@ -252,9 +252,8 @@ every definition row."
                               (list (pichat-jobs--display (pichat-jobs--context (plist-get run :spec))))))))))
     (tabulated-list-init-header)
     (setq mode-line-process
-          (format "%d/%d active · %d attention (%s) [%s%s]"
+          (format "%d/%d active · %d attention [%s%s]"
                   active pichat-jobs-max-concurrency attention
-                  (if (pichat-view-evil-normal-p) "g a" "a")
                   (if (eq pichat-jobs--kind 'jobs) "Jobs" "Runs")
                   (cond (pichat-jobs--attention-only ": Needs attention")
                         (pichat-jobs--filter
@@ -301,6 +300,12 @@ every definition row."
     (setq pichat-jobs--selection (tabulated-list-get-id)))
   (setq pichat-jobs--kind 'runs pichat-jobs--filter nil
         pichat-jobs--attention-only (not pichat-jobs--attention-only))
+  (pichat-jobs-refresh))
+
+(defun pichat-jobs-clear-filters ()
+  "Show every run again, dropping the job and attention filters."
+  (interactive)
+  (setq pichat-jobs--filter nil pichat-jobs--attention-only nil)
   (pichat-jobs-refresh))
 
 (defun pichat-jobs-delete ()
@@ -408,12 +413,15 @@ files are retained."
     (define-key map (kbd "e") #'pichat-jobs-edit)
     (define-key map (kbd "R") #'pichat-jobs-release-reservation)
     (define-key map (kbd "h") #'pichat-jobs-history)
-    (define-key map (kbd "a") #'pichat-jobs-attention)
+    (define-key map (kbd "a") #'pichat-jobs-actions)
+    (define-key map (kbd "f") #'pichat-jobs-attention)
     (define-key map (kbd "g") #'pichat-jobs-refresh)
     map))
 (define-derived-mode pichat-jobs-mode tabulated-list-mode "PiChat Jobs"
   "Inspect saved jobs and individual attempts; browsing never executes work.
 \\<pichat-jobs-mode-map>\\[pichat-jobs-details] opens the selected row.
+\\[pichat-jobs-actions] opens Actions for the row at point (Evil: g a), and
+\\[pichat-jobs-attention] toggles the attention filter (Evil: g f).
 \\[pichat-jobs-release-reservation] releases an uncertain run's scheduling
 reservation after inspection and confirmation.  With Evil, use g R."
   (setq tabulated-list-padding 1)
@@ -984,22 +992,57 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
                                  (pichat-job-records store 'jobs))
                    '((navigate "j" "Job definition" definition)))))))))
 
+(defun pichat-jobs--list-items (scope)
+  "Return list-level entries for SCOPE opened from Jobs/Runs, else nil.
+Entries have the shape of `pichat-jobs--action-items'; their keys must not
+clash with any job or run entry."
+  (when (eq (plist-get scope :origin-kind) 'list)
+    (with-current-buffer (plist-get scope :origin)
+      (append
+       (list (list 'list "a" (if pichat-jobs--attention-only "Show all runs"
+                              "Needs attention only")
+                   'attention))
+       (when (and (eq pichat-jobs--kind 'runs)
+                  (or pichat-jobs--filter pichat-jobs--attention-only))
+         '((list "F" "Clear filters" clear-filters)))))))
+
+(defun pichat-jobs--menu-items (scope record)
+  "Return every applicable Actions entry of SCOPE for its current RECORD."
+  (append (when record
+            (pichat-jobs--action-items (plist-get scope :owner)
+                                      (car (plist-get scope :detail)) record))
+          (pichat-jobs--list-items scope)))
+
+(defun pichat-jobs--actions-origin-p (scope)
+  "Whether SCOPE's origin still shows the exact report or list row."
+  (let ((origin (plist-get scope :origin)) (detail (plist-get scope :detail)))
+    (and (buffer-live-p origin) (not (plist-get scope :closed))
+         (with-current-buffer origin
+           (and (eq scope pichat-jobs--actions)
+                (eq pichat-jobs--owner (plist-get scope :owner))
+                (if (eq (plist-get scope :origin-kind) 'list)
+                    (and (derived-mode-p 'pichat-jobs-mode)
+                         (eq pichat-jobs--kind (car detail))
+                         (or (null (cdr detail))
+                             (assoc (cdr detail) tabulated-list-entries)))
+                  (and (equal pichat-jobs--detail detail)
+                       (null pichat-jobs--section))))))))
+
 (defun pichat-jobs--actions-current (scope)
-  "Return the current record only while SCOPE owns its exact report."
-  (let ((origin (plist-get scope :origin)))
-    (unless (and (buffer-live-p origin) (not (plist-get scope :closed))
-                 (with-current-buffer origin
-                   (and (eq scope pichat-jobs--actions)
-                        (eq pichat-jobs--owner (plist-get scope :owner))
-                        (equal pichat-jobs--detail (plist-get scope :detail))
-                        (null pichat-jobs--section))))
-      (user-error "Report changed; reopen Actions"))
+  "Return the current record only while SCOPE owns its exact report or row.
+A list scope opened without a row returns nil; it offers only list entries."
+  (let ((list (eq (plist-get scope :origin-kind) 'list)))
+    (unless (pichat-jobs--actions-origin-p scope)
+      (user-error "%s changed; reopen Actions" (if list "List" "Report")))
     (let* ((detail (plist-get scope :detail))
-           (record (condition-case nil
-                       (pichat-job-record (pichat-job-executor-store (plist-get scope :owner))
-                                          (car detail) (cdr detail))
-                     (pichat-job-error nil))))
-      (unless record (user-error "Job deleted; reopen Jobs"))
+           (record (and (cdr detail)
+                        (condition-case nil
+                            (pichat-job-record (pichat-job-executor-store (plist-get scope :owner))
+                                               (car detail) (cdr detail))
+                          (pichat-job-error nil)))))
+      (unless (or record (and list (null (cdr detail))))
+        (user-error (if list "%s deleted; reopen Actions" "Job deleted; reopen Jobs")
+                    (if (eq (car detail) 'jobs) "Job" "Run")))
       (when (and (eq (car detail) 'jobs) (not (equal record (plist-get scope :original))))
         (user-error "Job changed; reopen Actions"))
       record)))
@@ -1011,12 +1054,14 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
          (id (plist-get record :id)) (spec (plist-get record :spec)))
     (with-current-buffer (plist-get scope :origin)
       (unless (seq-some (lambda (item) (eq (nth 3 item) action))
-                        (pichat-jobs--action-items owner kind record))
+                        (pichat-jobs--menu-items scope record))
         (user-error "Action no longer available; reopen Actions"))
       (setf (plist-get scope :closed) t))
     ;; Navigation may select a new buffer; do not restore the old one over it.
     (set-buffer (plist-get scope :origin))
     (pcase action
+      ('attention (pichat-jobs-attention))
+      ('clear-filters (pichat-jobs-clear-filters))
       ('run (pichat-jobs--run-saved owner id))
       ('edit (pichat-job--edit-saved owner id))
       ('delete-job (pichat-jobs--delete-job owner id))
@@ -1060,15 +1105,13 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
                                    (or reason "Exit not confirmed")))))))))
 
 (defun pichat-jobs--action-suffixes (group)
-  "Build this report's command suffixes for GROUP."
+  "Build this report's or list row's command suffixes for GROUP."
   (let* ((scope (transient-scope))
          (record (pichat-jobs--actions-current scope)))
     (with-current-buffer (plist-get scope :origin)
       (transient-parse-suffixes
        'pichat-jobs-actions-menu
-       (cl-loop for (section key label action) in
-                (pichat-jobs--action-items (plist-get scope :owner)
-                                          (car (plist-get scope :detail)) record)
+       (cl-loop for (section key label action) in (pichat-jobs--menu-items scope record)
                 when (eq section group)
                 collect (let ((operation action))
                           (list key label (lambda () (interactive)
@@ -1079,22 +1122,32 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
   [["Work" :class transient-column :setup-children (lambda (_) (pichat-jobs--action-suffixes 'work))]
    ["Inspect" :class transient-column :setup-children (lambda (_) (pichat-jobs--action-suffixes 'inspect))]
    ["Navigate" :class transient-column :setup-children (lambda (_) (pichat-jobs--action-suffixes 'navigate))]
-   ["Schedule" :class transient-column :setup-children (lambda (_) (pichat-jobs--action-suffixes 'schedule))]]
+   ["Schedule" :class transient-column :setup-children (lambda (_) (pichat-jobs--action-suffixes 'schedule))]
+   ["List" :class transient-column :setup-children (lambda (_) (pichat-jobs--action-suffixes 'list))]]
   ["" ("q" "Close" transient-quit-one)])
 
 (defun pichat-jobs-actions ()
-  "Open commands for the exact inspected report, without executing work."
+  "Open commands for the exact report, or the Jobs/Runs row at point.
+Nothing is executed until a command is chosen; each command rechecks that
+the report or row and its record are still current.  In the list, a List
+group adds view commands; it is offered even when no row is at point."
   (interactive)
-  (unless (and pichat-jobs--detail (null pichat-jobs--section))
-    (user-error "Open a job or run report first"))
-  (let ((record (condition-case nil
-                    (pichat-job-record (pichat-jobs--store)
-                                       (car pichat-jobs--detail) (cdr pichat-jobs--detail))
-                  (pichat-job-error nil))))
-    (unless record (user-error "Job deleted; reopen Jobs"))
+  (let* ((list (derived-mode-p 'pichat-jobs-mode))
+         (detail (cond (list (cons pichat-jobs--kind (tabulated-list-get-id)))
+                       ((and pichat-jobs--detail (null pichat-jobs--section))
+                        pichat-jobs--detail)
+                       (t (user-error "Open a job or run report first"))))
+         (record (and (cdr detail)
+                      (condition-case nil
+                          (pichat-job-record (pichat-jobs--store) (car detail) (cdr detail))
+                        (pichat-job-error nil)))))
+    (unless (or record (and list (null (cdr detail))))
+      (user-error (if list "%s deleted; refresh the list" "Job deleted; reopen Jobs")
+                  (if (eq (car detail) 'jobs) "Job" "Run")))
     (pichat-job--settings-stop)
-    (setq pichat-jobs--actions (list :origin (current-buffer) :owner pichat-jobs--owner
-                                   :detail pichat-jobs--detail :original record :closed nil))
+    (setq pichat-jobs--actions (list :origin (current-buffer) :origin-kind (if list 'list 'report)
+                                   :owner pichat-jobs--owner
+                                   :detail detail :original record :closed nil))
     (transient-setup 'pichat-jobs-actions-menu nil nil :scope pichat-jobs--actions)))
 
 (defun pichat-jobs--summary-time (record)

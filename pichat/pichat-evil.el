@@ -179,7 +179,8 @@ remain in their original mode maps."
       (kbd "g e") #'pichat-jobs-edit
       (kbd "g R") #'pichat-jobs-release-reservation
       (kbd "g h") #'pichat-jobs-history
-      (kbd "g a") #'pichat-jobs-attention
+      (kbd "g a") #'pichat-jobs-actions
+      (kbd "g f") #'pichat-jobs-attention
       (kbd "q") #'quit-window)
     (evil-define-key* 'normal pichat-job-composer-review-mode-map
       (kbd "q") #'pichat-job-composer-inspection-return)

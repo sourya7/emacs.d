@@ -12,8 +12,6 @@
 (require 'subr-x)
 (defvar org-time-was-given)
 (defvar org-end-time-was-given)
-(declare-function pichat-jobs--button "pichat-jobs")
-(declare-function pichat-jobs--show-detail "pichat-jobs")
 (declare-function pichat-jobs--display "pichat-jobs")
 (defvar-local pichat-job-schedule-ui--scope nil)
 
@@ -237,14 +235,11 @@ next run."
             (insert (if (equal (plist-get rule :kind) "once") "When: " "First run: ")
                     (pichat-job-schedule-ui-time (plist-get rule :start)) "\n"))
           (when last
-            (let ((label (format "Last occurrence: %s at %s%s"
-                                 (capitalize (plist-get last :state))
-                                 (pichat-job-schedule-ui-time (plist-get last :due))
-                                 (if (plist-get last :reason) (concat " — " (plist-get last :reason)) ""))))
-              (if-let* ((run (plist-get last :run-id)))
-                  (pichat-jobs--button label (lambda () (pichat-jobs--show-detail owner 'runs run)))
-                (insert label)))
-            (insert "\n")))
+            ;; Actions' Navigate group opens the occurrence's run.
+            (insert (format "Last occurrence: %s at %s%s\n"
+                            (capitalize (plist-get last :state))
+                            (pichat-job-schedule-ui-time (plist-get last :due))
+                            (if (plist-get last :reason) (concat " — " (plist-get last :reason)) "")))))
       (insert "Schedule: " (pichat-job-schedule-ui-status schedule) "\n")
       (when (eq (plist-get schedule :enabled) t)
         (when-let* ((next (plist-get schedule :next)))

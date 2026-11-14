@@ -31,6 +31,9 @@ are not frozen.  Use only one owning Emacs per file."
 (defvar-local pichat-jobs--section nil)
 (defvar-local pichat-jobs--selection nil)
 (defvar-local pichat-jobs--attention-only nil)
+(defvar-local pichat-jobs--chain nil
+  "Run ID whose run chain filters Runs, or nil.
+The chain is derived again on every refresh, so later members appear.")
 (defvar pichat-job--draft nil
   "Dynamically bound private draft for capture and synchronous field adapters.
 Persistent draft ownership belongs to an explicit composer scope, not a buffer.")
@@ -100,17 +103,6 @@ metadata yields an empty table rather than blocking saved-session browsing."
     (define-key map (kbd "S-<tab>") #'backward-button)
     map)
   "Button map for local folding, never execution actions.")
-
-(defun pichat-jobs--button (label function &optional disclosure help)
-  "Insert LABEL invoking FUNCTION; DISCLOSURE marks a local fold control.
-HELP optionally describes the action without adding inline prose."
-  (let ((button (insert-text-button label 'follow-link t
-                                    'pichat-job-disclosure disclosure
-                                    'pichat-job-action function
-                                    'keymap (if disclosure pichat-jobs--disclosure-map button-map)
-                                    'action (lambda (_button) (funcall function)))))
-    (when help (button-put button 'help-echo help)))
-  (insert "   "))
 
 (defun pichat-jobs--display (text)
   "Return single-line bounded display TEXT, without interpreting properties."
@@ -199,7 +191,8 @@ every definition row."
          (title-width (if narrow (max 10 (min 20 (/ width 4))) 24))
          (active (seq-count (lambda (run) (member (plist-get run :state)
                                                  pichat-job--active-states)) runs))
-         (attention (seq-count (lambda (run) (pichat-jobs--attention-p pichat-jobs--owner run)) runs)))
+         (attention (seq-count (lambda (run) (pichat-jobs--attention-p pichat-jobs--owner run)) runs))
+         (chain (pichat-jobs--chain-members store)))
     (setq tabulated-list-format
           (if (eq pichat-jobs--kind 'jobs)
               (vconcat (list (list "Job" title-width t))
@@ -230,6 +223,7 @@ every definition row."
             (cl-loop for run in (reverse (append runs nil))
                      when (and (or (null pichat-jobs--filter)
                                    (equal pichat-jobs--filter (plist-get run :job-id)))
+                               (or (null chain) (member (plist-get run :id) chain))
                                (or (not pichat-jobs--attention-only)
                                    (pichat-jobs--attention-p pichat-jobs--owner run)))
                      collect
@@ -256,6 +250,14 @@ every definition row."
                   active pichat-jobs-max-concurrency attention
                   (if (eq pichat-jobs--kind 'jobs) "Jobs" "Runs")
                   (cond (pichat-jobs--attention-only ": Needs attention")
+                        (chain
+                         (format ": Run chain of %s · %d runs"
+                                 (pichat-jobs--display
+                                  (plist-get (plist-get (pichat-job-record
+                                                         store 'runs (car chain))
+                                                        :spec)
+                                             :title))
+                                 (length chain)))
                         (pichat-jobs--filter
                          (format ": %s"
                                  (plist-get
@@ -278,6 +280,17 @@ every definition row."
           (move-to-column (caddr position))
           (set-window-point (car position) (point)))))))
 
+(defun pichat-jobs--chain-members (store)
+  "Return the run IDs of the current Runs chain filter in STORE, root first.
+Return nil when no chain filters the list.  A chain whose run was deleted
+ends the filter instead of showing an empty list."
+  (when (and pichat-jobs--chain (eq pichat-jobs--kind 'runs))
+    (or (condition-case nil
+            (mapcar (lambda (run) (plist-get run :id))
+                    (plist-get (pichat-job-chain store pichat-jobs--chain) :members))
+          (pichat-job-error nil))
+        (setq pichat-jobs--chain nil))))
+
 (defun pichat-jobs--status (owner run)
   "Return the relevant cached execution/result summary of RUN in OWNER."
   (if (equal (plist-get run :state) "finished") (pichat-jobs--result run)
@@ -289,7 +302,7 @@ every definition row."
   (when (eq pichat-jobs--kind 'jobs)
     (setq pichat-jobs--selection (tabulated-list-get-id)))
   (setq pichat-jobs--kind (if (eq pichat-jobs--kind 'jobs) 'runs 'jobs)
-        pichat-jobs--filter nil pichat-jobs--attention-only nil)
+        pichat-jobs--filter nil pichat-jobs--attention-only nil pichat-jobs--chain nil)
   (pichat-jobs-refresh)
   (when (eq pichat-jobs--kind 'jobs) (pichat-jobs--select pichat-jobs--selection)))
 
@@ -298,14 +311,14 @@ every definition row."
   (interactive)
   (when (eq pichat-jobs--kind 'jobs)
     (setq pichat-jobs--selection (tabulated-list-get-id)))
-  (setq pichat-jobs--kind 'runs pichat-jobs--filter nil
+  (setq pichat-jobs--kind 'runs pichat-jobs--filter nil pichat-jobs--chain nil
         pichat-jobs--attention-only (not pichat-jobs--attention-only))
   (pichat-jobs-refresh))
 
 (defun pichat-jobs-clear-filters ()
-  "Show every run again, dropping the job and attention filters."
+  "Show every run again, dropping the job, run chain and attention filters."
   (interactive)
-  (setq pichat-jobs--filter nil pichat-jobs--attention-only nil)
+  (setq pichat-jobs--filter nil pichat-jobs--attention-only nil pichat-jobs--chain nil)
   (pichat-jobs-refresh))
 
 (defun pichat-jobs-delete ()
@@ -378,7 +391,7 @@ files are retained."
   (unless (eq pichat-jobs--kind 'jobs) (user-error "Select a job in Jobs first"))
   (setq pichat-jobs--selection (or (tabulated-list-get-id) (user-error "No job selected"))
         pichat-jobs--filter pichat-jobs--selection
-        pichat-jobs--attention-only nil pichat-jobs--kind 'runs)
+        pichat-jobs--attention-only nil pichat-jobs--chain nil pichat-jobs--kind 'runs)
   (pichat-jobs-refresh))
 
 (defun pichat-jobs--resize (frame)
@@ -607,8 +620,21 @@ before anything is queued; the store checks it again."
   (pop-to-buffer (get-buffer-create "*PiChat Jobs*"))
   (unless (derived-mode-p 'pichat-jobs-mode) (pichat-jobs-mode))
   (setq pichat-jobs--owner owner pichat-jobs--selection job-id
-        pichat-jobs--filter job-id pichat-jobs--attention-only nil pichat-jobs--kind 'runs)
+        pichat-jobs--filter job-id pichat-jobs--attention-only nil pichat-jobs--chain nil
+        pichat-jobs--kind 'runs)
   (pichat-jobs-refresh))
+
+(defun pichat-jobs--show-chain (owner id)
+  "Display Runs in OWNER filtered to the run chain of exact run ID.
+Point stays on ID's row.  The filter is shown in the mode line."
+  (pop-to-buffer (get-buffer-create "*PiChat Jobs*"))
+  (unless (derived-mode-p 'pichat-jobs-mode) (pichat-jobs-mode))
+  (when (eq pichat-jobs--kind 'jobs)
+    (setq pichat-jobs--selection (tabulated-list-get-id)))
+  (setq pichat-jobs--owner owner pichat-jobs--filter nil pichat-jobs--attention-only nil
+        pichat-jobs--chain id pichat-jobs--kind 'runs)
+  (pichat-jobs-refresh)
+  (pichat-jobs--select id))
 
 (defun pichat-jobs--runtime-label (session)
   "Return SESSION's runtime ID and, when it has a live chat, its buffer name."
@@ -733,15 +759,17 @@ narrowest displaying window."
     (forward-button 1 t)))
 
 (defun pichat-jobs--disclosure (key label &optional refresh)
-  "Insert a disclosure for KEY with LABEL, redrawing with REFRESH or Jobs."
-  (pichat-jobs--button
+  "Insert a disclosure for KEY with LABEL, redrawing with REFRESH or Jobs.
+Fold toggles are the only buttons Jobs reports insert; commands and
+navigation live in Actions."
+  (insert-text-button
    (concat (if (member key pichat-jobs--expanded) "▾ " "▸ ") label)
-   (lambda ()
-     (setq pichat-jobs--expanded
-           (if (member key pichat-jobs--expanded) (remove key pichat-jobs--expanded)
-             (cons key pichat-jobs--expanded)))
-     (funcall (or refresh #'pichat-jobs--render-detail)))
-   t))
+   'follow-link t 'pichat-job-disclosure t 'keymap pichat-jobs--disclosure-map
+   'action (lambda (_button)
+             (setq pichat-jobs--expanded
+                   (if (member key pichat-jobs--expanded) (remove key pichat-jobs--expanded)
+                     (cons key pichat-jobs--expanded)))
+             (funcall (or refresh #'pichat-jobs--render-detail)))))
 
 (defun pichat-jobs-copy-response ()
   "Copy the inspected run's exact response Markdown, never its rendered text."
@@ -834,7 +862,8 @@ narrowest displaying window."
       (pichat-chat-diagnostics-safe-summary-text error))))
 
 (defun pichat-jobs--insert-followup (owner record)
-  "Insert one linked status line for RECORD's captured after-run job in OWNER."
+  "Insert one status line for RECORD's captured after-run job in OWNER.
+Actions' Navigate group opens the after-run run."
   (when (or (plist-get record :after-job) (plist-get record :dispatch))
     (let* ((snapshot (plist-get record :after-job))
            (dispatch (plist-get record :dispatch))
@@ -855,10 +884,7 @@ narrowest displaying window."
                                  (pichat-job-executor-store owner) id
                                  pichat-jobs-max-concurrency) :reason)))
           (when reason (setq label (concat label " — " reason)))))
-      (if id
-          (pichat-jobs--button label (lambda () (pichat-jobs--show-detail owner 'runs id)))
-        (insert label))
-      (insert "\n"))))
+      (insert label "\n"))))
 
 (defun pichat-jobs--trigger-label (run)
   "Describe RUN's trigger without conflating timing and outcome."
@@ -868,7 +894,8 @@ narrowest displaying window."
     (_ (if (plist-get (plist-get run :trigger) :requested-by) "Requested by a job run" "Manual"))))
 
 (defun pichat-jobs--insert-chain (owner record)
-  "Insert RECORD's run chain links from OWNER's store, when it has one."
+  "Insert RECORD's requester and run chain from OWNER's store, as plain text.
+Actions' Navigate group opens them."
   (let* ((store (pichat-job-executor-store owner))
          (id (plist-get record :id))
          (chain (pichat-job-chain store id))
@@ -877,22 +904,16 @@ narrowest displaying window."
     (when caller
       (insert "Requested by: ")
       (if-let* ((run (seq-find (lambda (run) (equal caller (plist-get run :id))) members)))
-          (pichat-jobs--button (pichat-jobs--display (plist-get (plist-get run :spec) :title))
-                              (lambda () (pichat-jobs--show-detail owner 'runs caller)))
+          (insert (pichat-jobs--display (plist-get (plist-get run :spec) :title)))
         (insert "deleted run " caller))
       (insert "\n"))
     (when (> (length members) 1)
       (insert (format "Run chain: round %d · %d runs\n" (plist-get chain :round) (length members)))
       (seq-doseq (run members)
-        (let ((other (plist-get run :id)))
-          (insert "  ")
-          (if (equal other id)
-              (insert (pichat-jobs--display (plist-get (plist-get run :spec) :title)) " (this run)")
-            (pichat-jobs--button
-             (format "%s · %s" (pichat-jobs--display (plist-get (plist-get run :spec) :title))
-                     (pichat-jobs--status owner run))
-             (lambda () (pichat-jobs--show-detail owner 'runs other))))
-          (insert "\n"))))))
+        (insert "  " (pichat-jobs--display (plist-get (plist-get run :spec) :title))
+                (if (equal (plist-get run :id) id) " (this run)"
+                  (concat " · " (pichat-jobs--status owner run)))
+                "\n")))))
 
 (defun pichat-jobs--cancellable-p (owner record)
   "Whether RECORD in OWNER still offers cancellation."
@@ -918,6 +939,43 @@ narrowest displaying window."
          (eq (pichat-transport-kind (pichat-session-transport session)) 'ssh)
          (pichat-process-lifetime-supported-p (pichat-job-execution-process execution)))))
 
+(defun pichat-jobs--navigate-targets (owner kind record)
+  "Return RECORD's existing related runs in OWNER, as (KEY LABEL ACTION RUN-ID).
+KIND is `jobs' or `runs'.  Only links whose run is still in the store are
+returned; Run chain is offered only for a chain of more than one run.  Keys
+must not clash with any other job or run entry of Actions."
+  (let* ((store (pichat-job-executor-store owner))
+         (runs (plist-get (pichat-job-store-data store) :runs))
+         (present (lambda (id)
+                    (and (stringp id)
+                         (seq-some (lambda (run) (equal id (plist-get run :id))) runs)
+                         id)))
+         (trigger (plist-get record :trigger)))
+    (cl-loop
+     for (key label action target)
+     in (if (eq kind 'jobs)
+            (list (list "l" "Latest run" 'latest
+                        (plist-get (pichat-jobs--latest store (plist-get record :id) runs) :id))
+                  (list "L" "Last occurrence" 'last-occurrence
+                        (plist-get (plist-get (plist-get record :schedule) :last) :run-id)))
+          (let ((id (plist-get record :id)))
+            (list (list "P" "Previous run" 'previous
+                        (or (plist-get trigger :continue-of) (plist-get trigger :repeat-of)))
+                  (list "t" "Triggered by" 'triggered-by
+                        (plist-get (plist-get record :event) :run-id))
+                  (list "u" "Requested by" 'requested-by (plist-get trigger :requested-by))
+                  (list "A" "After-run run" 'after-run
+                        (plist-get (plist-get record :dispatch) :run-id))
+                  (list "b" "Blocking run" 'blocking
+                        (and (equal (plist-get record :state) "queued")
+                             (plist-get (pichat-job-admission store id pichat-jobs-max-concurrency)
+                                        :blocking-run)))
+                  (list "l" "Run chain" 'chain
+                        (and (> (length (plist-get (pichat-job-chain store id) :members)) 1)
+                             id)))))
+     for run = (funcall present target)
+     when run collect (list key label action run))))
+
 (defun pichat-jobs--action-items (owner kind record)
   "Return applicable grouped command entries for exact OWNER/KIND/RECORD.
 Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
@@ -939,7 +997,10 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
                        pichat-jobs-queue-limit)
                     (not unfinished))
            '((work "r" "Run job" run)))
-         '((work "e" "Edit…" edit) (navigate "h" "Run history" history))
+         '((work "e" "Edit…" edit))
+         (mapcar (lambda (target) (cons 'navigate (seq-take target 3)))
+                 (pichat-jobs--navigate-targets owner kind record))
+         '((navigate "h" "Run history" history))
          (unless unfinished '((work "D" "Delete job…" delete-job)))
          (list (list 'schedule "s" (cond ((pichat-job-schedule-ui-missed-p schedule) "Reschedule…")
                                               (schedule "Change…") (t "Set schedule…")) 'schedule))
@@ -986,6 +1047,8 @@ Each entry is (GROUP KEY LABEL ACTION).  This is presentation, not admission."
        (when pichat-jobs--response-source
          '((inspect "w" "Copy response Markdown" copy) (inspect "v" "View response source" source)))
        (when (pichat-jobs--recheck-p owner record) '((inspect "x" "Recheck remote Pi exit" recheck)))
+       (mapcar (lambda (target) (cons 'navigate (seq-take target 3)))
+               (pichat-jobs--navigate-targets owner kind record))
        (when job-id
          (append '((navigate "h" "Run history" history))
                  (when (seq-find (lambda (job) (equal (plist-get job :id) job-id))
@@ -1003,7 +1066,7 @@ clash with any job or run entry."
                               "Needs attention only")
                    'attention))
        (when (and (eq pichat-jobs--kind 'runs)
-                  (or pichat-jobs--filter pichat-jobs--attention-only))
+                  (or pichat-jobs--filter pichat-jobs--attention-only pichat-jobs--chain))
          '((list "F" "Clear filters" clear-filters)))))))
 
 (defun pichat-jobs--menu-items (scope record)
@@ -1067,6 +1130,12 @@ A list scope opened without a row returns nil; it offers only list entries."
       ('delete-job (pichat-jobs--delete-job owner id))
       ('history (pichat-jobs--show-history owner (if (eq kind 'jobs) id (plist-get record :job-id))))
       ('definition (pichat-jobs--show-detail owner 'jobs (plist-get record :job-id)))
+      ('chain (pichat-jobs--show-chain owner id))
+      ((or 'latest 'last-occurrence 'previous 'triggered-by 'requested-by 'after-run 'blocking)
+       (pichat-jobs--show-detail
+        owner 'runs
+        (nth 3 (seq-find (lambda (target) (eq (nth 2 target) action))
+                         (pichat-jobs--navigate-targets owner kind record)))))
       ('schedule (pichat-job-schedule-ui-open owner id))
       ('enable (pichat-job-schedule-ui--enable owner id record))
       ('disable (pichat-job-executor-schedule-enable owner id nil))
@@ -1197,11 +1266,7 @@ group adds view commands; it is offered even when no row is at point."
 
     (when (equal state "queued")
       (let ((decision (pichat-job-admission (pichat-job-executor-store owner) id pichat-jobs-max-concurrency)))
-        (insert (format "Waiting reason: %s\n" (or (plist-get decision :reason) "Ready for dispatch")))
-        (when-let* ((blocker (plist-get decision :blocking-run)))
-          (pichat-jobs--button "Open blocking run"
-                              (lambda () (pichat-jobs--show-detail owner 'runs blocker)))
-          (insert "\n"))))
+        (insert (format "Waiting reason: %s\n" (or (plist-get decision :reason) "Ready for dispatch")))))
     (when session
       (when-let* ((attention (pichat-chat-pending-user-input-summary session)))
         (insert (format "Needs input: %s\n" attention))))
@@ -1227,15 +1292,9 @@ group adds view commands; it is offered even when no row is at point."
         (insert "\nNo response captured.\n"))
       (put-text-property start (point) 'pichat-job-section 'response))
     (insert "\n")
-    (when (pichat-jobs--chat-p owner record)
-      (pichat-jobs--button "View chat" (lambda () (pichat-jobs--open-chat owner id)))
-      (insert "\n"))
     (when (member (plist-get (plist-get record :dispatch) :state) '("not-dispatched" "interrupted"))
       (pichat-jobs--insert-followup owner record))
     (when (equal state "uncertain") (insert "Reservation held · Inspect before releasing\n"))
-    (when (pichat-jobs--cancellable-p owner record)
-      (pichat-jobs--button "Cancel run…" (lambda () (pichat-jobs--cancel owner id)))
-      (insert "\n"))
     (pichat-jobs--disclosure 'execution "Details")
     (when (member 'execution pichat-jobs--expanded)
       (insert "\n")
@@ -1250,11 +1309,7 @@ group adds view commands; it is offered even when no row is at point."
       (when (equal state "uncertain")
         (insert "State: Execution uncertain\nReservation: Held\n"))
       (when-let* ((event (plist-get record :event)))
-        (let ((origin (plist-get event :run-id)))
-          (insert "Triggered by: ")
-          (pichat-jobs--button (pichat-jobs--display (plist-get event :title))
-                              (lambda () (pichat-jobs--show-detail owner 'runs origin)))
-          (insert "\n")))
+        (insert "Triggered by: " (pichat-jobs--display (plist-get event :title)) "\n"))
       (pichat-jobs--insert-chain owner record)
       ;; Only a chain started from a chat has one; kept while Emacs runs.
       (when-let* ((text (pichat-job-executor-chain-delivery-text
@@ -1275,13 +1330,10 @@ group adds view commands; it is offered even when no row is at point."
       (when-let* ((due (plist-get (plist-get record :trigger) :due)))
         (insert "Scheduled for: " (pichat-job-schedule-ui-time due) "\n"))
       (insert "\n")
-      (when-let* ((origin (or (plist-get (plist-get record :trigger) :continue-of)
-                             (plist-get (plist-get record :trigger) :repeat-of))))
+      (when (or (plist-get (plist-get record :trigger) :continue-of)
+                (plist-get (plist-get record :trigger) :repeat-of))
         (insert (if (plist-get record :continuation)
-                    "Continued from an earlier run.\n" "Repeated from an earlier run.\n"))
-        (pichat-jobs--button "Previous run"
-                            (lambda () (pichat-jobs--show-detail owner 'runs origin)))
-        (insert "\n"))
+                    "Continued from an earlier run.\n" "Repeated from an earlier run.\n")))
       (when-let* ((continuation (plist-get record :continuation)))
         (unless (string-empty-p (plist-get continuation :guidance))
           (insert "Additional instructions:\n")
@@ -1294,14 +1346,12 @@ group adds view commands; it is offered even when no row is at point."
   "Insert instructions-first saved RECORD, compact context and disclosures."
   (let* ((id (plist-get record :id)) (spec (plist-get record :spec)))
     (pichat-jobs--insert-instructions (plist-get spec :instructions))
-    (insert "Latest run: ")
-    (if-let* ((latest (pichat-jobs--latest (pichat-jobs--store) id)))
-        (let ((run-id (plist-get latest :id)))
-          (pichat-jobs--button (format "%s · %s" (pichat-jobs--status owner latest)
-                                      (pichat-jobs--summary-time latest))
-                              (lambda () (pichat-jobs--show-detail owner 'runs run-id))))
-      (insert "Never run"))
-    (insert "\n")
+    (insert "Latest run: "
+            (if-let* ((latest (pichat-jobs--latest (pichat-jobs--store) id)))
+                (format "%s · %s" (pichat-jobs--status owner latest)
+                        (pichat-jobs--summary-time latest))
+              "Never run")
+            "\n")
     (pichat-job-schedule-ui-insert owner record)
     (when (pichat-job-source-diverged-p record)
       (insert (propertize "Saved edits differ from last import; reimport requires replacement confirmation.\n"
@@ -1347,9 +1397,7 @@ group adds view commands; it is offered even when no row is at point."
      ((eq pichat-jobs--section 'diagnostics)
       (insert "Recorded execution diagnostics\n\n"
               (or (plist-get record :reason) "No execution note recorded.")
-              "\n\nRuntime logs are unavailable; no retained runtime.\n\n")
-      (pichat-jobs--button "Inspect raw settings…"
-                          (lambda () (pichat-jobs--show-detail owner kind id 'raw))))
+              "\n\nRuntime logs are unavailable; no retained runtime.\n"))
      (t
       (if (eq kind 'jobs)
           (pichat-jobs--render-job owner record)

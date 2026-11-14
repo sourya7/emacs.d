@@ -193,7 +193,7 @@ Emacs: it drives actual timing Transient keys, staged Cancel/Save, separate
 Enable/Disable and a real timer-triggered offline Pi run without focus changes.
 The `pichat-integration-jobs-live-ui-saved-schedule-run-now` scenario drives
 Set schedule, Save disabled, Enable and Run now for a future saved-job one-shot,
-then follows the last-occurrence link to its attributable early result. It supports
+then opens Actions → Last occurrence to reach its attributable early result. It supports
 isolated native/Evil terminal runs. Batch cases additionally cover atomic early
 consumption, manual-run timing preservation, stale/disabled/interval rejection,
 capacity/queue bounds, reentrant old callbacks and persistence failure.
@@ -240,13 +240,14 @@ requires a GUI-capable Emacs and working display for real frame-resize assertion
 A terminal-only Emacs build cannot supply that check merely by setting DISPLAY.
 The Actions scenario checks the absence of a permanent report label/button and
 drives actual native a/Evil g a entry, quit, raw inspection/return and command keys;
-other scenarios enter report commands through the same contextual menu, including
-nested timing. The schedule scenario follows the linked last-occurrence text to
-its submitted run. Batch cases distinguish that run from newer manual attempts,
-keep occurrences with no run unlinked, and check TAB navigation does not activate
-links or expose raw inspection inline. The manual-flow scenario also drives the
-Actions/f path-copy key without leaving its report; follow-up navigation activates
-the status text itself. Batch cases cover pending/undispatched plain follow-up
+other scenarios enter report commands and related-run navigation through the same
+contextual menu, including nested timing. The schedule scenario opens Actions →
+Last occurrence to reach its submitted run. Batch cases distinguish that run from
+newer manual attempts, offer no entry for occurrences with no run, check that
+reports contain no buttons besides folds and answer links, and check TAB
+navigation does not activate links or expose raw inspection inline. The
+manual-flow scenario also drives the Actions/f path-copy key without leaving its
+report; follow-up navigation uses Actions → After-run run and Triggered by. Batch cases cover pending/undispatched plain follow-up
 status, guarded path copying/absence and menu-only remote-exit rechecking with
 capability loss. The menu-only remote-exit fixture uses an inert process and
 stubbed recheck callbacks, never an SSH connection.
@@ -272,7 +273,8 @@ workspace concurrently while checking the global limit still applies. Error/abor
 fixtures require explicit inspection/release before continuation; legacy access
 labels never waive descendant uncertainty.
 Batch command fixtures invoke the validated dispatch path without a popup; use
-`pichat-test-job-goto-button` when asserting a control is present inline.
+`pichat-test-job-goto-button` when asserting a fold toggle or answer link is
+present inline.
 Optional Evil runs additionally load `evil` and `pichat-evil`, enable `evil-mode`,
 and call `pichat-evil-setup` before running tests.
 Use a private `user-emacs-directory` for the separate instance; picker history must

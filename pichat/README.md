@@ -1043,7 +1043,8 @@ phase adapter. Scheduling always requires explicit authorization.
   preview, `+` creates, `r` runs a selected job's current definition, `e` edits,
   `h` shows its attempts, `a` opens **Actions** for the row at point, `f` toggles
   the input/review attention filter on/off, and `g` redraws cached state. `q` buries the list. The overview shows active/limit and
-  attention counts plus the current history filter; returning to Jobs restores
+  attention counts plus the current history, attention or run chain filter;
+  returning to Jobs restores
   the selected definition. In the Jobs list, `M-x pichat-jobs-delete` deletes the
   selected definition after a short title-based `y`/`n` confirmation. Run history
   is preserved; queued, active or uncertain runs prevent deletion. There is no
@@ -1093,7 +1094,7 @@ phase adapter. Scheduling always requires explicit authorization.
   or its inspector does not access the job store, resolve settings, initialize
   an executor or start Pi. Import never enables timing or changes follow-ups
   (other than a file's own `after_job` link), queued captures or historical attempts; Run and timing remain separate.
-- Saved-job details put instructions first, followed by a clickable latest-run
+- Saved-job details put instructions first, followed by a latest-run
   summary, schedule and workspace/target. Completed summaries use the recorded
   finish time; older records without one label their queue time instead. Enabled
   schedules show their next occurrence; disabled timing does not imply authorization.
@@ -1101,18 +1102,20 @@ phase adapter. Scheduling always requires explicit authorization.
   IDs remain available through Actions → **Inspect raw settings…**, not normal
   job details. Replacement warnings remain visible when saved edits differ.
   Open the exact run to read its answer, without a duplicate response preview.
-  The latest-run link includes manual runs. In Details, **Last occurrence: …**
-  itself links to the run submitted by that occurrence, not a future run; it can
-  still be queued/running. Occurrences without a submitted run remain plain text.
-  That run and Latest run coincide only when no newer attempt exists.
+  Latest run includes manual runs; **Actions → Latest run** (`l`) opens it. In
+  Details, **Last occurrence: …** describes the last schedule occurrence;
+  **Actions → Last occurrence** (`L`) opens the run it submitted, not a future
+  run; that run can still be queued/running. The entry is absent when the
+  occurrence submitted no run. That run and Latest run coincide only when no
+  newer attempt exists.
 - Run reports put the compact outcome/time and rendered answer first. **Details**
   expands the original instructions, continuation guidance, workspace/target,
   model/preset/Tools, full identities, trigger, local
-  timeline and related-run links. Normal follow-up status is there too; failed
+  timeline and related runs. Normal follow-up status is there too; failed
   dispatch, input requests, blockers and uncertainty stay visible without opening
   a menu. The first run of a chain started from a chat also shows **Chat
   notification: …** (see [Chain finish notifications](#chain-finish-notifications))
-  while Emacs runs. **View chat** and active **Cancel run…** remain directly available.
+  while Emacs runs. **View chat** and **Cancel run…** are in Actions.
 - Both reports show the captured title in their header. Saved-job headers omit
   internal IDs; run headers append an abbreviated saved-job ID when applicable.
   One-off runs have no saved-job ID. Full identities remain available through
@@ -1125,7 +1128,14 @@ phase adapter. Scheduling always requires explicit authorization.
   row's job or run commands (without the report-only response entries) plus a
   **List** group: `a` toggles the attention filter (so `a a` / `g a a`) and `F`
   **Clear filters** appears while Runs is filtered. The List group is offered
-  even when no row is at point. Saved jobs offer **Run job**, **Edit…**, **Run history**
+  even when no row is at point. A **Navigate** group lists only the related runs
+  that exist: for a run **Previous run** (`P`, Repeat/Continue origin),
+  **Triggered by** (`t`, the follow-up's origin), **Requested by** (`u`),
+  **After-run run** (`A`), **Blocking run** (`b`, a same-job wait) and **Run
+  chain** (`l`, Runs filtered to the run's [run chain](#review-loops), shown in
+  the mode line; later members appear on refresh); for a saved job **Latest
+  run** (`l`) and **Last occurrence** (`L`); plus **Run history** and **Job
+  definition**. Saved jobs offer **Run job**, **Edit…**, **Run history**
   and schedule commands. **Delete job…** (`D`) confirms deletion of that exact
   definition, preserving run history and retiring its schedule timer; it is
   omitted while the job has unfinished work. **Run job** is omitted while this job has unfinished
@@ -1156,8 +1166,10 @@ phase adapter. Scheduling always requires explicit authorization.
   definition and captured settings. Validation/write errors retain the editable
   draft. Pending pickers block Save; deleted, changed or retargeted origins are
   rejected. Opening another editing menu invalidates late returns from the old one.
-- **Details** holds information and contextual links; routine operations live in
-  **Actions**. **Inspect raw settings…** is under **Inspect** (`I`) in both reports.
+- Reports contain no command or navigation buttons: **Details** holds
+  information as plain text, and routine operations and navigation live in
+  **Actions**. The only buttons are fold toggles and links in the rendered
+  answer. **Inspect raw settings…** is under **Inspect** (`I`) in both reports.
   Run reports also offer **Copy saved-session path** (`f`) there when a path is
   recorded; it copies the reference without opening or checking the file.
   **Recheck remote Pi exit** (`x`) is menu-only when supported; uncertainty stays
@@ -1178,7 +1190,7 @@ phase adapter. Scheduling always requires explicit authorization.
   inside **Details**; continuation guidance folds independently. Click or press
   `RET`/`TAB` within report folds to toggle them; short blocks need no control.
   A folded block ends in `…`; expanded blocks offer **Show less**. Elsewhere
-  `TAB`/`S-TAB` navigate without activating commands or links. Open Actions with
+  `TAB`/`S-TAB` move between folds and answer links without activating them. Open Actions with
   its keybinding. Native/Evil and terminal/GUI follow the same rules.
   Refresh/resize retain folding choices and reading position; editors and
   exact-source views remain plain text.
@@ -1186,8 +1198,8 @@ phase adapter. Scheduling always requires explicit authorization.
   preview, `gr` refresh, `gc` new, `gx` run, `ge` edit, `gh` history, `ga`
   Actions and `gf` attention filter. Native `R` or Evil `g R` invokes **Release
   reservation** on the selected uncertain run; `M-x
-  pichat-jobs-release-reservation` does the same. Details use buttons with
-  `RET`; these do not take over Vim movement keys. The mode line shows the
+  pichat-jobs-release-reservation` does the same. Report folds and answer links
+  use `RET`; these do not take over Vim movement keys. The mode line shows the
   attention count without a key hint.
 
 Run reports reuse the rendered response view's sanitized Markdown/SHR rendering,
@@ -1206,7 +1218,7 @@ response reading position and disclosures. Older summary-only records are labell
 with the latest response from a potentially continued conversation.
 
 Submitting does not select/display the new chat or change your current/preferred
-runtime. **View chat** displays the exact owning chat while work needs attention.
+runtime. **Actions → View chat** displays the exact owning chat while work needs attention.
 **Preview conversation** displays immutable run-end entries through the same
 read-only renderer as Session History and runtime-manager previews, without
 starting Pi or reading the current saved session file, including after Emacs
@@ -1387,7 +1399,7 @@ continuations. Explicit execution edits still re-resolve configuration and are
 rejected if the captured target/path identity changes; no silent target fallback.
 Continuation is one run, not a reusable job definition.
 
-The new run links to **Previous run**, starts a fresh independent runtime/Pi
+The new run records its origin (**Actions → Previous run**), starts a fresh independent runtime/Pi
 session and receives the original scope plus **previous run context**: the saved
 response, conversation/tool activity, and recorded outcome or error. The old
 report and saved session file are not changed or loaded for this operation.
@@ -1446,10 +1458,10 @@ has no conversation. The envelope also identifies the origin: its saved
 Emacs-visible directory; for an SSH origin that is a path on the remote host,
 not a local one), its run `input`, `requested-by` and `round` (see
 [Review loops](#review-loops)). Envelopes recorded before these fields existed
-remain valid. The run report's **After this run: …** status text itself
-links to the exact successor; pending/undispatched status without a successor is
-plain text. **Triggered by** links back to the origin; raw inspection includes the
-captured envelope.
+remain valid. The run report's **After this run: …** status names the successor;
+**Actions → After-run run** opens it once it exists. **Triggered by** in the
+follow-up's Details names the origin, and **Actions → Triggered by** opens it;
+raw inspection includes the captured envelope.
 
 **Context can contain sensitive tool output and is sent to the selected model.**
 Worker output is untrusted data, not instructions or authorization. External
@@ -1461,8 +1473,8 @@ not a built-in transport or installed dependency. A different provider can reduc
 correlated failures but does not guarantee availability.
 
 Queue full records **Not dispatched — Job queue is full**, with attention required
-and no hidden pending queue or automatic retry. Otherwise the report links the
-queued run and shows its actual wait reason. Follow-up failure is visible in that
+and no hidden pending queue or automatic retry. Otherwise the report shows the
+queued run's status and actual wait reason (**Actions → After-run run** opens it). Follow-up failure is visible in that
 run and does not overwrite the originating outcome. Follow-up runs suppress their
 own after-run defaults even if their selected definition has one configured.
 There is no recursive chaining, implicit worker continuation, plan approval or
@@ -1511,7 +1523,8 @@ derived from the store when needed.
 - A run that a chat (not a job run) starts with `pichat_job_run_now` begins a
   new chain; when that chain finishes, PiChat tells the chat (see
   [Chain finish notifications](#chain-finish-notifications)).
-- Run details show **Requested by** and a **Run chain** list linking every run.
+- Run details show **Requested by** and a **Run chain** list of every run with
+  its status; **Actions → Requested by** and **Run chain** open them.
   **Actions → Delete chain…** (`C`) deletes all of a chain's run records in one
   confirmed step, once every run in it is finished. Evidence and saved session
   files are kept. Nothing is deleted automatically.
@@ -1626,7 +1639,7 @@ ordinary bounded queue/admission. Full queue or preparation failure records a
 bounded last-occurrence reason, not a failed worker run or a backlog. A one-shot
 not submitted offers the same explicit intervention actions. Successful one-shots
 become inactive on submission, not worker completion; worker failure never rearms
-them. The definition's Details links to the exact submitted run; the run's Details
+them. The definition's Actions open the exact submitted run (**Last occurrence**); the run's Details
 retains the scheduled due time and Once/Interval trigger.
 
 Occurrence consumption and ordinary run creation commit together before launch;
@@ -1796,7 +1809,7 @@ prove descendant exit. The action is offered only with a retained verified SSH
 lifetime, under Actions; local runs have no irrelevant SSH message.
 Uncertain runs display **Needs inspection** in the existing table and report,
 without extra scheduling columns or sections. Their reservations still occupy
-global admission capacity, not a workspace lock. Same-job waits link to the blocking run.
+global admission capacity, not a workspace lock. Same-job waits offer **Actions → Blocking run**.
 **Release reservation…** (under Actions or via the selected-row command)
 asks for an inspection note and confirms that queued jobs may start and running
 tools are not stopped. It records an explicit human acknowledgement as Needs

@@ -90,6 +90,27 @@ end of the hidden suffix instead, where the folded line visibly ends."
       (call-interactively #'evil-forward-word-begin)
     (pichat-chat-user-ui-copy)))
 
+(defun pichat-evil--delete-draft-line (delete beg end type &rest args)
+  "Keep linewise DELETE within the editable draft boundary.
+BEG, END, TYPE and ARGS are the arguments to `evil-delete'."
+  (let ((start (and (derived-mode-p 'pichat-chat-mode)
+                    (markerp pichat-chat--input-start)
+                    (marker-position pichat-chat--input-start))))
+    (if (and start (eq type 'line)
+             (>= beg (save-excursion (goto-char start)
+                                    (line-beginning-position)))
+             (>= end start))
+        (let ((beg (max beg start)))
+          ;; Keep the linewise register type, but never yank the prompt label.
+          (apply #'evil-yank beg end type args)
+          ;; Match Evil's final-line behavior only inside the editable draft.
+          (when (and (= end (point-max)) (> beg start)
+                     (eq (char-before beg) ?\n)
+                     (not (eq (char-before end) ?\n)))
+            (setq beg (1- beg)))
+          (delete-region beg end))
+      (apply delete beg end type args))))
+
 ;;;###autoload
 (defun pichat-evil-setup ()
   "Use Vim navigation and PiChat-specific actions in PiChat buffers.
@@ -99,6 +120,8 @@ remain in their original mode maps."
   (interactive)
   (unless (require 'evil nil t)
     (user-error "PiChat Evil bindings require Evil"))
+  (unless (advice-member-p #'pichat-evil--delete-draft-line 'evil-delete)
+    (advice-add 'evil-delete :around #'pichat-evil--delete-draft-line))
   (evil-set-initial-state 'pichat-chat-mode 'normal)
   (evil-set-initial-state 'pichat-chat-compose-mode 'normal)
   (evil-set-initial-state 'pichat-view-mode 'normal)

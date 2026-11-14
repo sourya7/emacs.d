@@ -6,8 +6,6 @@ the goal is to be able to run things like compact before sending a follow up
 - Review: Draft plan =deliver-queued-follow-ups-after-manual-compaction= covers typed compact-before-send preparation, not arbitrary scheduled Elisp. Keep this broader idea open.
 ** add menu for going to session associated with an existing session (eg: job continuation)
 - Review: Related saved-session browsing and previous/triggering job-run links exist; a unified associated-session menu remains unverified. The Session History navigation draft concerns entries within one Pi session, not relations between sessions.
-** PLANNED do research into the available actions and move them to the actions transient when available
-- Existing plan: =pichat-maintainability=, unfinished W21 — Evaluate one thin chat-actions Transient. Planned evaluation, not an implemented consolidation.
 ** review and make sure all pichat buffers have the same consistent header
 - Review: Persistent chat headers are implemented (completed plan =pichat-persistent-context-header=). Jobs and other views still have distinct presentations; an all-buffer consistency audit remains open.
 ** command to screenshot emacs visible frame
@@ -24,5 +22,3 @@ want to see it work with the plans command and its json output rather than havin
 *** easy to toggle or revoke the access to drone
 ** automate openwrt configuration. something like git based.
 ** automate install and nix equivalent git based config for various maches. think whether we can have a secure way to automate with drone jobs
-** PLANNED can we combine the continuation within the follow up? kind of seems like related functionalitkes
-- Existing draft: =deliver-queued-follow-ups-after-manual-compaction= explicitly unifies conversational follow-up composition and timed continuation. Not implemented; execution requires separate authorization.

@@ -950,7 +950,9 @@ An explicit Pi session name takes precedence; a subsequently unnamed source
 restores that runtime's alias. Generated aliases are unique among themselves,
 not against user-supplied names; truncation can also make labels look alike.
 After all 1,024 pairs are reserved, new unnamed runtimes fall back to their Pi
-source ID or runtime ID. Naming through `e` waits for setter success and
+source ID or runtime ID. Integrations such as buffer pickers can show the same
+label with `(pichat-session-manager-runtime-label SESSION)`; like the manager,
+it reserves an alias on first use. Naming through `e` waits for setter success and
 an authoritative state refresh. Pi 1.4.0 rejects blank names rather than clearing
 them. External name changes appear on normal state synchronization, not polling.
 

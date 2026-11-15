@@ -163,6 +163,52 @@ Never redirect input to another terminal client's frame."
         (when tab (tab-bar-select-tab tab)))))
     (pichat-session-manager-display-chat-current-tab session)))
 
+(declare-function consult--buffer-preview "consult" ())
+(declare-function consult--buffer-query "consult" (&rest args))
+(declare-function consult--state-with-return "consult" (state return))
+(declare-function pichat-session-manager-runtime-label "pichat-session-manager"
+                  (session))
+(defvar pichat-chat-session)
+(defvar my/bufferlo-consult-buffer-sources)
+
+(defun my/pichat-consult--candidate (buffer)
+  "Return (DISPLAY . NAME) for chat BUFFER, matching its runtime label."
+  (let* ((name (buffer-name buffer))
+         (session (buffer-local-value 'pichat-chat-session buffer))
+         (label (and session
+                     (require 'pichat-session-manager nil t)
+                     (pichat-session-manager-runtime-label session))))
+    (cons (if label
+              (concat name "  "
+                      (propertize label 'face 'completions-annotations))
+            name)
+          name)))
+
+(defun my/pichat-consult--switch (name)
+  "Display chat buffer NAME in its owning tab."
+  (when-let* ((buffer (get-buffer name)))
+    (if-let* ((session (buffer-local-value 'pichat-chat-session buffer)))
+        (my/pichat-display-chat-with-bufferlo session)
+      (switch-to-buffer buffer))))
+
+(defvar my/consult-source-pichat-buffer
+  `(:name     "PiChat"
+    :narrow   ?c
+    :category buffer
+    :face     consult-buffer
+    :history  buffer-name-history
+    :state    ,(lambda ()
+                 (consult--state-with-return (consult--buffer-preview)
+                                             #'my/pichat-consult--switch))
+    :items    ,(lambda ()
+                 (mapcar #'my/pichat-consult--candidate
+                         (consult--buffer-query :mode 'pichat-chat-mode
+                                                :sort 'visibility))))
+  "Live PiChat chat buffers across tabs, matchable by runtime label.")
+
+(add-to-list 'my/bufferlo-consult-buffer-sources
+             'my/consult-source-pichat-buffer t)
+
 (setq pichat-session-manager-display-chat-function
       #'my/pichat-display-chat-with-bufferlo
       pichat-launch-display-chat-function

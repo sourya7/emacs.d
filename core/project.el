@@ -39,14 +39,15 @@
                         :as #'buffer-name)))
     "Local buffer candidate source for `consult-buffer'.")
 
+(defvar my/bufferlo-consult-buffer-sources
+  '(consult-bufferlo--source-local-buffer
+    consult-source-project-recent-file)
+  "Sources used by `my/bufferlo-consult-buffer'.")
+
 (defun my/bufferlo-consult-buffer ()
   "Consult buffer sourced for bufferlo."
   (interactive)
-  (let* ((sources
-          (list
-           'consult-bufferlo--source-local-buffer
-           'consult-source-project-recent-file)))
-    (consult-buffer sources)))
+  (consult-buffer my/bufferlo-consult-buffer-sources))
 
 (use-package bufferlo
   :commands (bufferlo-local-buffer-p bufferlo-tab-close-kill-buffers)

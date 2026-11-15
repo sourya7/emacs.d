@@ -190,8 +190,13 @@ or Bufferlo dependency."
             (puthash runtime-id alias pichat-session-manager--aliases)
             alias))))))
 
-(defun pichat-session-manager--row-session-name (session)
-  "Return SESSION's authoritative name or manager-local runtime label."
+(defun pichat-session-manager-runtime-label (session)
+  "Return the label the runtime manager shows for SESSION's runtime.
+This is SESSION's explicit Pi session name when non-blank, otherwise its
+stable two-word runtime alias, falling back to the Pi source ID and then
+the runtime ID.  The first call for an unnamed runtime reserves its alias
+for this Emacs uptime.  The label is display-only and never a stable
+identifier; use `pichat-session-runtime-id' for identity."
   (let ((name (pichat-session-name session)))
     (if (and (stringp name) (not (string-blank-p name))) name
       (or (pichat-session-manager--alias (pichat-session-runtime-id session))
@@ -254,7 +259,7 @@ or Bufferlo dependency."
   "Return SESSION's full cached value for COLUMN without display truncation."
   (pcase column
     ("" (pichat-session-manager--preferred-marker session))
-    ("Name" (pichat-session-manager--row-session-name session))
+    ("Name" (pichat-session-manager-runtime-label session))
     ("Status" (pichat-session-manager--status-label session))
     ("Project" (pichat-session-manager--project-label session))
     ("Preset" (if (pichat-session-preset-name session)

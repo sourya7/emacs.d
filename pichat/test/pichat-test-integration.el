@@ -2244,7 +2244,7 @@ clears MCP stays empty; an ineligible baseline or missing model starts nothing."
     (pichat-test-with-integration-session
         (session :script '(:turns []))
       (pichat-register-session session)
-      (let ((alias (pichat-session-manager--row-session-name session)))
+      (let ((alias (pichat-session-manager-runtime-label session)))
         (with-temp-buffer
           (pichat-session-manager-mode)
           (pichat-session-manager-refresh)
@@ -2254,7 +2254,7 @@ clears MCP stays empty; an ineligible baseline or missing model starts nothing."
           (pichat-test-wait-until
            (lambda () (equal "Manager name" (pichat-session-name session)))
            nil "manager naming authoritative readback")
-          (should (equal "Manager name" (pichat-session-manager--row-session-name session)))
+          (should (equal "Manager name" (pichat-session-manager-runtime-label session)))
           ;; Supported Pi rejects blank names; no invented clear-name operation.
           (dolist (name '("" "  "))
             (let (failure)

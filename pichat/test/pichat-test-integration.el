@@ -1107,6 +1107,50 @@ clears MCP stays empty; an ineligible baseline or missing model starts nothing."
                 (should (equal "unsent draft" (pichat-chat--input-text)))))
           (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+  (ert-deftest pichat-integration-chat-follow-up-delivers-across-settlement ()
+    (pichat-test-with-integration-session
+        (session :no-session t
+                 :script '(:turns [(:text "initial reply" :delayMs 700)
+                                   (:expectContextIncludes "busy follow-up"
+                                    :text "busy follow-up reply")
+                                   (:expectContextIncludes "idle follow-up"
+                                    :text "idle follow-up reply")]))
+      (let ((pichat-chat-stop-session-on-kill nil)
+            buffer)
+        (unwind-protect
+            (let ((settled (pichat-test-count-raw-events session "agent_settled")))
+              (setq buffer (pichat-chat-open session))
+              (pichat-rpc-prompt session "initial work")
+              (pichat-test-wait-for-raw-event session "agent_start" 3)
+              (with-current-buffer buffer
+                (pichat-chat--set-input-text "unsent draft")
+                ;; A cached idle state must not cause an overlapping run.
+                (setf (pichat-session-streaming-p session) nil)
+                (pichat-chat-follow-up "busy follow-up"))
+              (pichat-test-wait-until
+               (lambda ()
+                 (with-current-buffer buffer
+                   (equal '(0 . 1) pichat-chat--queue-counts)))
+               3 "busy follow-up to enter Pi's queue")
+              (pichat-test-wait-for-raw-event session "agent_settled" 8 settled)
+              (setq settled (pichat-test-count-raw-events session "agent_settled"))
+              (with-current-buffer buffer
+                ;; Reproduce submitting after settlement with stale busy state,
+                ;; as when Pi finishes while the follow-up minibuffer is open.
+                (setf (pichat-session-streaming-p session) t)
+                (pichat-chat-follow-up "idle follow-up"))
+              (pichat-test-wait-for-raw-event session "agent_settled" 8 settled)
+              (pichat-test-wait-for-buffer-contains buffer "idle follow-up reply")
+              (should (equal '("initial work" "busy follow-up" "idle follow-up")
+                             (pichat-test--user-texts session)))
+              (let ((state (plist-get (pichat-test-rpc-call session "get_state") :data)))
+                (should-not (plist-get state :isStreaming))
+                (should (= 0 (plist-get state :pendingMessageCount))))
+              (with-current-buffer buffer
+                (should (equal '(0 . 0) pichat-chat--queue-counts))
+                (should (equal "unsent draft" (pichat-chat--input-text)))))
+          (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
   (ert-deftest pichat-integration-simple-prompt-streams-through-real-pi ()
     (pichat-test-with-integration-session
         (session :no-session t

@@ -2131,7 +2131,9 @@ Chat keys:
 - `C-c C-0` — dismiss active diagnostic notices, preserving diagnostic history
 - `C-c C-o` — compact
 - `M-<up>` / `M-<down>` — browse submitted prompt history
-- `M-x pichat-chat-steer` / `M-x pichat-chat-follow-up` — queue messages during a run
+- `M-x pichat-chat-steer` — queue a steering message during a run
+- `C-c C-f` / `M-x pichat-chat-follow-up` — queue a follow-up during a run,
+  or start it immediately if Pi has already finished
 - `M-x pichat-chat-set-steering-mode` / `M-x pichat-chat-set-follow-up-mode` — configure Pi queue delivery
 - `C-c C-n` — new session; asks `Discard conversation?` only for an ephemeral
   runtime or a running turn

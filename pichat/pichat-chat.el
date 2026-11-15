@@ -2023,12 +2023,14 @@ Nested calls in another buffer establish an independent transaction."
   (pichat-rpc-steer pichat-chat-session message))
 
 (defun pichat-chat-follow-up (message)
-  "Queue follow-up MESSAGE."
+  "Queue follow-up MESSAGE, or start it immediately if Pi is idle."
   (interactive "sFollow-up: ")
   (unless pichat-chat-session (user-error "No PiChat session"))
   (pichat-backend-require-capability pichat-chat-session 'queue "Follow-up")
   (pichat-session-note-user-input pichat-chat-session)
-  (pichat-rpc-follow-up pichat-chat-session message))
+  ;; Pi decides atomically: the queue-only follow_up command can strand text
+  ;; if the current run settles while the minibuffer is accepting MESSAGE.
+  (pichat-rpc-prompt pichat-chat-session message nil "followUp"))
 
 (defun pichat-chat-set-steering-mode (mode)
   "Set Pi steering queue MODE for the current session."

@@ -511,7 +511,8 @@ including fields whose valid value may be nil."
 
 (defun pichat-reconfigure-validate-reload (origin retained state entries)
   "Build a verified replacement cache without mutating RETAINED or the chat.
-ORIGIN identifies the saved source; STATE is fresh get_state data and ENTRIES
+ORIGIN identifies the saved source; RETAINED is the preflight baseline read
+from the original process; STATE is fresh get_state data and ENTRIES
 is full get_entries data from the replacement process.  Reject source, branch,
 or entry changes rather than committing an unexpected conversation.  The
 caller must separately verify the replacement process generation."
@@ -562,10 +563,32 @@ The new Pi session must differ from ORIGIN; the PiChat runtime stays the same."
     (pichat-pi-entry-cache-full id file (plist-get entries :entries)
                                 (plist-get entries :leafId))))
 
+(defun pichat-reconfigure--fresh-baseline (origin entries)
+  "Return a restart baseline cache from ORIGIN's fresh get_entries ENTRIES.
+The cache comes from the process being replaced, not the chat's incrementally
+synchronized copy, so entries Pi appended without an event (for example
+`set_model') are part of the baseline.  Return nil when ENTRIES are malformed
+or the active leaf is historical, because Pi reload cannot restore it."
+  (and (listp entries)
+       (plist-member entries :entries)
+       (plist-member entries :leafId)
+       (let ((cache (condition-case nil
+                        (pichat-pi-entry-cache-full
+                         (plist-get origin :session-id)
+                         (plist-get origin :session-file)
+                         (plist-get entries :entries)
+                         (plist-get entries :leafId))
+                      (error nil))))
+         (and cache
+              (equal (pichat-entry-cache-leaf-id cache)
+                     (pichat-entry-cache-last-seen-id cache))
+              cache))))
+
 (defun pichat-reconfigure-request-preflight (origin callback)
-  "Check ORIGIN against a fresh bounded `get_state' response.
+  "Check ORIGIN against fresh bounded `get_state' and `get_entries' responses.
 Call CALLBACK with (BLOCKERS RESULT), where RESULT is a plist containing
-raw :state and :source-kind (`saved' or `unwritten').  BLOCKERS is nil only
+raw :state, :source-kind (`saved' or `unwritten') and, when safe, :baseline,
+the entry cache later reloads are verified against.  BLOCKERS is nil only
 when the source and state are safe for the next stage.  This never stops Pi or changes its configuration.
 An operation must recheck the origin and state before stopping the process."
   (let ((session (plist-get origin :session))
@@ -593,23 +616,31 @@ An operation must recheck the origin and state before stopping the process."
                       (blockers (pichat-reconfigure-preflight-blockers
                                  origin state kind))
                       (result (list :state state :source-kind kind)))
-                 (if (and (eq kind 'unwritten) (null blockers))
-                     (let ((pichat-rpc--operation-token
-                            (plist-get origin :restart-token)))
-                       (setq request-id
-                             (pichat-rpc-get-entries
-                              session nil
-                              (lambda (entries _session)
-                                (if (and (pichat-reconfigure-origin-current-p origin)
-                                         (pichat-reconfigure--empty-unwritten-source-p origin)
-                                         (pichat-reconfigure--empty-entries-p
-                                          (plist-get entries :data)))
-                                    (finish (pichat-reconfigure-preflight-blockers
-                                             origin state 'unwritten)
-                                            result)
-                                  (finish '("The unwritten Pi session is not empty or changed during preflight"))))
-                              #'failed)))
-                   (finish blockers result)))
+                 (if blockers
+                     (finish blockers result)
+                   (let ((pichat-rpc--operation-token
+                          (plist-get origin :restart-token)))
+                     (setq request-id
+                           (pichat-rpc-get-entries
+                            session nil
+                            (lambda (response _session)
+                              (let* ((entries (plist-get response :data))
+                                     (baseline (pichat-reconfigure--fresh-baseline
+                                                origin entries)))
+                                (cond
+                                 ((not (pichat-reconfigure-origin-current-p origin))
+                                  (finish '("The originating runtime, process, or conversation changed")))
+                                 ((and (eq kind 'unwritten)
+                                       (not (and (pichat-reconfigure--empty-unwritten-source-p origin)
+                                                 (pichat-reconfigure--empty-entries-p entries))))
+                                  (finish '("The unwritten Pi session is not empty or changed during preflight")))
+                                 ((not baseline)
+                                  (finish '("Pi returned no restorable entries or active leaf")))
+                                 (t
+                                  (finish (pichat-reconfigure-preflight-blockers
+                                           origin state kind)
+                                          (plist-put result :baseline baseline))))))
+                            #'failed)))))
              (finish '("The originating runtime, process, or conversation changed")))))
       (cond
        ((not (pichat-reconfigure-origin-current-p origin))
@@ -929,8 +960,9 @@ Only recovery may pass ALLOW-STOPPED for an already-confirmed stopped runtime."
     (let* ((previous (pichat-reconfigure-captured-configuration session))
            (command (pichat-reconfigure-validated-command
                      session requested state))
-           (retained (with-current-buffer buffer
-                       (pichat-chat-canonical-entry-cache session))))
+           (retained (plist-get result :baseline)))
+      (unless (pichat-entry-cache-p retained)
+        (user-error "Preflight returned no fresh conversation baseline"))
       (if (not (pichat-reconfigure-effective-change-p previous requested))
           (pichat-reconfigure--finish
            operation t "No effective configuration changes")

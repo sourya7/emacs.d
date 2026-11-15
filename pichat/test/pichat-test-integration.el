@@ -3001,6 +3001,70 @@ clears MCP stays empty; an ineligible baseline or missing model starts nothing."
                 ;; script counter reset.  Verify interaction resumes and
                 ;; consume that new process's single scripted turn.
                 (pichat-test-prompt-and-wait session "after restart")))
+          (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+  (ert-deftest pichat-integration-reconfigure-after-unsynced-model-change ()
+    "Pi persists `set_model' as a session entry without a chat sync.
+Reconfiguration must verify the reload against Pi's fresh entries, so that
+entry does not make the reloaded conversation look changed."
+    (pichat-test-with-integration-session
+        (session :script '(:turns [(:text "model change answer")]))
+      (let ((pichat-chat-render-markdown nil)
+            (pichat-chat-stop-session-on-kill nil)
+            buffer result)
+        (unwind-protect
+            (progn
+              (setq buffer (pichat-chat-open session))
+              (pichat-test-chat-send-and-wait session buffer "model question")
+              (pichat-test-assert-provider-script-consumed status-file)
+              (pichat-test-wait-until
+               (lambda () (pichat-chat-canonical-entry-cache session)) 4
+               "canonical snapshot before model change")
+              (let ((before (pichat-entry-cache-append-order
+                             (pichat-chat-canonical-entry-cache session))))
+                (pichat-test-rpc-call session "set_model"
+                                      '(:provider "pichat-fake"
+                                        :modelId "pichat-fake-reasoning"))
+                (pichat-test-rpc-call session "get_state")
+                (let ((entries (plist-get (plist-get (pichat-test-rpc-call
+                                                      session "get_entries")
+                                                     :data)
+                                          :entries)))
+                  ;; Precondition: Pi wrote an entry the chat has not synced.
+                  (should (> (length entries) (length before)))
+                  (should (equal before (pichat-entry-cache-append-order
+                                         (pichat-chat-canonical-entry-cache
+                                          session))))))
+              (let* ((id (pichat-session-id session))
+                     (old-command (pichat-session-rpc-command session))
+                     (pichat-pi-executable (car old-command))
+                     (pichat-pi-default-args
+                      (cl-remove "--no-builtin-tools"
+                                 (butlast (cdr old-command) 2) :test #'equal))
+                     (pichat-pi-extra-args nil)
+                     (pichat-rpc-command nil)
+                     (requested (pichat-reconfigure-select-preset
+                                 (pichat-reconfigure-captured-configuration session)
+                                 'coding)))
+                (pichat-reconfigure-restart
+                 (pichat-reconfigure-capture-origin session)
+                 requested (lambda (success reason)
+                             (setq result (list success reason))))
+                (pichat-test-wait-until (lambda () result) 20 "restart result")
+                (should (equal '(t nil) result))
+                (should (equal id (pichat-session-id session)))
+                (should (equal "pichat-fake-reasoning"
+                               (plist-get (plist-get (plist-get (pichat-test-rpc-call
+                                                                 session "get_state")
+                                                                :data)
+                                                     :model)
+                                          :id)))
+                (with-current-buffer buffer
+                  (should-not pichat-chat--restart-staging)
+                  (should (string-match-p "model change answer"
+                                          (buffer-string))))
+                ;; The replacement fake provider resets its script counter.
+                (pichat-test-prompt-and-wait session "after model restart")))
           (when (buffer-live-p buffer) (kill-buffer buffer)))))))
 
 (provide 'pichat-test-integration)

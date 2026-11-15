@@ -287,7 +287,13 @@
          (should-not (caar (plist-get fixture :results)))
          (should-not (pichat-session-alive-p session))
          (should (eq 'manual (pichat-session-preset-name session)))
-         (should (eq retained (plist-get (pichat-session-restart-operation session) :retained)))
+         ;; The verification baseline is the fresh preflight read, not the
+         ;; chat's cache object; the chat keeps displaying its own snapshot.
+         (let ((baseline (plist-get (pichat-session-restart-operation session)
+                                    :retained)))
+           (should (pichat-entry-cache-p baseline))
+           (should (equal (pichat-entry-cache-append-order retained)
+                          (pichat-entry-cache-append-order baseline))))
          (with-current-buffer (plist-get fixture :buffer)
            (should (eq retained pichat-chat--entry-cache))
            (should pichat-chat--restart-staging)

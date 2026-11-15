@@ -159,13 +159,18 @@
             '((:type "newest" :private "event secret")
               (:type "oldest")))
       (save-window-excursion
-        (let ((buffer (pichat-show-transport-diagnostics session)))
+        (let ((buffer (pichat-show-diagnostics session)))
           (unwind-protect
               (with-current-buffer buffer
                 (should (derived-mode-p 'pichat-view-mode))
+                (goto-char (point-min))
+                (search-forward "Retained incoming events")
+                (beginning-of-line)
+                (forward-char 2)
+                (call-interactively (key-binding (kbd "RET")))
                 (let ((text (buffer-substring-no-properties
                              (point-min) (point-max))))
-                  (should (string-match-p "WARNING" text))
+                  (should (string-match-p "Review before sharing" text))
                   (should (string-match-p "raw stderr secret" text))
                   (should (string-match-p "event secret" text))
                   (should (< (string-match "oldest" text)

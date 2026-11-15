@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Runtime ownership, cached refresh, safe metadata, raw navigation and
+;; Runtime ownership, cached refresh, bounded evidence and
 ;; auxiliary display lifecycle, without Pi processes.
 
 ;;; Code:
@@ -18,7 +18,7 @@
           buffers)
       (unwind-protect
           (cl-letf (((symbol-function 'pichat-view-display) #'ignore))
-            (dolist (show '(pichat-show-diagnostics pichat-show-transport-diagnostics))
+            (dolist (show '(pichat-show-diagnostics))
               (let ((av (funcall show a)) (bv (funcall show b)))
                 (push av buffers)
                 (push bv buffers)
@@ -41,7 +41,7 @@
     (let* ((a (pichat-register-session (pichat-session-make :state 'idle)))
            (b (pichat-register-session (pichat-session-make)))
            (pichat-current-session b)
-           safe raw)
+           safe)
       (unwind-protect
           (cl-letf (((symbol-function 'pichat-view-display) #'ignore)
                     ((symbol-function 'pichat-session-for-directory)
@@ -51,13 +51,8 @@
             (with-current-buffer safe
               (should (eq safe (pichat-show-diagnostics)))
               (should (string-match-p "State: stopped" (buffer-string)))
-              (setq raw (pichat-show-transport-diagnostics)))
-            (with-current-buffer raw
-              (should (eq a pichat-diagnostics--owner))
-              (should (eq raw (pichat-show-transport-diagnostics)))
-              (should (eq safe (pichat-show-diagnostics)))))
-        (when (buffer-live-p safe) (kill-buffer safe))
-        (when (buffer-live-p raw) (kill-buffer raw))))))
+              (should (eq a pichat-diagnostics--owner))))
+        (when (buffer-live-p safe) (kill-buffer safe))))))
 
 (ert-deftest pichat-diagnostics-forgotten-owner-preserves-snapshots-rejects-actions ()
   (pichat-test-with-clean-state
@@ -67,15 +62,13 @@
            buffers)
       (unwind-protect
           (cl-letf (((symbol-function 'pichat-view-display) #'ignore))
-            (setq buffers (list (pichat-show-diagnostics a)
-                                (pichat-show-transport-diagnostics a)))
+            (setq buffers (list (pichat-show-diagnostics a)))
             (pichat-forget-session a)
             (dolist (buffer buffers)
               (with-current-buffer buffer
                 (let ((snapshot (buffer-string)))
                   (dolist (action '(pichat-diagnostics-refresh
                                     pichat-show-diagnostics
-                                    pichat-show-transport-diagnostics
                                     pichat-diagnostics-open-settings
                                     pichat-diagnostics-probe-pi
                                     pichat-diagnostics-open-interactive-pi))
@@ -129,12 +122,12 @@
               (should-not (string-match-p "g / Evil\\|asks first" text)))))
       (when (buffer-live-p buffer) (kill-buffer buffer)))))
 
-(ert-deftest pichat-diagnostics-nested-quit-returns-through-safe-view-after-refresh ()
+(ert-deftest pichat-diagnostics-quit-returns-to-origin-after-refresh ()
   (pichat-test-with-clean-state
     (save-window-excursion
       (let ((session (pichat-register-session (pichat-session-make :state 'stopped)))
             (origin (generate-new-buffer " *diagnostics-origin*"))
-            safe raw)
+            safe)
         (unwind-protect
             (progn
               (switch-to-buffer origin)
@@ -142,16 +135,11 @@
               (should (eq safe (window-buffer (selected-window))))
               ;; Reopening in place must not replace the origin with itself.
               (pichat-show-diagnostics)
-              (setq raw (pichat-show-transport-diagnostics))
-              (should (eq raw (window-buffer (selected-window))))
-              (pichat-show-transport-diagnostics)
-              (call-interactively (key-binding (kbd "q")))
-              (should (eq safe (window-buffer (selected-window))))
-              (should (buffer-live-p raw))
+              (pichat-diagnostics-refresh)
               (call-interactively (key-binding (kbd "q")))
               (should (eq origin (window-buffer (selected-window))))
               (should (buffer-live-p safe)))
-          (dolist (buffer (list safe raw origin))
+          (dolist (buffer (list safe origin))
             (when (buffer-live-p buffer) (kill-buffer buffer))))))))
 
 (ert-deftest pichat-diagnostics-refresh-reads-current-caches-only ()
@@ -267,104 +255,11 @@
               (should-not (string-match-p "hidden\\|/private/path" text)))))
       (when (buffer-live-p report) (kill-buffer report)))))
 
-(ert-deftest pichat-diagnostics-raw-action-opens-directly-and-refreshes-bounded-owner-snapshot ()
-  (pichat-test-with-clean-state
-    (save-window-excursion
-      (let* ((session (pichat-register-session (pichat-session-make :state 'stopped)))
-             (other (pichat-register-session (pichat-session-make)))
-             (pichat-current-session other)
-             (origin (generate-new-buffer " *diagnostics-ui-origin*"))
-             (pichat-diagnostics-view-event-limit 1)
-             (pichat-diagnostics-view-value-limit 80)
-             safe raw)
-        (unwind-protect
-            (progn
-              (switch-to-buffer origin)
-              (setq safe (pichat-show-diagnostics session))
-              (should-not (get-buffer (format "*PiChat Transport Diagnostics %s*"
-                                             (pichat-session-runtime-id session))))
-              (cl-letf (((symbol-function 'y-or-n-p)
-                         (lambda (&rest _) (ert-fail "Explicit raw inspection needs no prompt"))))
-                (setq raw (call-interactively (key-binding (kbd "r")))))
-              (should (eq raw (current-buffer)))
-              (should (eq session pichat-diagnostics--owner))
-              (should (= (point) (point-min)))
-              (should (string-match-p "WARNING" (buffer-string)))
-              (setf (pichat-session-event-log session)
-                    `((:type "new-event" :raw ,(make-string 200 ?x))
-                      (:type "old-event")))
-              (call-interactively (key-binding (kbd "g")))
-              (should (string-match-p "new-event" (buffer-string)))
-              (should-not (string-match-p "old-event" (buffer-string)))
-              (should (string-match-p "truncated by PiChat" (buffer-string)))
-              (call-interactively (key-binding (kbd "q")))
-              (should (eq safe (current-buffer)))
-              (pichat-diagnostics-refresh)
-              (call-interactively (key-binding (kbd "q")))
-              (should (eq origin (current-buffer))))
-          (dolist (buffer (list safe raw origin))
-            (when (buffer-live-p buffer) (kill-buffer buffer))))))))
-
-(ert-deftest pichat-diagnostics-raw-action-rejects-forgotten-owner ()
-  (pichat-test-with-clean-state
-    (let ((session (pichat-register-session (pichat-session-make :state 'stopped)))
-          report)
-      (unwind-protect
-          (cl-letf (((symbol-function 'pichat-view-display) #'ignore))
-            (setq report (pichat-show-diagnostics session))
-            (with-current-buffer report
-              (pichat-forget-session session)
-              (cl-letf (((symbol-function 'y-or-n-p)
-                         (lambda (&rest _) (ert-fail "Prompted for forgotten owner"))))
-                (should-error (pichat-diagnostics-show-raw) :type 'user-error)))
-            (should-not (get-buffer (format "*PiChat Transport Diagnostics %s*"
-                                           (pichat-session-runtime-id session)))))
-        (when (buffer-live-p report) (kill-buffer report))))))
-
 (ert-deftest pichat-diagnostics-refresh-requires-an-inspector ()
   (with-temp-buffer
-    (should-error (pichat-diagnostics-refresh) :type 'user-error)
-    (should-error (pichat-diagnostics-show-raw) :type 'user-error)))
+    (should-error (pichat-diagnostics-refresh) :type 'user-error)))
 
-(ert-deftest pichat-diagnostics-setup-chooser-targets-owner-and-labels-side-effects ()
-  (pichat-test-with-clean-state
-    (let* ((session (pichat-register-session (pichat-session-make :state 'stopped)))
-           (other (pichat-register-session (pichat-session-make)))
-           (pichat-current-session other)
-           report seen choices)
-      (unwind-protect
-          (cl-letf (((symbol-function 'pichat-view-display) #'ignore))
-            (setq report (pichat-show-diagnostics session))
-            (with-current-buffer report
-              (cl-letf (((symbol-function 'completing-read)
-                         (lambda (_prompt collection &rest _)
-                           (setq choices collection)
-                           (caar collection)))
-                        ((symbol-function 'pichat-diagnostics-probe-pi)
-                         (lambda (owner) (push owner seen))))
-                (call-interactively (key-binding (kbd "s"))))
-              (should (equal seen (list session)))
-              (should (= 4 (length choices)))
-              (should (string-match-p "process; not RPC/auth/model health" (caar choices)))
-              (should (string-match-p "separate terminal" (car (nth 1 choices))))
-              (should (string-match-p "editable" (car (nth 2 choices))))
-              (dolist (action '(pichat-diagnostics-open-interactive-pi
-                                pichat-diagnostics-open-settings))
-                (cl-letf (((symbol-function 'completing-read)
-                           (lambda (_prompt collection &rest _)
-                             (car (rassq action collection))))
-                          ((symbol-function action)
-                           (lambda (owner) (should (eq owner session)))))
-                  (pichat-diagnostics-setup)))
-              (cl-letf (((symbol-function 'completing-read)
-                         (lambda (_prompt collection &rest _)
-                           (car (rassq 'pichat-diagnostics-customize collection))))
-                        ((symbol-function 'customize-group)
-                         (lambda (group &rest _) (should (eq group 'pichat)))))
-                (pichat-diagnostics-setup))))
-        (when (buffer-live-p report) (kill-buffer report))))))
-
-(ert-deftest pichat-diagnostics-setup-chooser-explains-unsupported-pi-actions ()
+(ert-deftest pichat-diagnostics-standalone-setup-respects-backend-capability ()
   (pichat-test-with-clean-state
     (let ((session (pichat-register-session (pichat-session-make :backend 'no-pi)))
           report customized)
@@ -372,15 +267,9 @@
           (cl-letf (((symbol-function 'pichat-view-display) #'ignore))
             (setq report (pichat-show-diagnostics session))
             (with-current-buffer report
-              (cl-letf (((symbol-function 'completing-read)
-                         (lambda (prompt collection &rest _)
-                           (should (string-match-p "Pi actions unavailable" prompt))
-                           (should (equal collection
-                                          '(("Customize PiChat" . pichat-diagnostics-customize))))
-                           (caar collection)))
-                        ((symbol-function 'customize-group)
+              (cl-letf (((symbol-function 'customize-group)
                          (lambda (group &rest _) (setq customized group))))
-                (pichat-diagnostics-setup))
+                (pichat-diagnostics-customize))
               (should (eq customized 'pichat))
               (dolist (action '(pichat-diagnostics-probe-pi
                                 pichat-diagnostics-open-interactive-pi
@@ -388,25 +277,50 @@
                 (should-error (funcall action) :type 'user-error))))
         (when (buffer-live-p report) (kill-buffer report))))))
 
-(ert-deftest pichat-diagnostics-setup-chooser-revalidates-forgotten-owner ()
+(ert-deftest pichat-diagnostics-reload-retires-raw-view-without-losing-report-or-records ()
   (pichat-test-with-clean-state
-    (let ((session (pichat-register-session (pichat-session-make :state 'stopped)))
-          report)
+    (let* ((session (pichat-register-session (pichat-session-make :state 'stopped)))
+           (legacy (generate-new-buffer " *legacy-raw-diagnostics*"))
+           (source (locate-library "pichat-chat-diagnostics.el"))
+           report records)
       (unwind-protect
           (cl-letf (((symbol-function 'pichat-view-display) #'ignore))
-            (setq report (pichat-show-diagnostics session))
+            (pichat-chat-diagnostics-record session :origin 'rpc-response :message "retained")
+            (setq report (pichat-show-diagnostics session)
+                  records (copy-tree (pichat-session-diagnostics session)))
+            ;; Simulate definitions/buffers left by the previous package version.
+            (with-current-buffer legacy (setq major-mode 'pichat-transport-diagnostics-mode))
+            (dolist (symbol '(pichat-show-transport-diagnostics pichat-diagnostics-show-raw
+                              pichat-diagnostics-setup pichat-transport-diagnostics-mode))
+              (fset symbol #'ignore))
+            (set 'pichat-transport-diagnostics-mode-map (make-sparse-keymap))
+            (define-key pichat-diagnostics-mode-map (kbd "r") 'pichat-diagnostics-show-raw)
+            (define-key pichat-diagnostics-mode-map (kbd "s") 'pichat-diagnostics-setup)
+            (load source nil t)
+            (should-not (buffer-live-p legacy))
+            (dolist (symbol '(pichat-show-transport-diagnostics pichat-diagnostics-show-raw
+                              pichat-diagnostics-setup pichat-transport-diagnostics-mode))
+              (should-not (fboundp symbol)))
+            (should-not (boundp 'pichat-transport-diagnostics-mode-map))
             (with-current-buffer report
-              (cl-letf (((symbol-function 'completing-read)
-                         (lambda (_prompt collection &rest _)
-                           (pichat-forget-session session)
-                           (caar collection)))
-                        ((symbol-function 'pichat-diagnostics-probe-pi)
-                         (lambda (&rest _) (ert-fail "Launched for forgotten owner"))))
-                (should-error (pichat-diagnostics-setup) :type 'user-error))
-              (cl-letf (((symbol-function 'completing-read)
-                         (lambda (&rest _) (ert-fail "Prompted for forgotten owner"))))
-                (should-error (pichat-diagnostics-setup) :type 'user-error))))
+              (should (eq report (pichat-show-diagnostics)))
+              (should (eq session pichat-diagnostics--owner))
+              (dolist (key '("r" "s"))
+                (should (memq (key-binding (kbd key)) '(nil undefined)))))
+            (should (equal records (pichat-session-diagnostics session))))
+        (when (buffer-live-p legacy) (kill-buffer legacy))
         (when (buffer-live-p report) (kill-buffer report))))))
+
+(ert-deftest pichat-diagnostics-mode-help-owns-actions-not-report-legends ()
+  (save-window-excursion
+    (with-temp-buffer
+      (pichat-diagnostics-mode)
+      (describe-mode)
+      (with-current-buffer "*Help*"
+        (dolist (text '("TAB" "RET" "gr refreshes" "q returns" "credentials"
+                        "pichat-diagnostics-open-settings" "pichat-diagnostics-customize"
+                        "pichat-diagnostics-open-interactive-pi" "pichat-diagnostics-probe-pi"))
+          (should (string-match-p (regexp-quote text) (buffer-string))))))))
 
 (defun pichat-test-diagnostics-toggle (title)
   "Activate the report evidence heading with exact TITLE."

@@ -446,7 +446,7 @@ status presentation. `pichat-attachments.el` owns bounded image records, file
 encoding, wire conversion, and optional acquisition adapters without knowing
 about chat buffers or transcript state. `pichat-chat-diagnostics.el` owns
 conservative transport/Pi-response classification, bounded session diagnostic
-records, safe summaries, explicit raw inspection, and setup launch policy; it
+records, safe chat summaries, the unified report entry point, and standalone setup helpers; it
 does not depend on the chat mode. `pichat-chat-notices.el` owns notice
 acknowledgment and narrowly captured recovery without editing chat buffers or
 deleting retained records; RPC and chat orchestration supply lifecycle boundaries.
@@ -1920,31 +1920,57 @@ after a batch deletion or run `M-x pichat-jobs-collect-evidence`. Archive only w
 work/uncertain executions need preservation. Control waits default to 30 seconds
 (`pichat-jobs-control-timeout`); active model work has no implicit timeout.
 
-## Diagnostics: inspect versus setup
+## Diagnostics: runtime troubleshooting report
 
-Start with `M-x pichat-show-diagnostics`, or `D` on a runtime-manager row
-(Evil Normal `g D`). This is a **safe cached snapshot, not a live health
-check**. It shows four independently retained sections:
+Use `M-x pichat-show-diagnostics`, Chat Actions → **Diagnostics (cached)**,
+`D` on a runtime-manager row (Evil Normal `g D`), or Jobs → Actions →
+**Diagnostics**. All reach the same report for that runtime. Jobs keeps its
+recorded execution-diagnostics view when no usable runtime is retained.
 
-- Runtime / transport failures.
-- Canonical transcript compatibility notices.
-- Live-tail compatibility notices.
-- Available current Session History normalization warnings.
+This is a **cached snapshot, not a live health check**. Its overview shows
+runtime/process and RPC state, the current Pi session identity and cached
+saved-session path, model/configuration and execution context, even when no
+problems were recorded. Runtime and Pi session IDs are distinct; translated
+Emacs paths appear when different. Cached paths do not prove a file exists or
+was written. Disabled persistence, unavailable values and empty caches are
+labelled separately. See `GLOSSARY.md` for these identity/lifetime distinctions.
 
-Opening or refreshing this report reads caches only: no history fetch, RPC
-request, process launch, or automatic raw-data access. `none` means the current
-cache contains no diagnostic records; `unavailable` means there is no current
-cached snapshot, not necessarily a failure. Source-bound sections are excluded
-when their source is stale or rebound. Their warnings are not copied into the
-runtime failure log. Safe summaries are redacted and bounded; severity/category
-and failure time appear only where retained, alongside a runtime identity and
-snapshot-time header.
+Recorded problems include runtime/transport failures, canonical transcript and
+live-tail compatibility notices, and available current Session History warnings.
+`none` means a current cache contains no records; `unavailable` is not a health
+verdict. Stale source-bound sections are unavailable, not copied into the runtime
+failure log. Safe problem summaries remain redacted and bounded, with metadata
+only where retained.
 
-Safe and raw inspectors use separate buffers per runtime. Their actions retain
-the inspected runtime even after it stops; after it is forgotten, the existing
-snapshot remains readable but owner-dependent actions are rejected rather than
-selecting another runtime. See `GLOSSARY.md` for runtime versus Pi session and
-Session History terminology.
+Expandable evidence holds captured launch arguments, startup tool selections,
+domain records, current or retained stderr/failures and incoming events.
+**The report can contain paths, prompts and credentials; review before sharing.**
+Incoming events are a bounded retained subset, **not a complete request/response
+trace**. Known omissions and display truncation are labelled. Startup selections
+are configuration, not proof that tools are active or healthy.
+
+Opening, expanding and refreshing use retained state and non-launching local
+process inspection only: no RPC, history fetch, process launch, settings edits
+or local/remote file checks. One inspector belongs to each runtime, even across
+Pi session changes or stops. Separate runtimes have separate reports. After
+Forget, the snapshot and folds remain readable, but owner-dependent actions
+reject it rather than selecting another runtime. Refresh preserves its owner,
+return destination and each section's fold choice; new sections use defaults.
+The latest failure expands automatically only on first opening.
+
+`C-h m` documents native and optional Evil actions and related standalone setup
+commands; the report contains no shortcut legend or setup chooser. Toggle an
+evidence heading with TAB/RET/click; refresh with native `g` (Evil `g r`), and
+return with `q`. Evil Normal also offers `za` for folding, while motions/search
+remain Vim's. There is no setup key (`s` is unbound/disabled).
+
+**Upgrade/reload:** rebuild PiChat and restart Emacs, or reload
+`pichat-chat-diagnostics.el` and `pichat-evil.el`, then rerun `pichat-evil-setup`
+if enabled. Reload closes old raw-mode buffers and removes the raw mode/keymap
+and the commands `pichat-show-transport-diagnostics`,
+`pichat-diagnostics-show-raw` and `pichat-diagnostics-setup`, with no aliases.
+Remove any personal bindings to those commands. Reopen with
+`pichat-show-diagnostics`; retained collectors are unchanged.
 
 Chat notices are separate from retained diagnostic history. Each new failure's
 notice disappears automatically after **5 seconds**, without deleting history,
@@ -1967,7 +1993,7 @@ captured malformed-RPC notices. Other errors remain until expiration or explicit
 dismissal. Source-specific notices are not replayed after source rebinding
 (including switching away and back); process-start/exit notices remain runtime-wide
 until expiration, dismissal or process replacement. Retained history stays
-available in the inspectors below, within the existing record limit.
+available in the unified report, within the existing record limit.
 See `GLOSSARY.md` for source and runtime distinctions.
 
 Raw transport evidence is bounded **before copying or printing**, separately
@@ -1992,19 +2018,7 @@ attachments or recoverable submissions, nor do they certify peak process
 memory. Notice acknowledgment, recovery and source/process expiry remain
 independent of the retained evidence.
 
-Inspector keys:
-
-- `g` (Evil Normal `g r`) — rebuild the current safe or raw snapshot.
-- Safe view `r` — open sensitive raw details for that runtime directly.
-  The raw view can contain stderr, failed RPC responses, command arguments,
-  recent RPC events, paths, prompt content, and credentials. It retains bounded
-  records/values; **review before sharing**. Direct explicit inspection remains
-  available via `M-x pichat-show-transport-diagnostics`.
-- Safe view `s` — choose an explicit setup action, separate from inspection.
-- `q` — return/bury; raw details opened from a safe report return to that
-  report, then to its origin. Refresh preserves this return chain.
-
-Setup actions may launch a process or open editable configuration:
+Standalone setup commands may launch a process or open editable configuration:
 
 - **Check Pi executable/version** (`pichat-diagnostics-probe-pi`) runs the target
   executable with `--version` and reports in the echo area/`*Messages*`. It does
@@ -2022,12 +2036,14 @@ Setup actions may launch a process or open editable configuration:
 - **Customize PiChat** (`pichat-diagnostics-customize`) opens the `pichat` group.
   `pichat-diagnostics-customize-transport` remains a compatibility alias.
 
-The chooser explains and omits unavailable Pi actions for backends without the
-required capability; Emacs customization remains available. No setup action is
-automatic, and opening diagnostics never repairs, restarts, or edits a runtime.
+Pi-specific helpers reject backends without the required capability; Emacs
+customization remains available. No setup action is automatic, and opening
+diagnostics never repairs, restarts, or edits a runtime. The version probe's
+result is not retained in the report.
 
-This repository's personal menus offer chat `SPC m ? D` for safe diagnostics and
-inspector `SPC m r` / `SPC m q` for refresh/return (including raw inspectors).
+This repository's personal menus offer chat `SPC m ? D` for the report and
+inspector `SPC m r` / `SPC m q` for refresh/return, plus `SPC m TAB` to toggle
+evidence at point.
 The manager's existing `SPC m D` remains unchanged. In Insert state use
 `M-SPC m`; native mode keys remain usable without these personal menus or Evil.
 
@@ -2123,9 +2139,9 @@ Chat keys:
   submissions already in flight
 - Image-only prompts are controlled by
   `pichat-attachments-allow-image-only-prompts` and are disabled by default
-- `M-x pichat-show-diagnostics` / local `SPC m ? D` — safe cached diagnostics;
-  see “Diagnostics: inspect versus setup” above for inspector keys, raw-data
-  warnings, setup actions, and ownership rules
+- `M-x pichat-show-diagnostics` / local `SPC m ? D` — cached runtime report;
+  see “Diagnostics: runtime troubleshooting report” above for evidence warnings,
+  standalone setup helpers and ownership rules; use `C-h m` for actions
 - Ordinary chat status shows only bounded, redacted diagnostic summaries and
   distinguishes local startup/process exit failures from valid Pi RPC errors
 - `C-c C-0` — dismiss active diagnostic notices, preserving diagnostic history

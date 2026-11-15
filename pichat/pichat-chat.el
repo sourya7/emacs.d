@@ -4281,7 +4281,7 @@ Return non-nil only when the projected status value changes."
                     (format "[diagnostic] %s" (plist-get record :summary)))
                   (reverse selected) "\n")
                  3600 nil nil "\n[additional notice text omitted]")
-                "\n[C-c C-0: dismiss notices; M-x pichat-show-diagnostics: history]")))))
+                "\n[C-c C-0: dismiss notices; M-x pichat-show-diagnostics: report]")))))
     (pichat-chat--schedule-diagnostic-notice-expiry session records)))
 
 (defun pichat-chat-dismiss-diagnostic-notices ()

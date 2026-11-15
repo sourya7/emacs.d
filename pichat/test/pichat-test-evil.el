@@ -21,8 +21,7 @@
                   pichat-job-definitions-mode
                   pichat-artifact-result-mode pichat-artifact-elisp-result-mode
                   pichat-artifact-runner-result-mode))
-         (open-inspectors (list (generate-new-buffer " *evil-existing-safe*")
-                                (generate-new-buffer " *evil-existing-raw*")))
+         (open-inspectors (list (generate-new-buffer " *evil-existing-report*")))
          (previous-preview-hook
           (copy-sequence pichat-artifacts-preview-mode-hook))
          (previous (mapcar (lambda (mode)
@@ -36,7 +35,7 @@
                        (funcall mode)
                        (evil-normal-state)))
                    open-inspectors
-                   '(pichat-diagnostics-mode pichat-transport-diagnostics-mode))
+                   '(pichat-diagnostics-mode))
           (pichat-evil-setup)
           (dolist (buffer open-inspectors)
             (with-current-buffer buffer
@@ -164,25 +163,26 @@
             (pichat-session-manager-preview-mode)
             (should (eq (key-binding (kbd "q"))
                         #'pichat-session-manager-preview-quit)))
-          (dolist (mode '(pichat-diagnostics-mode pichat-transport-diagnostics-mode))
-            (with-temp-buffer
-              (funcall mode)
-              (should (eq evil-state 'normal))
-              (should (eq (key-binding (kbd "q")) #'pichat-view-quit))
-              (should (eq (key-binding (kbd "g r")) #'pichat-diagnostics-refresh))
-              (should (eq (key-binding (kbd "r"))
-                          (if (eq mode 'pichat-diagnostics-mode)
-                              #'pichat-diagnostics-show-raw #'undefined)))
-              ;; Do not take over Vim's g prefix or unrelated navigation.
-              (should (eq (key-binding (kbd "g g")) #'evil-goto-first-line))
-              (should (eq (key-binding (kbd "/")) #'evil-search-forward))
-              (should (eq (key-binding (kbd "w")) #'evil-forward-word-begin))
-              (should (eq (key-binding (kbd "s"))
-                          (if (eq mode 'pichat-diagnostics-mode)
-                              #'pichat-diagnostics-setup #'undefined)))
-              (evil-emacs-state)
-              (should (eq (key-binding (kbd "g")) #'pichat-diagnostics-refresh))
-              (should (eq (key-binding (kbd "q")) #'pichat-view-quit))))
+          (with-temp-buffer
+            (pichat-diagnostics-mode)
+            (should (eq evil-state 'normal))
+            (should (eq (key-binding (kbd "q")) #'pichat-view-quit))
+            (should (eq (key-binding (kbd "g r")) #'pichat-diagnostics-refresh))
+            (dolist (key '("TAB" "<tab>" "RET" "z a"))
+              (should (eq (key-binding (kbd key)) #'pichat-diagnostics-toggle-section)))
+            ;; No raw navigation or setup action; Vim motions/search survive.
+            (should (eq (key-binding (kbd "r")) #'evil-replace))
+            (should (eq (key-binding (kbd "s")) #'undefined))
+            (dolist (binding '(("g g" . evil-goto-first-line)
+                               ("j" . evil-next-line) ("k" . evil-previous-line)
+                               ("/" . evil-search-forward) ("n" . evil-search-next)
+                               ("N" . evil-search-previous) ("w" . evil-forward-word-begin)))
+              (should (eq (key-binding (kbd (car binding))) (cdr binding))))
+            (evil-emacs-state)
+            (should (memq (key-binding (kbd "r")) '(nil undefined)))
+            (should (memq (key-binding (kbd "s")) '(nil undefined)))
+            (should (eq (key-binding (kbd "g")) #'pichat-diagnostics-refresh))
+            (should (eq (key-binding (kbd "q")) #'pichat-view-quit)))
           (with-temp-buffer
             (pichat-response-view-mode)
             (should (eq (key-binding (kbd "q")) #'pichat-view-quit))

@@ -776,7 +776,7 @@ LAUNCH-OPTIONS supports `:persistence', `:preset' (or a resolved
                    (pichat-session-rpc-command session))
         (message "PiChat RPC startup failed: %s"
                  (or (pichat-chat-diagnostics-latest-summary session)
-                     "see M-x pichat-show-transport-diagnostics"))))
+                     "see M-x pichat-show-diagnostics"))))
     session))
 
 ;;;###autoload

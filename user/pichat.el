@@ -332,7 +332,8 @@ Never redirect input to another terminal client's frame."
     "r" '(pichat-session-manager-preview-refresh :which-key "Refresh preview"))
   (sharmaso/mode-keys
     :keymaps 'pichat-diagnostics-mode-map
-    "r" '(pichat-diagnostics-refresh :which-key "Refresh snapshot")
+    "r" '(pichat-diagnostics-refresh :which-key "Refresh report")
+    "TAB" '(pichat-diagnostics-toggle-section :which-key "Toggle evidence")
     "q" '(pichat-view-quit :which-key "Return"))
   (sharmaso/mode-keys
     :keymaps 'pichat-response-view-mode-map

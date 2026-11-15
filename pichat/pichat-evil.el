@@ -175,11 +175,12 @@ remain in their original mode maps."
     (kbd "g r") #'pichat-session-manager-preview-refresh)
   (evil-define-key* 'normal pichat-diagnostics-mode-map
     (kbd "g r") #'pichat-diagnostics-refresh
-    (kbd "r") #'pichat-diagnostics-show-raw
-    (kbd "s") #'pichat-diagnostics-setup)
-  (evil-define-key* 'normal pichat-transport-diagnostics-mode-map
-    (kbd "g r") #'pichat-diagnostics-refresh
-    (kbd "r") #'undefined
+    (kbd "TAB") #'pichat-diagnostics-toggle-section
+    (kbd "<tab>") #'pichat-diagnostics-toggle-section
+    (kbd "RET") #'pichat-diagnostics-toggle-section
+    (kbd "z a") #'pichat-diagnostics-toggle-section
+    ;; Clear the old raw action on reload; block Evil's substitute action.
+    (kbd "r") nil
     (kbd "s") #'undefined)
   ;; Reports may already be open when this optional layer is enabled.  Evil
   ;; caches their active maps, so newly added auxiliary maps need a refresh.

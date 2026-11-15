@@ -107,7 +107,7 @@
             (should (equal seen (list a a a))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
-(ert-deftest pichat-diagnostics-safe-identity-excludes-paths-and-unsafe-labels ()
+(ert-deftest pichat-diagnostics-overview-distinguishes-runtime-context-and-launch-evidence ()
   (let* ((transport (pichat-transport--create
                      :id 'target :kind 'local :label "token=label-secret\n/secret"
                      :pi-executable "/secret/pi"))
@@ -121,9 +121,12 @@
           (with-current-buffer buffer
             (let ((text (buffer-string)))
               (should (string-match-p (pichat-session-runtime-id session) text))
-              (should (string-match-p "Backend: pi\nTarget: target (local)" text))
+              (should (string-match-p "Backend: pi" text))
               (should (string-match-p "State: error\nSnapshot: [0-9].*Z" text))
-              (should-not (string-match-p "secret\|label-secret" text)))))
+              (should (string-match-p "Runtime CWD: /secret/project/" text))
+              (should (string-match-p "Configured executable.*: /secret/pi" text))
+              (should-not (string-match-p "--secret" text))
+              (should-not (string-match-p "g / Evil\\|asks first" text)))))
       (when (buffer-live-p buffer) (kill-buffer buffer)))))
 
 (ert-deftest pichat-diagnostics-nested-quit-returns-through-safe-view-after-refresh ()
@@ -195,7 +198,8 @@
               (setq pichat-sessions--diagnostics
                     (list (pichat-diagnostic-create :summary "history-notice"))))
             (setf (pichat-session-event-log session) '((:secret "private-event")))
-            (let ((before (copy-tree (pichat-session-diagnostics session)))
+            (let ((comp-enable-subr-trampolines nil)
+                  (before (copy-tree (pichat-session-diagnostics session)))
                   (events (copy-tree (pichat-session-event-log session)))
                   (no-io (lambda (&rest _) (error "Refresh attempted I/O or raw rendering"))))
               (cl-letf (((symbol-function 'pichat-rpc-send) no-io)
@@ -207,7 +211,9 @@
                         ((symbol-function 'start-process) no-io)
                         ((symbol-function 'process-file) no-io)
                         ((symbol-function 'call-process) no-io)
-                        ((symbol-function 'pichat-chat-diagnostics--print-value) no-io))
+                        ((symbol-function 'file-exists-p) no-io)
+                        ((symbol-function 'file-attributes) no-io)
+                        ((symbol-function 'file-readable-p) no-io))
                 (with-current-buffer report
                   (call-interactively (key-binding (kbd "g")))
                   (let ((text (buffer-string)))
@@ -400,6 +406,171 @@
               (cl-letf (((symbol-function 'completing-read)
                          (lambda (&rest _) (ert-fail "Prompted for forgotten owner"))))
                 (should-error (pichat-diagnostics-setup) :type 'user-error))))
+        (when (buffer-live-p report) (kill-buffer report))))))
+
+(defun pichat-test-diagnostics-toggle (title)
+  "Activate the report evidence heading with exact TITLE."
+  (goto-char (point-min))
+  (search-forward title)
+  (beginning-of-line)
+  (forward-char 2)
+  (call-interactively (key-binding (kbd "TAB"))))
+
+(ert-deftest pichat-diagnostics-report-paths-folds-and-return-survive-refresh ()
+  (pichat-test-with-clean-state
+    (save-window-excursion
+      (let* ((session (pichat-register-session
+                       (pichat-session-make
+                        :id "pi-source" :session-file "/runtime/session.jsonl"
+                        :model '(:provider "fake" :id "offline") :thinking-level "low"
+                        :rpc-command '("pi" "--prompt" "token=explicit-secret")
+                        :preset-spec '(:name fixture :tools ("read")))))
+             (origin (generate-new-buffer " *report-origin*"))
+             report)
+        (unwind-protect
+            (progn
+              (switch-to-buffer origin)
+              (cl-letf (((symbol-function 'pichat-session-emacs-session-file)
+                         (lambda (_) "/emacs/session.jsonl")))
+                (setq report (pichat-show-diagnostics session)))
+              (should (string-match-p "Session ID: pi-source" (buffer-string)))
+              (should (string-match-p "Runtime saved-session path (cached): /runtime/session.jsonl" (buffer-string)))
+              (should (string-match-p "Emacs saved-session path (translated): /emacs/session.jsonl" (buffer-string)))
+              (should (string-match-p "does not prove a file was written" (buffer-string)))
+              (should (string-match-p "Model: fake/offline" (buffer-string)))
+              (should (string-match-p "Process status: unavailable" (buffer-string)))
+              (should-not (string-match-p "explicit-secret" (buffer-string)))
+              (pichat-test-diagnostics-toggle "Captured launch command")
+              (should (string-match-p "explicit-secret" (buffer-string)))
+              (pichat-chat-diagnostics-record session :origin 'rpc-response :message "late-failure-secret")
+              (pichat-diagnostics-refresh)
+              ;; First-appearing failure on refresh must not auto-expand.
+              (should-not (string-match-p ":message[[:space:]]+\"late-failure-secret\"" (buffer-string)))
+              (should (string-match-p "explicit-secret" (buffer-string)))
+              (pichat-test-diagnostics-toggle "Captured launch command")
+              (setf (pichat-session-id session) "replacement-source"
+                    (pichat-session-state session) 'stopped)
+              (pichat-diagnostics-refresh)
+              (should (eq report (current-buffer)))
+              (should (string-match-p "Session ID: replacement-source" (buffer-string)))
+              (should-not (string-match-p "explicit-secret" (buffer-string)))
+              (call-interactively (key-binding (kbd "q")))
+              (should (eq origin (current-buffer))))
+          (mapc (lambda (buffer) (when (buffer-live-p buffer) (kill-buffer buffer)))
+                (list report origin)))))))
+
+(ert-deftest pichat-diagnostics-report-provider-sections-keep-stable-independent-folds ()
+  (pichat-test-with-clean-state
+    (let* ((session (pichat-register-session (pichat-session-make)))
+           (present t)
+           (pichat-diagnostics-section-functions
+            (list (lambda (_)
+                    (when present '(("Extra domain" (:summary "extra" :type "extra-evidence")))))))
+           report)
+      (unwind-protect
+          (cl-letf (((symbol-function 'pichat-view-display) #'ignore))
+            (pichat-chat-diagnostics-record session :origin 'rpc-response :message "first-secret")
+            (setq report (pichat-show-diagnostics session))
+            (with-current-buffer report
+              (should (string-match-p ":message[[:space:]]+\"first-secret\"" (buffer-string)))
+              (pichat-test-diagnostics-toggle "Latest retained runtime failure")
+              (pichat-test-diagnostics-toggle "Extra domain evidence")
+              (should (string-match-p "extra-evidence" (buffer-string)))
+              (setq present nil)
+              (pichat-diagnostics-refresh)
+              (should-not (string-match-p "Extra domain" (buffer-string)))
+              (setq present t)
+              (pichat-chat-diagnostics-record session :origin 'rpc-response :message "second-secret")
+              (pichat-diagnostics-refresh)
+              (should (string-match-p "extra-evidence" (buffer-string)))
+              (should-not (string-match-p ":message[[:space:]]+\"second-secret\"" (buffer-string)))
+              (pichat-forget-session session)
+              ;; Readable snapshots still fold; owner-dependent refresh rejects.
+              (pichat-test-diagnostics-toggle "Extra domain evidence")
+              (should-error (pichat-diagnostics-refresh) :type 'user-error)))
+        (when (buffer-live-p report) (kill-buffer report))))))
+
+(ert-deftest pichat-diagnostics-report-bounds-retained-events-and-keeps-collectors ()
+  (pichat-test-with-clean-state
+    (let* ((session (pichat-register-session
+                     (pichat-session-make :event-log
+                                          `((:type "newest" :text ,(make-string 500 ?x))
+                                            (:type "omitted-event")))))
+           (before (copy-tree (pichat-session-event-log session)))
+           (pichat-diagnostics-view-event-limit 1)
+           (pichat-diagnostics-view-value-limit 100)
+           (comp-enable-subr-trampolines nil)
+           (no-io (lambda (&rest _) (ert-fail "Report inspection attempted I/O")))
+           report)
+      (unwind-protect
+          (cl-letf (((symbol-function 'pichat-view-display) #'ignore)
+                    ((symbol-function 'pichat-rpc-send) no-io)
+                    ((symbol-function 'pichat-backend-get-transcript) no-io)
+                    ((symbol-function 'pichat-rpc-get-tree) no-io)
+                    ((symbol-function 'make-process) no-io)
+                    ((symbol-function 'process-file) no-io)
+                    ((symbol-function 'file-exists-p) no-io)
+                    ((symbol-function 'file-attributes) no-io)
+                    ((symbol-function 'file-readable-p) no-io))
+            (setq report (pichat-show-diagnostics session))
+            (with-current-buffer report
+              (pichat-test-diagnostics-toggle "Retained incoming events")
+              (pichat-diagnostics-refresh)
+              (should (string-match-p "1 shown, 1 retained events omitted" (buffer-string)))
+              (should (string-match-p "Not a complete request/response trace" (buffer-string)))
+              (should (string-match-p "newest" (buffer-string)))
+              (should-not (string-match-p "omitted-event" (buffer-string)))
+              (should (string-match-p "truncated by PiChat" (buffer-string)))
+              (should (equal before (pichat-session-event-log session)))))
+        (when (buffer-live-p report) (kill-buffer report))))))
+
+(ert-deftest pichat-diagnostics-report-stderr-rejects-stale-process-and-buffer ()
+  (pichat-test-with-unit-session (session process)
+    (pichat-register-session session)
+    (let ((stderr (generate-new-buffer " *report-stderr*"))
+          (pichat-diagnostics-stderr-limit 12)
+          report)
+      (unwind-protect
+          (cl-letf (((symbol-function 'pichat-view-display) #'ignore))
+            (setf (pichat-session-stderr-buffer session) stderr
+                  (pichat-session-process-generation session) 7)
+            (process-put process 'pichat-process-generation 7)
+            (process-put process 'pichat-stderr-buffer stderr)
+            (setq report (pichat-show-diagnostics session))
+            (with-current-buffer report
+              (pichat-test-diagnostics-toggle "Current stderr")
+              (should (string-match-p "empty (owning live stderr buffer)" (buffer-string)))
+              (with-current-buffer stderr (insert "stderr-secret-long-value"))
+              (pichat-diagnostics-refresh)
+              (should (string-match-p "stderr-secre" (buffer-string)))
+              (should (string-match-p "stderr truncated" (buffer-string)))
+              (process-put process 'pichat-stderr-buffer nil)
+              (pichat-diagnostics-refresh)
+              (should-not (string-match-p "stderr-secre" (buffer-string)))
+              (process-put process 'pichat-stderr-buffer stderr)
+              (setf (pichat-session-process-generation session) 8)
+              (pichat-diagnostics-refresh)
+              (should (string-match-p "Process status: unavailable" (buffer-string)))
+              (should-not (string-match-p "stderr-secre" (buffer-string)))))
+        (when (buffer-live-p report) (kill-buffer report))
+        (when (buffer-live-p stderr) (kill-buffer stderr))))))
+
+(ert-deftest pichat-diagnostics-report-disabled-persistence-and-backend-boundaries ()
+  (dolist (backend '(pi no-pi))
+    (let ((session (pichat-session-make :backend backend :persistence 'ephemeral
+                                      :rpc-command '("secret-launch") :event-log '((:secret "event"))))
+          report)
+      (unwind-protect
+          (cl-letf (((symbol-function 'pichat-view-display) #'ignore))
+            (setq report (pichat-show-diagnostics session))
+            (with-current-buffer report
+              (should (string-match-p "Persistence: disabled (--no-session)" (buffer-string)))
+              (should (string-match-p "saved-session path (cached): unavailable" (buffer-string)))
+              (pichat-test-diagnostics-toggle "Captured launch command")
+              (if (eq backend 'pi)
+                  (should (string-match-p "secret-launch" (buffer-string)))
+                (should-not (string-match-p "secret-launch" (buffer-string)))
+                (should (string-match-p "unavailable for this backend" (buffer-string))))))
         (when (buffer-live-p report) (kill-buffer report))))))
 
 (provide 'pichat-test-diagnostics-views)

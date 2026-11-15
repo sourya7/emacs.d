@@ -20,6 +20,7 @@
 (require 'pichat-path)
 (require 'pichat-view)
 (require 'pichat-diagnostic)
+(require 'pichat-diagnostics-report)
 
 (defvar pichat-diagnostics-section-functions nil
   "Functions taking a runtime and returning cached diagnostic sections.
@@ -89,6 +90,9 @@ command is not safe."
 (defvar pichat-diagnostics-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "g") #'pichat-diagnostics-refresh)
+    (define-key map (kbd "TAB") #'pichat-diagnostics-toggle-section)
+    (define-key map (kbd "<tab>") #'pichat-diagnostics-toggle-section)
+    (define-key map (kbd "RET") #'pichat-diagnostics-toggle-section)
     (define-key map (kbd "r") #'pichat-diagnostics-show-raw)
     (define-key map (kbd "s") #'pichat-diagnostics-setup)
     map)
@@ -103,7 +107,11 @@ command is not safe."
   "Native bindings for explicit raw diagnostics.")
 
 (define-derived-mode pichat-diagnostics-mode pichat-view-mode "PiChat-Diagnostics"
-  "Read-only cached diagnostics owned by one PiChat runtime.")
+  "Read-only cached diagnostics owned by one PiChat runtime.
+Evidence may contain credentials, paths and prompts; review before sharing.
+TAB or RET on an evidence heading toggles its bounded snapshot.  g refreshes
+from retained state only; q returns to the origin.  No health probes run.
+\n\\{pichat-diagnostics-mode-map}")
 
 (define-derived-mode pichat-transport-diagnostics-mode pichat-diagnostics-mode
   "PiChat-Raw-Diagnostics"
@@ -589,7 +597,7 @@ are reported in the echo area and *Messages*, not the cached inspector."
    (condition-case err
        (pp-to-string (pichat-diagnostic-copy-raw value))
      (error (format "<unprintable: %s>" (error-message-string err))))
-   pichat-diagnostics-view-value-limit))
+   (max 1 (min 20000 pichat-diagnostics-view-value-limit))))
 
 (defun pichat-diagnostics-refresh ()
   "Rebuild the current inspector from its owner's cached records.
@@ -637,9 +645,10 @@ never replaced by the snapshot time.  Raw record fields are not printed."
 
 ;;;###autoload
 (defun pichat-show-diagnostics (&optional session)
-  "Show safe cached diagnostics for SESSION without issuing RPC requests.
-Domain collectors keep their own lifetimes.  Missing snapshots are reported as
-unavailable.  Use `pichat-show-transport-diagnostics' explicitly for raw data."
+  "Show the cached runtime troubleshooting report for SESSION.
+Overview and sensitive expandable evidence use retained state only, without
+RPC, process launch or filesystem checks.  Missing caches are unavailable,
+not healthy.  Collector lifetimes and retention remain unchanged."
   (interactive)
   (let* ((session (pichat-chat-diagnostics--session session))
          (_owner (unless session (user-error "No PiChat session")))
@@ -654,30 +663,10 @@ unavailable.  Use `pichat-show-transport-diagnostics' explicitly for raw data."
                         (mapcar (lambda (provider) (funcall provider session))
                                 pichat-diagnostics-section-functions)))))
       (with-current-buffer buffer
-        (let ((inhibit-read-only t))
-          (erase-buffer)
-          (insert "PiChat diagnostics (cached snapshot, not a live health check)\n\n"
-                  "g / Evil gr: refresh caches   r: raw details (sensitive; asks first)\n"
-                  "s: setup actions (may start processes or edit settings)   q: return\n"
-                  "Unavailable means no current cached snapshot, not necessarily a failure.\n"
-                  "None means the current cache contains no diagnostic records.\n\n")
-          (pichat-chat-diagnostics--insert-identity session)
-          (dolist (title '("Runtime / transport" "Canonical transcript"
-                           "Live tail" "Session History"))
-            (let ((section (assoc title sections)))
-              (insert title "\n")
-              (cond
-               ((null section) (insert "  unavailable (no current cached snapshot)\n"))
-               ((null (cdr section)) (insert "  none\n"))
-               (t (dolist (record (cdr section))
-                    (insert "  "
-                            (pichat-chat-diagnostics--safe-record-line record)
-                            "\n"))))
-              (insert "\n"))))
         (unless (eq major-mode 'pichat-diagnostics-mode)
           (pichat-diagnostics-mode))
         (setq-local pichat-diagnostics--owner session)
-        (goto-char (point-min)))
+        (pichat-diagnostics-report-install session sections))
       (unless (eq buffer (current-buffer))
         (pichat-view-display buffer nil 'bury))
       buffer)))

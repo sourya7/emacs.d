@@ -283,7 +283,7 @@
     (should (equal (pichat-diagnostic-summary record)
                    "unknown-entry at entry (context_edit)"))))
 
-(ert-deftest pichat-diagnostics-unified-view-is-safe-and-does-not-retain-snapshots ()
+(ert-deftest pichat-diagnostics-report-preserves-collectors-and-separates-sensitive-evidence ()
   (let* ((session (pichat-session-make))
          (pichat-diagnostics-section-functions
           (list (lambda (_session)
@@ -305,7 +305,13 @@
               (should (string-match-p "unknown-entry at entry (context_edit)" text))
               (should (string-match-p "Live tail\n  none" text))
               (should (string-match-p "Session History\n  unavailable" text))
-              (should-not (string-match-p "secret-value\\|raw-private-output" text))))
+              (should (string-match-p "secret-value" text))
+              (should (string-match-p "raw-private-output" text))
+              ;; Only explicit evidence, not the overview or ordinary chat,
+              ;; exposes the bounded retained payload.
+              (should-not (string-match-p
+                           "secret-value\\|raw-private-output"
+                           (substring text 0 (string-match "Evidence (bounded snapshots)" text))))))
           (should (= 1 (length (pichat-session-diagnostics session)))))
       (when (buffer-live-p buffer) (kill-buffer buffer)))))
 

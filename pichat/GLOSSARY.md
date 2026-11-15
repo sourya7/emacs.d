@@ -7,6 +7,7 @@ Shared terms for discussing PiChat. **Runtime**, **Pi session**, **saved session
 - Define shared, user-facing concepts only when their meaning or distinction needs clarification.
 - Reuse existing terms rather than naming each implementation mechanism or behavior.
 - Keep definitions brief. Put configuration syntax, file paths, protocols, guarantees, limitations, and operational instructions in README.md or implementation documentation.
+- Change this glossary only when the user explicitly requests it. Agents may suggest additions, removals, or rewordings, but must not apply them until the user asks for that specific change.
 
 ## Identity and lifetime
 
@@ -23,13 +24,13 @@ Shared terms for discussing PiChat. **Runtime**, **Pi session**, **saved session
 | **Chat buffer** | The Emacs conversation UI attached to a runtime. Its transcript follows that runtime's active source; closing the buffer and stopping the runtime are distinct operations. |
 | **Runtime manager** | PiChat's global view of retained runtimes, including live, stopped, and failed ones. It is not a browser of saved session files. |
 | **Job** | A reusable instruction and captured execution settings. Ordinary jobs do not require a managed plan. |
-| **Authored job definition** | A global or project JSON source file explicitly reviewed and imported into a saved job. It is not the runtime metadata store; editing or discovering it does not update a saved job or start a job run. |
-| **Job run** | One attempt to execute job instructions, with durable identity, outcome and captured run-end evidence distinct from its runtime and Pi session. A one-off job run need not have a saved job definition. Ordinary runs start independent work; a scheduled continuation borrows its explicitly captured live conversation. **Continue work** creates a linked new job run in a fresh Pi session; **Continue in chat** extends the saved conversation without changing the original run's report. |
-| **Run input** | Text given when starting a saved job that declares an input prompt, stored on the job run and added to its prompt. It is not a draft, a steering or follow-up message, or Continue work's additional instructions. |
-| **Run chain** | The job runs connected by **Requested by** (started by a job tool inside another job run), follow-up origin, Repeat and Continue work links. It is derived on demand, gives each run a round, bounds tool-started runs and can be deleted as a whole. |
-| **Follow-up job** | An independently configured job triggered after an originating job run stops or first becomes uncertain. It creates a new job run, not a follow-up message in the worker's Pi session. |
-| **Job schedule** | Authorized timing owned by Jobs while Emacs is running. Saved jobs support once or anchored elapsed intervals; scheduled continuation supports one explicitly captured attempt. Disabling saved-job timing does not cancel runs already submitted. |
-| **Chain finish notification** | One message PiChat sends to the chat that started a run chain with `pichat_job_run_now` when that chain finishes. It is data from PiChat, delivered as a prompt that Pi may queue as a follow-up message; it is neither a scheduled continuation nor a follow-up job. Its delivery state lasts only while Emacs runs. |
+| **Authored job definition** | A user-authored source explicitly reviewed and imported into a saved job. Editing or discovering it does not update a saved job or start a job run. |
+| **Job run** | One attempt to execute job instructions, with its own identity, outcome and captured evidence, distinct from its runtime and Pi session. **Continue work** creates a linked new job run; **Continue in chat** extends the saved conversation without changing the original run's report. |
+| **Run input** | Text given when starting a job that asks for it, added to that job run's prompt. It is not a draft, a steering or follow-up message, or Continue work's additional instructions. |
+| **Run chain** | The job runs linked because one was started from another job run, by a follow-up job, or by Repeat or Continue work. |
+| **Follow-up job** | An independently configured job triggered by the end of an originating job run. It creates a new job run, not a follow-up message in the worker's Pi session. |
+| **Job schedule** | Timing owned by Jobs that starts a saved job, or one scheduled continuation, while Emacs is running. |
+| **Chain finish notification** | A message PiChat sends to the chat that started a run chain when that chain finishes. It is data from PiChat, not a user request; it is neither a scheduled continuation nor a follow-up job. |
 | **Scheduled continuation** | A one-shot Jobs attempt to send a reviewed prompt in the exact captured live runtime and Pi session. It is not independent Continue work, a Pi follow-up message, or a follow-up job. |
 | **Jobs view** | The definitions and job-run history view, distinct from the runtime manager, Session History, and saved-session browser. |
 
@@ -42,11 +43,10 @@ Shared terms for discussing PiChat. **Runtime**, **Pi session**, **saved session
 | **Independent runtime** | An additional runtime started rather than reusing an existing one, without automatically becoming preferred. This differs from creating a new Pi session inside an existing runtime. |
 | **Launch profile** | The choices governing runtime selection or creation: scope, reuse, persistence, target, model, preset, optional Tools customization, and optional conversation intent. |
 | **Conversation intent** | A normal-launch choice: default reuse/fresh behavior, a fresh independent conversation, a selection-only saved session, or an explicit route to the current chat. It does not itself mutate a runtime. |
-| **Reconfiguration** | An explicitly confirmed restart of a runtime to replace startup preset/Tools without changing its runtime ID or owner scope. An existing saved Pi session is reloaded and verified; an unwritten, verified conversation-free Pi session instead receives a **new Pi session ID**. It is not a Pi session switch or clone. |
-| **Restart snapshot** | The last synchronized canonical transcript retained as read-only while a reconfigured runtime is stopping, loading, synchronizing, or failed. For an unwritten session it may contain only startup model/thinking metadata. It is not authoritative state from a replacement process until verified commit. |
-| **Source reservation** | An Emacs-local, transport-qualified saved-file claim held during an independent launch; together with retained restart writer claims it prevents another PiChat-managed writer. It does not detect external Pi processes. |
-| **Preset** | A named startup configuration of tools, system-prompt additions or replacement, and optionally a model, captured as a resolved snapshot when a runtime starts. It belongs to the runtime, not its saved Pi sessions, and cannot be applied to an already-running process. Explicit-tool presets also provide the baseline for the launch Tools picker, including any default MCP tools; pass-through presets leave Pi defaults unchanged. A preset's model is a run-local model for launches that name it. |
-| **Saved preset** | A preset saved from the launcher into the user's Custom file, rather than defined in Lisp. It is a reusable definition, not a runtime or saved session file, and takes precedence over a programmatic preset of the same name. |
+| **Reconfiguration** | An explicitly confirmed restart that replaces a runtime's preset or Tools, keeping its runtime ID and owner scope. It is not a Pi session switch or clone. |
+| **Restart snapshot** | The read-only transcript a chat shows while its runtime is being reconfigured, until the replacement process is verified. |
+| **Preset** | A named startup configuration of tools, system-prompt additions or replacement, and optionally a run-local model, captured as a resolved snapshot when a runtime starts. It belongs to the runtime, not its saved Pi sessions, and cannot be applied to an already-running process. Explicit-tool presets also provide the baseline for the launch Tools picker; pass-through presets leave Pi defaults unchanged. |
+| **Saved preset** | A preset saved from the launcher rather than defined in Lisp. It is a reusable definition, not a runtime or saved session file. |
 | **Tools customization** | A run-local selection that can remove built-in tools from an explicit preset, enable or disable eligible extension tools, and opt into directly exposed MCP tools or Emacs-defined tools. It configures a new independent runtime or an explicitly confirmed replacement, not a live edit or a Pi session/saved-session-file property; an unchanged preset baseline is not a customization. |
 | **Default preset** | The preset configured for a new runtime when no named preset is explicitly selected. It differs from the launcher's `default` choice, which permits reuse of a preferred runtime regardless of its captured preset. |
 | **Target** | The execution destination for Pi, such as the local machine or a configured SSH host. |
@@ -90,12 +90,9 @@ Shared terms for discussing PiChat. **Runtime**, **Pi session**, **saved session
 | **Canonical transcript** | PiChat's synchronized representation of Pi's active-branch entries, used as the authority for settled chat content. It also applies to ephemeral sessions. |
 | **Live tail** | Provisional chat content derived from RPC events while an agent run is in progress, before canonical synchronization. |
 | **Settlement** | The transition from an agent run's provisional output to synchronized canonical content after the run ends. |
-| **State synchronization** | Fetching Pi's state or entries to update PiChat after a run or source rebinding. |
-| **Source generation** | A PiChat generation marker used to invalidate stale events, callbacks, or caches after source rebinding. It is not a Pi session ID. A verified same-source runtime restart does not create a navigation entry. |
-| **Process generation** | A distinct runtime-process lifetime marker; events and transport buffers from a stopped process cannot act on its replacement, even when it hosts the same Pi session. |
-| **Repaint** | Refreshing the chat display from PiChat's synchronized transcript model, rather than treating visible buffer text as the source of truth. |
-| **Rendered response view** | A read-only rendering of one settled assistant response's prose. The chat itself retains the response's exact Markdown source. Job reports reuse its renderer without requiring a live chat. |
-| **Run transcript** | Captured conversation evidence through one job run's settled boundary. **Preview conversation** displays it read-only without starting a runtime or following later edits to the saved session file. |
+| **Repaint** | Rebuilding the chat display from the canonical transcript; visible buffer text is not the source of truth. |
+| **Rendered response view** | A read-only rendering of one settled assistant response's prose. The chat itself retains the response's exact Markdown source. |
+| **Run transcript** | The conversation captured when one job run settled. It does not follow later edits to the saved session file. |
 
 ## Messages and tool display
 
@@ -127,7 +124,7 @@ Shared terms for discussing PiChat. **Runtime**, **Pi session**, **saved session
 | **Tool declaration** | Offering a tool directly to the model, distinct from loading the extension or MCP server that provides it. |
 | **Tool catalogue** | A target-specific snapshot of tools available for selection, including initially disabled extension tools. |
 | **PiChat bridge** | The optional Pi extension that connects a Pi runtime to PiChat's Emacs-side tool and UI facilities. |
-| **Emacs-defined tool** | A PiChat tool implemented on the Emacs side and exposed to Pi through the bridge, rather than a Pi built-in tool. Registration only makes it selectable; a runtime exposes it only when its captured Tools selection includes it. |
+| **Emacs-defined tool** | A PiChat tool implemented on the Emacs side and exposed to Pi through the bridge, rather than a Pi built-in tool. A runtime offers it only when its Tools selection includes it. |
 | **Approval policy** | PiChat's allow/ask/deny policy for Emacs-defined tools. It does not govern Pi-native tools. |
 | **Extension UI request** | An extension's request for interaction with the user, routed to the owning chat. |
 

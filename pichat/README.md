@@ -1961,7 +1961,7 @@ dismissal. Source-specific notices are not replayed after source rebinding
 (including switching away and back); process-start/exit notices remain runtime-wide
 until expiration, dismissal or process replacement. Retained history stays
 available in the inspectors below, within the existing record limit.
-See `GLOSSARY.md` for source, runtime and process-generation distinctions.
+See `GLOSSARY.md` for source and runtime distinctions.
 
 Raw transport evidence is bounded **before copying or printing**, separately
 from inspector display limits. Each failure's message, condition, program,
@@ -2682,9 +2682,11 @@ housekeeping is separate from exit confirmation. These actions never delete the
 saved session file.
 
 Runtime identity, owner scope, chat/draft, run-local model and captured target
-remain stable. Saved Pi sessions retain their source and active branch; eligible
-unwritten, conversation-free Pi sessions intentionally receive a new Pi session
-ID, as defined in `GLOSSARY.md`. This is not reconnection or resumption of an old
+remain stable. An existing saved Pi session is reloaded and verified, retaining
+its source and active branch. A Pi session that has not been written yet and is
+verified to contain no conversation instead intentionally receives a new Pi
+session ID. Reconfiguration is not a Pi session switch or clone (see
+`GLOSSARY.md`). This is not reconnection or resumption of an old
 remote process. Source claims are Emacs-local: there is no distributed lock or
 guarantee against unrelated external Pi writers.
 

@@ -18,6 +18,7 @@ Personal GNU Emacs configuration. `init.el` loads `core/package.el`, then `user/
 - Build repository paths with `my/emacs-local-dir`, `my/emacs-shared-dir`, or `my/emacs-main-dir`; do not hardcode them.
 - Read dependency source from `.local/elpaca/sources/<package>/` instead of guessing APIs.
 - Use jj (jujutsu) for commits
+- Commit messages are a single summary line only: no body or trailers.
 - Before committing, review the diff and commit message for secrets and private identifiers (usernames, hostnames, personal paths); use generic placeholders unless explicitly required and approved.
 
 ## In-repo packages
@@ -26,7 +27,7 @@ Before changing these packages, read their documentation:
 
 - `pichat/README.md`, `pichat/GLOSSARY.md`, and `pichat/TESTING_GUIDELINES.md` — Pi RPC frontend, terminology, and tests
 
-When discussing or changing PiChat concepts, always consult `pichat/GLOSSARY.md` and use its precise terms (especially runtime vs. Pi session vs. saved session file, open vs. switch, and Session History vs. saved-session browsing). Reference the glossary when explaining specific concepts; keep it consistent with source and `pichat/README.md` when behavior changes.
+When discussing or changing PiChat concepts, always consult `pichat/GLOSSARY.md` and use its precise terms (especially runtime vs. Pi session vs. saved session file, open vs. switch, and Session History vs. saved-session browsing). Reference the glossary when explaining specific concepts. The glossary defines PiChat concepts only; put commands, configuration, and operational detail in `pichat/README.md`. Never edit `pichat/GLOSSARY.md` unless the user explicitly requests that change: when a change seems warranted (including a definition made stale by a behavior change), suggest it and wait for the user to ask for it.
 
 Sources fetched with elpaca generally live in `.local/elpaca/sources/vui/` (eg. `.local/elpaca/sources/vui/` for `vui`).
 

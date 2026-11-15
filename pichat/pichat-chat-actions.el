@@ -57,20 +57,6 @@ COMMAND retains responsibility for its own prompts, capabilities and async work.
                          (pichat-chat-actions--invoke scope command)))))
              items))))
 
-(defun pichat-chat-actions--heading ()
-  "Describe the captured runtime/source using cached data only."
-  (let* ((scope (transient-scope))
-         (buffer (pichat-chat-actions--buffer scope))
-         (session (buffer-local-value 'pichat-chat-session buffer)))
-    (pichat-transient-fill
-     (format "Runtime %s · %s · %s\nSource %s · %s"
-             (pichat-session-runtime-id session)
-             (or (pichat-session-state session) 'unknown)
-             (pichat-session-model-label session)
-             (or (pichat-session-id session) "unknown")
-             (abbreviate-file-name (or (pichat-session-emacs-cwd session)
-                                       (pichat-session-cwd session) ""))))))
-
 ;;;###autoload (autoload 'pichat-chat-actions "pichat-chat-actions" nil t)
 (transient-define-prefix pichat-chat-actions ()
   "Discover commands for this exact chat; opening/closing does no RPC work.
@@ -78,8 +64,7 @@ Commands recheck the captured chat/source before dispatch and retain their own
 validation.  Process replacement also invalidates this menu.  Stopped chats
 can still use draft and cached-transcript commands.  Tools and artifacts remain
 point-sensitive direct/Embark actions, not delayed menu actions."
-  [:description pichat-chat-actions--heading
-   ["Draft" :class transient-column
+  [["Draft" :class transient-column
     :setup-children (lambda (_)
                       (pichat-chat-actions--suffixes
                        '(("c" "Compose draft" pichat-chat-open-compose-buffer)

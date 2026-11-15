@@ -2046,6 +2046,23 @@ clears MCP stays empty; an ineligible baseline or missing model starts nothing."
                 (should (equal "extension draft" (pichat-chat--input-text)))))
           (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+  (ert-deftest pichat-integration-extension-name-updates-without-state-polling ()
+    (pichat-test-with-integration-session
+        (session :no-session t
+                 :extensions (list pichat-test-rpc-extension)
+                 :script '(:turns []))
+      (let (observed)
+        (pichat-on 'session-state-changed
+                   (lambda (s _event _plist)
+                     (push (pichat-session-name s) observed)) session)
+        ;; No get_state after startup: only the unsolicited RPC event can
+        ;; update the cached name and notify display observers.
+        (dolist (name '("Automatic title" "Replacement title" nil))
+          (pichat-test-rpc-call
+           session "prompt" (list :message (concat "/pichat-test-name " name)))
+          (should (equal name (pichat-session-name session))))
+        (should (equal '(nil "Replacement title" "Automatic title") observed)))))
+
   (ert-deftest pichat-integration-extension-status-request-updates-chat-state ()
     (pichat-test-with-integration-session
         (session :no-session t

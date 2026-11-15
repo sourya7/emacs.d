@@ -401,6 +401,28 @@
       (should (equal '(agent-settled agent-start) events))
       (should (eq (pichat-session-state session) 'idle)))))
 
+(ert-deftest pichat-rpc-name-events-update-cache-before-notifying-observers ()
+  (pichat-test-with-unit-session (session proc)
+    (let (observed generic)
+      (setf (pichat-session-session-file session) "/tmp/same-source.jsonl"
+            (pichat-session-state session) 'running)
+      (pichat-on 'session-state-changed
+                 (lambda (s _event _plist)
+                   (push (pichat-session-name s) observed)) session)
+      (pichat-on 'rpc-event
+                 (lambda (s _event _plist)
+                   (push (pichat-session-name s) generic)) session)
+      (dolist (name '("Automatic title" "Replacement title" nil))
+        (pichat-rpc--process-filter
+         proc (concat (pichat-rpc--json-encode
+                       (if name (list :type "session_info_changed" :name name)
+                         (list :type "session_info_changed"))) "\n"))
+        (should (equal name (pichat-session-name session)))
+        (should (eq 'running (pichat-session-state session)))
+        (should (equal "/tmp/same-source.jsonl" (pichat-session-session-file session))))
+      (should (equal '(nil "Replacement title" "Automatic title") observed))
+      (should (equal observed generic)))))
+
 (ert-deftest pichat-rpc-filter-framing-survives-every-chunk-boundary ()
   (pichat-test-with-unit-session (session proc)
     (let* ((text (concat "α" (string #x2028 #x2029) "\nquoted: \"value\""))

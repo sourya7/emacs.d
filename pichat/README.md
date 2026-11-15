@@ -114,6 +114,11 @@ global runtimes. The integer identifies the runtime, not its loaded Pi session
 and are not reused. Switching, forking, cloning, or reopening the same runtime's
 chat preserves its number; restarting Emacs resets the counter.
 
+Session names set by Pi extensions or `/name` update the runtime manager and
+chat displays as soon as Pi reports the change; no manual state refresh is
+needed. Clearing the name restores the manager's fallback label. Chat buffer
+names remain runtime-based as described above.
+
 ## Persistent chat header
 
 The fixed header stays visible while scrolling or composing. It shows the

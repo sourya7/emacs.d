@@ -881,6 +881,10 @@ must not update public state or become conversation/prompt acceptance events."
       (when (> (length (pichat-session-event-log session)) limit)
         (setcdr (nthcdr (1- limit) (pichat-session-event-log session)) nil)))
     (pcase normalized
+      ('session-info-changed
+       ;; Extensions and /name can rename without a get_state request.
+       ;; An omitted name means the display name was cleared.
+       (setf (pichat-session-name session) (plist-get event :name)))
       ('agent-start
        (setf (pichat-session-streaming-p session) t
              (pichat-session-state session) 'running))
@@ -933,6 +937,10 @@ must not update public state or become conversation/prompt acceptance events."
        (setf (pichat-session-retrying-p session) nil
              (pichat-session-state session)
              (if (pichat-session-streaming-p session) 'running 'idle))))
+    (when (and (eq normalized 'session-info-changed)
+               (pichat-rpc--dispatch-current-p session))
+      (pichat-emit session 'session-state-changed
+                   :name (pichat-session-name session)))
     (when (eq normalized 'compaction-end)
       (pichat-emit session 'diagnostic-notices-changed))
     ;; Generic consumers see updated session state before the compatibility

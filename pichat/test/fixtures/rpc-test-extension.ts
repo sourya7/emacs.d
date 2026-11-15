@@ -48,6 +48,13 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  pi.registerCommand("pichat-test-name", {
+    description: "Set or clear the session name without a model call",
+    handler: async (args) => {
+      pi.setSessionName(args.trim());
+    },
+  });
+
   pi.registerCommand("pichat-test-status", {
     description: "Emit deterministic fire-and-forget status updates",
     handler: async (_args, ctx) => {

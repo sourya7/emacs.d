@@ -280,6 +280,31 @@
             (should (equal "source-two" (pichat-session-id session))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+(ert-deftest pichat-session-manager-name-events-refresh-existing-rows ()
+  (pichat-test-with-unit-session (session proc)
+    (pichat-register-session session)
+    (let (buffer)
+      (unwind-protect
+          (cl-letf (((symbol-function 'pop-to-buffer) (lambda (&rest _) nil))
+                    ((symbol-function 'pichat-rpc-get-state)
+                     (lambda (&rest _) (ert-fail "Rename must not poll Pi"))))
+            (setq buffer (pichat-session-manager))
+            (dolist (name '("Automatic title" "Replacement title" nil))
+              (pichat-rpc--process-filter
+               proc (concat (pichat-rpc--json-encode
+                             (if name (list :type "session_info_changed" :name name)
+                               (list :type "session_info_changed"))) "\n"))
+              (with-current-buffer buffer
+                (should (timerp pichat-session-manager--refresh-timer))
+                (cancel-timer pichat-session-manager--refresh-timer)
+                (pichat-session-manager--run-refresh buffer)
+                (should (equal (pichat-session-runtime-id session)
+                               (caar tabulated-list-entries)))
+                (if name
+                    (should (string-match-p (regexp-quote name) (buffer-string)))
+                  (should-not (string-match-p "Replacement title" (buffer-string)))))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
 (ert-deftest pichat-session-manager-diagnostics-inspects-selected-stopped-runtime ()
   (pichat-test-with-clean-state
     (let* ((selected (pichat-register-session (pichat-session-make :state 'stopped)))

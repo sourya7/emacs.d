@@ -237,5 +237,188 @@
                                                  (pichat-test-compaction-users session)))))
           (when (buffer-live-p buffer) (kill-buffer buffer)))))))
 
+(defmacro pichat-test-queue-with-live-chat (&rest body)
+  "Run BODY in SESSION's disposable chat, cleaning it even on failure."
+  (declare (indent 0))
+  `(let ((pichat-chat-stop-session-on-kill nil)
+         (buffer (pichat-chat-open session)))
+     (unwind-protect (progn ,@body)
+       (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
+(defun pichat-test-queue-submit (buffer text &optional steer)
+  "Submit image-bearing TEXT through BUFFER's editor, optionally STEER."
+  (with-current-buffer buffer
+    (pichat-test-set-draft text)
+    (setq pichat-chat--pending-attachments (list pichat-test-queue-image))
+    (call-interactively (key-binding (kbd (if steer "M-RET" "RET"))))))
+
+(defun pichat-test-queue-wait-count (buffer count)
+  "Wait for BUFFER's authoritative queue to contain COUNT items."
+  (pichat-test-wait-until
+   (lambda () (with-current-buffer buffer (= count (length pichat-chat--pi-queue))))
+   5 (format "queue panel count %d" count)))
+
+(defun pichat-test-queue-assert-empty (buffer)
+  "Assert BUFFER no longer displays or retains any queued input."
+  (with-current-buffer buffer
+    (should-not pichat-chat--pi-queue)
+    (should-not pichat-chat--queue-candidates)
+    (should-not pichat-chat--held-submissions)
+    (should (equal '(0 . 0) pichat-chat--queue-counts))
+    (should-not (string-match-p "queued in Pi" (buffer-string)))
+    (should-not (pichat-chat--retained-attachments))))
+
+(defun pichat-test-queue-assert-user-image (user)
+  "Assert USER has the exact submitted image, not just an image indicator."
+  (let ((images (cl-remove-if-not
+                 (lambda (part) (equal "image" (plist-get part :type)))
+                 (plist-get user :content))))
+    (should (= 1 (length images)))
+    (should (equal (plist-get pichat-test-queue-image :data) (plist-get (car images) :data)))
+    (should (equal "image/png" (plist-get (car images) :mimeType)))))
+
+(when pichat-test-include-integration
+  (ert-deftest pichat-integration-queue-panel-drains-in-native-priority-and-modes ()
+    (dolist (mode '("one-at-a-time" "all"))
+      (pichat-test-with-integration-session
+          (session :script
+                   (list :turns
+                         (vconcat '((:text "initial" :delayMs 1500)
+                                    (:expectContextIncludes "steer" :text "steered" :delayMs 300)
+                                    (:expectContextIncludes "follow one" :text "followed" :delayMs 300))
+                                  (unless (equal mode "all")
+                                    '((:expectContextIncludes "follow two" :text "done"))))))
+        (pichat-test-rpc-call session "set_follow_up_mode" (list :mode mode))
+        (pichat-test-queue-with-live-chat
+          (pichat-test-rpc-call session "prompt" '(:message "start"))
+          (pichat-test-wait-for-raw-event session "agent_start")
+          (pichat-test-queue-submit buffer "follow one")
+          (pichat-test-queue-submit buffer "follow two")
+          (pichat-test-queue-submit buffer "steer" t)
+          (pichat-test-queue-wait-count buffer 3)
+          (with-current-buffer buffer
+            (should (equal '("steer" "follow one" "follow two")
+                           (mapcar (lambda (r) (plist-get r :text)) pichat-chat--pi-queue)))
+            (should (equal '(1 . 2) pichat-chat--queue-counts))
+            (should (= 3 (pichat-test-count-substring "[1 img]" (buffer-string)))))
+          ;; Observe a real partial drain, not just the final empty snapshot.
+          (pichat-test-queue-wait-count buffer 2)
+          (with-current-buffer buffer
+            (should (equal '("follow one" "follow two")
+                           (mapcar (lambda (r) (plist-get r :text)) pichat-chat--pi-queue))))
+          (pichat-test-wait-for-raw-event session "agent_settled")
+          (let ((users (pichat-test-compaction-users session)))
+            (should (equal '("start" "steer[image]" "follow one[image]" "follow two[image]")
+                           (mapcar #'pichat-render-message-text users)))
+            (mapc #'pichat-test-queue-assert-user-image (cdr users)))
+          (pichat-test-queue-assert-empty buffer)))))
+
+  (ert-deftest pichat-integration-queue-panel-abort-restores-images-and-keeps-draft ()
+    (pichat-test-with-integration-session
+        (session :script '(:turns [(:text "interrupted" :delayMs 2000)
+                                  (:text "later reply" :expectContextIncludes "later run")]))
+      (pichat-test-queue-with-live-chat
+        (pichat-test-rpc-call session "prompt" '(:message "start"))
+        (pichat-test-wait-for-raw-event session "agent_start")
+        (pichat-test-queue-submit buffer "follow")
+        (pichat-test-queue-submit buffer "steer" t)
+        (pichat-test-queue-wait-count buffer 2)
+        (with-current-buffer buffer
+          (pichat-test-set-draft "draft")
+          (call-interactively (key-binding (kbd "C-c C-k"))))
+        (pichat-test-wait-for-raw-event session "agent_settled")
+        (with-current-buffer buffer
+          (should (equal "steer\n\nfollow\n\ndraft" (pichat-chat--input-text)))
+          (should (equal (list pichat-test-queue-image) pichat-chat--pending-attachments))
+          (should-not pichat-chat--pi-queue)
+          (should-not (string-match-p "queued in Pi" (buffer-string))))
+        ;; An explicit later prompt must not replay either cleared message.
+        (pichat-test-prompt-and-wait session "later run")
+        (should (equal '("start" "later run")
+                       (mapcar #'pichat-render-message-text (pichat-test-compaction-users session)))))))
+
+  (ert-deftest pichat-integration-queue-panel-during-automatic-compaction-and-retry ()
+    (dolist (boundary '(threshold overflow retry))
+      (ert-info ((format "boundary: %s" boundary))
+        (pichat-test-with-integration-session
+            (session :settings '(:compaction (:enabled t :reserveTokens 1000 :keepRecentTokens 100)
+                                 :retry (:enabled t :maxRetries 2 :baseDelayMs 1000))
+                     :script
+                     (list :turns
+                           (vconcat
+                            (pcase boundary
+                              ('threshold '((:text "h1" :usage (:input 500 :output 20))
+                                            (:text "h2" :usage (:input 127500 :output 20))
+                                            (:text "summary" :delayMs 1500)))
+                              ('overflow '((:text "h1") (:text "h2")
+                                           (:error "maximum context length exceeded")
+                                           (:text "summary" :delayMs 1500)
+                                           (:text "after overflow")))
+                              ('retry '((:error "WebSocket error") (:text "recovered"))))
+                            '((:text "queued reply" :expectContextIncludes "during boundary")))))
+          (unless (eq boundary 'retry)
+            (pichat-test-prompt-and-wait session (concat "one " (make-string 5000 ?a)))
+            (when (eq boundary 'overflow)
+              (pichat-test-prompt-and-wait session (concat "two " (make-string 5000 ?b)))))
+          (pichat-test-queue-with-live-chat
+            (pichat-test-rpc-call session (if (eq boundary 'retry) "set_auto_retry" "set_auto_compaction")
+                                  '(:enabled t))
+            (let ((settled (pichat-test-count-raw-events session "agent_settled")))
+              (pichat-test-rpc-call session "prompt"
+                                    (list :message (if (eq boundary 'threshold)
+                                                       (concat "two " (make-string 5000 ?b)) "start")))
+              (pichat-test-wait-for-raw-event
+               session (if (eq boundary 'retry) "auto_retry_start" "compaction_start"))
+              (pichat-test-queue-submit buffer "during boundary")
+              (pichat-test-queue-wait-count buffer 1)
+              (with-current-buffer buffer
+                (should-not pichat-chat--held-submissions)
+                (should (string-match-p "queued in Pi.*follow-up.*during boundary.*1 img" (buffer-string))))
+              (pichat-test-wait-for-raw-event session "agent_settled" 15 settled))
+            (let ((users (cl-remove-if-not
+                          (lambda (u) (equal "during boundary[image]" (pichat-render-message-text u)))
+                          (pichat-test-compaction-users session))))
+              (should (= 1 (length users)))
+              (pichat-test-queue-assert-user-image (car users)))
+            (pichat-test-queue-assert-empty buffer))))))
+
+  (ert-deftest pichat-integration-queue-panel-run-ends-during-recall ()
+    ;; Delay either actual dispatch (Pi consumes first) or only the real reply
+    ;; (clear wins).  Both sides cross real settlement and real clear_queue.
+    (dolist (timing '(before-clear after-clear))
+      (pichat-test-with-integration-session
+          (session :script (list :turns
+                                 (vconcat '((:text "initial" :delayMs 1000))
+                                          (when (eq timing 'before-clear)
+                                            '((:text "consumed" :expectContextIncludes "waiting"))))))
+        (pichat-test-queue-with-live-chat
+          (pichat-test-rpc-call session "prompt" '(:message "start"))
+          (pichat-test-wait-for-raw-event session "agent_start")
+          (pichat-test-queue-submit buffer "waiting")
+          (pichat-test-queue-wait-count buffer 1)
+          (let ((clear (symbol-function 'pichat-backend-clear-session-queue)) delayed response)
+            (cl-letf (((symbol-function 'pichat-backend-clear-session-queue)
+                       (lambda (s success &optional failure)
+                         (setq delayed
+                               (if (eq timing 'before-clear)
+                                   (lambda () (funcall clear s success failure))
+                                 (funcall clear s (lambda (&rest args) (setq response args)) failure)
+                                 (lambda () (apply success response)))))))
+              (with-current-buffer buffer (pichat-chat-recover-submission))
+              (pichat-test-wait-for-raw-event session "agent_settled")
+              (when (eq timing 'after-clear) (should response))
+              (funcall delayed)
+              (pichat-test-wait-until
+               (lambda () (with-current-buffer buffer (not pichat-chat--queue-recall))))
+              (with-current-buffer buffer
+                (should (equal (if (eq timing 'before-clear) "" "waiting") (pichat-chat--input-text)))
+                (should (equal (unless (eq timing 'before-clear) (list pichat-test-queue-image))
+                               pichat-chat--pending-attachments))
+                (should-not pichat-chat--recoverable-submissions)
+                (should-not pichat-chat--pi-queue)
+                (should-not (string-match-p "queued in Pi" (buffer-string))))
+              (should (equal (if (eq timing 'before-clear) '("start" "waiting[image]") '("start"))
+                             (mapcar #'pichat-render-message-text (pichat-test-compaction-users session)))))))))))
+
 (provide 'pichat-test-queue-panel)
 ;;; pichat-test-queue-panel.el ends here

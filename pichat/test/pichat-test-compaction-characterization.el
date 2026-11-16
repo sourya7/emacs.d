@@ -41,19 +41,18 @@
                     (let ((state (plist-get (pichat-test-rpc-call session "get_state") :data)))
                       (should (plist-get state :isCompacting))
                       (should-not (plist-get state :isStreaming)))
+                    ;; Characterize Pi directly now that the chat commands
+                    ;; hold instead of invoking these rejected/stranded paths.
                     (with-current-buffer buffer
                       (pichat-test-set-draft "RET during compact")
-                      (setq pichat-chat--pending-attachments (list pichat-test-compaction-image))
-                      (pichat-chat-send-input)
-                      (pichat-test-wait-until
-                       (lambda () (zerop (hash-table-count pichat-chat--pending-submissions)))
-                       3 "RET rejection")
-                      (message "PROBE RET: draft=%S recovery=%S images=%S" (pichat-chat--input-text)
-                               pichat-chat--recoverable-submissions pichat-chat--pending-attachments)
-                      (should (equal "RET during compact" (pichat-chat--input-text)))
-                      (should (equal (list pichat-test-compaction-image) pichat-chat--pending-attachments))
-                      (pichat-chat-follow-up "C-c C-f during compact")
-                      (pichat-chat-steer "steer during compact"))
+                      (setq pichat-chat--pending-attachments (list pichat-test-compaction-image)))
+                    (let (refused)
+                      (pichat-rpc-prompt session "RET during compact"
+                                        (pichat-attachments-wire-images (list pichat-test-compaction-image)) nil
+                                        #'ignore (lambda (r _s) (setq refused r)))
+                      (pichat-test-wait-until (lambda () refused) 3 "ordinary prompt refusal")
+                      (should (string-match-p "compaction is in progress" (plist-get refused :error))))
+                    (pichat-rpc-steer session "steer during compact")
                     ;; Barrier: every earlier command on the same stdin has run.
                     (pichat-test-rpc-call session "get_state")
                     (let (refused)
@@ -86,8 +85,7 @@
                     (dolist (user (pichat-test-compaction-users session))
                       (should-not (string-match-p "during compact" (pichat-render-message-text user))))
                     (with-current-buffer buffer
-                      ;; Minibuffer queue commands never take the draft images
-                      ;; or retain rejected minibuffer input for recovery.
+                      ;; Direct RPC probes do not consume the chat draft.
                       (should-not pichat-chat--recoverable-submissions)
                       (should (equal "RET during compact" (pichat-chat--input-text)))
                       (should (equal (list pichat-test-compaction-image)

@@ -85,6 +85,7 @@
 (require 'pichat-test-sessions-integration)
 (require 'pichat-test-integration)
 (require 'pichat-test-compaction-characterization)
+(require 'pichat-test-held-input)
 
 (provide 'pichat-test)
 ;;; pichat-test.el ends here

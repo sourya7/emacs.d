@@ -535,6 +535,7 @@ user messages, activity groups, and tool blocks."
   (pichat-chat-user-ui-reset)
   (add-hook 'kill-buffer-query-functions
             #'pichat-chat--restart-safe-to-kill-p nil t)
+  (add-hook 'kill-buffer-query-functions #'pichat-chat-input-confirm-close nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat-user-ui-reset nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--cancel-pending-ui-requests nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--cancel-live-projection nil t)
@@ -547,6 +548,7 @@ user messages, activity groups, and tool blocks."
   (add-hook 'kill-buffer-hook #'pichat-chat--stop-session-on-kill nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--release-session-buffer nil t)
   (add-hook 'kill-buffer-hook #'pichat-chat--cancel-restart-on-kill nil t)
+  (add-hook 'kill-buffer-hook #'pichat-chat-input-close nil t)
   (add-hook 'completion-at-point-functions
             #'pichat-chat--slash-command-capf nil t)
   (add-hook 'post-command-hook
@@ -673,7 +675,10 @@ user messages, activity groups, and tool blocks."
           (pichat-stop-session session)
         (when (pichat-session-alive-p session)
           (pichat-backend-stop-session session)))
-      (when (fboundp 'pichat-forget-session)
+      ;; A closed chat can still own manual recovery.  Keep its stopped
+      ;; runtime reachable in the manager so reopening can restore that input.
+      (when (and (fboundp 'pichat-forget-session)
+                 (not (pichat-session-input-recovery session)))
         (pichat-forget-session session)))))
 
 (defun pichat-chat--project-name (session)
@@ -829,6 +834,7 @@ When DEFER-SYNC is non-nil, wait for a subsequent authoritative state reply."
 
 (defun pichat-chat--on-session-rebinding (_session _event _plist)
   "Invalidate source-derived state before fresh state for a rebind arrives."
+  (pichat-chat-input-abandon-in-flight)
   (if pichat-chat--restart-staging
       ;; An in-place restart reloads the *same* Pi session.  Retain the last
       ;; canonical snapshot through loading/failure; only an explicit verified
@@ -859,6 +865,8 @@ conversation; an unwritten empty source may commit a verified new Pi session."
                (not pichat-chat--sync-pending)
                (pichat-chat-canonical-entry-cache session))
     (user-error "Chat has no settled canonical snapshot to stage"))
+  (when (or pichat-chat--held-submissions pichat-chat--held-release)
+    (pichat-chat-input-abandon-in-flight))
   (setq pichat-chat--restart-staging
         (list :session session
               :session-id pichat-chat--source-session-id
@@ -1036,6 +1044,12 @@ Creating ownership never displays a window or activates pending dialog requests.
       (pichat-chat--refresh-header session)
       (pichat-chat--refresh-source-identity session)
       (setf (pichat-session-buffer session) buffer)
+      (when (pichat-session-input-recovery session)
+        (setq pichat-chat--recoverable-submissions
+              (nconc (pichat-session-input-recovery session)
+                     pichat-chat--recoverable-submissions))
+        (setf (pichat-session-input-recovery session) nil)
+        (pichat-chat--update-recovery-status))
       (pichat-chat--rename-buffer-maybe session)
       (pichat-chat--install-handlers session buffer)
       (when (fboundp 'pichat-note-session-updated)
@@ -2000,6 +2014,8 @@ Nested calls in another buffer establish an independent transaction."
   "Abort the current run, restoring queued text when supported."
   (interactive)
   (unless pichat-chat-session (user-error "No PiChat session"))
+  (when (or pichat-chat--held-submissions pichat-chat--held-release)
+    (pichat-chat-input-abandon-in-flight))
   (let ((session pichat-chat-session))
     (cond
      ((pichat-session-retrying-p session)
@@ -2020,7 +2036,9 @@ Nested calls in another buffer establish an independent transaction."
   (unless pichat-chat-session (user-error "No PiChat session"))
   (pichat-backend-require-capability pichat-chat-session 'queue "Steering")
   (pichat-session-note-user-input pichat-chat-session)
-  (pichat-rpc-steer pichat-chat-session message))
+  (if (pichat-chat-input-hold-p)
+      (pichat-chat-input-hold-message message "steer")
+    (pichat-rpc-steer pichat-chat-session message)))
 
 (defun pichat-chat-follow-up (message)
   "Queue follow-up MESSAGE, or start it immediately if Pi is idle."
@@ -2030,7 +2048,9 @@ Nested calls in another buffer establish an independent transaction."
   (pichat-session-note-user-input pichat-chat-session)
   ;; Pi decides atomically: the queue-only follow_up command can strand text
   ;; if the current run settles while the minibuffer is accepting MESSAGE.
-  (pichat-rpc-prompt pichat-chat-session message nil "followUp"))
+  (if (pichat-chat-input-hold-p)
+      (pichat-chat-input-hold-message message "followUp")
+    (pichat-rpc-prompt pichat-chat-session message nil "followUp")))
 
 (defun pichat-chat-set-steering-mode (mode)
   "Set Pi steering queue MODE for the current session."
@@ -4154,9 +4174,12 @@ Return non-nil only when the projected status value changes."
     (force-mode-line-update)
     (pcase event
       ('compaction-start
+       (when pichat-chat--held-release
+         (pichat-chat-input-abandon-in-flight))
        (pichat-chat--set-status 'compaction
                                 (pichat-render-event-line raw)))
       ('compaction-end
+       (pichat-chat-input-compaction-end raw)
        (cond
         ((eq t (plist-get raw :aborted))
          (pichat-chat--set-status 'compaction "[compaction aborted]"))
@@ -4191,6 +4214,7 @@ Return non-nil only when the projected status value changes."
 (defun pichat-chat--on-agent-start (session event plist)
   "Start a new stats-coverage window and render agent EVENT from PLIST."
   (setq pichat-chat--stats-run-covered-p nil)
+  (pichat-chat-input-agent-start)
   (pichat-chat--on-simple-event session event plist))
 
 (defun pichat-chat--on-turn-end (session _event _plist)
@@ -4372,6 +4396,7 @@ not run.  Other extensions' dialogs are untouched."
 
 (defun pichat-chat--on-session-ended (_session _event _plist)
   "Cancel pending UI/stats work and display a session-ended status."
+  (pichat-chat-input-abandon-in-flight)
   (pichat-chat--cancel-stats-request)
   (pichat-chat--cancel-pending-ui-requests)
   (pichat-chat--set-status 'session "[session ended]"))

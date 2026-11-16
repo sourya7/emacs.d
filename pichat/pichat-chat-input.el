@@ -28,6 +28,30 @@
 (defvar-local pichat-chat--recoverable-submissions nil
   "Ambiguous submissions available for explicit manual recovery.")
 
+(defvar-local pichat-chat--held-submissions nil
+  "FIFO submissions owned by this chat until compaction succeeds.")
+
+(defvar-local pichat-chat--held-release nil
+  "Release phase: nil, `barrier', `ready', `sending', or `wait-start'.")
+
+(defvar-local pichat-chat--held-start-seen nil
+  "Whether an authoritative agent start crossed the current request barrier.")
+
+(defvar-local pichat-chat--held-started-p nil
+  "Whether any run has started since this compaction release began.")
+
+(defvar-local pichat-chat--held-awaiting-start nil
+  "Recovery-only copy of an acknowledged prompt awaiting agent_start.")
+
+(defvar-local pichat-chat--held-timer nil
+  "Owned deferred release/start-barrier timeout timer.")
+
+(defvar-local pichat-chat--held-cycle nil
+  "Identity invalidating callbacks when a release is abandoned.")
+
+(defvar-local pichat-chat--held-external-prompt nil
+  "Whether another compaction-end listener already submitted a prompt.")
+
 (defvar-local pichat-chat--prompt-history nil
   "Previously submitted textual prompts, newest first.")
 
@@ -174,7 +198,7 @@
              (kind (plist-get response :pichat-failure-kind))
              (attachments (plist-get record :attachments)))
         (when record
-          (if (or kind
+          (if (or (plist-get record :held-p) kind
                   (/= (plist-get record :source-generation)
                       pichat-chat--source-generation)
                   (/= (plist-get record :editor-generation)
@@ -270,7 +294,8 @@ changed by this operation."
       'copied))))
 
 (defun pichat-chat-input-abandon-in-flight ()
-  "Move current in-flight submissions to manual recovery exactly once."
+  "Move held and in-flight submissions to manual recovery exactly once."
+  (pichat-chat-input-abandon-held)
   (when (hash-table-p pichat-chat--pending-submissions)
     (maphash
      (lambda (_id record)
@@ -286,6 +311,12 @@ changed by this operation."
 (defun pichat-chat--retained-attachments ()
   "Return unique pending, in-flight, and recoverable image records."
   (let ((attachments pichat-chat--pending-attachments))
+    (dolist (record (append pichat-chat--held-submissions
+                            (when pichat-chat--held-awaiting-start
+                              (list pichat-chat--held-awaiting-start))))
+      (setq attachments
+            (pichat-attachments-merge-unique
+             attachments (plist-get record :attachments))))
     (when (hash-table-p pichat-chat--in-flight-attachments)
       (maphash (lambda (_request-id records)
                  (setq attachments
@@ -423,58 +454,256 @@ changed by this operation."
     ;; before prompt history, editor, or attachment ownership changes.
     (pichat-backend-check-submit
      pichat-chat-session message attachments nil)
+    (when (pichat-chat-input-hold-p)
+      (pichat-rpc--require-operation-ownership pichat-chat-session "prompt"))
     (pichat-chat--record-prompt-history message)
     (pichat-session-note-user-input pichat-chat-session)
-    (let* ((buffer (current-buffer))
-           (record (list :text text
-                         :attachments attachments
-                         :source-generation pichat-chat--source-generation
-                         :editor-generation pichat-chat--editor-generation
-                         :extension-command-p
-                         (pichat-chat-completion-extension-command-p message)))
-           (placeholder
-            (format "local-submission:%d:%d"
-                    pichat-chat--source-generation
-                    (cl-incf pichat-chat--submission-sequence)))
-           (request-id placeholder))
-      ;; Install recovery ownership before invoking a backend: native providers
-      ;; are allowed to complete or reject inline.
-      (puthash placeholder record pichat-chat--pending-submissions)
-      (puthash placeholder (copy-sequence attachments)
-               pichat-chat--in-flight-attachments)
+    (let ((record (list :text text
+                        :attachments attachments
+                        :source-generation pichat-chat--source-generation
+                        :editor-generation pichat-chat--editor-generation
+                        :extension-command-p
+                        (pichat-chat-completion-extension-command-p message))))
       (pichat-chat--clear-input)
       (setq pichat-chat--pending-attachments nil)
-      (condition-case err
-          (let ((returned
-                 (pichat-backend-submit-prompt
-                  pichat-chat-session message
-                  (and attachments
-                       (pichat-attachments-wire-images attachments))
-                  nil
-                  (lambda (response _session)
-                    (pichat-chat--submission-success
-                     buffer request-id response))
-                  (lambda (response _session)
-                    (pichat-chat--submission-failure
-                     buffer request-id response)))))
-            (when (and (gethash placeholder pichat-chat--pending-submissions)
-                       (null returned))
-              (error "PiChat backend returned no submission identity"))
-            (when (gethash placeholder pichat-chat--pending-submissions)
-              (remhash placeholder pichat-chat--pending-submissions)
-              (remhash placeholder pichat-chat--in-flight-attachments)
-              (setq request-id returned)
-              (puthash request-id record pichat-chat--pending-submissions)
-              (puthash request-id (copy-sequence attachments)
-                       pichat-chat--in-flight-attachments)))
-        (error
-         (remhash placeholder pichat-chat--pending-submissions)
-         (remhash placeholder pichat-chat--in-flight-attachments)
-         (pichat-chat--set-input-text text)
-         (setq pichat-chat--pending-attachments attachments)
-         (pichat-chat--refresh-attachment-status)
-         (signal (car err) (cdr err))))
-      (pichat-chat--refresh-attachment-status))))
+      (if (pichat-chat-input-hold-p)
+          (pichat-chat-input-hold record "followUp")
+        (condition-case err
+            (pichat-chat-input-submit record nil)
+          (error
+           (pichat-chat--set-input-text text)
+           (setq pichat-chat--pending-attachments attachments)
+           (pichat-chat--refresh-attachment-status)
+           (signal (car err) (cdr err))))))))
+
+(defun pichat-chat-input-submit (record behavior &optional success failure)
+  "Transfer RECORD to one request with BEHAVIOR and completion callbacks.
+Install ownership before invoking providers, including inline providers."
+  (let* ((buffer (current-buffer))
+         (attachments (plist-get record :attachments))
+         (message (string-trim (plist-get record :text)))
+         (placeholder
+          (format "local-submission:%d:%d"
+                  pichat-chat--source-generation
+                  (cl-incf pichat-chat--submission-sequence)))
+         (request-id placeholder))
+    ;; Install recovery ownership before invoking a backend: native providers
+    ;; are allowed to complete or reject inline.
+    (puthash placeholder record pichat-chat--pending-submissions)
+    (puthash placeholder (copy-sequence attachments)
+             pichat-chat--in-flight-attachments)
+    (condition-case err
+        (let ((returned
+               (pichat-backend-submit-prompt
+                pichat-chat-session message
+                (and attachments
+                     (pichat-attachments-wire-images attachments))
+                behavior
+                (lambda (response _session)
+                  (when (and (buffer-live-p buffer)
+                             (with-current-buffer buffer
+                               (gethash request-id pichat-chat--pending-submissions)))
+                    (pichat-chat--submission-success buffer request-id response)
+                    (when success (funcall success response))))
+                (lambda (response _session)
+                  (when (and (buffer-live-p buffer)
+                             (with-current-buffer buffer
+                               (gethash request-id pichat-chat--pending-submissions)))
+                    (pichat-chat--submission-failure buffer request-id response)
+                    (when failure (funcall failure response)))))))
+          (when (and (gethash placeholder pichat-chat--pending-submissions)
+                     (null returned))
+            (error "PiChat backend returned no submission identity"))
+          (when (gethash placeholder pichat-chat--pending-submissions)
+            (remhash placeholder pichat-chat--pending-submissions)
+            (remhash placeholder pichat-chat--in-flight-attachments)
+            (setq request-id returned)
+            (puthash request-id record pichat-chat--pending-submissions)
+            (puthash request-id (copy-sequence attachments)
+                     pichat-chat--in-flight-attachments)))
+      (error
+       (remhash placeholder pichat-chat--pending-submissions)
+       (remhash placeholder pichat-chat--in-flight-attachments)
+       (signal (car err) (cdr err))))
+    (pichat-chat--refresh-attachment-status)))
+
+(defun pichat-chat-input-hold-p ()
+  "Whether submissions must join this chat's compaction FIFO."
+  (or pichat-chat--held-release
+      (and (eq (pichat-session-backend pichat-chat-session) 'pi)
+           (pichat-session-compacting-p pichat-chat-session)
+           (not (pichat-session-streaming-p pichat-chat-session)))))
+
+(defun pichat-chat-input-hold (record behavior)
+  "Retain RECORD with intended BEHAVIOR until a successful compaction."
+  (setq record (plist-put record :held-p t))
+  (setq record (plist-put record :behavior behavior))
+  (setq pichat-chat--held-submissions
+        (nconc pichat-chat--held-submissions (list record)))
+  (pichat-chat--insert-prompt)
+  (pichat-chat--refresh-attachment-status))
+
+(defun pichat-chat-input-hold-message (text behavior)
+  "Hold minibuffer TEXT with BEHAVIOR, leaving the editor and images alone."
+  (pichat-rpc--require-operation-ownership pichat-chat-session
+                                          (if (equal behavior "steer") "steer" "prompt"))
+  (pichat-chat-input-hold
+   (list :text (substring-no-properties text) :attachments nil
+         :source-generation pichat-chat--source-generation
+         :editor-generation pichat-chat--editor-generation)
+   behavior))
+
+(defun pichat-chat-input-cancel-held-timer ()
+  "Cancel the release's owned timer."
+  (when (timerp pichat-chat--held-timer)
+    (cancel-timer pichat-chat--held-timer))
+  (setq pichat-chat--held-timer nil))
+
+(defun pichat-chat-input-abandon-held ()
+  "Move unsent held messages to recovery; invalidate release callbacks."
+  (pichat-chat-input-cancel-held-timer)
+  (setq pichat-chat--held-cycle nil
+        pichat-chat--held-release nil)
+  (dolist (record pichat-chat--held-submissions)
+    (push record pichat-chat--recoverable-submissions))
+  (when pichat-chat--held-awaiting-start
+    (push pichat-chat--held-awaiting-start pichat-chat--recoverable-submissions))
+  (setq pichat-chat--held-submissions nil
+        pichat-chat--held-awaiting-start nil)
+  (pichat-chat--update-recovery-status))
+
+(defun pichat-chat-input-held-timer (seconds function)
+  "Run FUNCTION after SECONDS only for the current buffer/release cycle."
+  (pichat-chat-input-cancel-held-timer)
+  (let ((buffer (current-buffer))
+        (cycle pichat-chat--held-cycle))
+    (setq pichat-chat--held-timer
+          (run-at-time
+           seconds nil
+           (lambda ()
+             (when (buffer-live-p buffer)
+               (with-current-buffer buffer
+                 (when (eq cycle pichat-chat--held-cycle)
+                   (setq pichat-chat--held-timer nil)
+                   (funcall function)))))))))
+
+(defun pichat-chat-input-held-timeout ()
+  "Recover instead of guessing whether a release submission started."
+  (pichat-chat-input-abandon-in-flight))
+
+(defun pichat-chat-input-compaction-end (raw)
+  "Release held messages after successful RAW compaction, otherwise recover."
+  (when pichat-chat--held-submissions
+    (if (or (plist-get raw :aborted) (plist-get raw :errorMessage)
+            (not (plist-get raw :result)))
+        (pichat-chat-input-abandon-in-flight)
+      (setq pichat-chat--held-cycle (make-symbol "held-release")
+            pichat-chat--held-release 'barrier
+            pichat-chat--held-start-seen nil
+            pichat-chat--held-started-p (pichat-session-streaming-p pichat-chat-session)
+            pichat-chat--held-external-prompt
+            (pichat-chat-input-prompt-pending-p))
+      ;; All compaction-end listeners must run first.  In particular an
+      ;; unchanged chain finish waiter can already own an idle prompt.  Its
+      ;; acknowledgment is NOT a start barrier: wait for agent_start instead.
+      (pichat-chat-input-held-timer 0 #'pichat-chat-input-held-barrier))))
+
+(defun pichat-chat-input-prompt-pending-p ()
+  "Whether an external prompt still has an outstanding response."
+  (cl-loop for pending being the hash-values of
+           (pichat-session-pending-responses pichat-chat-session)
+           thereis (equal "prompt" (pichat-rpc--pending-command pending))))
+
+(defun pichat-chat-input-held-barrier ()
+  "Serialize release behind any prompt issued by compaction-end listeners."
+  (cond
+   ((or pichat-chat--held-start-seen
+        (pichat-session-streaming-p pichat-chat-session))
+    (setq pichat-chat--held-release 'ready)
+    (pichat-chat-input-release-next))
+   ((or pichat-chat--held-external-prompt
+        (pichat-chat-input-prompt-pending-p))
+    (setq pichat-chat--held-release 'wait-start)
+    (pichat-chat-input-held-timer 30 #'pichat-chat-input-held-timeout))
+   (t
+    (setq pichat-chat--held-release 'ready)
+    (pichat-chat-input-release-next))))
+
+(defun pichat-chat-input-agent-start ()
+  "Advance the held FIFO only after an authoritative agent start."
+  (when pichat-chat--held-release
+    (setq pichat-chat--held-start-seen t
+          pichat-chat--held-started-p t
+          pichat-chat--held-awaiting-start nil)
+    (when (eq pichat-chat--held-release 'wait-start)
+      (pichat-chat-input-cancel-held-timer)
+      (setq pichat-chat--held-release 'ready)
+      (pichat-chat-input-release-next))))
+
+(defun pichat-chat-input-release-next ()
+  "Send one held message, serializing ownership, acknowledgment and start."
+  (when (eq pichat-chat--held-release 'ready)
+    (if (null pichat-chat--held-submissions)
+        (progn
+          (pichat-chat-input-cancel-held-timer)
+          (setq pichat-chat--held-release nil pichat-chat--held-cycle nil))
+      (let* ((record (car pichat-chat--held-submissions))
+             (buffer (current-buffer))
+             (cycle pichat-chat--held-cycle))
+        (if (or (/= (plist-get record :source-generation)
+                    pichat-chat--source-generation)
+                (not (pichat-backend-session-alive-p pichat-chat-session))
+                (pichat-session-compacting-p pichat-chat-session))
+            (pichat-chat-input-abandon-in-flight)
+          (pop pichat-chat--held-submissions)
+          (setq pichat-chat--held-release 'sending
+                pichat-chat--held-start-seen nil)
+          (pichat-chat-input-held-timer 30 #'pichat-chat-input-held-timeout)
+          (condition-case nil
+              (pichat-chat-input-submit
+               record
+               ;; An idle steering-only FIFO must start a run, not strand a
+               ;; queue-only steer.  Once running, Pi's atomic prompt/steer
+               ;; operation preserves steering semantics even at settlement.
+               (when (or pichat-chat--held-started-p
+                         (pichat-session-streaming-p pichat-chat-session))
+                 (plist-get record :behavior))
+               (lambda (response)
+                 (when (buffer-live-p buffer)
+                   (with-current-buffer buffer
+                     (when (eq cycle pichat-chat--held-cycle)
+                       (pichat-chat-input-cancel-held-timer)
+                       (if (and (not (member (plist-get (plist-get response :data) :disposition)
+                                             '("queued" "handled")))
+                                (not pichat-chat--held-start-seen))
+                           (progn
+                             (setq pichat-chat--held-release 'wait-start
+                                   pichat-chat--held-awaiting-start record)
+                             (pichat-chat-input-held-timer 30 #'pichat-chat-input-held-timeout))
+                         (setq pichat-chat--held-release 'ready)
+                         (pichat-chat-input-release-next))))))
+               (lambda (_response)
+                 (when (buffer-live-p buffer)
+                   (with-current-buffer buffer
+                     (when (eq cycle pichat-chat--held-cycle)
+                       (pichat-chat-input-abandon-held))))))
+            (error
+             ;; Invocation failure has no acknowledgment; retain rather than
+             ;; automatically retrying or replacing a concurrently edited draft.
+             (push record pichat-chat--recoverable-submissions)
+             (pichat-chat-input-abandon-held))))))))
+
+(defun pichat-chat-input-confirm-close ()
+  "Ask before closing a chat that owns held or releasing submissions."
+  (or (not (or pichat-chat--held-submissions pichat-chat--held-release))
+      (yes-or-no-p "Close chat and retain held submissions for manual recovery? ")))
+
+(defun pichat-chat-input-close ()
+  "Stop release and retain manual recovery on the runtime when chat closes."
+  (when pichat-chat-session
+    (pichat-chat-input-abandon-in-flight)
+    (setf (pichat-session-input-recovery pichat-chat-session)
+          pichat-chat--recoverable-submissions)))
 
 (provide 'pichat-chat-input)
 ;;; pichat-chat-input.el ends here

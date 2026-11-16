@@ -41,6 +41,8 @@
   ;; follow-up); prompts PiChat or Jobs send for it do not advance it.
   (user-input-generation 0)
   buffer
+  ;; In-memory manual recovery transferred out of a closed owning chat.
+  input-recovery
   stderr-buffer
   stop-requested-p
   state

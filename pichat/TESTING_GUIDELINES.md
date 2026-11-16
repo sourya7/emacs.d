@@ -478,6 +478,33 @@ viewport is modeled; these are neither real redisplay/Avy timings nor SSH/TRAMP
 latency measurements. Use the same Emacs/build, fixture sizes and GC settings
 for comparisons; do not put wall-clock thresholds in ERT.
 
+### Transcript preview pipeline
+
+Run the separate maintained settled-transcript benchmark (requires
+`markdown-mode` on the load path):
+
+```sh
+emacs -Q --batch -L pichat -L /path/to/markdown-mode \
+  -l pichat/test/benchmark-transcript-preview.el
+```
+
+The default fixture is deterministic and synthetic: 2,880 entries with thinking,
+1,280 settled tools and 160 assistant prose runs. Set `PICHAT_BENCHMARK_5X=1`
+to add five concatenated copies with unique entry and tool-call IDs. Explicitly
+set `PICHAT_BENCHMARK_SESSION=/path/to/session.jsonl` to read a real local
+saved session file instead; its last entry selects the root-to-leaf branch.
+The benchmark does not discover private sessions, print their content/paths,
+write files, start Pi or contact a runtime. Real inputs can consume substantial
+memory, especially with 5x enabled.
+
+It reports cache/build/context/render, insertion, eager Markdown fontification
+and tool indexing separately, plus legacy preview insertion and text byte sizes.
+Collapsed/expanded refer to activity groups; tools retain the default summary
+view. Each stage is one sample with a preceding untimed GC; in-stage GC remains
+enabled and is reported. Compare repeated fresh processes using the same input,
+Emacs and GC settings. These are not actual redisplay, first-paint, manager-row
+change or interactive toggle measurements; there are no timing-based ERT gates.
+
 ## Compatibility verification workflow
 
 [`PI_COMPATIBILITY.md`](./PI_COMPATIBILITY.md) is the authoritative record of

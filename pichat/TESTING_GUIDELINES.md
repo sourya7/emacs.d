@@ -53,6 +53,30 @@ emacs -Q --batch -L pichat -L pichat/test \
   -f ert-run-tests-batch-and-exit
 ```
 
+## Test timing and temporary storage
+
+ERT prints each test's elapsed time and the suite total. Jobs fixtures perform
+real atomic metadata writes with forced filesystem synchronization; on a
+persistent disk these writes can dominate unit-test time. Do not stub out
+persistence or disable its synchronization to speed up the suite.
+
+For faster local iteration on Linux, a writable, sufficiently sized tmpfs can
+hold the disposable fixtures instead:
+
+```sh
+TMPDIR=/dev/shm pichat/test/run-tests.sh
+TMPDIR=/dev/shm pichat/test/run-tests.sh --full
+```
+
+This is opt-in: the ordinary commands retain the system temporary directory.
+Use an executable tmpfs mount (some systems mount `/dev/shm` with `noexec`),
+since some fixtures launch temporary helper scripts. Tests still write, rename,
+synchronize and reread files, but tmpfs does **not** exercise physical-disk
+persistence. Keep a normal disk-backed run for storage-sensitive verification.
+No real provider or user state is used in either mode. Integration diagnostics
+cache successful `pi --version` probes per executable for the test process;
+real RPC processes and isolated Pi state are still created per fixture.
+
 ## Dependency-enabled local runs
 
 To exercise optional Consult, Embark, Evil and Orderless tests rather than

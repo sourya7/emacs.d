@@ -966,8 +966,11 @@ The whole buffer becomes the canonical transcript; point moves to its start."
                    (lambda (name &optional dir suffix &rest rest)
                      (if (string-prefix-p "/ssh:other:/tmp/pichat-code-" name)
                          (progn (setq prefix name)
-                                (funcall real-make-temp-file
-                                         "pichat-test-code-" dir suffix))
+                                ;; Model the remote /tmp independently of the
+                                ;; local suite's TMPDIR (which may be a tmpfs).
+                                (let ((temporary-file-directory "/tmp/"))
+                                  (funcall real-make-temp-file
+                                           "pichat-test-code-" dir suffix)))
                        (apply real-make-temp-file name dir suffix rest))))
                   ((symbol-function 'make-process)
                    (lambda (&rest process-args)

@@ -1989,30 +1989,34 @@ clears MCP stays empty; an ineligible baseline or missing model starts nothing."
                  :script '(:turns []))
       (let ((pichat-chat-stop-session-on-kill nil)
             buffer response)
-        (setq buffer (pichat-chat-open session))
-        (pichat-rpc-send
-         session "prompt" (list :message "/pichat-test-input")
-         (lambda (value _session) (setq response value)))
-        (pichat-test-wait-until
-         (lambda ()
-           (cl-find-if
-            (lambda (event)
-              (and (equal "extension_ui_request" (plist-get event :type))
-                   (equal "input" (plist-get event :method))))
-            (pichat-session-event-log session)))
-         3 "real Pi extension input request")
-        (kill-buffer buffer)
-        (pichat-test-wait-until (lambda () response) 3 "cancelled command response")
-        (should (plist-get response :success))
-        (pichat-test-wait-until
-         (lambda ()
-           (cl-find-if
-            (lambda (event)
-              (and (equal "extension_ui_request" (plist-get event :type))
-                   (equal "notify" (plist-get event :method))
-                   (equal "input:<cancelled>" (plist-get event :message))))
-            (pichat-session-event-log session)))
-         3 "extension observed buffer-death cancellation"))))
+        (save-window-excursion
+          (with-temp-buffer
+            (let ((other (current-buffer)))
+              (unwind-protect
+                  (progn
+                    (setq buffer (pichat-chat-open session))
+                    ;; Keep the request queued: a selected chat can open a
+                    ;; real minibuffer during the event wait, before teardown.
+                    (switch-to-buffer other)
+                    (pichat-rpc-send
+                     session "prompt" (list :message "/pichat-test-input")
+                     (lambda (value _session) (setq response value)))
+                    (pichat-test-wait-until
+                     (lambda () (= 1 (pichat-chat-pending-user-input-count session)))
+                     3 "queued real Pi extension input request")
+                    (kill-buffer buffer)
+                    (pichat-test-wait-until (lambda () response) 3 "cancelled command response")
+                    (should (plist-get response :success))
+                    (pichat-test-wait-until
+                     (lambda ()
+                       (cl-find-if
+                        (lambda (event)
+                          (and (equal "extension_ui_request" (plist-get event :type))
+                               (equal "notify" (plist-get event :method))
+                               (equal "input:<cancelled>" (plist-get event :message))))
+                        (pichat-session-event-log session)))
+                     3 "extension observed buffer-death cancellation"))
+                (when (buffer-live-p buffer) (kill-buffer buffer)))))))))
 
   (ert-deftest pichat-integration-extension-confirm-request-responds-and-renders-notify ()
     (pichat-test-with-integration-session

@@ -322,11 +322,23 @@ have been seen."
     (ert-fail (format "Full integration requested but Pi executable is unavailable: %s"
                       pichat-test-pi-executable))))
 
+(defvar pichat-test--pi-version-cache (make-hash-table :test #'equal)
+  "Successful version diagnostics by resolved executable for this test process.
+The suite assumes each executable stays unchanged during a run.")
+
 (defun pichat-test-pi-version ()
-  "Return `pi --version' output for diagnostics."
-  (with-temp-buffer
-    (let ((status (call-process pichat-test-pi-executable nil t nil "--version")))
-      (format "status=%S output=%s" status (string-trim (buffer-string))))))
+  "Return `pi --version' diagnostics, probing each executable once per run.
+Do not cache failures, so a later fixture can retry a failed probe."
+  (let ((executable (or (executable-find pichat-test-pi-executable)
+                        pichat-test-pi-executable)))
+    (or (gethash executable pichat-test--pi-version-cache)
+        (with-temp-buffer
+          (let* ((status (call-process executable nil t nil "--version"))
+                 (diagnostic (format "status=%S output=%s"
+                                     status (string-trim (buffer-string)))))
+            (when (equal status 0)
+              (puthash executable diagnostic pichat-test--pi-version-cache))
+            diagnostic)))))
 
 (defun pichat-test-file-bytes (file)
   "Return FILE's exact bytes as a unibyte string, or nil when it is absent."

@@ -15,6 +15,7 @@
 (require 'pichat-backend)
 (require 'pichat-attachments)
 (require 'pichat-chat-completion)
+(require 'pichat-chat-queue)
 
 (defvar pichat-chat-session)
 (defvar pichat-chat--input-start)
@@ -240,12 +241,13 @@
 
 ;;;###autoload
 (defun pichat-chat-recover-submission ()
-  "Recover a failed submission, or recall the newest held message.
-Neither operation sends input.  Failed submissions take precedence."
+  "Recover failed input, newest held input, or Pi's whole queue, in that order.
+No recall operation sends input."
   (interactive)
-  (if pichat-chat--recoverable-submissions
-      (pichat-chat-input-recover-failed)
-    (pichat-chat-input-recall-held (car (last pichat-chat--held-submissions)))))
+  (cond (pichat-chat--recoverable-submissions (pichat-chat-input-recover-failed))
+        (pichat-chat--held-submissions
+         (pichat-chat-input-recall-held (car (last pichat-chat--held-submissions))))
+        (t (pichat-chat-recall-queue))))
 
 (defun pichat-chat-input-recover-failed ()
   "Restore one failed submission using the existing recovery chooser."
@@ -320,6 +322,7 @@ changed by this operation."
   "Return unique pending, in-flight, and recoverable image records."
   (let ((attachments pichat-chat--pending-attachments))
     (dolist (record (append pichat-chat--held-submissions
+                            pichat-chat--pi-queue pichat-chat--queue-candidates
                             (when pichat-chat--held-awaiting-start
                               (list pichat-chat--held-awaiting-start))))
       (setq attachments
@@ -440,8 +443,9 @@ changed by this operation."
     (newline)))
 
 ;;;###autoload
-(defun pichat-chat-send-input ()
-  "Send current text and pending images as one Pi prompt."
+(defun pichat-chat-send-input (&optional behavior)
+  "Send current text and pending images with optional streaming BEHAVIOR.
+During a run, ordinary input queues as a follow-up."
   (interactive)
   (unless pichat-chat-session
     (user-error "No PiChat session for this buffer"))
@@ -450,7 +454,11 @@ changed by this operation."
   (let* ((text (buffer-substring-no-properties
                 pichat-chat--input-start (point-max)))
          (message (string-trim text))
-         (attachments pichat-chat--pending-attachments))
+         (attachments pichat-chat--pending-attachments)
+         (behavior (or behavior
+                       (when (and (eq (pichat-session-backend pichat-chat-session) 'pi)
+                                  (pichat-session-streaming-p pichat-chat-session))
+                         "followUp"))))
     (when (and (string-empty-p message)
                (or (null attachments)
                    (not pichat-attachments-allow-image-only-prompts)))
@@ -461,7 +469,7 @@ changed by this operation."
     ;; Dynamic backend state (busy/uncertain) and image support must be checked
     ;; before prompt history, editor, or attachment ownership changes.
     (pichat-backend-check-submit
-     pichat-chat-session message attachments nil)
+     pichat-chat-session message attachments behavior)
     (when (pichat-chat-input-hold-p)
       (pichat-rpc--require-operation-ownership pichat-chat-session "prompt"))
     (pichat-chat--record-prompt-history message)
@@ -475,14 +483,19 @@ changed by this operation."
       (pichat-chat--clear-input)
       (setq pichat-chat--pending-attachments nil)
       (if (pichat-chat-input-hold-p)
-          (pichat-chat-input-hold record "followUp")
+          (pichat-chat-input-hold record (or behavior "followUp"))
         (condition-case err
-            (pichat-chat-input-submit record nil)
+            (pichat-chat-input-submit record behavior)
           (error
            (pichat-chat--set-input-text text)
            (setq pichat-chat--pending-attachments attachments)
            (pichat-chat--refresh-attachment-status)
            (signal (car err) (cdr err))))))))
+
+(defun pichat-chat-steer-input ()
+  "Submit the editor as steering, or hold it during manual compaction."
+  (interactive)
+  (pichat-chat-send-input "steer"))
 
 (defun pichat-chat-input-submit (record behavior &optional success failure)
   "Transfer RECORD to one request with BEHAVIOR and completion callbacks.
@@ -494,7 +507,8 @@ Install ownership before invoking providers, including inline providers."
           (format "local-submission:%d:%d"
                   pichat-chat--source-generation
                   (cl-incf pichat-chat--submission-sequence)))
-         (request-id placeholder))
+         (request-id placeholder)
+         (candidate (pichat-chat-queue-track record behavior)))
     ;; Install recovery ownership before invoking a backend: native providers
     ;; are allowed to complete or reject inline.
     (puthash placeholder record pichat-chat--pending-submissions)
@@ -511,12 +525,14 @@ Install ownership before invoking providers, including inline providers."
                   (when (and (buffer-live-p buffer)
                              (with-current-buffer buffer
                                (gethash request-id pichat-chat--pending-submissions)))
+                    (with-current-buffer buffer (pichat-chat-queue-finish candidate))
                     (pichat-chat--submission-success buffer request-id response)
                     (when success (funcall success response))))
                 (lambda (response _session)
                   (when (and (buffer-live-p buffer)
                              (with-current-buffer buffer
                                (gethash request-id pichat-chat--pending-submissions)))
+                    (with-current-buffer buffer (pichat-chat-queue-finish candidate))
                     (pichat-chat--submission-failure buffer request-id response)
                     (when failure (funcall failure response)))))))
           (when (and (gethash placeholder pichat-chat--pending-submissions)
@@ -530,6 +546,7 @@ Install ownership before invoking providers, including inline providers."
             (puthash request-id (copy-sequence attachments)
                      pichat-chat--in-flight-attachments)))
       (error
+       (pichat-chat-queue-finish candidate)
        (remhash placeholder pichat-chat--pending-submissions)
        (remhash placeholder pichat-chat--in-flight-attachments)
        (signal (car err) (cdr err))))

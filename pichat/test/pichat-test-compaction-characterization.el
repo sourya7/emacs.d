@@ -142,15 +142,15 @@
             (progn
               (pichat-test-rpc-call session "prompt" '(:message "busy"))
               (pichat-test-wait-for-raw-event session "agent_start")
-              (with-current-buffer buffer
-                (pichat-test-set-draft "RET while busy")
-                (setq pichat-chat--pending-attachments (list pichat-test-compaction-image))
-                (pichat-chat-send-input)
-                (pichat-test-wait-until
-                 (lambda () (zerop (hash-table-count pichat-chat--pending-submissions)))
-                 3 "busy RET refusal")
-                (should (equal "RET while busy" (pichat-chat--input-text)))
-                (should (equal (list pichat-test-compaction-image) pichat-chat--pending-attachments)))
+              ;; Characterize Pi's ordinary busy-prompt refusal directly.
+              ;; PiChat RET now deliberately supplies followUp instead.
+              (let (refused)
+                (pichat-rpc-prompt
+                 session "RET while busy"
+                 (pichat-attachments-wire-images (list pichat-test-compaction-image)) nil
+                 #'ignore (lambda (response _session) (setq refused response)))
+                (pichat-test-wait-until (lambda () refused) 3 "busy prompt refusal")
+                (should (stringp (plist-get refused :error))))
               (dolist (command '("follow_up" "steer" "follow_up"))
                 (pichat-test-rpc-call session command
                   (list :message command :images (pichat-attachments-wire-images

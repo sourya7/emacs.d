@@ -487,6 +487,8 @@ Markup characters remain visible; this is fontification only."
     (define-key map (kbd "C-c C-t") #'pichat-chat-cycle-thinking-level)
     (define-key map (kbd "C-c C-r") #'pichat-sessions-browse-related)
     (define-key map (kbd "C-c C-y") #'pichat-chat-recover-submission)
+    (define-key map (kbd "M-RET") #'pichat-chat-steer-input)
+    (define-key map (kbd "M-<return>") #'pichat-chat-steer-input)
     (define-key map (kbd "C-c C-i") #'pichat-chat-attach-image-file)
     (define-key map (kbd "C-c C-u") #'pichat-chat-paste-clipboard-image)
     (define-key map (kbd "C-c C-j") #'pichat-chat-screenshot)
@@ -785,6 +787,8 @@ When DEFER-SYNC is non-nil, wait for a subsequent authoritative state reply."
   (pichat-chat--cancel-sync-request)
   (pichat-chat--cancel-stats-request)
   (pichat-chat-input-abandon-in-flight)
+  (pichat-chat-queue-reset)
+  (setq pichat-chat--queue-counts '(0 . 0))
   (pichat-chat--release-live-projection-fragments)
   (pichat-chat--cancel-diagnostic-notice-timer)
   (cl-incf pichat-chat--source-generation)
@@ -835,6 +839,8 @@ When DEFER-SYNC is non-nil, wait for a subsequent authoritative state reply."
 (defun pichat-chat--on-session-rebinding (_session _event _plist)
   "Invalidate source-derived state before fresh state for a rebind arrives."
   (pichat-chat-input-abandon-in-flight)
+  (pichat-chat-queue-reset)
+  (setq pichat-chat--queue-counts '(0 . 0))
   (if pichat-chat--restart-staging
       ;; An in-place restart reloads the *same* Pi session.  Retain the last
       ;; canonical snapshot through loading/failure; only an explicit verified
@@ -1973,9 +1979,12 @@ Nested calls in another buffer establish an independent transaction."
            (progn ,@body)
          (pichat-chat--restore-view-state view-state)))))
 
-(defun pichat-chat--restore-cleared-queue (response)
-  "Prepend queued message text from clear-queue RESPONSE to the editor."
+(defun pichat-chat--restore-cleared-queue (response copies)
+  "Prepend RESPONSE's queued text and restore images matched against COPIES."
   (let* ((data (plist-get response :data))
+         (records (pichat-chat-queue-records data copies))
+         (images (cl-loop for record in records
+                          append (plist-get record :attachments)))
          (messages
           (cl-remove-if-not
            (lambda (text)
@@ -1988,16 +1997,25 @@ Nested calls in another buffer establish an independent transaction."
        (string-join
         (cl-remove-if #'string-blank-p
                       (list queued-text (pichat-chat--input-text)))
-        "\n\n")))))
+        "\n\n")))
+    (when images
+      (setq pichat-chat--pending-attachments
+            (pichat-attachments-merge-unique
+             pichat-chat--pending-attachments images))
+      (pichat-chat--refresh-attachment-status))
+    (when (cl-some (lambda (record) (not (plist-get record :known))) records)
+      (pichat-chat--set-status
+       'queue-recall "[Queue recalled as text; unmatched images were not restored]")
+      (message "PiChat: unmatched queue images were not restored"))))
 
 (defun pichat-chat--clear-queue-before-abort-success
-    (buffer session response response-session)
+    (buffer session copies response response-session)
   "Restore RESPONSE's queue in BUFFER, then abort SESSION."
   (when (and (eq session response-session)
              (buffer-live-p buffer))
     (with-current-buffer buffer
       (when (eq pichat-chat-session session)
-        (pichat-chat--restore-cleared-queue response))))
+        (pichat-chat--restore-cleared-queue response copies))))
   (when (pichat-backend-session-alive-p session)
     (pichat-backend-abort-session session nil)))
 
@@ -2011,7 +2029,7 @@ Nested calls in another buffer establish an independent transaction."
     (pichat-backend-abort-session session nil)))
 
 (defun pichat-chat-abort ()
-  "Abort the current run, restoring queued text when supported."
+  "Abort the current run, restoring queued text and matching images."
   (interactive)
   (unless pichat-chat-session (user-error "No PiChat session"))
   (when (or pichat-chat--held-submissions pichat-chat--held-release)
@@ -2024,7 +2042,7 @@ Nested calls in another buffer establish an independent transaction."
       (pichat-backend-clear-session-queue
        session
        (apply-partially #'pichat-chat--clear-queue-before-abort-success
-                        (current-buffer) session)
+                        (current-buffer) session pichat-chat--pi-queue)
        (apply-partially #'pichat-chat--clear-queue-before-abort-failure
                         (current-buffer) session)))
      (t
@@ -2038,7 +2056,16 @@ Nested calls in another buffer establish an independent transaction."
   (pichat-session-note-user-input pichat-chat-session)
   (if (pichat-chat-input-hold-p)
       (pichat-chat-input-hold-message message "steer")
-    (pichat-rpc-steer pichat-chat-session message)))
+    (let* ((buffer (current-buffer))
+           (candidate (pichat-chat-queue-track (list :text message) "steer" message))
+           (finish (lambda (_response _session)
+                     (when (buffer-live-p buffer)
+                       (with-current-buffer buffer (pichat-chat-queue-finish candidate))))))
+      ;; Retain the existing queue-only steer semantics, including when idle.
+      (condition-case err
+          (pichat-rpc-send pichat-chat-session "steer" (list :message message) finish finish)
+        (error (pichat-chat-queue-finish candidate)
+               (signal (car err) (cdr err)))))))
 
 (defun pichat-chat-follow-up (message)
   "Queue follow-up MESSAGE, or start it immediately if Pi is idle."
@@ -2050,7 +2077,10 @@ Nested calls in another buffer establish an independent transaction."
   ;; if the current run settles while the minibuffer is accepting MESSAGE.
   (if (pichat-chat-input-hold-p)
       (pichat-chat-input-hold-message message "followUp")
-    (pichat-rpc-prompt pichat-chat-session message nil "followUp")))
+    (pichat-chat-input-submit
+     (list :text message :source-generation pichat-chat--source-generation
+           :editor-generation pichat-chat--editor-generation)
+     "followUp")))
 
 (defun pichat-chat-set-steering-mode (mode)
   "Set Pi steering queue MODE for the current session."
@@ -4170,7 +4200,8 @@ Return non-nil only when the projected status value changes."
     (when (eq event 'queue-update)
       (setq pichat-chat--queue-counts
             (cons (length (plist-get raw :steering))
-                  (length (plist-get raw :followUp)))))
+                  (length (plist-get raw :followUp))))
+      (pichat-chat-queue-update raw))
     (force-mode-line-update)
     (pcase event
       ('compaction-start
@@ -4397,6 +4428,8 @@ not run.  Other extensions' dialogs are untouched."
 (defun pichat-chat--on-session-ended (_session _event _plist)
   "Cancel pending UI/stats work and display a session-ended status."
   (pichat-chat-input-abandon-in-flight)
+  (pichat-chat-queue-reset)
+  (setq pichat-chat--queue-counts '(0 . 0))
   (pichat-chat--cancel-stats-request)
   (pichat-chat--cancel-pending-ui-requests)
   (pichat-chat--set-status 'session "[session ended]"))
@@ -4429,6 +4462,7 @@ not run.  Other extensions' dialogs are untouched."
                  (insert (ansi-color-filter-apply (format "%s" line)) "\n")))
              pichat-chat--extension-widgets)
             (pichat-chat-input-insert-held-panel)
+            (pichat-chat-queue-insert-panel)
             (let ((new-end (point))
                   (inserted (- (point) position)))
               (set-marker pichat-chat--widget-end new-end)

@@ -11,6 +11,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'pichat-pi)
+(require 'pichat-display)
 (require 'pichat-render)
 (require 'pichat-tool-enrichment)
 (require 'pichat-shell-presentation)

@@ -9,6 +9,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'json)
+(require 'pichat-display)
 (require 'pichat-transcript)
 (require 'pichat-activity-presentation)
 

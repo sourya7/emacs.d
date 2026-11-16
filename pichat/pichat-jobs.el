@@ -9,6 +9,7 @@
 (require 'pichat-job-executor)
 (require 'pichat-job-schedule-ui)
 (require 'pichat-view)
+(require 'pichat-display)
 (require 'pichat-disclosure)
 (require 'pichat-response-view)
 (require 'tabulated-list)

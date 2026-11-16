@@ -10,6 +10,43 @@
 
 ;;; Pure canonical rendering tests
 
+(ert-deftest pichat-render-display-definitions-work-without-chat ()
+  "Cold presentation loads expose faces/options and retain preloaded settings."
+  (with-temp-buffer
+    (should
+     (zerop
+      (call-process
+       (expand-file-name invocation-name invocation-directory) nil t nil
+       "-Q" "--batch" "-L"
+       (file-name-directory (locate-library "pichat-render"))
+       "--eval"
+       (prin1-to-string
+        '(progn
+           ;; Mimic settings loaded before the package (including nil).
+           (setq pichat-chat-show-thinking nil
+                 pichat-chat-tool-default-display 'output)
+           (require 'pichat-render)
+           (require 'pichat-chat-tool-ui)
+           (unless (and (not (featurep 'pichat-chat))
+                        (not pichat-chat-show-thinking)
+                        (eq pichat-chat-tool-default-display 'output)
+                        (eq pichat-chat-activity-group-display 'collapsed)
+                        (= pichat-chat-max-tool-args-chars 300)
+                        (= pichat-chat-max-tool-output-chars 4000)
+                        pichat-chat-render-markdown
+                        (stringp pichat-chat-tool-truncation-notice-format))
+             (error "Cold display options or load boundary changed"))
+           (dolist (face '(pichat-user-block-face pichat-input-block-face
+                          pichat-input-bar-face pichat-tool-label-face
+                          pichat-thinking-face))
+             (unless (facep face) (error "Missing face: %s" face)))
+           (with-temp-buffer
+             (setq-local pichat-chat-show-thinking t)
+             (unless pichat-chat-show-thinking
+               (error "Buffer-local display override failed")))
+           (when pichat-chat-show-thinking
+             (error "Buffer-local override leaked")))))))))
+
 (ert-deftest pichat-render-canonical-fragment-respects-visibility-and-order ()
   (let* ((transcript (pichat-test--canonical-fixture-transcript))
          (context (pichat-render-context-create

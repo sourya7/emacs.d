@@ -10,6 +10,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'pichat-display)
 (require 'pichat-tool-enrichment)
 
 (defcustom pichat-shell-presentation-enable-compilation-rerun nil

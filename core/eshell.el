@@ -13,8 +13,64 @@
 ;; eshell-rc-script -- your profile for eshell; like a bashrc for eshell.
 ;; eshell-aliases-file -- sets an aliases file for the eshell.
 
+(defun my/eshell-protect-transcript ()
+  "Make everything before Eshell's current input read-only."
+  (when (and (markerp eshell-last-output-end)
+             (marker-position eshell-last-output-end))
+    (let ((inhibit-read-only t)
+          (inhibit-modification-hooks t)
+          (buffer-undo-list t))
+      (with-silent-modifications
+        (save-restriction
+          (widen)
+          ;; Protect insertions at the start, but not at the input boundary.
+          (add-text-properties
+           (point-min) eshell-last-output-end
+           '(read-only my/eshell-transcript
+             front-sticky (read-only) rear-nonsticky t)))))))
+
+(define-minor-mode my/eshell-input-only-mode
+  "Allow editing only the current input in an Eshell buffer."
+  :lighter nil
+  (if my/eshell-input-only-mode
+      (progn
+        (add-hook 'eshell-output-filter-functions
+                  #'my/eshell-protect-transcript t t)
+        (add-hook 'eshell-input-filter-functions
+                  #'my/eshell-protect-transcript t t)
+        (my/eshell-protect-transcript))
+    (remove-hook 'eshell-output-filter-functions
+                 #'my/eshell-protect-transcript t)
+    (remove-hook 'eshell-input-filter-functions
+                 #'my/eshell-protect-transcript t)
+    (let ((inhibit-read-only t))
+      (with-silent-modifications
+        (save-restriction
+          (widen)
+          (let ((start (point-min)) end)
+            (while (< start (point-max))
+              (setq end (next-single-property-change start 'read-only
+                                                     nil (point-max)))
+              (when (eq (get-text-property start 'read-only)
+                        'my/eshell-transcript)
+                (remove-text-properties start end '(read-only nil)))
+              (setq start end))))))))
+
+(defun my/eshell-allow-output-updates (function &rest args)
+  "Allow FUNCTION to insert and process Eshell output with ARGS."
+  ;; Output filters can rewrite earlier output (e.g. carriage returns).
+  (let* ((buffer (or (car args) (current-buffer)))
+         (inhibit-read-only
+          (or inhibit-read-only
+              (and (buffer-live-p buffer)
+                   (buffer-local-value 'my/eshell-input-only-mode buffer)))))
+    (apply function args)))
+
 (use-package eshell
   :ensure nil
+  :hook (eshell-mode . my/eshell-input-only-mode)
+  :config
+  (advice-add 'eshell-interactive-filter :around #'my/eshell-allow-output-updates)
   :custom
   ;; (eshell-history-file-name (my/emacs-local-dir "eshell/history"))
   ;; (eshell-last-dir-ring-file-name (my/emacs-local-dir "eshell/lastdir"))

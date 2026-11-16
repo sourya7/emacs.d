@@ -10,13 +10,6 @@
       :data "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
       :name "probe.png" :bytes 68))
 
-  (defun pichat-test-compaction-users (session)
-    "Return SESSION's authoritative user messages."
-    (cl-remove-if-not
-     (lambda (m) (equal "user" (plist-get m :role)))
-     (plist-get (plist-get (pichat-test-rpc-call session "get_messages") :data)
-                :messages)))
-
   (ert-deftest pichat-integration-characterize-manual-compaction-input-paths ()
     (dolist (outcome '(success failure abort))
         (ert-info ((format "manual / %s" outcome))

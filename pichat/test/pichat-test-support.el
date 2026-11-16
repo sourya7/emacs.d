@@ -272,6 +272,13 @@ have been seen."
       ((and response (pred identity)) response)
       (_ (ert-fail (format "RPC %s failed: %S" type (plist-get result :error)))))))
 
+(defun pichat-test-compaction-users (session)
+  "Return SESSION's authoritative user messages (not pre-compaction history)."
+  (cl-remove-if-not
+   (lambda (m) (equal "user" (plist-get m :role)))
+   (plist-get (plist-get (pichat-test-rpc-call session "get_messages") :data)
+              :messages)))
+
 (defun pichat-test-prompt-and-wait (session message &optional timeout)
   "Prompt SESSION with MESSAGE and wait until the run is settled."
   (let ((settled-count (pichat-test-count-raw-events session "agent_settled"))

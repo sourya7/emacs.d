@@ -348,9 +348,20 @@
                     (pichat-chat-send-input))
                   (should (= 3 (length pichat-chat--held-submissions))))
                 (pichat-test-wait-for-raw-event session "agent_settled" 10 settled)
-                (let ((users (last (pichat-test-compaction-users session) 3)))
+                (let ((users (cl-remove-if-not
+                              (lambda (m) (string-prefix-p "held " (pichat-render-message-text m)))
+                              (pichat-test-compaction-users session))))
+                  ;; Compare every matching message, not just the last three:
+                  ;; an earlier duplicate must fail as well as a missing item.
                   (should (equal '("held first[image]" "held second[image]" "held third[image]")
-                                 (mapcar #'pichat-render-message-text users))))
+                                 (mapcar #'pichat-render-message-text users)))
+                  (dolist (user users)
+                    (let ((image (cl-find "image" (plist-get user :content)
+                                          :key (lambda (part) (plist-get part :type))
+                                          :test #'equal)))
+                      (should (equal (plist-get image :data)
+                                     (plist-get pichat-test-held-image :data)))
+                      (should (equal "image/png" (plist-get image :mimeType))))))
                 (with-current-buffer buffer
                   (should-not pichat-chat--held-submissions)
                   (should-not pichat-chat--held-release)
@@ -393,8 +404,10 @@
                 (should (equal "waiting" (plist-get delivery :state)))
                 (pichat-test-wait-for-raw-event session "agent_settled" 10 settled)
                 (should (equal '("chain notice" "held one" "held two")
-                               (last (mapcar #'pichat-render-message-text
-                                             (pichat-test-compaction-users session)) 3)))
+                               (cl-remove-if-not
+                                (lambda (text) (member text '("chain notice" "held one" "held two")))
+                                (mapcar #'pichat-render-message-text
+                                        (pichat-test-compaction-users session)))))
                 (should (equal "sent" (plist-get delivery :state)))
                 (with-current-buffer buffer
                   (should-not pichat-chat--recoverable-submissions)
@@ -403,7 +416,9 @@
             (when (buffer-live-p buffer) (kill-buffer buffer)))))))
 
   (ert-deftest pichat-integration-held-input-steering-alone-and-mixed ()
-    (dolist (mixed '(nil t))
+    (pcase-dolist (`(,mixed . ,mode)
+                  '((nil . "one-at-a-time") (t . "one-at-a-time")
+                    (nil . "all") (t . "all")))
       (pichat-test-with-integration-session
           (session :settings '(:compaction (:reserveTokens 1000 :keepRecentTokens 100))
                    :script (list :turns
@@ -413,6 +428,7 @@
                                           (when mixed [(:text "steer reply") (:text "follow reply")]))))
         (pichat-test-prompt-and-wait session (make-string 2000 ?a))
         (pichat-test-prompt-and-wait session (make-string 2000 ?b))
+        (pichat-test-rpc-call session "set_follow_up_mode" (list :mode mode))
         (let ((pichat-chat-stop-session-on-kill nil)
               (buffer (pichat-chat-open session))
               (settled (pichat-test-count-raw-events session "agent_settled")))
@@ -426,9 +442,10 @@
                   (when mixed (pichat-chat-follow-up "last follow")))
                 (pichat-test-wait-for-raw-event session "agent_settled" 10 settled)
                 (should (equal (if mixed '("first follow" "held steer" "last follow") '("held steer"))
-                               (last (mapcar #'pichat-render-message-text
-                                             (pichat-test-compaction-users session))
-                                     (if mixed 3 1)))))
+                               (cl-remove-if-not
+                                (lambda (text) (member text '("first follow" "held steer" "last follow")))
+                                (mapcar #'pichat-render-message-text
+                                        (pichat-test-compaction-users session))))))
             (when (buffer-live-p buffer) (kill-buffer buffer)))))))
 
   (ert-deftest pichat-integration-held-input-failure-and-abort-never-send ()
@@ -462,8 +479,209 @@
                   (should (= 2 (length pichat-chat--recoverable-submissions)))
                   (should-not pichat-chat--held-submissions)
                   (should-not pichat-chat--held-release)
-                  (should (equal (list pichat-test-held-image) (pichat-chat--retained-attachments)))))
+                  (should-not (string-match-p "├ queued" (buffer-string)))
+                  (should (equal '("held image" "held steer")
+                                 (sort (mapcar (lambda (r) (plist-get r :text))
+                                               pichat-chat--recoverable-submissions)
+                                       #'string<)))
+                  (should (equal (list pichat-test-held-image) (pichat-chat--retained-attachments))))
+                (should-not (cl-find-if
+                             (lambda (m) (string-prefix-p "held " (pichat-render-message-text m)))
+                             (pichat-test-compaction-users session))))
             (when (buffer-live-p buffer) (kill-buffer buffer))))))))
+
+(when pichat-test-include-integration
+  (ert-deftest pichat-integration-held-input-recall-and-delete-before-delivery ()
+    (pichat-test-with-integration-session
+        (session :settings '(:compaction (:reserveTokens 1000 :keepRecentTokens 100))
+                 :script '(:turns [(:text "h1") (:text "h2")
+                                   (:text "summary" :delayMs 1000)
+                                   (:text "delivered")]))
+      (pichat-test-prompt-and-wait session (make-string 2000 ?a))
+      (pichat-test-prompt-and-wait session (make-string 2000 ?b))
+      (let ((pichat-chat-stop-session-on-kill nil)
+            (buffer (pichat-chat-open session))
+            (starts (pichat-test-count-raw-events session "agent_start"))
+            (settled (pichat-test-count-raw-events session "agent_settled")))
+        (unwind-protect
+            (progn
+              (with-current-buffer buffer (pichat-chat-compact))
+              (pichat-test-wait-for-raw-event session "compaction_start")
+              (with-current-buffer buffer
+                (dolist (text '("held deliver" "held delete" "held panel recall" "held recall"))
+                  (pichat-test-set-draft text)
+                  (setq pichat-chat--pending-attachments (list pichat-test-held-image))
+                  (pichat-chat-send-input))
+                (should (= 4 (how-many "held · follow-up" (point-min) (point-max))))
+                (goto-char (pichat-test-held-item-position "held panel recall"))
+                (call-interactively (key-binding (kbd "RET")))
+                (should (equal "held panel recall" (pichat-chat--input-text)))
+                (should (equal (list pichat-test-held-image) pichat-chat--pending-attachments))
+                ;; Explicitly discard this recalled fixture draft before
+                ;; exercising newest-first recall from the empty prompt.
+                (pichat-test-set-draft "")
+                (pichat-chat-clear-attachments)
+                (goto-char (point-max))
+                (call-interactively (key-binding (kbd "C-c C-y")))
+                (should (equal "held recall" (pichat-chat--input-text)))
+                (should (equal (list pichat-test-held-image) pichat-chat--pending-attachments))
+                (goto-char (pichat-test-held-item-position "held deliver"))
+                (should-error (call-interactively (key-binding (kbd "RET"))) :type 'user-error)
+                (goto-char (pichat-test-held-item-position "held delete"))
+                (call-interactively (key-binding (kbd "d")))
+                (should (= 1 (length pichat-chat--held-submissions))))
+              ;; Round-trip readiness while still compacting: none of the held
+              ;; or recalled content has reached Pi or started an agent run.
+              (should (plist-get (plist-get (pichat-test-rpc-call session "get_state") :data)
+                                 :isCompacting))
+              (should (= starts (pichat-test-count-raw-events session "agent_start")))
+              (should-not (cl-find-if
+                           (lambda (m) (string-prefix-p "held " (pichat-render-message-text m)))
+                           (pichat-test-compaction-users session)))
+              (pichat-test-wait-for-raw-event session "agent_settled" 10 settled)
+              (should (equal '("held deliver[image]")
+                             (mapcar #'pichat-render-message-text
+                                     (cl-remove-if-not
+                                      (lambda (m) (string-prefix-p "held " (pichat-render-message-text m)))
+                                      (pichat-test-compaction-users session)))))
+              (with-current-buffer buffer
+                (should (equal "held recall" (pichat-chat--input-text)))
+                (should (equal (list pichat-test-held-image) pichat-chat--pending-attachments))
+                (should-not (string-match-p "├ queued" (buffer-string)))
+                (should-not pichat-chat--recoverable-submissions)))
+          (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+  (ert-deftest pichat-integration-held-input-submission-during-real-handoff ()
+    (dolist (mode '("one-at-a-time" "all"))
+      (pichat-test-with-integration-session
+          (session :settings '(:compaction (:reserveTokens 1000 :keepRecentTokens 100))
+                   :script (list :turns
+                                 (vconcat [(:text "h1") (:text "h2")
+                                           (:text "summary" :delayMs 600)
+                                           (:text "first reply" :delayMs 600)]
+                                          (if (equal mode "all")
+                                              [(:text "combined")]
+                                            [(:text "second") (:text "third")]))))
+        (pichat-test-prompt-and-wait session (make-string 2000 ?a))
+        (pichat-test-prompt-and-wait session (make-string 2000 ?b))
+        (pichat-test-rpc-call session "set_follow_up_mode" (list :mode mode))
+        (let* ((pichat-chat-stop-session-on-kill nil)
+               (buffer (pichat-chat-open session))
+               (settled (pichat-test-count-raw-events session "agent_settled"))
+               injected
+               (handler (lambda (&rest _)
+                          (unless injected
+                            (with-current-buffer buffer
+                              ;; This listener runs before the chat's start
+                              ;; handler, with release still owning the FIFO.
+                              (should pichat-chat--held-release)
+                              (setq injected t)
+                              (pichat-test-set-draft "held during handoff")
+                              (setq pichat-chat--pending-attachments (list pichat-test-held-image))
+                              (pichat-chat-send-input))))))
+          (unwind-protect
+              (progn
+                (pichat-rpc-compact session nil #'ignore)
+                (pichat-test-wait-for-raw-event session "compaction_start")
+                (with-current-buffer buffer
+                  (pichat-chat-follow-up "held first")
+                  (pichat-chat-follow-up "held second"))
+                (pichat-on 'agent-start handler session)
+                (pichat-test-wait-for-raw-event session "agent_settled" 10 settled)
+                (should injected)
+                (should (equal '("held first" "held second" "held during handoff[image]")
+                               (mapcar #'pichat-render-message-text
+                                       (cl-remove-if-not
+                                        (lambda (m) (string-prefix-p "held " (pichat-render-message-text m)))
+                                        (pichat-test-compaction-users session)))))
+                (with-current-buffer buffer
+                  (should-not pichat-chat--held-release)
+                  (should-not pichat-chat--recoverable-submissions)
+                  (should-not (string-match-p "├ queued" (buffer-string)))))
+            (pichat-off 'agent-start handler session)
+            (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
+  (ert-deftest pichat-integration-held-input-lifecycle-never-retargets-or-replays ()
+    (dolist (boundary '(close rebind restart))
+      (ert-info ((format "held input / %s" boundary))
+        (pichat-test-with-integration-session
+            (session :settings '(:compaction (:reserveTokens 1000 :keepRecentTokens 100))
+                     :script '(:turns [(:text "h1") (:text "h2")
+                                       (:text "summary" :delayMs 1000)
+                                       (:text "explicit later reply")]))
+          (pichat-test-prompt-and-wait session (make-string 2000 ?a))
+          (pichat-test-prompt-and-wait session (make-string 2000 ?b))
+          (let ((pichat-chat-stop-session-on-kill nil)
+                (buffer (pichat-chat-open session))
+                (runtime-id (pichat-session-runtime-id session))
+                (source-id (pichat-session-id session))
+                (old-process (pichat-session-process session)))
+            (unwind-protect
+                (progn
+                  (pichat-rpc-compact session nil #'ignore)
+                  (pichat-test-wait-for-raw-event session "compaction_start")
+                  (with-current-buffer buffer
+                    (pichat-test-set-draft "held image")
+                    (setq pichat-chat--pending-attachments (list pichat-test-held-image))
+                    (pichat-chat-send-input)
+                    (pichat-chat-steer "held steer")
+                    (pichat-test-set-draft "unsent draft"))
+                  (pcase boundary
+                    ('close
+                     (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) nil)))
+                       (should-not (kill-buffer buffer)))
+                     (should (buffer-live-p buffer))
+                     (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+                       (should (kill-buffer buffer)))
+                     (setq buffer (pichat-chat-open session))
+                     (pichat-test-wait-for-raw-event session "compaction_end"))
+                    ('rebind
+                     ;; Real source mutation while compaction is pending, not
+                     ;; a hand-emitted session-rebinding notification.
+                     (pichat-test-rpc-call session "new_session")
+                     (pichat-test-rpc-call session "get_state")
+                     (should-not (equal source-id (pichat-session-id session)))
+                     (pichat-test-wait-for-raw-event session "compaction_end"))
+                    ('restart
+                     ;; Stop the actual process mid-summary, then start a
+                     ;; replacement in the same runtime with a fresh script.
+                     (pichat-rpc-stop session)
+                     (should-not (process-live-p old-process))
+                     (with-temp-file script-file
+                       (insert "{\"turns\":[{\"text\":\"explicit later reply\"}]}"))
+                     (pichat-rpc-start session (pichat-session-rpc-command session))
+                     (pichat-test-rpc-call session "get_state")
+                     (pichat-test-rpc-call session "set_auto_compaction" '(:enabled :json-false))
+                     (should-not (eq old-process (pichat-session-process session)))))
+                  (should (equal runtime-id (pichat-session-runtime-id session)))
+                  ;; A later real run must not rearm any abandoned release.
+                  (pichat-test-prompt-and-wait session "explicit later input")
+                  (pichat-test-rpc-call session "get_state")
+                  (should-not (cl-find-if
+                               (lambda (m) (string-prefix-p "held " (pichat-render-message-text m)))
+                               (pichat-test-compaction-users session)))
+                  (with-current-buffer buffer
+                    (should-not pichat-chat--held-submissions)
+                    (should-not pichat-chat--held-release)
+                    (should-not pichat-chat--held-timer)
+                    (should-not (string-match-p "├ queued" (buffer-string)))
+                    (should (= 2 (length pichat-chat--recoverable-submissions)))
+                    (should (equal (list pichat-test-held-image) (pichat-chat--retained-attachments)))
+                    (unless (eq boundary 'close)
+                      (should (equal "unsent draft" (pichat-chat--input-text))))
+                    (pichat-test-set-draft "")
+                    (let (recovered)
+                      (dotimes (_ 2)
+                        (cl-letf (((symbol-function 'completing-read)
+                                   (lambda (_prompt choices &rest _) (caar choices))))
+                          (pichat-chat-recover-submission))
+                        (push (cons (pichat-chat--input-text) pichat-chat--pending-attachments) recovered)
+                        (pichat-test-set-draft "")
+                        (setq pichat-chat--pending-attachments nil))
+                      (should (equal '("held image" "held steer") (sort (mapcar #'car recovered) #'string<)))
+                      (should (equal (list pichat-test-held-image) (cdr (assoc "held image" recovered)))))
+                    (should-not pichat-chat--recoverable-submissions)))
+              (when (buffer-live-p buffer) (kill-buffer buffer)))))))))
 
 (provide 'pichat-test-held-input)
 ;;; pichat-test-held-input.el ends here

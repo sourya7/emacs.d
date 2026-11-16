@@ -11,6 +11,9 @@
   :diminish
   :demand t
   :custom
+  ;; Keep prefix C-h available for Embark's searchable command picker.
+  (which-key-use-C-h-commands nil)
+  (which-key-show-early-on-C-h nil)
   (which-key-sort-order #'which-key-key-order-alpha)
   (which-key-allow-imprecise-window-fit nil)
   (which-key-sort-uppercase-first nil)

@@ -49,6 +49,7 @@
 (require 'pichat-test-transcript)
 (require 'pichat-test-activity-presentation)
 (require 'pichat-test-render)
+(require 'pichat-test-transcript-view)
 (require 'pichat-test-approval-tools)
 (require 'pichat-test-sessions-reference)
 (require 'pichat-test-reference)

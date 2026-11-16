@@ -84,6 +84,7 @@
 (require 'pichat-test-evil)
 (require 'pichat-test-sessions-integration)
 (require 'pichat-test-integration)
+(require 'pichat-test-compaction-characterization)
 
 (provide 'pichat-test)
 ;;; pichat-test.el ends here

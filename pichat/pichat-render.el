@@ -204,11 +204,14 @@ assistant transcript text."
   (mapconcat #'pichat-render--content-text content ""))
 
 (defun pichat-render-tool-view-for (context node-key tool-id)
-  "Return CONTEXT's display state for NODE-KEY and TOOL-ID."
-  (or (alist-get (cons node-key tool-id)
-                 (pichat-render-context-tool-views context)
-                 nil nil #'equal)
-      (pichat-render-context-tool-view context)))
+  "Return CONTEXT's display state for NODE-KEY and TOOL-ID.
+Tool views may be an equal-keyed hash table or a compatibility alist."
+  (let ((views (pichat-render-context-tool-views context))
+        (key (cons node-key tool-id)))
+    (or (if (hash-table-p views)
+            (gethash key views)
+          (alist-get key views nil nil #'equal))
+        (pichat-render-context-tool-view context))))
 
 (defun pichat-render--indent-fragment (fragment first-prefix rest-prefix)
   "Apply visual FIRST-PREFIX and REST-PREFIX to FRAGMENT lines.

@@ -49,9 +49,70 @@
                   (ert-info ((format "%S" (list default legacy group live
                                                settled status explicit)))
                     (should
-                     (equal (list (cons '("node" . "tool") expected))
-                            (pichat-chat--tool-views-for-transcript
-                             transcript live)))))))))))))
+                     (eq expected
+                         (pichat-render-tool-view-for
+                          (pichat-render-context-create
+                           :tool-views (pichat-chat--tool-views-for-transcript
+                                        transcript live))
+                          (copy-sequence "node") (copy-sequence "tool"))))))))))))))
+
+(ert-deftest pichat-chat-indexed-views-preserve-rendering-and-tool-ownership ()
+  (let* ((transcript (pichat-test--canonical-fixture-transcript))
+         (pichat-chat--tool-view-states (make-hash-table :test #'equal))
+         (pichat-chat--activity-view-states (make-hash-table :test #'equal))
+         (pichat-chat--tool-enrichments (make-hash-table :test #'equal))
+         (pichat-chat--skill-view-states (make-hash-table :test #'equal))
+         (pichat-chat-activity-group-display 'collapsed)
+         (groups (pichat-activity-groups
+                  (pichat-activity-build-presentation
+                   transcript '(thinking tool) t))))
+    ;; Exercise explicit group choices, not just the policy's empty table.
+    (dolist (group groups)
+      (puthash (pichat-chat-activity-ui-canonical-view-key
+                (copy-tree (pichat-activity-group-key group)))
+               (list :view 'expanded
+                     :tool-ids (pichat-activity-group-tool-ids group))
+               pichat-chat--activity-view-states))
+    (puthash '(canonical "entry-tool-call" "tool-1") 'output
+             pichat-chat--tool-view-states)
+    (let* ((context (pichat-chat--canonical-render-context transcript))
+           (compat (copy-pichat-render-context context)))
+      (cl-labels ((alist (table)
+                    (let (entries)
+                      (maphash (lambda (key value)
+                                 (push (cons (copy-tree key) value) entries)) table)
+                      entries)))
+        (setf (pichat-render-context-tool-views compat)
+              (alist (pichat-render-context-tool-views context))
+              (pichat-render-context-activity-views compat)
+              (alist (pichat-render-context-activity-views context))))
+      (should groups)
+      (should (equal (pichat-render-canonical transcript compat)
+                     (pichat-render-canonical transcript context)))
+      (should (eq (pichat-render-tool-view-for context "missing" "tool-1")
+                  pichat-chat-tool-default-display))
+      (with-temp-buffer
+        (insert (pichat-render-fragment-propertized-string
+                 (pichat-render-canonical transcript context)))
+        ;; An equal but non-identical key resolves; a tool ID under the wrong
+        ;; node must not acquire another node's tool data.
+        (insert (propertize "unowned" 'pichat-tool-key '("missing" . "tool-1")))
+        (let ((blocks (pichat-chat-tool-ui-index-tools
+                       transcript (point-min) (point-max) context nil 0
+                       pichat-chat--tool-enrichments)))
+          (unwind-protect
+              (let ((block (gethash "tool-1" blocks)))
+                (should block)
+                (should (equal (plist-get block :canonical-key)
+                               '("entry-tool-call" . "tool-1")))
+                (should (eq (plist-get block :display-state) 'output))
+                (should (equal (plist-get (plist-get block :raw) :toolName)
+                               "read_example"))
+                (should (string-match-p "sanitized output"
+                                        (plist-get block :full-text)))
+                (should (< (marker-position (plist-get block :end))
+                           (point-max))))
+            (pichat-chat-tool-ui-release-blocks blocks)))))))
 
 (ert-deftest pichat-chat-tool-default-applies-live-and-after-settlement ()
   (dolist (default '(summary args output))

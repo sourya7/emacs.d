@@ -68,8 +68,9 @@ to the matching live choice."
 LIVE-P keeps active tools expanded.  GENERATION and VIEW-STATES scope explicit
 choices; LIVE-DRAFT determines whether incomplete live tools are settled.
 Explicit choices win, then active live tools use `output', otherwise DEFAULT.
-Parent activity-group disclosure does not participate in this pure policy."
-  (let (views)
+Parent activity-group disclosure does not participate in this pure policy.
+The result is a fresh equal-keyed hash table, owned by the render context."
+  (let ((views (make-hash-table :test #'equal)))
     (dolist (node (pichat-transcript-nodes transcript))
       (dolist (content (pichat-transcript-node-content node))
         (when (eq 'tool (pichat-transcript-content-kind content))
@@ -85,17 +86,20 @@ Parent activity-group disclosure does not participate in this pure policy."
                            (and (eq status 'incomplete)
                                 (not (pichat-live-draft-settled-p live-draft))))))
                  (view (or explicit (if active-p 'output default))))
-            (push (cons (cons node-key tool-id) view) views)))))
+            (puthash (cons node-key tool-id) view views)))))
     views))
 
-(defun pichat-chat-tool-ui--canonical-tool (transcript tool-key)
-  "Return normalized tool in TRANSCRIPT identified by TOOL-KEY."
-  (let* ((node-key (car-safe tool-key))
-         (tool-id (cdr-safe tool-key))
-         (node (cl-find node-key (pichat-transcript-nodes transcript)
-                        :key #'pichat-transcript-node-key :test #'equal)))
-    (cl-find tool-id (and node (pichat-transcript-node-content node))
-             :key #'pichat-transcript-content-tool-call-id :test #'equal)))
+(defun pichat-chat-tool-ui--tool-index (transcript)
+  "Return a fresh equal-keyed tool index for TRANSCRIPT.
+Keys include both node ownership and tool-call ID, as rendered text does."
+  (let ((tools (make-hash-table :test #'equal)))
+    (dolist (node (pichat-transcript-nodes transcript))
+      (dolist (content (pichat-transcript-node-content node))
+        (when (eq (pichat-transcript-content-kind content) 'tool)
+          (puthash (cons (pichat-transcript-node-key node)
+                         (pichat-transcript-content-tool-call-id content))
+                   content tools))))
+    tools))
 
 (defun pichat-chat-tool-ui--canonical-output (tool)
   "Return plain persisted output text for normalized TOOL."
@@ -208,14 +212,14 @@ CONTEXT supplies display state.  LIVE-P selects source-scoped view keys.
 GENERATION and ENRICHMENTS supply derived presentation.  This function only
 creates block records, markers, and overlays; rendered text is never edited."
   (let ((blocks (make-hash-table :test #'equal))
+        (tools (pichat-chat-tool-ui--tool-index transcript))
         (pos start))
     (while (< pos end)
       (let* ((tool-key (get-text-property pos 'pichat-tool-key))
              (next (or (next-single-property-change
                         pos 'pichat-tool-key nil end) end)))
         (when tool-key
-          (when-let* ((tool (pichat-chat-tool-ui--canonical-tool
-                            transcript tool-key)))
+          (when-let* ((tool (gethash tool-key tools)))
             (let* ((tool-id (pichat-transcript-content-tool-call-id tool))
                    (block
                     (list :start (copy-marker pos t)

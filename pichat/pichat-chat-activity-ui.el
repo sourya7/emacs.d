@@ -140,7 +140,8 @@ GENERATION scopes transient choices and LIVE-P selects the owning source."
                 live-draft policy)
   "Return explicit views and latest key for rendering TRANSCRIPT.
 MEMBER-KINDS and SHOW-THINKING select the pure presentation.  LIVE-P,
-GENERATION, VIEW-STATES, LIVE-DRAFT, and POLICY resolve source-local state."
+GENERATION, VIEW-STATES, LIVE-DRAFT, and POLICY resolve source-local state.
+The :views value is a fresh equal-keyed hash table for this render context."
   (let* ((presentation
           (pichat-activity-build-presentation
            transcript member-kinds show-thinking))
@@ -154,14 +155,14 @@ GENERATION, VIEW-STATES, LIVE-DRAFT, and POLICY resolve source-local state."
                (eq (pichat-activity-item-kind tail) 'group)
                (pichat-activity-group-key
                 (pichat-activity-item-group tail))))
-         views)
+         (views (make-hash-table :test #'equal)))
     (dolist (group groups)
       (when-let* ((view (pichat-chat-activity-ui-explicit-view
                         view-states generation group live-p)))
-        (push (cons (pichat-activity-group-key group) view) views)))
+        (puthash (pichat-activity-group-key group) view views)))
     (list :presentation presentation
           :groups groups
-          :views (nreverse views)
+          :views views
           :latest-key (and (eq policy 'latest) latest))))
 
 (defun pichat-chat-activity-ui--enrichment

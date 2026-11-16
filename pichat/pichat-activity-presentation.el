@@ -81,8 +81,9 @@ Explicit errors remain terminal even when a provider also reports =toolUse=."
            (or (pichat-transcript-content-text content) ""))))
     (_ nil)))
 
-(defun pichat-activity--member (node content ordinal)
-  "Build an activity member for NODE CONTENT at global ORDINAL."
+(defun pichat-activity--member (node content _ordinal)
+  "Build an activity member for NODE CONTENT.
+The global ordinal argument is unused; identity comes from source positions."
   (let* ((node-key (pichat-transcript-node-key node))
          (index (pichat-transcript-content-index content))
          (tool-id (pichat-transcript-content-tool-call-id content)))
@@ -142,8 +143,9 @@ Thought-only activity is active until its owning assistant node settles."
      (thinking-p 'active)
      (t 'complete))))
 
-(defun pichat-activity--make-group (members ordinal)
-  "Return a derived group from source-ordered MEMBERS and group ORDINAL."
+(defun pichat-activity--make-group (members _ordinal)
+  "Return a derived group from source-ordered MEMBERS.
+The group ordinal argument is unused; identity comes from source positions."
   (let* ((first (car members))
          (valid-ids
           (delq nil
@@ -298,10 +300,13 @@ whether non-member thinking is a visible boundary.  Source order is retained."
 (defun pichat-activity-resolve-expanded-p
     (group policy explicit-views latest-key live-p)
   "Resolve whether GROUP is expanded under display POLICY.
-EXPLICIT-VIEWS is an alist keyed by pure group key.  LATEST-KEY names the live
-tail group eligible for `latest'; LIVE-P distinguishes transient projection."
-  (let ((explicit (alist-get (pichat-activity-group-key group)
-                             explicit-views nil nil #'equal)))
+EXPLICIT-VIEWS is an equal-keyed hash table (or compatibility alist) keyed by
+pure group key.  LATEST-KEY names the live tail group eligible for `latest';
+LIVE-P distinguishes transient projection."
+  (let ((explicit (if (hash-table-p explicit-views)
+                      (gethash (pichat-activity-group-key group) explicit-views)
+                    (alist-get (pichat-activity-group-key group)
+                               explicit-views nil nil #'equal))))
     (pcase (or explicit policy 'latest)
       ('expanded t)
       ('collapsed nil)

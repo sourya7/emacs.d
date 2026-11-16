@@ -24,7 +24,7 @@
                 :content ((:type "text" :text "Complete output"))))
      (:id "answer" :type "message"
       :message (:role "assistant" :content "Final answer")))
-   "answer"))
+   t))
 
 (ert-deftest pichat-transcript-view-owns-only-its-region ()
   (let ((transcript (pichat-test-transcript-view--transcript))
@@ -198,6 +198,116 @@
                  (unless (or (eq hook #'pichat-transcript-view-clear)
                              (eq hook t) (memq hook hooks))
                    (error "Unexpected kill hook: %S" hook))))))))))))
+
+(ert-deftest pichat-transcript-view-selection-resolves-messages-records-and-results ()
+  (let* ((transcript (pichat-test-transcript-view--transcript))
+         (pichat-chat-activity-group-display 'collapsed)
+         (pichat-chat-show-thinking t)
+         (original (copy-tree transcript t)))
+    (dolist (selection '("user" "call" "result" "answer" "missing"))
+      (with-temp-buffer
+        (insert "Header\nFooter")
+        (pichat-transcript-view-render transcript 8 8 nil (copy-sequence selection))
+        (let ((position (pichat-transcript-view-selected-position)))
+          (if (equal selection "missing")
+              (should-not position)
+            (should (<= 8 position))
+            (should (< position pichat-transcript-view--end))
+            (if (equal selection "result")
+                (should (equal (get-text-property position 'pichat-tool-key)
+                               '("call" . "tool")))
+              (should (equal (get-text-property position 'pichat-node-key)
+                             selection)))))
+        (when (member selection '("call" "result"))
+          (should (gethash "tool" pichat-transcript-view--tool-blocks))
+          (should (string-match-p "Private reasoning" (buffer-string)))
+          ;; Pre-expansion is initial policy, not an override on every repaint.
+          (maphash (lambda (key value)
+                     (puthash key (plist-put (copy-sequence value) :view 'collapsed)
+                              pichat-transcript-view--activity-view-states))
+                   pichat-transcript-view--activity-view-states)
+          (pichat-transcript-view-repaint)
+          (should-not (gethash "tool" pichat-transcript-view--tool-blocks)))))
+    (with-temp-buffer
+      (pichat-transcript-view-render transcript 1 1 1 "result")
+      (should-not (pichat-transcript-view-selected-position)))
+    (should (equal original transcript)))
+  ;; A tail bound can split a group and change its anchor.  Expand the visible
+  ;; group, not the full transcript's now-absent first tool.
+  (with-temp-buffer
+    (let ((pichat-chat-activity-group-display 'collapsed))
+      (pichat-transcript-view-render-entries
+       '((:id "first" :type "message"
+          :message (:role "assistant" :stopReason "toolUse"
+                    :content ((:type "toolCall" :id "one" :name "bash"))))
+         (:id "second" :type "message"
+          :message (:role "assistant" :stopReason "toolUse"
+                    :content ((:type "toolCall" :id "two" :name "bash"))))
+         (:id "result" :type "message"
+          :message (:role "toolResult" :toolCallId "two" :content "output")))
+       1 1 1 "result")
+      (should (gethash "two" pichat-transcript-view--tool-blocks))
+      (should-not (gethash "one" pichat-transcript-view--tool-blocks))
+      (should (equal (get-text-property
+                      (pichat-transcript-view-selected-position) 'pichat-tool-key)
+                     '("second" . "two")))))
+  ;; The caller can supply an alternate path; no active-branch cache is read.
+  (with-temp-buffer
+    (pichat-transcript-view-render-entries
+     '((:id "other-user" :type "message"
+        :message (:role "user" :content "Alternate request"))
+       (:id "record" :type "model_change" :provider "example" :modelId "test"))
+     1 1 nil (copy-sequence "record"))
+    (should (string-match-p "Alternate request" (buffer-string)))
+    (should (equal (get-text-property
+                    (pichat-transcript-view-selected-position) 'pichat-node-key)
+                   "record"))))
+
+(ert-deftest pichat-transcript-view-rejection-preserves-caller-region-and-resets ()
+  (dolist (builder '(nil t))
+    (with-temp-buffer
+      (insert (propertize "Header\n" 'owner 'caller) "old\nFooter")
+      (pichat-transcript-view-render
+       (pichat-test-transcript-view--transcript) 8 11 nil "result")
+      (let ((marker (plist-get (gethash "tool" pichat-transcript-view--tool-blocks)
+                              :start))
+            (bad (pichat-test-transcript-view--transcript)))
+        (if builder
+            (pichat-transcript-view-render-entries
+             '((:id "a" :type "message"
+                :message (:role "assistant"
+                          :content ((:type "toolCall" :id "duplicate" :name "bash")
+                                    (:type "toolCall" :id "duplicate" :name "bash")))))
+             pichat-transcript-view--start pichat-transcript-view--end)
+          (setf (pichat-transcript-nodes bad)
+                (append (pichat-transcript-nodes bad)
+                        (list (car (pichat-transcript-nodes bad)))))
+          (pichat-transcript-view-render
+           bad pichat-transcript-view--start pichat-transcript-view--end))
+        (should-not (marker-buffer marker)))
+      (should buffer-read-only)
+      (should (string-prefix-p "Header\nTranscript unavailable: " (buffer-string)))
+      (should (string-match-p (if builder "Duplicate declared tool id" "Duplicate node key")
+                              (buffer-string)))
+      (should (eq (get-text-property 1 'owner) 'caller))
+      (should (string-suffix-p "\nFooter" (buffer-string)))
+      (should-not (pichat-transcript-view-selected-position))
+      (should (= 0 (hash-table-count pichat-transcript-view--tool-blocks)))
+      (let ((text (buffer-string)))
+        (pichat-transcript-view-repaint)
+        (should (equal text (buffer-string))))
+      (pichat-transcript-view-render
+       (pichat-test-transcript-view--transcript)
+       pichat-transcript-view--start pichat-transcript-view--end)
+      (should-not (string-match-p "unavailable" (buffer-string)))
+      (should (string-match-p "Final answer" (buffer-string)))))
+  (with-temp-buffer
+    (let* ((key (concat "bad\n" (make-string 1000 ?x)))
+           (node (pichat-transcript-node-create :kind 'activity :key key)))
+      (pichat-transcript-view-render
+       (pichat-transcript-create :nodes (list node node)) 1 1)
+      (should (< (buffer-size) 350))
+      (should (= 1 (cl-count ?\n (buffer-string)))))))
 
 (provide 'pichat-test-transcript-view)
 ;;; pichat-test-transcript-view.el ends here

@@ -77,6 +77,7 @@
 (declare-function pichat-chat--input-text "pichat-chat")
 (declare-function pichat-chat--set-input-text "pichat-chat" (text))
 (declare-function pichat-chat--set-status "pichat-chat" (key text))
+(declare-function pichat-chat--render-extension-widgets "pichat-chat" ())
 
 (defun pichat-chat-input-initialize ()
   "Initialize buffer-local prompt lifecycle and attachment state."
@@ -239,8 +240,15 @@
 
 ;;;###autoload
 (defun pichat-chat-recover-submission ()
-  "Restore a failed submission without automatically resending it."
+  "Recover a failed submission, or recall the newest held message.
+Neither operation sends input.  Failed submissions take precedence."
   (interactive)
+  (if pichat-chat--recoverable-submissions
+      (pichat-chat-input-recover-failed)
+    (pichat-chat-input-recall-held (car (last pichat-chat--held-submissions)))))
+
+(defun pichat-chat-input-recover-failed ()
+  "Restore one failed submission using the existing recovery chooser."
   (unless pichat-chat--recoverable-submissions
     (user-error "No recoverable PiChat submission"))
   (unless (string-empty-p (pichat-chat--input-text))
@@ -541,7 +549,78 @@ Install ownership before invoking providers, including inline providers."
   (setq pichat-chat--held-submissions
         (nconc pichat-chat--held-submissions (list record)))
   (pichat-chat--insert-prompt)
+  (pichat-chat--render-extension-widgets)
   (pichat-chat--refresh-attachment-status))
+
+(defvar pichat-chat-input-held-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET") #'pichat-chat-input-recall-held-at-point)
+    (define-key map [return] #'pichat-chat-input-recall-held-at-point)
+    (define-key map (kbd "d") #'pichat-chat-input-delete-held-at-point)
+    map)
+  "Local actions on held queue items, also used in Evil states.")
+
+(defun pichat-chat-input-insert-held-panel ()
+  "Insert the held queue display at point; caller owns region protection."
+  (when pichat-chat--held-submissions
+    (insert (propertize "├ queued ─────────────────────────────\n" 'face 'shadow))
+    (cl-loop for record in pichat-chat--held-submissions
+             for number from 1
+             for images = (length (plist-get record :attachments))
+             do (insert
+                 (propertize
+                  (format "%d held · %s · %s%s\n" number
+                          (if (equal (plist-get record :behavior) "steer")
+                              "steering" "follow-up")
+                          (truncate-string-to-width
+                           (replace-regexp-in-string
+                            "[[:space:][:cntrl:]]+" " " (plist-get record :text))
+                           60 nil nil "…")
+                          (if (> images 0) (format " [%d img]" images) ""))
+                  'pichat-held-record record
+                  'keymap pichat-chat-input-held-map
+                  'mouse-face 'highlight
+                  'help-echo "RET: recall · d: delete")))
+    (insert (propertize
+             "sends after compaction · C-c C-y: recall · RET/d on item\n"
+             'face 'shadow))))
+
+(defun pichat-chat-input-held-at-point ()
+  "Return the still-owned held item at point, or signal a user error."
+  (let ((record (get-text-property (point) 'pichat-held-record)))
+    (unless (memq record pichat-chat--held-submissions)
+      (user-error "No held PiChat message at point"))
+    record))
+
+(defun pichat-chat-input-recall-held (record)
+  "Move still-held RECORD and its images into an empty draft."
+  (unless (and record (memq record pichat-chat--held-submissions))
+    (user-error "No held PiChat message"))
+  (unless (= (plist-get record :source-generation) pichat-chat--source-generation)
+    (user-error "Held PiChat source changed"))
+  (unless (and (= pichat-chat--input-start (point-max))
+               (null pichat-chat--pending-attachments))
+    (user-error "Current PiChat editor is not empty"))
+  (let ((attachments (plist-get record :attachments)))
+    (pichat-attachments-validate-set attachments)
+    (pichat-chat--set-input-text (plist-get record :text))
+    (setq pichat-chat--pending-attachments attachments
+          pichat-chat--held-submissions (delq record pichat-chat--held-submissions))
+    (pichat-chat--render-extension-widgets)
+    (pichat-chat--refresh-attachment-status)
+    (goto-char (point-max))))
+
+(defun pichat-chat-input-recall-held-at-point ()
+  "Recall the held panel item at point without replacing a draft."
+  (interactive)
+  (pichat-chat-input-recall-held (pichat-chat-input-held-at-point)))
+
+(defun pichat-chat-input-delete-held-at-point ()
+  "Delete the still-held panel item at point, including its images."
+  (interactive)
+  (let ((record (pichat-chat-input-held-at-point)))
+    (setq pichat-chat--held-submissions (delq record pichat-chat--held-submissions))
+    (pichat-chat--render-extension-widgets)))
 
 (defun pichat-chat-input-hold-message (text behavior)
   "Hold minibuffer TEXT with BEHAVIOR, leaving the editor and images alone."
@@ -568,8 +647,10 @@ Install ownership before invoking providers, including inline providers."
     (push record pichat-chat--recoverable-submissions))
   (when pichat-chat--held-awaiting-start
     (push pichat-chat--held-awaiting-start pichat-chat--recoverable-submissions))
-  (setq pichat-chat--held-submissions nil
-        pichat-chat--held-awaiting-start nil)
+  (let ((had-panel pichat-chat--held-submissions))
+    (setq pichat-chat--held-submissions nil
+          pichat-chat--held-awaiting-start nil)
+    (when had-panel (pichat-chat--render-extension-widgets)))
   (pichat-chat--update-recovery-status))
 
 (defun pichat-chat-input-held-timer (seconds function)
@@ -656,6 +737,7 @@ Install ownership before invoking providers, including inline providers."
                 (pichat-session-compacting-p pichat-chat-session))
             (pichat-chat-input-abandon-in-flight)
           (pop pichat-chat--held-submissions)
+          (pichat-chat--render-extension-widgets)
           (setq pichat-chat--held-release 'sending
                 pichat-chat--held-start-seen nil)
           (pichat-chat-input-held-timer 30 #'pichat-chat-input-held-timeout)

@@ -4428,6 +4428,7 @@ not run.  Other extensions' dialogs are untouched."
                (seq-doseq (line (plist-get widget :lines))
                  (insert (ansi-color-filter-apply (format "%s" line)) "\n")))
              pichat-chat--extension-widgets)
+            (pichat-chat-input-insert-held-panel)
             (let ((new-end (point))
                   (inserted (- (point) position)))
               (set-marker pichat-chat--widget-end new-end)

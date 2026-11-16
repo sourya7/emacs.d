@@ -286,6 +286,23 @@
                 (pichat-transcript-content-status
                  (car (pichat-transcript-node-content orphan)))))))
 
+(ert-deftest pichat-pi-linear-branch-builder-matches-cache-builder ()
+  (dolist (name '("canonical-session.json" "canonical-session-legacy.json"))
+    (let* ((fixture (pichat-test-read-json-fixture name))
+           (cache (pichat-pi-entry-cache-full
+                   (plist-get fixture :sessionId)
+                   (plist-get fixture :sessionFile)
+                   (plist-get fixture :entries)
+                   (plist-get fixture :leafId)))
+           (entries (pichat-pi-entry-cache-active-branch cache))
+           (original (copy-tree entries t)))
+      (should (equal (pichat-pi-build-canonical-transcript cache)
+                     (pichat-pi-build-canonical-transcript-from-entries entries)))
+      (should (equal original entries))))
+  (should (equal (pichat-pi-build-canonical-transcript
+                  (pichat-pi-entry-cache-full "empty" nil nil nil))
+                 (pichat-pi-build-canonical-transcript-from-entries nil))))
+
 ;;; Transient live-draft reducer tests
 
 (ert-deftest pichat-live-draft-uses-authoritative-user-message-lifecycle ()

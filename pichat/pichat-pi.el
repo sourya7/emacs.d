@@ -232,6 +232,16 @@ DIAGNOSE is called with category, entry id, and bounded source type."
 
 (defun pichat-pi-build-canonical-transcript (cache)
   "Build a validated canonical transcript from CACHE's active branch."
+  (pichat-pi-build-canonical-transcript-from-entries
+   (pichat-pi-entry-cache-active-branch cache)))
+
+(defun pichat-pi-build-canonical-transcript-from-entries (entries)
+  "Build a validated canonical transcript from linear branch ENTRIES.
+ENTRIES must be a list of Pi entries already selected in root-to-leaf order.
+This function does not select a branch or validate parent links; callers
+with an entry cache should use `pichat-pi-build-canonical-transcript'.
+ENTRIES are not modified.  Tool results are merged into their calls and
+compatibility diagnostics are retained in the returned transcript."
   (let ((nodes nil)
         (diagnostics nil)
         (diagnostic-count 0)
@@ -306,7 +316,7 @@ DIAGNOSE is called with category, entry id, and bounded source type."
                 (push (pichat-transcript-node-create
                        :kind 'tool :key entry-id :content (list orphan))
                       nodes))))))
-      (dolist (entry (pichat-pi-entry-cache-active-branch cache))
+      (dolist (entry entries)
         (let ((type (or (plist-get entry :type)
                         (plist-get entry :entryType)))
               (entry-id (plist-get entry :id)))

@@ -28,7 +28,8 @@
   activity-latest-key
   activity-live-p
   activity-header-renderer
-  skill-views)
+  skill-views
+  history-views)
 
 (cl-defstruct (pichat-render-fragment
                (:constructor pichat-render-fragment-create)
@@ -473,6 +474,32 @@ Prose spans exclude image indicators; skill disclosures never call this path."
                 "")))
      ((equal reason "length") "[assistant stopped: length]"))))
 
+(defun pichat-render--history-fragment (node context)
+  "Render historical activity NODE under CONTEXT.
+Summary blocks default to folded.  CONTEXT's history-views is an equal-keyed
+alist mapping node keys to explicit non-nil (expanded) or nil (folded) choices.
+Header properties let a caller implement disclosure without chat-local state."
+  (let* ((key (pichat-transcript-node-key node))
+         (foldable (eq (pichat-transcript-node-activity-type node) 'history-summary))
+         (expanded (and foldable
+                        (alist-get key (pichat-render-context-history-views context)
+                                   nil nil #'equal)))
+         (label (replace-regexp-in-string
+                 "[[:space:]]+" " " (or (pichat-transcript-node-summary node) "")))
+         (body (pichat-render--plain-content (pichat-transcript-node-content node))))
+    (pichat-render--concat
+     (delq nil
+           (list
+            (pichat-render--text-fragment
+             (format "%s[%s]" (if foldable (if expanded "▼ " "▶ ") "") label)
+             (append '(pichat-content-kind history-header font-lock-face shadow)
+                     (when foldable
+                       (list 'pichat-history-key key 'pichat-history-expanded expanded))))
+            (when (and (or (not foldable) expanded) (not (string-empty-p body)))
+              (pichat-render--text-fragment
+               body '(pichat-content-kind history-body font-lock-face shadow)))))
+     "\n")))
+
 (defun pichat-render--node-fragment (node context)
   "Render canonical NODE under CONTEXT."
   (let* ((kind (pichat-transcript-node-kind node))
@@ -480,10 +507,13 @@ Prose spans exclude image indicators; skill disclosures never call this path."
          (body
           (pcase kind
             ('activity
-             (pichat-render--text-fragment
-              (format "[compaction: %s tokens]"
-                      (or (pichat-transcript-node-tokens-before node) "?"))
-              '(pichat-content-kind activity font-lock-face shadow)))
+             (if (memq (pichat-transcript-node-activity-type node)
+                       '(history-record history-summary))
+                 (pichat-render--history-fragment node context)
+               (pichat-render--text-fragment
+                (format "[compaction: %s tokens]"
+                        (or (pichat-transcript-node-tokens-before node) "?"))
+                '(pichat-content-kind activity font-lock-face shadow))))
             ('tool
              (pichat-render--tool-fragment
               (car (pichat-transcript-node-content node))

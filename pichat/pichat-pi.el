@@ -230,18 +230,24 @@ DIAGNOSE is called with category, entry id, and bounded source type."
        (equal output (pichat-transcript-content-output tool))
        (eq is-error (pichat-transcript-content-is-error tool))))
 
-(defun pichat-pi-build-canonical-transcript (cache)
-  "Build a validated canonical transcript from CACHE's active branch."
+(defun pichat-pi-build-canonical-transcript (cache &optional include-history)
+  "Build a validated canonical transcript from CACHE's active branch.
+With INCLUDE-HISTORY, also retain records omitted by ordinary chat rendering."
   (pichat-pi-build-canonical-transcript-from-entries
-   (pichat-pi-entry-cache-active-branch cache)))
+   (pichat-pi-entry-cache-active-branch cache) include-history))
 
-(defun pichat-pi-build-canonical-transcript-from-entries (entries)
+(defun pichat-pi-build-canonical-transcript-from-entries (entries &optional include-history)
   "Build a validated canonical transcript from linear branch ENTRIES.
 ENTRIES must be a list of Pi entries already selected in root-to-leaf order.
 This function does not select a branch or validate parent links; callers
 with an entry cache should use `pichat-pi-build-canonical-transcript'.
 ENTRIES are not modified.  Tool results are merged into their calls and
-compatibility diagnostics are retained in the returned transcript."
+compatibility diagnostics are retained in the returned transcript.
+With INCLUDE-HISTORY, emit source-ordered activity nodes for historical
+records ordinary chat omits.  Their summary is a display label and their
+content retains readable message/summary text.  `history-summary' activities
+are foldable, `history-record' activities are inline; neither joins thinking
+or tool activity groups.  Context-edit replacement data is never included."
   (let ((nodes nil)
         (diagnostics nil)
         (diagnostic-count 0)
@@ -283,6 +289,20 @@ compatibility diagnostics are retained in the returned transcript."
                    :stop-reason (plist-get (plist-get entry :message) :stopReason)
                    :error-message (plist-get (plist-get entry :message) :errorMessage)
                    :custom-type custom-type)
+                  nodes)))
+         (history-record
+          (entry label &optional content foldable)
+          (when include-history
+            (push (pichat-transcript-node-create
+                   :kind 'activity :key (plist-get entry :id)
+                   :activity-type (if foldable 'history-summary 'history-record)
+                   :summary label
+                   :content (and content
+                                 (cl-remove-if
+                                  (lambda (item)
+                                    (memq (pichat-transcript-content-kind item)
+                                          '(thinking tool)))
+                                  (normalize content (plist-get entry :id)))))
                   nodes)))
          (apply-tool-result
           (entry message)
@@ -332,36 +352,71 @@ compatibility diagnostics are retained in the returned transcript."
                  ((or "toolResult" "tool_result")
                   (apply-tool-result entry message))
                  ("custom"
-                  (when (eq t (plist-get message :display))
-                    (append-message entry 'custom (plist-get message :content)
-                                    (plist-get message :customType))))
-                 ((or "system" "compactionSummary" "branchSummary"
-                      "bashExecution") nil)
+                  (if (eq t (plist-get message :display))
+                      (append-message entry 'custom (plist-get message :content)
+                                      (plist-get message :customType))
+                    (history-record
+                     entry (format "custom message: %s (not displayed)"
+                                   (or (plist-get message :customType) "custom"))
+                     (plist-get message :content))))
+                 ((or "system" "compactionSummary" "branchSummary")
+                  (history-record entry role (plist-get message :content)
+                                  (member role '("compactionSummary" "branchSummary"))))
+                 ("bashExecution"
+                  (when include-history
+                    (history-record
+                     entry "bash execution"
+                     (or (plist-get message :content)
+                         (concat (if (stringp (plist-get message :command))
+                                     (plist-get message :command) "")
+                                 "\n"
+                                 (if (stringp (plist-get message :output))
+                                     (plist-get message :output) ""))))))
                  (_ (diagnose 'unknown-message-role entry-id role)))))
             ((or "custom_message" "customMessage")
-             (when (eq t (plist-get entry :display))
-               (append-message entry 'custom (plist-get entry :content)
-                               (plist-get entry :customType))))
+             (if (eq t (plist-get entry :display))
+                 (append-message entry 'custom (plist-get entry :content)
+                                 (plist-get entry :customType))
+               (history-record
+                entry (format "custom message: %s (not displayed)"
+                              (or (plist-get entry :customType) "custom"))
+                (plist-get entry :content))))
             ((or "compaction" "compaction_summary")
-             (push (pichat-transcript-node-create
-                    :kind 'activity :key entry-id :activity-type 'compaction
-                    :summary (and (stringp (plist-get entry :summary))
-                                  (plist-get entry :summary))
-                    :tokens-before (plist-get entry :tokensBefore))
-                   nodes))
+             (if include-history
+                 (history-record
+                  entry (format "compaction: %s tokens"
+                                (or (plist-get entry :tokensBefore) "?"))
+                  (plist-get entry :summary) t)
+               (push (pichat-transcript-node-create
+                      :kind 'activity :key entry-id :activity-type 'compaction
+                      :summary (and (stringp (plist-get entry :summary))
+                                    (plist-get entry :summary))
+                      :tokens-before (plist-get entry :tokensBefore))
+                     nodes)))
             ("model_change"
+             (history-record
+              entry (format "model: %s/%s" (or (plist-get entry :provider) "?")
+                            (or (plist-get entry :modelId)
+                                (plist-get entry :model) "?")))
              (setq metadata
                    (plist-put metadata :model
                               (list :provider (plist-get entry :provider)
                                     :model-id (plist-get entry :modelId)))))
             ("thinking_level_change"
+             (history-record entry (format "thinking level: %s"
+                                           (or (plist-get entry :thinkingLevel) "?")))
              (setq metadata
                    (plist-put metadata :thinking-level
                               (plist-get entry :thinkingLevel))))
             ("session_info"
+             (history-record entry (format "session: %s"
+                                           (or (plist-get entry :name)
+                                               (plist-get entry :sessionName) "")))
              (setq metadata
                    (plist-put metadata :session-name (plist-get entry :name))))
             ("label"
+             (history-record entry (format "label: %s"
+                                           (or (plist-get entry :label) "")))
              (setq metadata
                    (plist-put metadata :labels
                               (append (plist-get metadata :labels)
@@ -369,9 +424,18 @@ compatibility diagnostics are retained in the returned transcript."
                                                   (plist-get entry :targetId)
                                                   :label
                                                   (plist-get entry :label)))))))
+            ((or "custom" "custom_entry")
+             (history-record entry (format "custom: %s"
+                                           (or (plist-get entry :customType) "custom"))))
+            ("branch_summary"
+             (history-record entry "branch summary" (plist-get entry :summary) t))
             ;; Context edits change future model input, not raw UI history.
-            ((or "custom" "custom_entry" "branch_summary" "context_edit"
-                 "usage") nil)
+            ("context_edit"
+             (history-record
+              entry (format "context edit: %s %s (model context only; raw history unchanged)"
+                            (if (null (plist-get entry :replacement)) "Omit" "Replace")
+                            (or (plist-get entry :targetId) "unknown target"))))
+            ("usage" nil)
             (_ (diagnose 'unknown-entry entry-id type)))))
       (pichat-transcript-validate
        (pichat-transcript-create

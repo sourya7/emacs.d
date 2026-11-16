@@ -619,5 +619,99 @@
       (should (eq 'incomplete (pichat-transcript-content-status tool)))
       (should (pichat-live-draft-settled-p draft)))))
 
+(ert-deftest pichat-pi-history-records-are-opt-in-and-preserve-default-projection ()
+  (dolist (name '("canonical-session.json" "canonical-session-legacy.json"))
+    (let* ((fixture (pichat-test-read-json-fixture name))
+           (entries (plist-get fixture :entries))
+           (cache (pichat-pi-entry-cache-full
+                   "history" nil entries (plist-get fixture :leafId)))
+           (branch (pichat-pi-entry-cache-active-branch cache))
+           (before (copy-tree branch t))
+           (default (pichat-pi-build-canonical-transcript cache))
+           (explicit-off (pichat-pi-build-canonical-transcript-from-entries branch nil)))
+      (should (equal default explicit-off))
+      (should (equal (pichat-render-canonical default)
+                     (pichat-render-canonical explicit-off)))
+      (pichat-pi-build-canonical-transcript cache t)
+      (should (equal before branch)))))
+
+(ert-deftest pichat-pi-history-records-preserve-order-content-and-fold-state ()
+  (let* ((entries
+          '((:type "message" :id "user" :message (:role "user" :content "Prompt"))
+            (:type "message" :id "tool" :message
+             (:role "assistant" :content ((:type "toolCall" :id "call" :name "read"))))
+            (:type "model_change" :id "model" :provider "provider" :modelId "model")
+            (:type "message" :id "result" :message
+             (:role "toolResult" :toolCallId "call" :content "tool output"))
+            (:type "thinking_level_change" :id "thinking" :thinkingLevel "high")
+            (:type "session_info" :id "session" :name "Session name")
+            (:type "label" :id "label" :label "A\nlabel")
+            (:type "context_edit" :id "omit" :targetId "tool" :replacement nil)
+            (:type "context_edit" :id "replace" :targetId "user" :replacement "PRIVATE")
+            (:type "custom" :id "custom" :customType "extension")
+            (:entryType "custom_entry" :id "legacy-custom" :customType "legacy")
+            (:type "custom_message" :id "hidden" :customType "hidden" :content "Hidden text")
+            (:entryType "customMessage" :id "legacy-hidden" :content "Legacy hidden text")
+            (:type "message" :id "hidden-role" :message
+             (:role "custom" :display nil :customType "role" :content "Hidden role text"))
+            (:type "message" :id "system" :message (:role "system" :content "System text"))
+            (:type "message" :id "bash" :message
+             (:role "bashExecution" :command "echo test" :output "bash output"))
+            (:type "compaction" :id "compact" :summary "Compaction text" :tokensBefore 100)
+            (:entryType "compaction_summary" :id "legacy-compact" :summary "Legacy summary")
+            (:type "branch_summary" :id "branch" :summary "Branch text")
+            (:type "message" :id "compact-role" :message
+             (:role "compactionSummary" :content "Compaction role text"))
+            (:type "message" :id "branch-role" :message
+             (:role "branchSummary" :content "Branch role text"))
+            (:type "message" :id "answer" :message (:role "assistant" :content "Answer"))))
+         (before (copy-tree entries t))
+         (transcript (pichat-pi-build-canonical-transcript-from-entries entries t))
+         (nodes (pichat-transcript-nodes transcript))
+         (context (pichat-render-default-context))
+         (folded (pichat-render-fragment-propertized-string
+                  (pichat-render-canonical transcript context)))
+         (summary-ids '("compact" "legacy-compact" "branch" "compact-role" "branch-role")))
+    (should (equal before entries))
+    (should-not (pichat-transcript-diagnostics transcript))
+    ;; Results remain merged into calls, all other entries have durable nodes.
+    (should (equal (mapcar #'pichat-transcript-node-key nodes)
+                   (cl-remove "result" (mapcar (lambda (e) (plist-get e :id)) entries)
+                              :test #'equal)))
+    (should (equal "result" (pichat-transcript-content-result-entry-id
+                             (car (pichat-transcript-node-content (cadr nodes))))))
+    (should (equal (pichat-transcript-metadata transcript)
+                   (pichat-transcript-metadata
+                    (pichat-pi-build-canonical-transcript-from-entries entries))))
+    (dolist (text '("[model: provider/model]" "[thinking level: high]"
+                    "[session: Session name]" "[label: A label]" "Omit tool" "Replace user"
+                    "[custom: extension]" "[custom: legacy]" "Hidden text" "Legacy hidden text"
+                    "Hidden role text" "System text" "echo test" "bash output"))
+      (should (string-match-p (regexp-quote text) folded)))
+    (should-not (string-match-p "PRIVATE" (format "%S" transcript)))
+    (should-not (string-match-p "Compaction text\\|Branch text\\|Compaction role text" folded))
+    (dolist (id summary-ids)
+      (let* ((range (cl-find
+                     id (pichat-render-fragment-ranges
+                         (pichat-render-canonical transcript context))
+                     :test #'equal
+                     :key (lambda (range)
+                            (plist-get (plist-get range :properties) 'pichat-history-key))))
+             (props (plist-get range :properties)))
+        (should range)
+        (should-not (plist-get props 'pichat-history-expanded))
+        (should (eq 'shadow (plist-get props 'font-lock-face)))
+        (should (equal id (get-text-property (plist-get range :start)
+                                             'pichat-node-key folded)))))
+    (setf (pichat-render-context-history-views context)
+          (mapcar (lambda (id) (cons (copy-sequence id) t)) summary-ids))
+    (let ((expanded (pichat-render-fragment-propertized-string
+                     (pichat-render-canonical transcript context))))
+      (dolist (text '("Compaction text" "Legacy summary" "Branch text"
+                      "Compaction role text" "Branch role text"))
+        (should (string-match-p (regexp-quote text) expanded))))
+    (should (equal folded (pichat-render-fragment-propertized-string
+                          (pichat-render-canonical transcript))))))
+
 (provide 'pichat-test-transcript)
 ;;; pichat-test-transcript.el ends here

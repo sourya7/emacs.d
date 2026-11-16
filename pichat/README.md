@@ -440,9 +440,11 @@ response snapshots and depends on the canonical selection API plus the common
 read-only view lifecycle; chat orchestration supplies source validation and
 origin callbacks explicitly, so the response module never requires
 `pichat-chat.el`. `pichat-chat-input.el` owns prompt submission,
-history, recovery, and pending/in-flight attachment coordination without
-requiring the chat layer; orchestration supplies prompt markers and compact
-status presentation. `pichat-attachments.el` owns bounded image records, file
+history, recovery, compaction-held input and pending/in-flight attachment
+coordination without requiring the chat layer; orchestration supplies prompt
+markers and compact status presentation. `pichat-chat-queue.el` owns Pi queue
+projection, conservative image matching and recall-all; it never resends recalled
+messages. `pichat-attachments.el` owns bounded image records, file
 encoding, wire conversion, and optional acquisition adapters without knowing
 about chat buffers or transcript state. `pichat-chat-diagnostics.el` owns
 conservative transport/Pi-response classification, bounded session diagnostic
@@ -2075,8 +2077,8 @@ Emacs keymaps for other users:
 ```
 
 This repository enables that layer in `user/pichat.el`. In chat, Normal-state
-`RET` toggles a submitted-message disclosure when on one, otherwise retaining
-Evil's movement; enter Insert state to send with `RET`, or use
+`RET` recalls a queue-panel item or toggles a submitted-message disclosure when
+on one, otherwise retaining Evil's movement; enter Insert state to send with `RET`, or use
 `C-c C-c` / `SPC m s` from either state. In read-only views, `q` uses the
 PiChat-specific close/return policy instead of Evil Collection's generic
 `quit-window`. History uses `j/k` for entries, `RET` to jump, `za` to fold,
@@ -2123,13 +2125,20 @@ Chat keys:
 
 - `RET` / `TAB` or mouse-1 on a long submitted user block — expand/collapse it
 - `w` on that block (Evil Normal `g y`) — copy its original full message text
-- `RET` — send prompt in Emacs state or Evil Insert state; in Evil Normal state,
-  toggle a submitted-message disclosure or otherwise move as usual
+- `RET` — send the editor prompt when idle, queue a follow-up during a run,
+  or hold it during compaction outside a run (Emacs or Evil Insert state).
+  On a queue-panel item, recall it; in Evil Normal state elsewhere, toggle
+  a submitted-message disclosure or otherwise move as usual
+- `M-RET` — send the editor text/images as steering during a run; hold during
+  compaction outside a run, or start a prompt when idle
 - `S-RET` — insert newline
-- `C-c C-k` — abort; queued steering and follow-up text is cleared from Pi
-  and prepended to the current editor draft before the run is stopped
-- `C-c C-y` — recover a rejected or ambiguously failed submission, including
-  its images
+- `C-c C-k` — abort; clear Pi's queue and prepend its text to the current draft,
+  restoring matching images; compaction-held input becomes recoverable
+- `C-c C-y` — recover a failed/uncertain submission first; otherwise recall the
+  newest held message, or recall all of Pi's queue (text and matching images).
+  Held/Pi-queue recall requires an empty text-and-image draft
+- `RET` / `d` on a held panel item — recall / delete that item; `RET` on a
+  queued-in-Pi item recalls the whole Pi queue (no single-item deletion)
 - `M-x pichat-chat-discard-recoverable-submissions` — discard saved recovery drafts
 - `C-c C-i` — attach a bounded PNG, JPEG, GIF, or WebP file
 - `C-c C-q` — select and remove one pending image
@@ -2145,11 +2154,13 @@ Chat keys:
 - Ordinary chat status shows only bounded, redacted diagnostic summaries and
   distinguishes local startup/process exit failures from valid Pi RPC errors
 - `C-c C-0` — dismiss active diagnostic notices, preserving diagnostic history
-- `C-c C-o` — compact
+- `C-c C-o` — manually compact; the editor remains usable (see below)
 - `M-<up>` / `M-<down>` — browse submitted prompt history
-- `M-x pichat-chat-steer` — queue a steering message during a run
-- `C-c C-f` / `M-x pichat-chat-follow-up` — queue a follow-up during a run,
-  or start it immediately if Pi has already finished
+- `M-x pichat-chat-steer` — read steering text in the minibuffer; hold during
+  compaction outside a run, otherwise use Pi's queue-only steering command
+- `C-c C-f` / `M-x pichat-chat-follow-up` — read follow-up text in the minibuffer;
+  queue during a run, hold during compaction outside a run, or start immediately
+  if idle. These minibuffer commands leave the editor text/images untouched
 - `M-x pichat-chat-set-steering-mode` / `M-x pichat-chat-set-follow-up-mode` — configure Pi queue delivery
 - `C-c C-n` — new session; asks `Discard conversation?` only for an ephemeral
   runtime or a running turn
@@ -2442,6 +2453,70 @@ Additional chat keys:
 - `M-x pichat-chat-export-transcript-to-markdown` — export authoritative
   canonical transcript model data, including complete canonical tool output,
   without reading rendered, folded, or truncated buffer text
+
+## Compaction and waiting messages
+
+Use `C-c C-o` (`pichat-chat-compact`) for manual compaction. Typing `/compact`
+and pressing `RET` in the RPC chat sends ordinary prompt text; it does not invoke
+this command. During any observed compaction **outside an agent run**, regardless
+of who started it, editor submissions (`RET`, `M-RET`) and minibuffer follow-up
+or steering messages are held in Emacs instead of sent to Pi. The editor clears
+for another message; editor images stay with their held message. Automatic
+compaction/retry **during a run** continues to use Pi's own queue.
+
+The read-only queue panel appears between the transcript/extension widgets and
+the prompt only while messages wait. Numbered rows distinguish **held by PiChat**
+from **queued in Pi**, show steering/follow-up intent, a bounded single-line text
+preview and image counts (or unknown image provenance). They are not submitted
+user-message blocks. Pi's queue is shown steering first, then follow-ups; its
+status-line counts remain available. Consumed or recalled rows disappear.
+
+After successful compaction, PiChat releases held messages in submission order,
+one acknowledged request at a time. When idle, the first starts a normal prompt
+(including steering alone); after Pi reports the run started, later messages use
+their recorded steering/follow-up intent. Pi's native steering priority and
+follow-up delivery mode still apply. New submissions during hand-off join behind
+the held messages. If a chain finish notification is waiting on the same
+compaction, its run starts first and the held messages queue behind it. No
+synthetic `continue` prompt is sent. An uncertain submission is retained for
+manual recovery, never automatically resent.
+
+If compaction fails or is aborted, nothing held is sent: all held messages move
+to recoverable submissions (`C-c C-y`) and their panel clears. Abort, source
+rebinding (including a Pi session switch), process loss/replacement and chat
+closure likewise retire automatic delivery and preserve unsent/uncertain input
+for recovery. Closing with held input asks first. Recovery survives reopening
+that runtime's chat, including when the default close policy stops the runtime;
+a stopped runtime with recovery remains in the manager. Forgetting it or exiting
+Emacs ends this in-memory retention. There is no restart persistence and no
+automatic delivery to a different Pi session. See `GLOSSARY.md` for runtime,
+Pi session, source rebinding and recoverable submission distinctions.
+
+## Queue recall and images
+
+With an empty text-and-image draft, `C-c C-y` first offers existing failed or
+uncertain submissions; without those, it recalls the newest held message with
+its exact images. Clear/send that draft before repeating to recall the preceding
+held message. On a held row, `RET` recalls that specific item and `d` deletes it.
+Recall refuses a nonempty draft rather than silently replacing it. These item
+keys work in native Emacs and Evil Normal/Insert states.
+
+For messages already **queued in Pi**, `C-c C-y` (after failed/held recovery) or
+`RET` on any Pi-queued row recalls **all** steering and follow-ups, steering
+first, joined with blank lines. Pi can only clear its entire queue; PiChat does
+not remove one item and requeue the others. Recall does not abort the current
+run. If Pi consumes a message before clearing, it is not fabricated back into
+the draft. A changed draft/source or closed chat during the clear request keeps
+cleared content as recoverable input instead of overwriting a later draft.
+
+Pi's queue events and clear response contain text, not image data or stable item
+IDs. PiChat restores its submitted images only for unique ordered text matches
+against its retained copies. Duplicate text, external entries or mismatches fall
+back conservatively to text with visible **unmatched images were not restored**
+feedback; unknown provenance is labelled in the panel. Abort uses the same
+matching rule while prepending queued text to the existing editor draft. Review
+and reattach any missing images before sending again. Scheduled continuations,
+Jobs and Pi's queue delivery-mode controls are unchanged.
 
 ## Chat Actions
 

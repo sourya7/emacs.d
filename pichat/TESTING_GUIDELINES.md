@@ -290,6 +290,37 @@ still be iconified by the window manager: `display-graphic-p` and passing window
 geometry assertions do not prove the layout was visible. Review the displayed
 screens separately before closing a visible-layout acceptance task.
 
+## Queue panel terminal check
+
+`pichat-test-queue-live-ui.el` is opt-in and is not loaded by the batch runner.
+It drives actual editor and panel keys in a live frame against isolated offline
+Pi: manual compaction, image-bearing held steering, newest/item recall, deletion,
+successful release, busy RET/M-RET, steering-first queue display and recall-all.
+It checks that recalled/deleted input never reaches Pi. Run in a separate native
+terminal Emacs, for example under `script -q -e -c '<command>' terminal.log`:
+
+```sh
+private=$(mktemp -d)
+PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0 PICHAT_UI_PRIVATE="$private/" \
+  emacs -Q -nw -L pichat -L pichat/test \
+  --eval '(setq user-emacs-directory (getenv "PICHAT_UI_PRIVATE") use-dialog-box nil)' \
+  -l pichat-test-queue-live-ui \
+  --eval '(let ((stats (ert-run-tests-batch "^pichat-integration-queue-live-ui-")))
+    (with-temp-file "/tmp/pichat-queue-ui-result.log"
+      (insert (with-current-buffer "*Messages*" (buffer-string))))
+    (kill-emacs (if (> (ert-stats-completed-unexpected stats) 0) 1 0)))'
+rm -rf "$private"
+```
+
+For a separate Evil run, add the installed Evil/goto-chg load paths, then
+`--eval '(progn (require (quote evil)) (require (quote pichat-evil))
+(evil-mode 1) (pichat-evil-setup))'` before loading the test. The fixture enters
+Insert state through the command loop so deferred Evil initialization completes
+before the first chat shortcut. Both runs use private Emacs history and the
+shared temporary Pi fixture, never a live user chat or Jobs store. These are
+programmatic terminal checks, not human visual acceptance, real clipboard
+acquisition or graphical image-preview verification.
+
 ## Saved preset live check
 
 `pichat-test-presets-live-ui.el` drives the real launcher `p`, `x` Tools (with

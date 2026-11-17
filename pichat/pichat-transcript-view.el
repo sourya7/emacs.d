@@ -11,6 +11,7 @@
 
 (require 'cl-lib)
 (require 'pichat-display)
+(require 'pichat-markdown-fontification)
 (require 'pichat-pi)
 (require 'pichat-render)
 (require 'pichat-chat-tool-ui)
@@ -413,6 +414,9 @@ that boundary remains after the transcript, including on a later repaint."
           (delete-region start end)
           (goto-char start)
           (insert text))
+        (when pichat-chat-render-markdown
+          (pichat-markdown-fontification-apply-region
+           start (+ start (length text))))
         (pichat-transcript-view--release-blocks)
         ;; Explicitly reset endpoints after insertion, including empty regions.
         ;; Outside insertions at either boundary remain caller-owned.
@@ -497,6 +501,10 @@ TRANSCRIPT and its diagnostics are read-only inputs, never runtime updates."
       (pichat-transcript-view--expand-selection visible))
     (add-hook 'kill-buffer-hook #'pichat-transcript-view-clear nil t)
     (add-hook 'change-major-mode-hook #'pichat-transcript-view-clear nil t)
+    ;; Display projected faces without enabling a major-mode fontifier that
+    ;; could overwrite them.  Preserve caller aliases without mutating defaults.
+    (setq-local char-property-alias-alist (copy-tree char-property-alias-alist))
+    (cl-pushnew 'font-lock-face (alist-get 'face char-property-alias-alist))
     (prog1 (pichat-transcript-view-repaint)
       (pichat-transcript-view-mode 1)
       (setq buffer-read-only t))))

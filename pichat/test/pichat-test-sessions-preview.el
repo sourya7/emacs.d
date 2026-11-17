@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Focused Phase 6 tests for immutable root-to-entry branch previews.
+;; Immutable root-to-entry branch previews and shared transcript presentation.
 
 ;;; Code:
 
@@ -38,7 +38,9 @@
     (let* ((origin (current-buffer))
            (nodes pichat-sessions--nodes)
            (parents pichat-sessions--parents)
-           (chat (generate-new-buffer " *pichat-preview-chat*")))
+           (chat (generate-new-buffer " *pichat-preview-chat*"))
+           (pichat-chat-activity-group-display 'expanded)
+           (pichat-chat-tool-default-display 'output))
       (unwind-protect
           (progn
             (with-current-buffer chat (insert "canonical chat unchanged"))
@@ -59,17 +61,19 @@
                                      pichat-sessions-preview--path)))
               (let* ((text (buffer-string))
                      (root-pos (string-match "Initial prompt" text))
-                     (call-pos (string-match "TOOL CALL: read" text))
-                     (result-pos (string-match "TOOL RESULT: read" text))
+                     (call-pos (string-match "README.md" text))
+                     (result-pos (string-match "tool output" text))
                      (alternate-pos (string-match "Alternate prompt" text)))
                 (should (string-match-p "Status: alternate branch\n\n" text))
                 (should-not (string-match-p "f fork · t history" text))
                 (should-not (string-match-p "q close · fork" text))
                 (should (string-match-p "Selected entry: assistant at 18:42" text))
-                (should (string-match-p
-                         (regexp-quote "{\"path\":\"README.md\"}") text))
+                (should (string-match-p "README.md" text))
                 (should (string-match-p "tool output" text))
-                (should (< root-pos call-pos result-pos alternate-pos))))
+                (should (< root-pos call-pos result-pos alternate-pos))
+                (should buffer-read-only)
+                (should pichat-transcript-view-mode)
+                (should-not (memq #'pichat-stop-session kill-buffer-hook))))
             (should (eq nodes pichat-sessions--nodes))
             (should (eq parents pichat-sessions--parents))
             (with-current-buffer chat
@@ -78,16 +82,20 @@
 
 (ert-deftest pichat-sessions-preview-opens-and-reuses-at-selected-entry ()
   (pichat-test-sessions-preview--with-history
+    (setq pichat-sessions--filter 'all)
+    (pichat-sessions--refresh-from-response
+     (pichat-test-sessions-preview--response) session (current-buffer))
     (let ((history (current-buffer)))
       (save-window-excursion
         (switch-to-buffer history)
-        (dolist (id '("alternate-leaf" "assistant"))
+        (dolist (id '("alternate-leaf" "assistant" "result" "active-leaf"))
           (pichat-sessions--goto-id id)
           (pichat-sessions-preview-branch-at-point)
           (should (equal "*PiChat Branch Preview*" (buffer-name)))
-          (should (equal id
-                         (get-text-property
-                          (point) 'pichat-preview-entry-id)))
+          (if (equal id "result")
+              (should (equal '("assistant" . "call-1")
+                             (get-text-property (point) 'pichat-tool-key)))
+            (should (equal id (get-text-property (point) 'pichat-node-key))))
           (should (= (point) (window-point (selected-window))))
           (should (= (point) (window-start (selected-window))))
           (should (save-excursion
@@ -162,8 +170,28 @@
     (cl-letf (((symbol-function 'pop-to-buffer) #'ignore))
       (pichat-sessions-preview-branch-at-point))
     (let ((preview (get-buffer "*PiChat Branch Preview*")) sent)
-      (pichat-emit session 'session-rebinding :command "fork")
       (with-current-buffer preview
+        ;; A stale notification must not reset folds, reindex blocks or repaint
+        ;; Markdown.  Preserve both the rendered properties and owned markers.
+        (let* ((start pichat-transcript-view--start)
+               (end pichat-transcript-view--end)
+               (tools pichat-transcript-view--tool-blocks)
+               (states pichat-transcript-view--activity-view-states)
+               (text (buffer-substring start end))
+               (selected (copy-marker (point))))
+          (unwind-protect
+              (progn
+                (pichat-emit session 'session-rebinding :command "fork")
+                (pichat-emit session 'session-rebinding :command "switch_session")
+                (should (eq start pichat-transcript-view--start))
+                (should (eq end pichat-transcript-view--end))
+                (should (eq tools pichat-transcript-view--tool-blocks))
+                (should (eq states pichat-transcript-view--activity-view-states))
+                (should (equal-including-properties
+                         text (buffer-substring start end)))
+                (should (= (point) selected))
+                (should (= 1 (how-many "STALE" (point-min) (point-max)))))
+            (set-marker selected nil)))
         (should pichat-sessions-preview--stale-p)
         (should (string-match-p "STALE" (buffer-string)))
         (should (string-match-p "Alternate answer" (buffer-string)))
@@ -184,13 +212,13 @@
         (pichat-sessions-preview-branch-at-point))
       (with-current-buffer "*PiChat Branch Preview*"
         (should (derived-mode-p 'pichat-view-mode))
-        (should (eq (lookup-key pichat-sessions-preview-mode-map (kbd "f"))
+        (should (eq (key-binding (kbd "f"))
                     #'pichat-sessions-preview-fork))
-        (should (eq (lookup-key pichat-sessions-preview-mode-map (kbd "t"))
+        (should (eq (key-binding (kbd "t"))
                     #'pichat-sessions-preview-return-to-history))
-        (should (eq (lookup-key pichat-sessions-preview-mode-map (kbd "q"))
+        (should (eq (key-binding (kbd "q"))
                     #'pichat-view-quit))
-        (should (eq (lookup-key pichat-sessions-preview-mode-map (kbd "d"))
+        (should (eq (key-binding (kbd "d"))
                     #'pichat-sessions-preview-show-details))
         (cl-letf (((symbol-function 'pop-to-buffer)
                    (lambda (buffer &rest _args) (setq returned buffer))))
@@ -203,6 +231,34 @@
           (should (string-match-p "ID: alternate-leaf" (buffer-string))))))
     (should (eq (lookup-key pichat-sessions-mode-map (kbd "v"))
                 #'pichat-sessions-preview-branch-at-point))))
+
+(ert-deftest pichat-sessions-preview-rejected-transcript-retains-header-and-details ()
+  (let* ((session (pichat-session-make :id "session"))
+         (node (pichat-test-sessions-tree--entry
+                "duplicate" "message"
+                :message '(:role "assistant"
+                           :content ((:type "toolCall" :id "same" :name "read"
+                                      :arguments (:path "one"))
+                                     (:type "toolCall" :id "same" :name "read"
+                                      :arguments (:path "two")))))))
+    (unwind-protect
+        (pichat-test-with-history
+            (session (pichat-test-sessions-tree--response
+                      (list node) "duplicate"))
+          (pichat-sessions--goto-id "duplicate")
+          (cl-letf (((symbol-function 'pop-to-buffer) #'ignore))
+            (pichat-sessions-preview-branch-at-point)
+            (with-current-buffer "*PiChat Branch Preview*"
+              (should buffer-read-only)
+              (should (string-match-p "Branch Preview" (buffer-string)))
+              (should (string-match-p "Status: active leaf" (buffer-string)))
+              (should (string-match-p "Transcript unavailable:" (buffer-string)))
+              (should (= (point) (point-min)))
+              (pichat-sessions-preview-show-details))
+            (with-current-buffer "*PiChat Session Entry*"
+              (should (string-match-p "ID: duplicate" (buffer-string)))
+              (should (string-match-p "two" (buffer-string))))))
+      (pichat-test-sessions-preview--kill-buffers))))
 
 (provide 'pichat-test-sessions-preview)
 ;;; pichat-test-sessions-preview.el ends here

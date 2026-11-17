@@ -17,6 +17,7 @@
 (require 'pichat-render)
 (require 'pichat-path)
 (require 'pichat-view)
+(require 'pichat-transcript-view)
 (require 'pichat-chat-diagnostics)
 
 ;; Basic completion and Session History do not need archive services.  Keep
@@ -2365,6 +2366,7 @@ runtime-manager previews."
          (kind (pichat-sessions--entry-kind entry))
          (time (pichat-sessions--entry-time entry))
          (inhibit-read-only t))
+    (pichat-transcript-view-clear)
     (erase-buffer)
     (insert (propertize "Branch Preview" 'face 'bold)
             (if pichat-sessions-preview--stale-p
@@ -2376,11 +2378,11 @@ runtime-manager previews."
                     (pichat-sessions--preview-status-label
                      pichat-sessions-preview--status)))
     (insert "\n")
-    (let ((selected-position
-           (pichat-sessions-insert-preview-path
-            pichat-sessions-preview--path
-            pichat-sessions-preview--selected-id)))
-      (goto-char (or selected-position (point-min))))))
+    (pichat-transcript-view-render-entries
+     (mapcar (lambda (node) (plist-get node :entry))
+             pichat-sessions-preview--path)
+     (point) (point) nil pichat-sessions-preview--selected-id)
+    (goto-char (or (pichat-transcript-view-selected-position) (point-min)))))
 
 (defun pichat-sessions-preview--remove-event-handler ()
   "Remove the rebind handler owned by the current preview buffer."
@@ -2392,10 +2394,14 @@ runtime-manager previews."
   (setq pichat-sessions-preview--event-handler nil))
 
 (defun pichat-sessions-preview--mark-stale ()
-  "Mark the current immutable preview stale while preserving its path."
+  "Mark the preview stale by updating only its caller-owned title line."
   (unless pichat-sessions-preview--stale-p
     (setq pichat-sessions-preview--stale-p t)
-    (pichat-sessions-preview--render)))
+    (let ((inhibit-read-only t))
+      (save-excursion
+        (goto-char (point-min))
+        (end-of-line)
+        (insert "  [STALE — fork disabled]")))))
 
 (defun pichat-sessions-preview--source-current-p ()
   "Return non-nil when this preview still owns its captured source."

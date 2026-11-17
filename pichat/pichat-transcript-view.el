@@ -15,6 +15,45 @@
 (require 'pichat-render)
 (require 'pichat-chat-tool-ui)
 (require 'pichat-chat-activity-ui)
+(require 'pichat-view)
+
+(defvar pichat-transcript-view-mode-map
+  (let ((map (make-sparse-keymap)))
+    (dolist (pair '((pichat-chat-toggle-activity-at-point . pichat-transcript-view-toggle)
+                    (pichat-chat-toggle-skill-at-point . pichat-transcript-view-toggle)
+                    (pichat-chat-copy-skill-at-point . pichat-transcript-view-copy-skill)
+                    (pichat-chat-toggle-tool-at-point . pichat-transcript-view-toggle-tool)
+                    (pichat-chat-show-tool-details . pichat-transcript-view-tool-details)
+                    (pichat-chat-toggle-thinking-display . pichat-transcript-view-toggle-thinking)))
+      (define-key map (vector 'remap (car pair)) (cdr pair)))
+    (define-key map (kbd "C-c C-;") #'pichat-transcript-view-toggle)
+    (define-key map (kbd "C-c C-z") #'pichat-transcript-view-toggle-tool)
+    (define-key map (kbd "C-c C-d") #'pichat-transcript-view-tool-details)
+    map)
+  "Controls for an owned transcript region; caller action keys remain free.")
+
+(defvar pichat-transcript-view--disclosure-map
+  (let ((map (make-sparse-keymap)))
+    (dolist (key '("RET" "TAB" "<return>" "<tab>"))
+      (define-key map (kbd key) #'pichat-transcript-view-toggle))
+    (define-key map [mouse-1] #'pichat-transcript-view-toggle)
+    map)
+  "Text-property controls installed only on tool and history headers.")
+
+(defun pichat-transcript-view--tool-header-map (block)
+  "Install disclosure controls on BLOCK's first line only."
+  (save-excursion
+    (goto-char (plist-get block :start))
+    (add-text-properties
+     (point) (min (line-end-position) (plist-get block :end))
+     (list 'keymap pichat-transcript-view--disclosure-map
+           'rear-nonsticky t))))
+
+(define-minor-mode pichat-transcript-view-mode
+  "Use isolated disclosure controls in a settled transcript region."
+  :lighter nil
+  (unless pichat-transcript-view-mode
+    (pichat-transcript-view-clear)))
 
 (defconst pichat-transcript-view--generation 0
   "Fixed generation for presentation without live source state.")
@@ -60,6 +99,7 @@
   "Release this buffer's transcript presentation state without editing text.
 Call before discarding the caller-owned region.  Also runs on buffer death
 and major-mode changes; it has no runtime lifecycle side effects."
+  (setq pichat-transcript-view-mode nil)
   (pichat-transcript-view--release-blocks)
   (dolist (marker (list pichat-transcript-view--start
                         pichat-transcript-view--end))
@@ -174,6 +214,145 @@ with `equal', not object identity; never search caller-owned header text."
             (setq position (next-single-property-change
                             position property nil end))))))))
 
+(defun pichat-transcript-view--property-position (property key)
+  "Find PROPERTY equal to KEY only within the owned region."
+  (let ((position (marker-position pichat-transcript-view--start))
+        (end (marker-position pichat-transcript-view--end)))
+    (catch 'found
+      (while (< position end)
+        (when (equal key (get-text-property position property))
+          (throw 'found position))
+        (setq position (next-single-property-change position property nil end))))))
+
+(defun pichat-transcript-view--at-point-p ()
+  "Return non-nil when point is in the owned transcript region."
+  (and pichat-transcript-view-mode
+       (<= pichat-transcript-view--start (point))
+       (< (point) pichat-transcript-view--end)))
+
+(defun pichat-transcript-view--choose (table key value property target)
+  "Store VALUE at KEY in TABLE, repaint and restore PROPERTY TARGET.
+Restore the choice if repaint fails."
+  (let* ((absent (make-symbol "absent"))
+         (previous (gethash key table absent)))
+    (puthash key value table)
+    (condition-case condition
+        (pichat-transcript-view-repaint)
+      ((error quit)
+       (if (eq previous absent) (remhash key table)
+         (puthash key previous table))
+       (signal (car condition) (cdr condition)))))
+  (when-let* ((position (pichat-transcript-view--property-position property target)))
+    (goto-char position)))
+
+(defun pichat-transcript-view-toggle (&optional event)
+  "Toggle the activity, skill, history summary or tool at point.
+Mouse EVENT selects its own position.  No runtime state is consulted."
+  (interactive (list (and (listp last-command-event) last-command-event)))
+  (when event (posn-set-point (event-end event)))
+  (unless (pichat-transcript-view--at-point-p)
+    (user-error "No transcript disclosure at point"))
+  (let ((skill (get-text-property (point) 'pichat-skill-key))
+        (history (get-text-property (point) 'pichat-history-key))
+        (activity (pichat-chat-activity-ui-block-at
+                   pichat-transcript-view--activity-blocks (point))))
+    (cond
+     (skill
+      (let* ((text (get-text-property (point) 'pichat-skill-text))
+             (table pichat-transcript-view--skill-view-states))
+        (pichat-transcript-view--choose
+         table skill (unless (equal (gethash skill table) text) text)
+         'pichat-skill-key skill)))
+     (history
+      (pichat-transcript-view--choose
+       pichat-transcript-view--history-view-states history
+       (not (get-text-property (point) 'pichat-history-expanded))
+       'pichat-history-key history))
+     (activity
+      (let* ((key (plist-get activity :view-state-key))
+             (table pichat-transcript-view--activity-view-states)
+             (choice (make-hash-table :test #'equal))
+             (value (progn
+                      (pichat-chat-activity-ui-store-view
+                       activity choice
+                       (if (eq (plist-get activity :display-state) 'expanded)
+                           'collapsed 'expanded))
+                      (gethash key choice))))
+        (pichat-transcript-view--choose
+         table key value 'pichat-activity-key (plist-get activity :key))))
+     (t (pichat-transcript-view-toggle-tool)))))
+
+(defun pichat-transcript-view-copy-skill ()
+  "Copy the exact original skill invocation at point."
+  (interactive)
+  (let ((text (and (pichat-transcript-view--at-point-p)
+                   (get-text-property (point) 'pichat-skill-text))))
+    (unless text (user-error "No skill invocation header at point"))
+    (kill-new (substring-no-properties text))))
+
+(defun pichat-transcript-view--tool-at-point ()
+  "Return the visible tool at point or signal a user error."
+  (or (and (pichat-transcript-view--at-point-p)
+           (pichat-chat-tool-ui-block-at
+            pichat-transcript-view--tool-blocks (point)))
+      (user-error "No tool block at point")))
+
+(defun pichat-transcript-view--edit (thunk)
+  "Run THUNK with read-only editing enabled, retaining point."
+  (let ((inhibit-read-only t))
+    (save-excursion (funcall thunk))))
+
+(defun pichat-transcript-view-toggle-tool ()
+  "Toggle only the tool block at point, retaining other block indexes."
+  (interactive)
+  (let ((block (pichat-transcript-view--tool-at-point))
+        (pichat-tool-enrichment-path-context nil))
+    (pichat-chat-tool-ui-toggle-block
+     block pichat-transcript-view--tool-view-states
+     (list :max-args pichat-chat-max-tool-args-chars
+           :max-output pichat-chat-max-tool-output-chars
+           :truncation-notice pichat-chat-tool-truncation-notice-format
+           :tracked-markers (list pichat-transcript-view--end)
+           :edit-function #'pichat-transcript-view--edit
+           :enrichments pichat-transcript-view--tool-enrichments
+           :generation pichat-transcript-view--generation))
+    (let ((inhibit-read-only t))
+      (pichat-transcript-view--tool-header-map block))
+    (goto-char (plist-get block :start))))
+
+(defun pichat-transcript-view-tool-details ()
+  "Show full retained arguments and output without a runtime or file lookup."
+  (interactive)
+  (let* ((block (pichat-transcript-view--tool-at-point))
+         (raw (plist-get block :raw))
+         (pichat-tool-enrichment-path-context nil)
+         (enrichment (pichat-tool-enrichment-build
+                      (plist-get raw :toolCallId) (plist-get raw :toolName)
+                      (plist-get raw :args)))
+         (text (pichat-chat-tool-ui-details-text block nil enrichment))
+         (buffer (get-buffer-create "*PiChat Transcript Tool Details*")))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t)) (erase-buffer) (insert text))
+      (pichat-view-mode))
+    (pichat-view-display buffer nil 'bury)))
+
+(defun pichat-transcript-view-toggle-thinking ()
+  "Toggle thinking in this preview only, retaining the logical reading point."
+  (interactive)
+  (unless (pichat-transcript-view--at-point-p)
+    (user-error "No transcript at point"))
+  (let ((key (get-text-property (point) 'pichat-node-key))
+        (previous pichat-chat-show-thinking))
+    (setq-local pichat-chat-show-thinking (not previous))
+    (condition-case condition
+        (pichat-transcript-view-repaint)
+      ((error quit)
+       (setq-local pichat-chat-show-thinking previous)
+       (signal (car condition) (cdr condition))))
+    (goto-char (or (and key (pichat-transcript-view--property-position
+                            'pichat-node-key key))
+                   pichat-transcript-view--start))))
+
 (defun pichat-transcript-view--rejection-text (condition)
   "Return a bounded, plain single-line reason for CONDITION."
   (let ((print-length 8) (print-level 4))
@@ -248,7 +427,21 @@ that boundary remains after the transcript, including on a later repaint."
               pichat-transcript-view--activity-blocks
               (pichat-chat-activity-ui-index-groups
                start (+ start (length text)) nil
-               pichat-transcript-view--generation))))
+               pichat-transcript-view--generation))
+        (maphash (lambda (_id block)
+                   (pichat-transcript-view--tool-header-map block))
+                 pichat-transcript-view--tool-blocks)
+        (let ((position start)
+              (limit (+ start (length text))))
+          (while (< position limit)
+            (let ((next (next-single-property-change
+                         position 'pichat-history-key nil limit)))
+              (when (get-text-property position 'pichat-history-key)
+                (add-text-properties
+                 position next
+                 (list 'keymap pichat-transcript-view--disclosure-map
+                       'rear-nonsticky t)))
+              (setq position next))))))
     omitted))
 
 (defun pichat-transcript-view-render
@@ -305,6 +498,7 @@ TRANSCRIPT and its diagnostics are read-only inputs, never runtime updates."
     (add-hook 'kill-buffer-hook #'pichat-transcript-view-clear nil t)
     (add-hook 'change-major-mode-hook #'pichat-transcript-view-clear nil t)
     (prog1 (pichat-transcript-view-repaint)
+      (pichat-transcript-view-mode 1)
       (setq buffer-read-only t))))
 
 (provide 'pichat-transcript-view)

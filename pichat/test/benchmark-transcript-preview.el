@@ -14,7 +14,10 @@
 ;; Each stage is one wall-clock sample after GC, with ordinary GC enabled.
 ;; Run several fresh processes for comparisons on the same Emacs/machine.
 ;; These are pipeline timings, NOT redisplay/first-paint or interactive toggle
-;; measurements, and have no pass/fail timing thresholds.  Expanded means
+;; measurements, and have no pass/fail timing thresholds.  Additional component
+;; timings exercise render-entries, fold commands and a 24-node cached tail;
+;; these include complete operations but still exclude caller UI and redisplay.
+;; Expanded means
 ;; activity groups expanded, with the ordinary completed-tool summary default.
 ;; The legacy preview includes full tool output; its snapshot preparation is
 ;; excluded from insertion timing.  Buffer sizes are UTF-8 text bytes.
@@ -24,6 +27,7 @@
 (require 'benchmark)
 (require 'json)
 (require 'pichat-chat)
+(require 'pichat-transcript-view)
 (require 'markdown-mode)
 
 (defun pichat-benchmark-preview--synthetic ()
@@ -169,6 +173,54 @@
                                               (pichat-transcript-node-content node)
                                               :key #'pichat-transcript-content-kind))))))))
 
+(defun pichat-benchmark-preview--component (entries)
+  "Measure actual component entry points for cached linear ENTRIES.
+These include validation, region replacement, fontification and all indexes,
+not source acquisition or redisplay.  Manager callers are not yet migrated."
+  (with-temp-buffer
+    (setq-local pichat-chat-show-thinking t)
+    (let ((pichat-chat-activity-group-display 'collapsed)
+          (pichat-chat-render-markdown t)
+          rows)
+      (cl-labels
+          ((stage (label function)
+             (let ((sample (pichat-benchmark-preview--measure function)))
+               (push (cons label (cdr sample)) rows))))
+        (stage "Entries to full region (<=.5s)"
+               (lambda () (pichat-transcript-view-render-entries entries 1 1)))
+        (let ((group (car (sort (hash-table-values
+                                pichat-transcript-view--activity-blocks)
+                               (lambda (a b) (< (plist-get a :start)
+                                                (plist-get b :start)))))))
+          (unless group (error "Benchmark branch has no activity group"))
+          (goto-char (plist-get group :start))
+          (stage "Activity toggle (<=.5s)" #'pichat-transcript-view-toggle))
+        (goto-char pichat-transcript-view--start)
+        (stage "Thinking toggle (<=.5s)" #'pichat-transcript-view-toggle-thinking)
+        (let ((tool (car (sort (hash-table-values
+                               pichat-transcript-view--tool-blocks)
+                              (lambda (a b) (< (plist-get a :start)
+                                               (plist-get b :start)))))))
+          (unless tool (error "Benchmark group has no visible tool"))
+          (goto-char (plist-get tool :start))
+          (stage "Tool toggle (size independent)"
+                 #'pichat-transcript-view-toggle-tool))
+        ;; Restore defaults after the thinking toggle.  Each fresh render
+        ;; below also resets the explicit activity/tool choices.
+        (setq-local pichat-chat-show-thinking t)
+        (let ((transcript pichat-transcript-view--transcript))
+          (stage "Cached canonical tail (diagnostic)"
+                 (lambda ()
+                   (pichat-transcript-view-render
+                    transcript pichat-transcript-view--start
+                    pichat-transcript-view--end 24)))
+          (stage "Cached entries tail (<=.06s)"
+                 (lambda ()
+                   (pichat-transcript-view-render-entries
+                    entries pichat-transcript-view--start
+                    pichat-transcript-view--end 24))))
+        (nreverse rows)))))
+
 (defun pichat-benchmark-preview--run ()
   "Print the base and optional 5x collapsed/expanded pipeline table."
   (let* ((file (getenv "PICHAT_BENCHMARK_SESSION"))
@@ -211,7 +263,17 @@
                                        sum (nth 2 row))
                               (cl-loop for row in (plist-get sample :rows)
                                        sum (nth 3 row)))))
-             labels samples)))
+             labels samples)
+    (princ "\nComponent operations: seconds / GC count / GC seconds.\n")
+    (princ "Cached input only; no RPC, caller headers or actual redisplay.\n")
+    (princ "Tail=24 canonical nodes; entries tail includes full history build.\n")
+    (dolist (scale scales)
+      (princ (format "%dx component:\n" scale))
+      (dolist (row (pichat-benchmark-preview--component
+                    (if (= scale 1) branch
+                      (pichat-benchmark-preview--repeat branch scale))))
+        (princ (format "%-34s %.6f / %d / %.6f\n"
+                       (car row) (nth 1 row) (nth 2 row) (nth 3 row)))))))
 
 (pichat-benchmark-preview--run)
 

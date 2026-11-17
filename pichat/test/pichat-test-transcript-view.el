@@ -178,11 +178,27 @@
        (expand-file-name invocation-name invocation-directory) nil t nil
        "-Q" "--batch" "-L"
        (file-name-directory (locate-library "pichat-transcript-view"))
+       "-L" (file-name-directory (locate-library "pichat-test-transcript-view"))
        "--eval"
        (prin1-to-string
         '(progn
            (require 'pichat-transcript-view)
+           (require 'pichat-test-transcript-view)
+           ;; Run real controls/selection/rejection with chat locals genuinely
+           ;; undeclared, not merely nil after the full suite loaded chat.
+           (let ((stats (ert-run-tests-batch
+                         '(member
+                           pichat-transcript-view-controls-are-local-and-preserve-boundaries
+                           pichat-transcript-view-skill-and-history-disclosures
+                           pichat-transcript-view-selection-resolves-messages-records-and-results
+                           pichat-transcript-view-rejection-preserves-caller-region-and-resets))))
+             (unless (zerop (ert-stats-completed-unexpected stats))
+               (error "Cold component controls failed")))
            (when (featurep 'pichat-chat) (error "Loaded chat"))
+           (dolist (variable '(pichat-chat--session pichat-chat--tool-view-states
+                               pichat-chat--activity-view-states
+                               pichat-chat--skill-view-states))
+             (when (boundp variable) (error "Bound chat local: %S" variable)))
            (with-temp-buffer
              (let ((hooks (copy-tree kill-buffer-hook))
                    (post-hooks (copy-tree post-command-hook))
@@ -530,6 +546,55 @@
           (should (equal exact (buffer-substring-no-properties 1 (point-max))))
           (should buffer-read-only)
           (should-not (pichat-transcript-view-selected-position)))))))
+
+(ert-deftest pichat-transcript-view-history-stays-source-ordered-and-reachable ()
+  (let* ((records
+          '((:id "model" :type "model_change" :provider "example" :modelId "model")
+            (:id "thinking" :type "thinking_level_change" :thinkingLevel "high")
+            (:id "info" :type "session_info" :name "Historical name")
+            (:id "label" :type "label" :label "Historical label")
+            (:id "edit" :type "context_edit" :targetId "model" :replacement "SECRET")
+            (:id "custom" :type "custom" :customType "extension")
+            (:id "hidden" :type "custom_message" :content "Hidden message")
+            (:id "system" :type "message" :message (:role "system" :content "System text"))
+            (:id "bash" :type "message" :message
+             (:role "bashExecution" :command "echo history" :output "Historical output"))
+            (:id "compact" :type "compaction" :summary "Compaction body")
+            (:id "branch" :type "branch_summary" :summary "Branch body")
+            (:id "compact-role" :type "message" :message
+             (:role "compactionSummary" :content "Compaction role body"))
+            (:id "branch-role" :type "message" :message
+             (:role "branchSummary" :content "Branch role body"))))
+         (original (copy-tree records t)))
+    (with-temp-buffer
+      (special-mode)
+      (pichat-transcript-view-render-entries records 1 1)
+      (let ((previous 0))
+        (dolist (entry records)
+          ;; Selection is checked through the public entry API for every record.
+          (pichat-transcript-view-render-entries
+           records pichat-transcript-view--start pichat-transcript-view--end
+           nil (copy-sequence (plist-get entry :id)))
+          (let ((position (pichat-transcript-view-selected-position)))
+            (should position)
+            (should (> position previous))
+            (setq previous position))))
+      (dolist (text '("example/model" "high" "Historical name" "Historical label"
+                      "Replace model" "extension" "Hidden message" "System text"
+                      "echo history" "Historical output"))
+        (should (string-match-p (regexp-quote text) (buffer-string))))
+      (should-not (string-match-p "SECRET" (buffer-string)))
+      (dolist (pair '(("compact" . "Compaction body") ("branch" . "Branch body")
+                      ("compact-role" . "Compaction role body")
+                      ("branch-role" . "Branch role body")))
+        (should-not (string-match-p (regexp-quote (cdr pair)) (buffer-string)))
+        (goto-char (pichat-transcript-view--property-position
+                    'pichat-history-key (car pair)))
+        (pichat-transcript-view-toggle)
+        (should (string-match-p (regexp-quote (cdr pair)) (buffer-string))))
+      (should buffer-read-only)
+      (should-not (overlays-in (point-min) (point-max))))
+    (should (equal records original))))
 
 (provide 'pichat-test-transcript-view)
 ;;; pichat-test-transcript-view.el ends here

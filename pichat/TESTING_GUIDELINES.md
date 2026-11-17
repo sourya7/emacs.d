@@ -505,6 +505,15 @@ enabled and is reported. Compare repeated fresh processes using the same input,
 Emacs and GC settings. These are not actual redisplay, first-paint, manager-row
 change or interactive toggle measurements; there are no timing-based ERT gates.
 
+A separate component table times complete `render-entries`, activity/thinking
+and focused tool-toggle operations, including validation, region replacement,
+fontification and indexes. It also compares a 24-node tail from cached canonical
+data with one built from cached linear entries (including the full history
+build). These are component CPU/wall-clock measurements, not migrated caller
+row changes, actual first paint or redisplay. Budget labels apply to the 1x
+reference input; 5x reports scaling only. Input reading and branch selection
+are outside the timed component operations, and no runtime is contacted.
+
 ## Compatibility verification workflow
 
 [`PI_COMPATIBILITY.md`](./PI_COMPATIBILITY.md) is the authoritative record of

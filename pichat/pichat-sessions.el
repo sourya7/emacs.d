@@ -2233,17 +2233,6 @@ normalization `:diagnostics'.  An empty session produces a nil path."
           :diagnostics (copy-sequence
                         (pichat-sessions--model-diagnostics model)))))
 
-(defun pichat-sessions-preview-active-snapshot-from-entries (entries leaf-id)
-  "Return an active-branch preview snapshot from linear ENTRIES and LEAF-ID.
-ENTRIES must be a root-to-leaf branch such as the branch retained by PiChat's
-canonical entry cache."
-  (let (nested)
-    (dolist (entry (reverse entries))
-      (setq nested
-            (list (list :entry (copy-tree entry t) :children nested))))
-    (pichat-sessions-preview-active-snapshot
-     (list :tree nested :leafId leaf-id))))
-
 (defun pichat-sessions--preview-message-has-images-p (message)
   "Return non-nil when MESSAGE contains historical image content."
   (cl-some (lambda (part)
@@ -2258,106 +2247,6 @@ canonical entry cache."
      (and (equal (plist-get node :type) "message")
           (equal (plist-get node :role) "user")))
    (reverse path)))
-
-(defun pichat-sessions--preview-insert-section (heading text)
-  "Insert a preview section with HEADING and optional TEXT."
-  (insert (propertize heading 'face 'bold) "\n")
-  (unless (string-empty-p (string-trim (or text "")))
-    (insert text "\n"))
-  (insert "\n"))
-
-(defun pichat-sessions--preview-render-node (node)
-  "Insert one exact-dispatch transcript section for preview NODE."
-  (let* ((entry (plist-get node :entry))
-         (type (plist-get node :type))
-         (message (plist-get entry :message))
-         (role (plist-get node :role)))
-    (pcase type
-      ("message"
-       (cond
-        ((equal role "assistant")
-         (pichat-sessions--preview-insert-section
-          "ASSISTANT" (pichat-render-message-text message))
-         (dolist (call (plist-get node :tool-calls))
-           (pichat-sessions--preview-insert-section
-            (format "TOOL CALL: %s" (or (plist-get call :name) "unknown"))
-            (format "Arguments: %s"
-                    (pichat-render-tool-args
-                     (plist-get call :arguments))))))
-        ((member role '("toolResult" "tool_result"))
-         (let ((call (plist-get node :tool-call)))
-           (pichat-sessions--preview-insert-section
-            (format "TOOL RESULT: %s"
-                    (or (plist-get call :name)
-                        (plist-get message :toolName) "unknown"))
-            (pichat-render-message-text message))))
-        (t
-         (pichat-sessions--preview-insert-section
-          (upcase (replace-regexp-in-string
-                   "_" " " (or role "MESSAGE")))
-          (pichat-render-message-text message)))))
-      ("custom_message"
-       (pichat-sessions--preview-insert-section
-        (format "CUSTOM MESSAGE: %s"
-                (or (plist-get entry :customType) "custom"))
-        (pichat-render-content (plist-get entry :content))))
-      ("compaction"
-       (pichat-sessions--preview-insert-section
-        "COMPACTION" (or (plist-get entry :summary) "")))
-      ("branch_summary"
-       (pichat-sessions--preview-insert-section
-        "BRANCH SUMMARY" (or (plist-get entry :summary) "")))
-      ("model_change"
-       (pichat-sessions--preview-insert-section
-        "MODEL CHANGE"
-        (format "%s%s"
-                (or (plist-get entry :modelId)
-                    (plist-get entry :model) "unknown")
-                (if-let* ((provider (plist-get entry :provider)))
-                    (format " via %s" provider)
-                  ""))))
-      ("thinking_level_change"
-       (pichat-sessions--preview-insert-section
-        "THINKING LEVEL"
-        (format "%s" (or (plist-get entry :thinkingLevel) "unknown"))))
-      ("session_info"
-       (pichat-sessions--preview-insert-section
-        "SESSION INFO"
-        (or (plist-get entry :name)
-            (plist-get entry :sessionName) "")))
-      ("label"
-       (pichat-sessions--preview-insert-section
-        "LABEL" (or (plist-get entry :label) "")))
-      ("custom"
-       (pichat-sessions--preview-insert-section
-        (format "CUSTOM: %s" (or (plist-get entry :customType) "custom"))
-        ""))
-      ("context_edit"
-       (pichat-sessions--preview-insert-section
-        "CONTEXT EDIT"
-        (format "%s (model context only; raw history unchanged)"
-                (pichat-sessions--context-edit-description entry))))
-      (_
-       (pichat-sessions--preview-insert-section
-        (upcase (replace-regexp-in-string "_" " " (or type "ENTRY")))
-        (or (plist-get entry :text)
-            (plist-get entry :output) ""))))))
-
-(defun pichat-sessions-insert-preview-path (path &optional selected-id)
-  "Insert immutable branch preview PATH into the current buffer.
-When SELECTED-ID is non-nil, return the buffer position at which that entry
-starts.  This is the shared transcript renderer used by session history and
-runtime-manager previews."
-  (let (selected-position)
-    (dolist (node path)
-      (let ((start (point)))
-        (when (equal (plist-get node :id) selected-id)
-          (setq selected-position start))
-        (pichat-sessions--preview-render-node node)
-        (add-text-properties
-         start (point)
-         (list 'pichat-preview-entry-id (plist-get node :id)))))
-    selected-position))
 
 (defun pichat-sessions-preview--render ()
   "Render the immutable path owned by the current preview buffer."

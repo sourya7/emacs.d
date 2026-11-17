@@ -498,7 +498,8 @@ write files, start Pi or contact a runtime. Real inputs can consume substantial
 memory, especially with 5x enabled.
 
 It reports cache/build/context/render, insertion, eager Markdown fontification
-and tool indexing separately, plus legacy preview insertion and text byte sizes.
+and tool indexing separately, plus rendered text byte sizes. Legacy preview
+baselines remain in the plan record; the per-entry renderer has been removed.
 Collapsed/expanded refer to activity groups; tools retain the default summary
 view. Each stage is one sample with a preceding untimed GC; in-stage GC remains
 enabled and is reported. Compare repeated fresh processes using the same input,

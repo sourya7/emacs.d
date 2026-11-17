@@ -19,8 +19,8 @@
 ;; these include complete operations but still exclude caller UI and redisplay.
 ;; Expanded means
 ;; activity groups expanded, with the ordinary completed-tool summary default.
-;; The legacy preview includes full tool output; its snapshot preparation is
-;; excluded from insertion timing.  Buffer sizes are UTF-8 text bytes.
+;; Buffer sizes are UTF-8 text bytes.  Legacy preview baseline measurements
+;; are retained in the plan record; that renderer has been removed.
 
 ;;; Code:
 
@@ -153,15 +153,7 @@
           (when blocks (pichat-chat-tool-ui-release-blocks blocks)))
         (let ((bytes (string-bytes (buffer-substring-no-properties
                                    (point-min) (point-max)))))
-          (erase-buffer)
-          (let ((snapshot (pichat-sessions-preview-active-snapshot-from-entries
-                           entries (plist-get (car (last entries)) :id))))
-            (stage "Legacy preview insertion"
-                   (lambda () (pichat-sessions-insert-preview-path
-                               (plist-get snapshot :path)))))
           (list :rows (nreverse rows) :bytes bytes
-                :legacy-bytes (string-bytes (buffer-substring-no-properties
-                                            (point-min) (point-max)))
                 :nodes (length (pichat-transcript-nodes transcript))
                 :tools (cl-loop for node in (pichat-transcript-nodes transcript)
                                 sum (cl-count 'tool
@@ -251,8 +243,7 @@ not source acquisition or redisplay.  Manager callers are not yet migrated."
         (princ (format " %13.6f" (cadr (assoc (car row) (plist-get sample :rows))))))
       (princ "\n"))
     (dolist (field '((:nodes . "Canonical nodes") (:tools . "Tool calls")
-                     (:prose . "Assistant prose runs") (:bytes . "Rendered text bytes")
-                     (:legacy-bytes . "Legacy text bytes")))
+                     (:prose . "Assistant prose runs") (:bytes . "Rendered text bytes")))
       (princ (format "%-29s" (cdr field)))
       (dolist (sample samples) (princ (format " %13d" (plist-get sample (car field)))))
       (princ "\n"))

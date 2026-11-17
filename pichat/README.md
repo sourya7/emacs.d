@@ -106,6 +106,47 @@ before canonical synchronization and are explicitly reported as unavailable
 afterward. Compatibility diagnostics are deduplicated and displayed as bounded
 status entries.
 
+## Read-only transcript previews
+
+Branch previews, runtime manager previews and Jobs **Preview conversation**
+share chat-style rendering of settled messages, Markdown faces, thinking,
+activity groups and tool blocks. Their sources and actions remain distinct
+(see `GLOSSARY.md`); none becomes a chat buffer or follows live RPC events.
+Closing a preview never stops its originating runtime.
+
+These previews use the shared `pichat-chat-show-thinking`,
+`pichat-chat-activity-group-display`, `pichat-chat-tool-default-display`,
+`pichat-chat-max-tool-args-chars`, `pichat-chat-max-tool-output-chars` and
+`pichat-chat-render-markdown` options. Markdown fontification requires
+`markdown-mode`; prose remains exact Markdown source, not an SHR-rendered
+response. Tool arguments/output are bounded inline; full retained text is
+available in tool details.
+
+Native controls on rendered transcript text:
+
+- `RET` / `TAB` or mouse-1 on an activity, tool, skill or history-summary
+  header — toggle its disclosure
+- `C-c C-;` — toggle the disclosure at point
+- `C-c C-z` — cycle the tool at point between header and arguments
+- `C-c C-d` — show full retained tool arguments/output in a details view
+- `w` on a skill header — copy the original full Pi message
+- `M-x pichat-transcript-view-toggle-thinking` with point in the transcript —
+  toggle thinking in this preview buffer only
+
+Fold choices belong to the preview buffer, never the originating chat, and
+reset when new input is rendered. Compaction and branch summaries are folded
+by default; model/thinking-level changes and other historical records remain
+in source order. Context edits show target/kind, not replacement content.
+Ordinary user messages show in full, without the chat's long-message folds.
+Previews provide no tool location links or path-visiting actions. Unavailable
+auxiliary execution data is labelled in details. If transcript construction
+rejects the entries, the preview retains its header and shows a bounded reason
+instead of a second rendering.
+
+Archive-backed Consult saved-session and related-session previews still show
+bounded archive search context; they do not use this structured transcript
+view. Restart snapshots and rendered response views are also unchanged.
+
 ## Chat buffer names
 
 Chat buffers use `*pi:project:7*` for project runtimes and `*pi:8*` for
@@ -432,8 +473,12 @@ effects.
 
 `pichat-chat.el` is the mode and event-orchestration layer. It consumes focused
 presentation modules, but those modules do not require or mutate the chat
-layer's state implicitly. `pichat-markdown-fontification.el` is a fail-open,
-fontification-only component: it copies face runs from a temporary
+layer's state implicitly. `pichat-display.el` owns shared faces and display
+options with their existing public names. `pichat-transcript-view.el` renders
+settled transcripts into caller-owned read-only regions, with independent
+buffer-local disclosure state and no dependency on `pichat-chat.el`. Preview
+callers retain their headers, provenance, source validation and lifecycle.
+`pichat-markdown-fontification.el` is a fail-open, fontification-only component: it copies face runs from a temporary
 `markdown-mode` buffer onto exact completed prose and has no chat, link, table,
 overlay, or cache dependency. `pichat-response-view.el` owns secure rendered
 response snapshots and depends on the canonical selection API plus the common
@@ -1006,9 +1051,14 @@ from whether state synchronization has produced a source path yet.
 The runtime preview reuses the owning chat's settled canonical entry cache when
 available, including after a runtime stops. Otherwise a live runtime is queried
 explicitly when previewing; ordinary manager refresh remains cached-only. The
-preview is source-scoped, rejects stale row/source callbacks, and shows only the
-most recent `pichat-session-manager-preview-max-entries` entries. Use `g` in the
-preview to refresh it and `q` to close it.
+preview is source-scoped and rejects stale row/source callbacks. Its chat-style
+transcript shows only the most recent canonical nodes, bounded by
+`pichat-session-manager-preview-max-entries` (default 24). Despite the historical
+option name, the bound counts nodes, not raw entries: tool results stay with
+their calls. The omission note still counts source entries. Headers, notes and
+empty/unavailable states remain separate from the transcript. Use the shared
+read-only transcript controls above to unfold activity or inspect full tool
+output; `g` refreshes the preview and `q` closes it.
 
 Archive-backed Consult candidates also expose Embark action `o` to open a saved
 source in a new independent runtime (the same behavior as `RET`). Independent loading starts a separate
@@ -1281,12 +1331,15 @@ with the latest response from a potentially continued conversation.
 
 Submitting does not select/display the new chat or change your current/preferred
 runtime. **Actions → View chat** displays the exact owning chat while work needs attention.
-**Preview conversation** displays immutable run-end entries through the same
-read-only renderer as Session History and runtime-manager previews, without
+**Preview conversation** displays immutable run-end entries with the shared
+chat-style transcript view and its disclosure/tool-details controls, without
 starting Pi or reading the current saved session file, including after Emacs
-restart. It has no fork/switch actions and is not Session History or saved-session
-browsing. Older Markdown-only captures remain readable with a labelled fallback;
-PiChat never reconstructs historical evidence from a subsequently continued file.
+restart. It renders the full captured branch directly in the destination buffer;
+folds and tool details remain interactive. It has no fork/switch actions and is
+not Session History or saved-session browsing (see `GLOSSARY.md`). Older version-1
+Markdown-only captures remain readable with a labelled fallback, not structured
+transcript controls. PiChat never reconstructs historical evidence from a
+subsequently continued file.
 Finished runs with saved-session references offer **Continue in chat** under
 **Actions**: an explicit
 new ordinary runtime on the captured target using the run's captured preset and
@@ -2084,7 +2137,11 @@ PiChat-specific close/return policy instead of Evil Collection's generic
 `quit-window`. History uses `j/k` for entries, `RET` to jump, `za` to fold,
 `zv` to preview, and `gr` to refresh. The runtime manager uses `RET` to open,
 `zv` to toggle its preview, and `gr` to refresh. Runtime and response previews
-also use `gr` to refresh. In rendered response views, `]r` / `[r` navigate
+also use `gr` to refresh. Structured branch, runtime-manager and Jobs
+conversation previews use `za`, `RET` or `TAB` on disclosure headers, and
+`C-c C-d` for full tool details; `w` keeps Vim word motion (use
+`M-x pichat-transcript-view-copy-skill` to copy a skill invocation).
+In rendered response views, `]r` / `[r` navigate
 next/previous settled prose responses without taking over Evil's `n` / `N`
 search repeat. The local
 `SPC m` menus provide preview, details, and other PiChat actions without
@@ -2364,8 +2421,10 @@ Session History keys:
   owning chat's active transcript; use `v` for entries on alternate branches
 - `f` — explicitly fork the selected user prompt; direct RPC fork targets must
   be user-message entries
-- `v` — preview the immutable root-to-entry branch, including explicit tool
-  calls and results, with point positioned at the selected entry
+- `v` — preview the full immutable root-to-entry branch with chat-style
+  messages, thinking, tool blocks and historical records; point lands on the
+  selected entry, expanding its containing activity group when needed (a tool
+  result lands at its merged tool block)
 - `TAB` — fold or unfold the current branch segment
 - `n` / `p`, `<down>` / `<up>` — move between visible entries
 - `M-n` / `M-p` — move between visible branch segments
@@ -2401,10 +2460,15 @@ Branch preview keys:
 - `t` — return to the exact originating Session History buffer
 - `d` — show raw details for the selected preview entry
 - `q` — close the preview
+- Shared transcript disclosure and tool-details controls listed above also apply;
+  `d` remains raw selected-entry details, distinct from `C-c C-d` tool details
 
-A preview remains readable after its owning session rebinds, but is marked stale
-and cannot fork. If the resolved historical user prompt contained images, a
-message explains that Pi restores its text only.
+A preview remains readable after its originating runtime's source rebinds, but
+its title is marked `STALE` and it cannot fork. Stale marking updates only the
+header, preserving transcript text, folds and reading position. Previewing does
+not change that runtime's source or Pi's active branch (see `GLOSSARY.md`). If
+the resolved historical user prompt contained images, a message explains that
+Pi restores its text only.
 
 Source back/forward navigation is scoped to one Pi RPC session and is available
 only when both the source and target have nonblank persisted session-file paths;

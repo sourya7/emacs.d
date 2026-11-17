@@ -12,6 +12,7 @@
 (require 'pichat-display)
 (require 'pichat-disclosure)
 (require 'pichat-response-view)
+(require 'pichat-transcript-view)
 (require 'tabulated-list)
 (require 'button)
 (require 'pp)
@@ -993,24 +994,31 @@ navigation live in Actions."
          (run (pichat-job-record store 'runs id))
          (digest (plist-get run :evidence)))
     (unless digest (user-error "This older run has no captured conversation"))
-    (let ((evidence (pichat-job-evidence-read store digest)))
-      (pichat-jobs--source-view
-       (format "*PiChat Run Preview %s*" id)
-       (with-temp-buffer
-         (insert (propertize "Run conversation" 'face 'bold)
-                 "\nCaptured run-end snapshot · Read-only\n\n")
-         (if (eql (plist-get evidence :version) 2)
-             (let* ((entries (json-parse-string
-                              (json-serialize (plist-get evidence :entries))
-                              :object-type 'plist :array-type 'list
-                              :null-object nil :false-object :json-false))
-                    (snapshot (pichat-sessions-preview-active-snapshot-from-entries
-                               entries (plist-get evidence :leaf))))
-               (pichat-sessions-insert-preview-path (plist-get snapshot :path)))
-           (insert (propertize "Structured preview unavailable for this older capture; showing captured Markdown.\n\n"
-                               'face 'shadow)
-                   (plist-get evidence :transcript)))
-         (buffer-string))))))
+    (let ((evidence (pichat-job-evidence-read store digest))
+          (buffer (generate-new-buffer (format "*PiChat Run Preview %s*" id))))
+      (with-current-buffer buffer
+        (pichat-view-mode)
+        (setq-local pichat-jobs--owner owner)
+        (let ((inhibit-read-only t))
+          (insert (propertize "Run conversation" 'face 'bold)
+                  "\nCaptured run-end snapshot · Read-only\n\n")
+          (if (eql (plist-get evidence :version) 2)
+              ;; Evidence arrays are vectors; normalize to the builder's lists.
+              ;; Render here, not through a string copy: disclosures own markers
+              ;; and overlays in this destination buffer.
+              (pichat-transcript-view-render-entries
+               (json-parse-string
+                (json-serialize (plist-get evidence :entries))
+                :object-type 'plist :array-type 'list
+                :null-object nil :false-object :json-false)
+               (point) (point))
+            (insert (propertize "Structured preview unavailable for this older capture; showing captured Markdown.\n\n"
+                                'face 'shadow)
+                    (plist-get evidence :transcript))))
+        (setq-local truncate-lines nil)
+        (visual-line-mode 1)
+        (goto-char (point-min)))
+      (pichat-view-display buffer nil 'kill))))
 
 (defun pichat-jobs--reading-position (position)
   "Capture semantic section POSITION for a refresh; otherwise absolute position."

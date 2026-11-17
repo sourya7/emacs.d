@@ -73,7 +73,20 @@
                 (should (< root-pos call-pos result-pos alternate-pos))
                 (should buffer-read-only)
                 (should pichat-transcript-view-mode)
-                (should-not (memq #'pichat-stop-session kill-buffer-hook))))
+                (should-not (memq #'pichat-stop-session kill-buffer-hook)))
+              (goto-char (point-min))
+              (search-forward "README.md")
+              (beginning-of-line)
+              (call-interactively (key-binding (kbd "TAB")))
+              (should-not (string-match-p "tool output" (buffer-string)))
+              ;; A whole-region repaint retains the caller's provenance/actions
+              ;; and the explicit tool choice, not just its initial text.
+              (pichat-transcript-view-toggle-thinking)
+              (should-not (string-match-p "tool output" (buffer-string)))
+              (should (string-match-p "Status: alternate branch" (buffer-string)))
+              (should (string-match-p "Alternate answer" (buffer-string)))
+              (should (eq (key-binding (kbd "f")) #'pichat-sessions-preview-fork))
+              (should (eq (key-binding (kbd "d")) #'pichat-sessions-preview-show-details)))
             (should (eq nodes pichat-sessions--nodes))
             (should (eq parents pichat-sessions--parents))
             (with-current-buffer chat

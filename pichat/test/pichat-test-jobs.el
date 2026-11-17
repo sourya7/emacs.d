@@ -2117,13 +2117,18 @@
             (should (string-match-p "Inspect files" (buffer-string)))
             (should (string-prefix-p "Run conversation\nCaptured run-end snapshot · Read-only\n\n"
                                     (buffer-string)))
-            ;; Disclosures must retain markers in the destination buffer.
-            (goto-char (plist-get (car (hash-table-values
-                                       pichat-transcript-view--activity-blocks)) :start))
+            ;; Drive the visible disclosures, not the renderer's block tables.
+            (goto-char (point-min))
+            (search-forward "▶")
+            (beginning-of-line)
             (call-interactively (key-binding (kbd "RET")))
-            (goto-char (plist-get (gethash "tool" pichat-transcript-view--tool-blocks) :start))
-            (call-interactively (key-binding (kbd "TAB")))
-            (should (string-match-p "read" (buffer-string)))
+            (search-forward "✓ read")
+            (beginning-of-line)
+            (let ((collapsed-size (buffer-size)))
+              (call-interactively (key-binding (kbd "TAB")))
+              (should (> (buffer-size) collapsed-size)))
+            (should (string-prefix-p "Run conversation\nCaptured run-end snapshot · Read-only\n\n"
+                                    (buffer-string)))
             (let ((preview (current-buffer)))
               (pichat-transcript-view-tool-details)
               (should (string-match-p "Captured tool output" (buffer-string)))

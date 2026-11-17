@@ -1008,7 +1008,23 @@
           (should-not (string-match-p "Earlier task" (buffer-string)))
           (should (string-match-p "retained result" (buffer-string)))
           (should (string-match-p "Final answer" (buffer-string)))
-          (should (= 1 (hash-table-count pichat-transcript-view--tool-blocks)))
+          ;; Native disclosure keys work in the manager's own major mode.
+          (goto-char (point-min))
+          (search-forward "sample.txt")
+          (beginning-of-line)
+          (call-interactively (key-binding (kbd "TAB")))
+          (should-not (string-match-p "retained result" (buffer-string)))
+          (should (string-match-p "Final answer" (buffer-string)))
+          (unwind-protect
+              (progn
+                (cl-letf (((symbol-function 'pop-to-buffer) #'ignore))
+                  (call-interactively (key-binding (kbd "C-c C-d"))))
+                (with-current-buffer "*PiChat Transcript Tool Details*"
+                  (should (string-match-p "retained result" (buffer-string)))))
+            (when-let* ((details (get-buffer "*PiChat Transcript Tool Details*")))
+              (kill-buffer details)))
+          (should (string-match-p "Runtime Preview" (buffer-string)))
+          (should (string-match-p "Cached source" (buffer-string)))
           (should (eq #'pichat-session-manager-preview-refresh
                       (key-binding (kbd "g")))))
         (let ((pichat-session-manager-preview-max-entries 1))

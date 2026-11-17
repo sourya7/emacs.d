@@ -10,6 +10,70 @@
 (require 'pichat-test-support)
 (require 'pichat-test-job-support)
 
+(ert-deftest pichat-evil-transcript-previews-fold-without-taking-vim-motions ()
+  (skip-unless (require 'evil nil t))
+  (require 'pichat-evil)
+  (let ((was-active (bound-and-true-p evil-mode))
+        (previous (evil-initial-state 'pichat-view-mode))
+        (overriding-local-map nil)
+        (overriding-terminal-local-map nil)
+        (pichat-chat-activity-group-display 'collapsed)
+        (pichat-chat-tool-default-display 'summary)
+        (entries
+         '((:id "u" :type "message"
+            :message (:role "user" :content "Preview task"))
+           (:id "a" :type "message"
+            :message (:role "assistant" :stopReason "toolUse"
+                      :content ((:type "toolCall" :id "call" :name "read"
+                                 :arguments (:path "sample.txt")))))
+           (:id "r" :type "message"
+            :message (:role "toolResult" :toolCallId "call"
+                      :content ((:type "text" :text "Full captured result")))))))
+    (unwind-protect
+        (progn
+          (evil-mode 1)
+          (pichat-evil-setup)
+          ;; The component is enabled after each caller has selected Normal.
+          (dolist (mode '(pichat-sessions-preview-mode
+                          pichat-session-manager-preview-mode
+                          pichat-view-mode))
+            (with-temp-buffer
+              (funcall mode)
+              (evil-normal-state)
+              (let ((inhibit-read-only t)) (insert "Caller header\n\n"))
+              (pichat-transcript-view-render-entries entries (point-max) (point-max))
+              (goto-char (point-min))
+              (dolist (binding '(("f" . evil-find-char)
+                                 ("t" . evil-find-char-to)
+                                 ("w" . evil-forward-word-begin)
+                                 ("/" . evil-search-forward)
+                                 ("n" . evil-search-next)))
+                (should (eq (key-binding (kbd (car binding))) (cdr binding))))
+              (should (eq (key-binding (kbd "q"))
+                          (if (eq mode 'pichat-session-manager-preview-mode)
+                              #'pichat-session-manager-preview-quit
+                            #'pichat-view-quit)))
+              (goto-char (point-min))
+              (search-forward "▶")
+              (beginning-of-line)
+              (call-interactively (key-binding (kbd "z a")))
+              (should (string-match-p "sample.txt" (buffer-string)))
+              (search-forward "sample.txt")
+              (beginning-of-line)
+              (let ((collapsed (buffer-string)))
+                (call-interactively (key-binding (kbd "TAB")))
+                (should (> (buffer-size) (length collapsed)))
+                (call-interactively (key-binding (kbd "RET")))
+                (should (equal collapsed (buffer-string))))
+              (cl-letf (((symbol-function 'pop-to-buffer) #'ignore))
+                (call-interactively (key-binding (kbd "C-c C-d"))))
+              (with-current-buffer "*PiChat Transcript Tool Details*"
+                (should (string-match-p "Full captured result" (buffer-string))))
+              (kill-buffer "*PiChat Transcript Tool Details*")
+              (should buffer-read-only))))
+      (evil-set-initial-state 'pichat-view-mode previous)
+      (unless was-active (evil-mode -1)))))
+
 (ert-deftest pichat-evil-read-only-views-keep-vim-navigation-and-owned-quit ()
   (skip-unless (require 'evil nil t))
   (require 'pichat-evil)

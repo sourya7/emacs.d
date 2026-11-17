@@ -173,6 +173,10 @@ remain in their original mode maps."
   (evil-define-key* 'normal pichat-session-manager-preview-mode-map
     (kbd "q") #'pichat-session-manager-preview-quit
     (kbd "g r") #'pichat-session-manager-preview-refresh)
+  (evil-define-key* 'normal pichat-transcript-view-mode-map
+    (kbd "z a") #'pichat-transcript-view-toggle)
+  ;; Callers enable the component after their major mode has selected Normal.
+  (add-hook 'pichat-transcript-view-mode-hook #'evil-normalize-keymaps)
   (evil-define-key* 'normal pichat-diagnostics-mode-map
     (kbd "g r") #'pichat-diagnostics-refresh
     (kbd "TAB") #'pichat-diagnostics-toggle-section

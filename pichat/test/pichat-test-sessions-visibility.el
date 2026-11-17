@@ -104,14 +104,20 @@
       (should-not (string-match-p "Never display replacement" (buffer-string))))))
 
 (ert-deftest pichat-sessions-context-edit-preview-keeps-replacement-private ()
-  (let ((entry (list :id "edit" :type "context_edit"
-                     :entry '(:type "context_edit" :id "edit"
-                              :targetId "user"
-                              :replacement "Never display replacement"))))
-    (with-temp-buffer
-      (pichat-sessions-insert-preview-path (list entry) "edit")
-      (should (string-match-p "Replace user" (buffer-string)))
-      (should-not (string-match-p "Never display replacement" (buffer-string))))))
+  (let ((session (pichat-session-make :id "context-edit"))
+        (node (pichat-test-sessions-tree--entry
+               "edit" "context_edit" :targetId "user"
+               :replacement "Never display replacement")))
+    (unwind-protect
+        (pichat-test-with-history
+            (session (pichat-test-sessions-tree--response (list node) "edit"))
+          (cl-letf (((symbol-function 'pop-to-buffer) #'ignore))
+            (pichat-sessions-preview-branch-at-point))
+          (with-current-buffer "*PiChat Branch Preview*"
+            (should (string-match-p "context edit.*user" (buffer-string)))
+            (should (equal "edit" (get-text-property (point) 'pichat-node-key)))
+            (should-not (string-match-p "Never display replacement" (buffer-string)))))
+      (pichat-test-sessions-preview--kill-buffers))))
 
 (ert-deftest pichat-sessions-visibility-handles-tool-only-assistants-and-current-leaf ()
   (let* ((tool-content

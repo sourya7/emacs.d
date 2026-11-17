@@ -976,6 +976,72 @@
               (should (string-match-p "Fix the parser" text))
               (should (string-match-p "Working on the parser now" text)))))))))
 
+(ert-deftest pichat-session-manager-preview-bounds-nodes-not-tool-results ()
+  (pichat-test-with-clean-state
+    (let* ((session (pichat-session-make :id "bounded" :state 'stopped))
+           (entries
+            '((:id "u" :type "message"
+               :message (:role "user" :content "Earlier task"))
+              (:id "a" :type "message"
+               :message (:role "assistant"
+                         :content ((:type "toolCall" :id "call" :name "read"
+                                    :arguments (:path "sample.txt")))))
+              (:id "r" :type "message"
+               :message (:role "toolResult" :toolCallId "call" :toolName "read"
+                         :content ((:type "text" :text "retained result"))
+                         :isError nil))
+              (:id "done" :type "message"
+               :message (:role "assistant" :content "Final answer"))))
+           (pichat-chat-activity-group-display 'expanded)
+           (pichat-chat-tool-default-display 'output)
+           (pichat-session-manager-preview-max-entries 2))
+      (with-temp-buffer
+        (pichat-session-manager-mode)
+        (pichat-session-manager--render-preview
+         session (list :entries entries) "Cached source")
+        (with-current-buffer pichat-session-manager-preview-buffer-name
+          (should buffer-read-only)
+          (should (derived-mode-p 'pichat-session-manager-preview-mode))
+          (should (string-match-p "Runtime Preview" (buffer-string)))
+          (should (string-match-p "Cached source" (buffer-string)))
+          (should (string-match-p "1 earlier entries omitted" (buffer-string)))
+          (should-not (string-match-p "Earlier task" (buffer-string)))
+          (should (string-match-p "retained result" (buffer-string)))
+          (should (string-match-p "Final answer" (buffer-string)))
+          (should (= 1 (hash-table-count pichat-transcript-view--tool-blocks)))
+          (should (eq #'pichat-session-manager-preview-refresh
+                      (key-binding (kbd "g")))))
+        (let ((pichat-session-manager-preview-max-entries 1))
+          (pichat-session-manager--render-preview session (list :entries entries)))
+        (with-current-buffer pichat-session-manager-preview-buffer-name
+          (should (string-match-p "3 earlier entries omitted" (buffer-string)))
+          (should-not (string-match-p "retained result" (buffer-string)))
+          (should (= 0 (hash-table-count pichat-transcript-view--tool-blocks))))))))
+
+(ert-deftest pichat-session-manager-preview-rejection-and-empty-release-view ()
+  (pichat-test-with-clean-state
+    (let ((session (pichat-session-make :id "invalid" :state 'stopped))
+          (entries
+           '((:id "a" :type "message"
+              :message (:role "assistant"
+                        :content ((:type "toolCall" :id "duplicate" :name "read")
+                                  (:type "toolCall" :id "duplicate" :name "read")))))))
+      (with-temp-buffer
+        (pichat-session-manager-mode)
+        (pichat-session-manager--render-preview session (list :entries entries))
+        (with-current-buffer pichat-session-manager-preview-buffer-name
+          (should (string-match-p "Runtime Preview" (buffer-string)))
+          (should (string-match-p "Transcript unavailable:" (buffer-string))))
+        (pichat-session-manager--render-preview session (list :entries nil))
+        (with-current-buffer pichat-session-manager-preview-buffer-name
+          (should (string-match-p "\\[empty session\\]" (buffer-string)))
+          (should-not pichat-transcript-view--start))
+        (pichat-session-manager--render-preview session nil "Unavailable source")
+        (with-current-buffer pichat-session-manager-preview-buffer-name
+          (should (string-match-p "preview unavailable" (buffer-string)))
+          (should (string-match-p "Unavailable source" (buffer-string)))
+          (should-not pichat-transcript-view--start))))))
+
 (ert-deftest pichat-session-manager-preview-quit-releases-owned-side-window ()
   (pichat-test-with-clean-state
     (save-window-excursion

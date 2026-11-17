@@ -20,6 +20,7 @@
 (require 'pichat-pi)
 (require 'pichat-sessions)
 (require 'pichat-view)
+(require 'pichat-transcript-view)
 (require 'pichat-chat-diagnostics)
 
 (declare-function pichat-start-session "pichat"
@@ -58,7 +59,9 @@ or Bufferlo dependency."
   :group 'pichat-session-manager)
 
 (defcustom pichat-session-manager-preview-max-entries 24
-  "Maximum active-branch entries shown in a runtime preview."
+  "Maximum canonical nodes shown in a runtime preview.
+Tool results stay with their calls, so this is not a raw entry count.
+The historical option name is retained for configuration compatibility."
   :type 'integer
   :group 'pichat-session-manager)
 
@@ -443,9 +446,9 @@ identifier; use `pichat-session-runtime-id' for identity."
   "Return a reusable settled chat snapshot for SESSION, or nil."
   (condition-case nil
       (when-let* ((cache (pichat-chat-canonical-entry-cache session)))
-        (pichat-sessions-preview-active-snapshot-from-entries
-         (pichat-pi-entry-cache-active-branch cache)
-         (pichat-entry-cache-leaf-id cache)))
+        (list :entries (copy-tree
+                        (pichat-pi-entry-cache-active-branch cache) t)
+              :selected-id (pichat-entry-cache-leaf-id cache)))
     (error nil)))
 
 (defun pichat-session-manager--cached-preview (session &optional rpc-only)
@@ -462,6 +465,34 @@ canonical chat cache while an RPC refresh is pending."
       (puthash token snapshot pichat-session-manager--preview-cache))
     snapshot))
 
+(defun pichat-session-manager--insert-transcript (entries)
+  "Insert the bounded canonical tail of linear ENTRIES at point.
+Count omitted source entries, including merged tool results, not nodes.
+Construction rejection is presented by the shared view, never a runtime notice."
+  (let* ((limit (max 1 pichat-session-manager-preview-max-entries))
+         (transcript
+          (condition-case nil
+              (pichat-pi-build-canonical-transcript-from-entries entries t)
+            ((pichat-pi-invalid-session pichat-transcript-invalid) nil))))
+    (if (null transcript)
+        (pichat-transcript-view-render-entries entries (point) (point) limit)
+      (let* ((nodes (pichat-transcript-nodes transcript))
+             (omitted (max 0 (- (length nodes) limit)))
+             (ids (make-hash-table :test #'equal)))
+        (cl-loop for node in nodes for index from 0 below omitted do
+                 (puthash (pichat-transcript-node-key node) t ids)
+                 (dolist (content (pichat-transcript-node-content node))
+                   (when-let* ((id (pichat-transcript-content-result-entry-id content)))
+                     (puthash id t ids))))
+        (when (> omitted 0)
+          (insert (propertize
+                   (format "[%d earlier entries omitted]\n\n"
+                           (cl-count-if (lambda (entry)
+                                          (gethash (plist-get entry :id) ids))
+                                        entries))
+                   'face 'shadow)))
+        (pichat-transcript-view-render transcript (point) (point) limit)))))
+
 (defun pichat-session-manager--render-preview (session snapshot &optional note)
   "Render SESSION and optional active-branch SNAPSHOT with NOTE."
   (let ((buffer (get-buffer-create
@@ -472,7 +503,8 @@ canonical chat cache while an RPC refresh is pending."
         (pichat-session-manager-preview-mode))
       (setq pichat-session-manager-preview--manager-buffer manager)
       (let ((inhibit-read-only t)
-            (path (plist-get snapshot :path)))
+            (entries (plist-get snapshot :entries)))
+        (pichat-transcript-view-clear)
         (erase-buffer)
         (insert (propertize "Runtime Preview" 'face 'bold) "\n")
         (insert (format "Session: %s\n"
@@ -561,17 +593,8 @@ canonical chat cache while an RPC refresh is pending."
           (insert (propertize (concat "\n" note "\n") 'face 'shadow)))
         (insert "\n" (propertize "Recent active branch" 'face 'bold) "\n\n")
         (cond
-         (path
-          (let* ((total (length path))
-                 (limit (max 1 pichat-session-manager-preview-max-entries))
-                 (omitted (max 0 (- total limit)))
-                 (visible (if (> total limit) (nthcdr omitted path) path)))
-            (when (> omitted 0)
-              (insert (propertize
-                       (format "[%d earlier entries omitted]\n\n" omitted)
-                       'face 'shadow)))
-            (pichat-sessions-insert-preview-path
-             visible (plist-get snapshot :selected-id))))
+         (entries
+          (pichat-session-manager--insert-transcript entries))
          (snapshot
           (insert (propertize "[empty session]" 'face 'shadow) "\n"))
          (t
@@ -615,8 +638,12 @@ canonical chat cache while an RPC refresh is pending."
            (when (and (eq response-session session) (current-p))
              (condition-case error-data
                  (let ((fresh
-                        (pichat-sessions-preview-active-snapshot
-                         (plist-get response :data))))
+                        (let ((snapshot (pichat-sessions-preview-active-snapshot
+                                         (plist-get response :data))))
+                          (list :entries (mapcar (lambda (node)
+                                                  (plist-get node :entry))
+                                                (plist-get snapshot :path))
+                                :selected-id (plist-get snapshot :selected-id)))))
                    (with-current-buffer manager
                      (puthash token fresh
                               pichat-session-manager--preview-cache)

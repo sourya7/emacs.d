@@ -698,7 +698,9 @@
              (pichat-current-session preferred)
              args displayed
              (context (pichat--make-launch-context
-                       (lambda (session) (push session displayed)))))
+                       (lambda (session)
+                         (should (eq origin pichat-current-session))
+                         (push session displayed)))))
         (puthash key preferred pichat--sessions-by-scope)
         (setq-local major-mode 'pichat-chat-mode
                     pichat-chat-session origin)
@@ -714,13 +716,14 @@
                           (("--target=local") . ,key)
                           (("--global") . "global|local")))
             (ert-info ((format "Launch arguments: %S" (car case)))
-              (setq args (car case) displayed nil)
+              (setq args (car case) displayed nil
+                    pichat-current-session preferred)
               (setf (pichat-session-owner-scope-key origin) (cdr case))
               (should (equal "Current chat" (pichat--launch-conversation-description)))
               (should (equal "Open current chat" (pichat--launch-action-description)))
               (should (eq origin (pichat-test-launch-ret args context)))
               (should (equal (list origin) displayed))
-              (should (eq preferred pichat-current-session))
+              (should (eq origin pichat-current-session))
               (should (eq preferred (gethash key pichat--sessions-by-scope))))))))))
 
 (ert-deftest pichat-launch-touched-draft-keeps-normal-profile-from-chat ()
@@ -770,8 +773,12 @@
              (scope '("project|local|/tmp/launcher-project/" "/tmp/launcher-project/" "project"))
              (origin (pichat-session-create :buffer (current-buffer)))
              (preferred (pichat-session-create :state 'idle))
+             (previous (pichat-session-create))
+             (pichat-current-session previous)
              (context (pichat--make-launch-context
-                       (lambda (session) (should (eq preferred session)))))
+                       (lambda (session)
+                         (should (eq preferred session))
+                         (should (eq preferred pichat-current-session)))))
              (synchronized nil)
              alive notice)
         (pichat-register-session origin scope)
@@ -793,7 +800,8 @@
                           (t idle starting "restart or recovery is pending")))
             (pcase-let ((`(,live ,state ,phase ,reason) case))
               (ert-info ((format "Origin status: %S" case))
-                (setq alive live notice nil synchronized nil)
+                (setq alive live notice nil synchronized nil
+                      pichat-current-session previous)
                 (setf (pichat-session-state origin) state
                       (pichat-session-restart-operation origin) (and phase (list :phase phase)))
                 (if (eq phase 'starting)
@@ -802,9 +810,11 @@
                                "A PiChat runtime is restarting in this scope"
                                (cadr (should-error (pichat-test-launch-ret nil context)
                                                    :type 'user-error))))
-                      (should-not synchronized))
+                      (should-not synchronized)
+                      (should (eq previous pichat-current-session)))
                   (should (eq preferred (pichat-test-launch-ret nil context)))
-                  (should (eq preferred synchronized)))
+                  (should (eq preferred synchronized))
+                  (should (eq preferred pichat-current-session)))
                 (should (equal (format "PiChat: current chat unavailable (%s); using preferred launch"
                                        reason)
                                notice))))))))))

@@ -1647,6 +1647,7 @@ nothing is launched, and other launch choices remain unsaved."
     (let ((current-chat (pichat--launch-current-chat profile context)))
       (if (pichat-session-p current-chat)
           (progn
+            (setq pichat-current-session current-chat)
             (funcall (plist-get profile :display-function) current-chat)
             current-chat)
         (when (stringp current-chat)

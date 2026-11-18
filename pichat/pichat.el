@@ -425,6 +425,16 @@ preferred runtime."
       ((pred pichat--exact-scope-p) scope)
       (_ (user-error "Invalid PiChat launch scope: %S" scope)))))
 
+(defun pichat--launch-destination (profile &optional directory)
+  "Return (SCOPE . TRANSPORT) for PROFILE launched from optional DIRECTORY.
+SCOPE is PROFILE's resolved owner scope; TRANSPORT is resolved from its
+working directory and PROFILE's explicit target, if any."
+  (let* ((target (plist-get profile :target))
+         (scope (pichat--resolve-launch-scope
+                 (plist-get profile :scope) directory target)))
+    (cons scope (pichat-transport-resolve
+                 (nth 1 scope) (unless (eq target 'inferred) target)))))
+
 (defun pichat--display-and-synchronize-session (session display-function)
   "Display and synchronize exact SESSION through DISPLAY-FUNCTION."
   (funcall display-function session)
@@ -481,10 +491,9 @@ Prevent a second writer for the same saved session file."
   (let* ((selection (plist-get (plist-get profile :conversation) :selection))
          (source (plist-get selection :source-session))
          (target (plist-get profile :target))
-         (scope (pichat--resolve-launch-scope
-                 (plist-get profile :scope) directory target))
-         (transport (pichat-transport-resolve
-                     (nth 1 scope) (unless (eq target 'inferred) target)))
+         (destination (pichat--launch-destination profile directory))
+         (scope (car destination))
+         (transport (cdr destination))
          (file (plist-get selection :file)))
     (unless (eq (plist-get profile :persistence) 'persistent)
       (user-error "A saved conversation cannot launch with ephemeral storage"))
@@ -570,11 +579,9 @@ no MCP tools, or a live preferred runtime in DIRECTORY's scope is reused."
 Discovery runs in the destination target and directory, as the Tools picker
 would.  Missing, hidden, non-direct or disconnected tools cancel the launch
 with a message; no tool outside the baseline is enabled."
-  (let* ((target (plist-get profile :target))
-         (scope (pichat--resolve-launch-scope (plist-get profile :scope)
-                                              directory target))
-         (transport (pichat-transport-resolve
-                     (nth 1 scope) (unless (eq target 'inferred) target)))
+  (let* ((destination (pichat--launch-destination profile directory))
+         (scope (car destination))
+         (transport (cdr destination))
          (context (pichat-transport-path-context transport pichat-path-mappings))
          (runtime-cwd (or (plist-get (pichat-path-resolve-to-runtime
                                       (nth 1 scope) context)
@@ -1339,13 +1346,12 @@ model and conversation are shown by their own menu entries."
   (let* ((context (transient-scope))
          (profile (pichat--launch-profile-from-arguments
                    (transient-get-value) context))
-         (selection (plist-get (plist-get profile :conversation) :selection)))
+         (selection (plist-get (plist-get profile :conversation) :selection))
+         (destination (when selection
+                        (pichat--launch-destination
+                         profile (plist-get context :directory)))))
     (list :context context :profile profile :selection selection
-          :owner (when selection
-                   (pichat--resolve-launch-scope
-                    (plist-get profile :scope)
-                    (plist-get context :directory)
-                    (plist-get profile :target))))))
+          :owner (car destination) :transport (cdr destination))))
 
 (defun pichat--launch-action-description ()
   "Return the normalized action description for the active launch Transient."
@@ -1358,10 +1364,7 @@ model and conversation are shown by their own menu entries."
       "Blocked · ephemeral can't load saved")
      ((and selected
            (not (equal (plist-get selected :transport)
-                       (pichat-transport-resolve
-                        (plist-get context :directory)
-                        (unless (eq (plist-get profile :target) 'inferred)
-                          (plist-get profile :target))))))
+                       (plist-get view :transport))))
       "Blocked · session on another target")
      ((pichat-session-p (pichat--launch-current-chat profile context))
       "Open current chat")
@@ -1406,12 +1409,8 @@ model and conversation are shown by their own menu entries."
     (if (plist-get context :conversation)
         (pichat--launch-stage context args :conversation nil)
       (let* ((profile (pichat--launch-profile-from-arguments args context))
-             (directory (plist-get context :directory))
-             (target (plist-get profile :target))
-             (scope (pichat--resolve-launch-scope
-                     (plist-get profile :scope) directory target))
-             (transport (pichat-transport-resolve
-                         (nth 1 scope) (unless (eq target 'inferred) target)))
+             (transport (cdr (pichat--launch-destination
+                              profile (plist-get context :directory))))
              (buffer (plist-get context :origin-buffer))
              (session (and (buffer-live-p buffer)
                            (buffer-local-value 'pichat-chat-session buffer)))
@@ -1447,10 +1446,9 @@ model and conversation are shown by their own menu entries."
                 (if (eq preset 'default) pichat-default-preset preset)))
          (directory (plist-get context :directory))
          (target (plist-get profile :target))
-         (scope (pichat--resolve-launch-scope
-                 (plist-get profile :scope) directory target))
-         (transport (pichat-transport-resolve
-                     (nth 1 scope) (unless (eq target 'inferred) target))))
+         (destination (pichat--launch-destination profile directory))
+         (scope (car destination))
+         (transport (cdr destination)))
     (when (and pichat-rpc-command (eq (pichat-transport-kind transport) 'local))
       (user-error "Tools cannot customize a complete Pi command wrapper"))
     (setq context (plist-put context :tool-discovery
@@ -1509,12 +1507,10 @@ callbacks stale, so they cannot reopen or change a launch draft.")
 ARGS are the launcher arguments to restore.  Cancelling the prompt returns
 to the unchanged launcher; a superseded listing is ignored."
   (let* ((token (make-symbol "pichat-launch-model"))
-         (directory (plist-get context :directory))
-         (target (plist-get profile :target))
-         (scope (pichat--resolve-launch-scope (plist-get profile :scope)
-                                              directory target))
-         (transport (pichat-transport-resolve
-                     (nth 1 scope) (unless (eq target 'inferred) target))))
+         (destination (pichat--launch-destination
+                       profile (plist-get context :directory)))
+         (scope (car destination))
+         (transport (cdr destination)))
     (when (and pichat-rpc-command (eq (pichat-transport-kind transport) 'local))
       (user-error
        "Run-local PiChat models are not supported with a local `pichat-rpc-command'"))

@@ -588,6 +588,23 @@
     (should (equal "Launch independent (review)"
                    (pichat--launch-action-description)))))
 
+(ert-deftest pichat-launch-selected-conversation-without-directory-uses-owner-target ()
+  "A launcher opened without a directory, as from the manager, still
+checks a saved session's target against its resolved owner scope."
+  (let* ((default-directory temporary-file-directory)
+         (transport (pichat-transport-resolve default-directory))
+         (scope nil))
+    (cl-letf (((symbol-function 'transient-scope) (lambda (&rest _) scope))
+              ((symbol-function 'transient-get-value) (lambda (&rest _) nil)))
+      (dolist (case (list (cons transport "Launch independent")
+                          (cons 'other "Blocked · session on another target")))
+        (setq scope (list :directory nil
+                          :conversation
+                          (list :kind 'saved
+                                :selection (list :transport (car case)))))
+        (should (string-prefix-p (cdr case)
+                                 (pichat--launch-action-description)))))))
+
 (ert-deftest pichat-launch-selected-conversation-details-are-full-width ()
   (let* ((selection (list :title "what tools are available here"
                           :session-id "01a16663abcdef"
@@ -602,7 +619,7 @@
               ((symbol-function 'transient-get-value)
                (lambda (&rest _) nil))
               ((symbol-function 'pichat--resolve-launch-scope)
-               (lambda (&rest _) (list nil nil "global"))))
+               (lambda (&rest _) (list "global|local" "/home/mojo/" "global"))))
       (should (equal "Selected saved conversation"
                      (pichat--launch-conversation-description)))
       (should (equal (concat "Selected: what tools are available here\n"

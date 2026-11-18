@@ -5,6 +5,7 @@
 
 (defvar elpaca-use-package)
 (defvar elpaca-lock-file)
+(defvar elpaca-lock-file-functions)
 (defvar use-package-compute-statistics)
 (defvar use-package-always-ensure)
 
@@ -19,6 +20,7 @@
 (declare-function elpaca-wait "elpaca.el")
 (declare-function elpaca-write-lock-file "elpaca.el")
 (declare-function elpaca "elpaca.el")
+(declare-function elpaca<-recipe "elpaca.el")
 
 (defvar elpaca-installer-version 0.12)
 (defvar elpaca-directory (my/emacs-local-dir "elpaca/"))
@@ -61,11 +63,20 @@
       (or (getenv "EMACS_ELPACA_LOCK_FILE")
           (my/emacs-main-dir "elpaca-lock.eld")))
 
+(defun my/elpaca-lock-portable-p (e)
+  "Return non-nil unless E is a local `:type file' package.
+Local packages, such as in-repo ones, have no revision to pin, and their
+absolute :main path would make the lock file host-specific."
+  (not (eq (plist-get (elpaca<-recipe e) :type) 'file)))
+
 (defun my/elpaca-write-lock-file ()
-  "Write the active package profile to `elpaca-lock-file'."
+  "Write the active package profile to `elpaca-lock-file'.
+Local `:type file' packages are omitted; see `my/elpaca-lock-portable-p'."
   (interactive)
   (elpaca-wait)
-  (elpaca-write-lock-file elpaca-lock-file))
+  (let ((elpaca-lock-file-functions
+         (append elpaca-lock-file-functions (list #'my/elpaca-lock-portable-p))))
+    (elpaca-write-lock-file elpaca-lock-file)))
 
 (add-hook 'after-init-hook #'elpaca-process-queues)
 (elpaca `(,@elpaca-order))

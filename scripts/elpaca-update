@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/elpaca-update [--lock-file PATH] [--allow-running-emacs]
+
+Update all Elpaca packages and rewrite the lock file:
+
+  1. Reattach detached source repositories (scripts/elpaca-unlock-sources).
+  2. Load this configuration in batch Emacs with a temporary copy of the lock
+     file that has every :ref pin removed, and run `elpaca-update-all'.  The
+     locked recipes are kept so packages resolve to the same repositories.
+  3. Rebuild every package, so build directories gain files added upstream
+     and no bytecode is older than its source.
+  4. Check the builds: fail on missing build files or stale bytecode; warn
+     about repositories still behind their fetched upstream.
+  5. Write the updated revisions to the lock file (scripts/elpaca-lock-write)
+     and verify every locked :ref matches its source checkout.
+
+Restart Emacs afterwards to load the updated packages.  The previous lock file
+remains recoverable from version control.
+
+Options:
+  --lock-file PATH       Lock file to rewrite (default: PROJECT/elpaca-lock.eld)
+  --allow-running-emacs  Do not refuse when an Emacs server is reachable
+  -h, --help             Show this help
+
+Environment:
+  EMACS  Emacs executable (default: emacs)
+EOF
+}
+
+die() { echo "elpaca-update: $*" >&2; exit 1; }
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+project_root=$(cd -- "$script_dir/.." && pwd -P)
+emacs_bin=${EMACS:-emacs}
+lock_file="$project_root/elpaca-lock.eld"
+allow_running=false
+
+while (($#)); do
+  case $1 in
+    --lock-file) [[ $# -ge 2 ]] || die "--lock-file requires a path"; lock_file=$2; shift 2 ;;
+    --allow-running-emacs) allow_running=true; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+command -v "$emacs_bin" >/dev/null || die "Emacs executable not found: $emacs_bin"
+command -v git >/dev/null || die "git not found"
+if [[ $lock_file != /* ]]; then lock_file="$PWD/$lock_file"; fi
+sources_dir="$project_root/.local/elpaca/sources"
+[[ -d $sources_dir ]] || die "Elpaca sources directory not found: $sources_dir"
+
+# A running Emacs shares .local/elpaca and would keep the old packages loaded.
+if ! $allow_running && command -v emacsclient >/dev/null &&
+   emacsclient -a false --eval t >/dev/null 2>&1; then
+  die "an Emacs server is running; quit it first (or pass --allow-running-emacs)"
+fi
+
+mapfile -t git_locks < <(find "$sources_dir" -path '*/.git/*' -type f -name '*.lock' -print)
+if ((${#git_locks[@]})); then
+  printf 'elpaca-update: active Git lock files found:\n' >&2
+  printf '  %s\n' "${git_locks[@]}" >&2
+  exit 1
+fi
+
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/elpaca-update.XXXXXX")
+cleanup() { rm -rf -- "$work_dir"; }
+trap cleanup EXIT
+
+echo "==> Reattaching Elpaca source repositories"
+"$script_dir/elpaca-unlock-sources" --source-dir "$sources_dir"
+
+unpinned_lock="$work_dir/elpaca-lock-unpinned.eld"
+if [[ -e $lock_file ]]; then
+  ELPACA_UPDATE_LOCK_IN="$lock_file" ELPACA_UPDATE_LOCK_OUT="$unpinned_lock" \
+  "$emacs_bin" --batch -Q --eval '
+(let ((entries (with-temp-buffer
+                 (insert-file-contents (getenv "ELPACA_UPDATE_LOCK_IN"))
+                 (read (current-buffer)))))
+  (dolist (entry entries)
+    (let ((recipe (plist-get (cdr entry) :recipe)))
+      (while (plist-member recipe :ref)
+        (setq recipe (let ((tail recipe) out)
+                       (while tail
+                         (unless (eq (car tail) :ref)
+                           (setq out (nconc out (list (car tail) (cadr tail)))))
+                         (setq tail (cddr tail)))
+                       out)))
+      (setcdr entry (plist-put (cdr entry) :recipe recipe))))
+  (with-temp-file (getenv "ELPACA_UPDATE_LOCK_OUT")
+    (let ((print-length nil) (print-level nil)) (prin1 entries (current-buffer)))))' ||
+    die "could not create the unpinned lock file"
+fi
+
+cat > "$work_dir/update.el" <<'ELISP'
+;;; -*- lexical-binding: t; -*-
+(require 'cl-lib)
+(elpaca-wait)
+(let ((pinned (cl-loop for (_ . e) in (elpaca--queued)
+                       when (elpaca--pinned-p e) collect (elpaca--pinned-p e))))
+  (when pinned
+    (message "Note: these packages are pinned by their recipes and will be skipped:")
+    (dolist (pin pinned) (message "  %S" pin))))
+
+(defun elpaca-update--check-failures (phase)
+  "Exit with an error report if any package failed during PHASE."
+  (let ((failed (cl-loop for (id . e) in (elpaca--queued)
+                         when (eq (elpaca<-status e) 'failed) collect id)))
+    (if (null failed)
+        (message "%s: all %d packages finished." phase (length (elpaca--queued)))
+      (message "%s: failed packages: %S" phase failed)
+      (dolist (id failed)
+        (dolist (event (reverse (elpaca-event-log id)))
+          (message "  %s: %S" id (elpaca-event<-payload event))))
+      (kill-emacs 1))))
+
+(elpaca-update-all)
+(elpaca-wait)
+(elpaca-update--check-failures "Update")
+
+;; An update can add files (e.g. a new required library) that an existing
+;; build directory lacks, and leaves older bytecode in place.  Rebuild all.
+(message "Rebuilding all packages...")
+(dolist (entry (elpaca--queued))
+  (elpaca-rebuild (car entry)))
+(elpaca-wait)
+(elpaca-update--check-failures "Rebuild")
+
+(let (problems behind)
+  (dolist (entry (elpaca--queued))
+    (let* ((id (car entry)) (e (cdr entry)) missing stale)
+      (dolist (pair (elpaca--files e))
+        (when (string-suffix-p ".el" (car pair))
+          (let ((elc (concat (cdr pair) "c")))
+            (cond
+             ((not (file-exists-p (cdr pair)))
+              (push (file-name-nondirectory (cdr pair)) missing))
+             ((and (file-exists-p elc) (file-newer-than-file-p (car pair) elc))
+              (push (file-name-nondirectory (cdr pair)) stale))))))
+      (when (or missing stale)
+        (push (list id :missing (nreverse missing) :stale-bytecode (nreverse stale))
+              problems))
+      (when-let* ((dir (elpaca<-source-dir e))
+                  ((file-directory-p (expand-file-name ".git" dir)))
+                  (default-directory dir)
+                  (count (with-temp-buffer
+                           (when (zerop (call-process "git" nil t nil "rev-list"
+                                                      "--count" "HEAD..@{u}"))
+                             (string-to-number (buffer-string)))))
+                  ((> count 0)))
+        (push (list id count) behind))))
+  (when behind
+    (message "Warning: still behind fetched upstream (commits): %S"
+             (delete-dups (nreverse behind))))
+  (if (null problems)
+      (message "Build check: no missing files or stale bytecode.")
+    (message "Build check failed:")
+    (dolist (problem (nreverse problems)) (message "  %S" problem))
+    (kill-emacs 1)))
+ELISP
+
+echo "==> Updating and rebuilding packages without lock-file pins"
+# Resetting after-init-time matches scripts/elpaca-lock-write: init.el
+# declarations count as the init profile.
+EMACS_ELPACA_LOCK_FILE="$unpinned_lock" \
+ELPACA_UPDATE_PROJECT_ROOT="$project_root" \
+"$emacs_bin" --batch \
+  --eval '(setq user-emacs-directory (file-name-as-directory (getenv "ELPACA_UPDATE_PROJECT_ROOT")) after-init-time nil)' \
+  -l "$project_root/early-init.el" \
+  -l "$project_root/init.el" \
+  -l "$work_dir/update.el" ||
+  die "package update failed; the lock file was not rewritten"
+
+echo "==> Writing lock file"
+"$script_dir/elpaca-lock-write" --lock-file "$lock_file"
+
+echo "==> Verifying lock file against source checkouts"
+HOME="$work_dir" \
+ELPACA_CACHE_PROJECT_ROOT="$project_root" \
+ELPACA_CACHE_LOCK_FILE="$lock_file" \
+"$emacs_bin" --batch -Q -l "$script_dir/elpaca-cache-lock-records.el" > "$work_dir/lock-records.tsv" ||
+  die "could not read lock records from $lock_file"
+mismatches=0
+while IFS=$'\t' read -r _ id type relative_source ref; do
+  [[ $type == git ]] || continue
+  head=$(git -C "$project_root/$relative_source" rev-parse HEAD 2>/dev/null || true)
+  if [[ $head != "$ref" ]]; then
+    echo "ERROR: $id is locked at $ref but $relative_source is at ${head:-nothing}" >&2
+    ((mismatches += 1))
+  fi
+done < "$work_dir/lock-records.tsv"
+((mismatches == 0)) || die "$mismatches lock entries do not match their source checkouts"
+
+echo "==> Done. Restart Emacs, check the configuration, then commit $(basename -- "$lock_file")."

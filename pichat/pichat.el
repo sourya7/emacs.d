@@ -476,7 +476,8 @@ preferred runtime."
     (remhash key pichat--source-reservations)))
 
 (defun pichat--open-selected-conversation-profile (profile directory)
-  "Launch PROFILE's saved conversation with exact ownership and no duplicate writer."
+  "Launch PROFILE's saved session, resolving its owner scope from DIRECTORY.
+Prevent a second writer for the same saved session file."
   (let* ((selection (plist-get (plist-get profile :conversation) :selection))
          (source (plist-get selection :source-session))
          (target (plist-get profile :target))

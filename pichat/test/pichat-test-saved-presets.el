@@ -144,14 +144,14 @@ The saved preset collection, its Custom properties and FILE are restored."
     (setq pichat-saved-presets
           '((review :description "Saved review" :tools ("read"))
             (web :tools ("read") :mcp (("ketch" . "search")))))
-    (should (equal '(manual coding review standard web) (pichat-presets-names)))
+    (should (equal '(manual coding review conversation standard web) (pichat-presets-names)))
     (should (equal "Saved review" (plist-get (pichat-get-preset 'review) :description)))
     ;; A later programmatic redefinition does not override the saved one.
     (pichat-make-preset 'review :description "Programmatic" :tools '("read" "ls"))
     (should (equal '("read") (plist-get (pichat-presets-resolve 'review) :tools)))
     (should (pichat-presets-saved-p 'web))
     (should-not (pichat-presets-saved-p 'manual))
-    (should (equal '("default" "manual" "coding" "review" "standard" "web")
+    (should (equal '("default" "manual" "coding" "review" "conversation" "standard" "web")
                    (pichat--launch-preset-choices)))))
 
 (ert-deftest pichat-saved-presets-names-are-validated ()
@@ -290,7 +290,7 @@ The saved preset collection, its Custom properties and FILE are restored."
             (goto-char (point-max))
             (backward-sexp)
             (pcase-let ((`(,names ,web ,fast) (read (current-buffer))))
-              (should (equal '(manual coding review standard web fast) names))
+              (should (equal '(manual coding review conversation standard web fast) names))
               (should (equal '(("ketch" . "search")) (plist-get web :mcp)))
               (should (equal "provider/model" (plist-get web :model)))
               (should (eq 'default fast)))))))))

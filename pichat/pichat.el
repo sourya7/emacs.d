@@ -388,7 +388,6 @@ preferred runtime."
     (unless (functionp display-function)
       (user-error "Invalid PiChat display function: %S" display-function))
     (unless (or (null conversation)
-                (eq (plist-get conversation :kind) 'new)
                 (and (eq (plist-get conversation :kind) 'saved)
                      (listp (plist-get conversation :selection))))
       (user-error "Invalid PiChat launch conversation selection"))
@@ -1284,7 +1283,8 @@ Return a name without changing state."
          (model (cond (prompt-p 'prompt)
                       ((plist-get context :model))))
          (independent-p (or (member "--new" arguments)
-                            conversation ephemeral-p prompt-p tools
+                            (eq (plist-get conversation :kind) 'saved)
+                            ephemeral-p prompt-p tools
                             (memq model '(prompt)) (stringp model)
                             (not (eq preset 'default)))))
     (pichat--normalize-launch-profile
@@ -1344,10 +1344,9 @@ model and conversation are shown by their own menu entries."
 
 (defun pichat--launch-conversation-description ()
   "Return a short conversation choice suitable for a Transient column."
-  (pcase (plist-get (plist-get (transient-scope) :conversation) :kind)
-    ('new "New conversation")
-    ('saved "Selected saved conversation")
-    (_ "Default conversation")))
+  (if (plist-get (transient-scope) :conversation)
+      "Selected saved conversation"
+    "Default conversation"))
 
 (defun pichat--launch-action-heading ()
   "Show selected saved-session provenance on its own lines above the action."
@@ -1369,63 +1368,32 @@ model and conversation are shown by their own menu entries."
                  (or (plist-get selection :cwd) "unknown") 30))))))
 
 (transient-define-suffix pichat-launch-conversation ()
-  "Choose a conversation intent without mutating any running runtime."
+  "Stage a saved session, or clear the staged selection on a second press."
   (interactive)
-  (let* ((context (transient-scope))
-         (args (transient-args 'pichat-launch))
-         (choice (completing-read
-                  "Conversation: "
-                  '("Default" "New conversation" "Current conversation…"
-                    "Choose saved session…") nil t)))
-    (pcase choice
-      ("Default"
-       (plist-put context :conversation nil)
-       (plist-put context :launch-args args)
-       (transient-setup 'pichat-launch nil nil :scope context))
-      ("New conversation"
-       (plist-put context :conversation '(:kind new))
-       (plist-put context :launch-args args)
-       (transient-setup 'pichat-launch nil nil :scope context))
-      ("Current conversation…"
-       (let* ((buffer (plist-get context :origin-buffer))
-              (session (and (buffer-live-p buffer)
-                            (buffer-local-value 'pichat-chat-session buffer))))
-         (unless (and (pichat-session-p session)
-                      (eq buffer (pichat-session-buffer session)))
-           (user-error "Current conversation requires the originating chat"))
-         (pcase (car (read-multiple-choice
-                      "Current conversation (ignore launch choices): "
-                      '((?o "Open existing chat")
-                        (?r "Reconfigure this runtime")
-                        (?c "Cancel"))))
-           (?o (funcall (plist-get context :display-function) session))
-           (?r (pichat-launch-reconfigure))
-           (_ (transient-setup 'pichat-launch nil nil
-                               :scope (plist-put context :launch-args args))))))
-      ("Choose saved session…"
-       (let* ((profile (pichat--launch-profile-from-arguments args context))
-              (directory (plist-get context :directory))
-              (target (plist-get profile :target))
-              (scope (pichat--resolve-launch-scope
-                      (plist-get profile :scope) directory target))
-              (transport (pichat-transport-resolve
-                          (nth 1 scope) (unless (eq target 'inferred) target)))
-              (buffer (plist-get context :origin-buffer))
-              (session (and (buffer-live-p buffer)
-                            (buffer-local-value 'pichat-chat-session buffer)))
-              (source (and session
-                           (equal transport (pichat-session-transport session))
-                           session)))
-         (when (and (eq (pichat-transport-kind transport) 'ssh)
-                    (null source))
-           (user-error "Select SSH saved sessions from a chat on the same target"))
-         (pichat-sessions-select-file
-          (lambda (selection)
-            (plist-put context :conversation
-                       (list :kind 'saved :selection selection))
-            (plist-put context :launch-args args)
-            (transient-setup 'pichat-launch nil nil :scope context))
-          :session source))))))
+  (let ((context (transient-scope))
+        (args (transient-args 'pichat-launch)))
+    (if (plist-get context :conversation)
+        (pichat--launch-stage context args :conversation nil)
+      (let* ((profile (pichat--launch-profile-from-arguments args context))
+             (directory (plist-get context :directory))
+             (target (plist-get profile :target))
+             (scope (pichat--resolve-launch-scope
+                     (plist-get profile :scope) directory target))
+             (transport (pichat-transport-resolve
+                         (nth 1 scope) (unless (eq target 'inferred) target)))
+             (buffer (plist-get context :origin-buffer))
+             (session (and (buffer-live-p buffer)
+                           (buffer-local-value 'pichat-chat-session buffer)))
+             (source (and (pichat-session-p session)
+                          (equal transport (pichat-session-transport session))
+                          session)))
+        (when (and (eq (pichat-transport-kind transport) 'ssh) (null source))
+          (user-error "SSH saved-session selection requires a chat on the same target"))
+        (pichat-sessions-select-file
+         (lambda (selection)
+           (pichat--launch-stage context args :conversation
+                                 (list :kind 'saved :selection selection)))
+         :session source)))))
 
 (defun pichat--launch-transient-init-value (object)
   "Initialize Transient prefix OBJECT with safe launch switches."

@@ -71,11 +71,11 @@
        'pichat-launch
        (append (list :launch-args '("--global" "--new" "--ephemeral" "--target=devbox"
                                     "--preset=coding")
-                     :model "anthropic/claude-sonnet-4-5" :conversation '(:kind new)
+                     :model "anthropic/claude-sonnet-4-5"
                      :tool-selection '(:builtins ("read")))
                base)
        "RET Launch independent (coding)" "--target=devbox" "--ephemeral"
-       "Model anthropic/claude-sonnet-4-5" "New conversation")
+       "Model anthropic/claude-sonnet-4-5" "Default conversation")
       (cl-letf (((symbol-function 'pichat--resolve-launch-scope)
                  (lambda (&rest _)
                    (list "project|local|/home/user/src/project/"

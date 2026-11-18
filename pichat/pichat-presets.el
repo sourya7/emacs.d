@@ -404,6 +404,9 @@ file written.  Callers confirm replacing an existing name."
   :description "Review code with read-only built-in tools."
   :tools '("read" "grep" "find" "ls")
   :append-system-prompt "Review for correctness, regressions and missing tests. Report actionable findings with locations.")
+(pichat-make-preset 'conversation
+  :description ""
+  :tools '())
 (pichat-make-preset 'standard
   :description "Use Pi's normal prompt and default built-in tools."
   :tools :default)

@@ -609,54 +609,70 @@ The public launch commands are deliberately small:
 - `M-x pichat-launch` opens a Transient for advanced launch profiles.
 - `C-u M-x pichat` opens that same Transient.
 
-The Transient starts with no switches, which selects the same runtime profile
-as ordinary `pichat`. It does not restore saved switch values, preventing an old
-ephemeral choice from being repeated accidentally. Direct Transient launches
-use `pichat-launch-display-chat-function` to display the chat (current tab by
-default); manager-initiated launches retain the manager's display policy. This
-repository configures direct launches to use the same optional Bufferlo-aware
-project-tab policy as the manager. Ordinary `pichat` retains its current-tab
-display behavior.
+The Transient starts with no switches. It does not restore saved switch values,
+preventing an old ephemeral choice from being repeated accidentally. Direct
+Transient launches use `pichat-launch-display-chat-function` to display the
+chat (current tab by default); manager-initiated launches retain the manager's
+display policy. This repository configures direct launches to use the same
+optional Bufferlo-aware project-tab policy as the manager. Ordinary `pichat`
+retains its current-tab display behavior.
 
 | Key | Choice | Effect |
 |---|---|---|
 | `g` | Global | Use global instead of current-project scope |
-| `n` | Independent runtime | Start an additional runtime instead of reusing the preferred one |
+| `n` | Independent runtime | Start an additional runtime instead of reusing one |
 | `t` | Target | Use inferred, local, or a configured runtime target |
 | `e` | Ephemeral | Start Pi with `--no-session`; implies independent |
 | `m` | Model | List models and stage a listed or entered ID for this launch (implies independent); with a model staged, `m` clears it back to the preset's model or Pi's default |
 | `p` | Preset | Choose a named tool/prompt preset; explicit selection implies independent and restores its model |
 | `x` | Tools | Choose that preset's built-ins, extension tools and direct MCP tools for a new independent runtime |
-| `s` | Conversation | Default, new independent conversation, existing chat route, or select a saved session |
+| `s` | Conversation | Pick a saved session, or clear the staged selection |
 | `r` | Reconfigure this runtime | From its owning chat, enter a separate captured-runtime menu; never implied by launching |
 | `c` | Save preset as… | Save the selected preset, Tools and model under a name; see [Saving presets from the launcher](#saving-presets-from-the-launcher) |
-| `RET` | Open / launch | Execute the normalized profile; the action label names the runtime it uses (preferred or independent) and the preset |
+| `RET` | Open / launch | Open the current chat or launch with the displayed reuse policy and preset |
+
+With no switches set, `RET` returns to the originating chat if it owns a live
+runtime and the resolved scope and target match that runtime's owner scope.
+This works for independent as well as preferred runtimes: PiChat simply displays
+the chat without starting or changing a runtime. The `s` label shows **Current chat**
+and the `RET` action shows **Open current chat**. A scope or target choice that
+still matches can keep this default: for example, `g` can return to a global
+chat opened in a project directory. If the matching runtime is stopped, in
+error, or has a restart or recovery pending, PiChat reports why it cannot
+return and falls back to the normal preferred launch. That path still refuses
+to launch while a runtime in the selected scope is actively restarting.
+
+From other buffers, including the runtime manager, or when the owner scope
+does not match, the default reuses the preferred runtime for the selected scope
+and target, or starts one if needed. The preset picker starts at
+`default (manual)`; ordinary reuse does not require the preferred runtime to
+have been created with that preset.
 
 The switches compose. For example, `g e`, then `m` and a model, creates an
-independent global, ephemeral runtime with that model. `n` alone creates an independent
-persistent/default-model runtime in the current scope. `g` alone opens the
-preferred global runtime. With no switches, PiChat opens the preferred current
-runtime. The picker starts at `default (manual)`; this policy reuses the
-preferred runtime if one exists, even when that runtime was created with a
-different preset. Choosing a named preset (including `manual`) starts an
-**independent** runtime without stopping or changing the preferred runtime.
+independent global, ephemeral runtime with that model. `n` alone starts an
+independent persistent runtime with a fresh Pi session in the current scope.
+`n`, `e`, a named preset, a Tools customization, a model override, and a staged
+saved session all bypass the current-chat default. Choosing a named preset
+(including `manual`) starts an **independent** runtime without stopping or
+changing the preferred runtime.
 Choose `default` again to restore normal reuse, unless another switch requires
 an independent runtime. The manager's Preset column and the chat's `P:name`
 mode-line label identify the captured startup choice. Presets belong to Emacs
 runtimes, not saved Pi transcripts. Changing a retained runtime's preset or
 Tools requires an explicit guarded restart, not a change to its live process.
 
-`s` retains its choice only while this launcher is open. **Default** preserves
-ordinary reuse; **New conversation** launches a fresh independent runtime and
-Pi session without switching an existing runtime. **Current conversation…**
-only routes to opening the captured chat or entering its reconfiguration menu;
-it never applies pending launch choices. **Choose saved session…** selects a
-transport-qualified file without loading it. Consult search, related-session
-navigation, preview, and Embark in this selection-only context cannot open,
-switch, or jump to a runtime; the built-in file picker is the fallback. `RET`
-starts the selected preset/Tools in a new independent runtime, then loads the
-saved Pi session and waits for authoritative transcript synchronization. The
-menu keeps the choice short and shows the saved title, ID, cwd and resolved
+`s` opens the saved-session picker directly. It stages a transport-qualified
+saved session file without loading it. Press `s` again to clear the selection
+and restore the default conversation choice without changing other launch
+settings. Canceling the picker leaves the draft unchanged. For an SSH target,
+the picker requires opening the launcher from a chat on that same target;
+otherwise `s` explains why it cannot open the picker. Consult search,
+related-session navigation, preview, and Embark in this selection-only context
+cannot open, switch, or jump to a runtime; the built-in file picker is the
+fallback. With a saved session staged, `RET` starts a new independent runtime
+with the selected preset and Tools, then loads the saved Pi session and waits
+for authoritative transcript synchronization. The menu keeps the choice short
+and shows the saved title, ID, cwd and resolved
 owner scope on their own lines above the action; loading it does not move
 the process's working directory to that cwd.
 Selected saved sessions require persistent storage and the same target as the
@@ -666,8 +682,8 @@ second writer; for a file already hosted elsewhere the choice is `Open in runtim
 N:` with Open/Cancel (reconfiguration remains in that chat's launcher).
 Concurrent PiChat launches reserve the file until synchronization
 succeeds or fails. This Emacs-local managed-runtime check cannot detect external
-Pi processes. Canceling the picker leaves the prior selection untouched. The ordinary saved-session browser still
-uses its own independent-open ownership and actions.
+Pi processes. The ordinary saved-session browser still uses its own
+independent-open ownership and actions.
 
 From an owning chat, `r` opens **Reconfigure this runtime**. The menu captures
 that exact runtime, its current conversation, and its resolved preset/Tools

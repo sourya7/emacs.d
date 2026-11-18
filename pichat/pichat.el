@@ -1300,6 +1300,28 @@ Return a name without changing state."
            :display-function (or (plist-get context :display-function)
                                  #'pichat-chat-open)))))
 
+(defun pichat--launch-current-chat (profile context)
+  "Return the owning runtime when PROFILE can open CONTEXT's origin chat.
+Return a fallback reason string if that runtime is unusable, or nil if
+current-chat routing does not apply.  The owner scope includes the target."
+  (when-let* (((eq (plist-get profile :reuse) 'preferred))
+              (buffer (plist-get context :origin-buffer))
+              ((buffer-live-p buffer))
+              (session (buffer-local-value 'pichat-chat-session buffer))
+              ((pichat-session-p session))
+              ((eq buffer (pichat-chat-owned-buffer session)))
+              (owner (pichat-session-owner-scope-key session))
+              (scope (pichat--resolve-launch-scope
+                      (plist-get profile :scope) (plist-get context :directory)
+                      (plist-get profile :target)))
+              ((equal owner (car scope))))
+    (cond
+     ((pichat-session-restart-operation session)
+      "restart or recovery is pending")
+     ((eq (pichat-session-state session) 'error) "runtime is in error")
+     ((not (pichat-session-alive-p session)) "runtime is not live")
+     (t session))))
+
 (defun pichat--launch-profile-description (profile)
   "Summarize what launching normalized PROFILE does.
 Name the runtime it uses and its preset; scope, target, persistence,
@@ -1340,13 +1362,21 @@ model and conversation are shown by their own menu entries."
                         (unless (eq (plist-get profile :target) 'inferred)
                           (plist-get profile :target))))))
       "Blocked · session on another target")
+     ((pichat-session-p (pichat--launch-current-chat profile context))
+      "Open current chat")
      (t (pichat--launch-profile-description profile)))))
 
 (defun pichat--launch-conversation-description ()
   "Return a short conversation choice suitable for a Transient column."
-  (if (plist-get (transient-scope) :conversation)
-      "Selected saved conversation"
-    "Default conversation"))
+  (let ((context (transient-scope)))
+    (cond
+     ((plist-get context :conversation) "Selected saved conversation")
+     ((pichat-session-p
+       (pichat--launch-current-chat
+        (pichat--launch-profile-from-arguments (transient-get-value) context)
+        context))
+      "Current chat")
+     (t "Default conversation"))))
 
 (defun pichat--launch-action-heading ()
   "Show selected saved-session provenance on its own lines above the action."
@@ -1613,7 +1643,15 @@ nothing is launched, and other launch choices remain unsaved."
                  (pichat--scope-for-directory
                   (nth 1 selected-scope) nil
                   (plist-get profile :target)))))))
-    (pichat--open-launch-profile profile (plist-get context :directory))))
+    (let ((current-chat (pichat--launch-current-chat profile context)))
+      (if (pichat-session-p current-chat)
+          (progn
+            (funcall (plist-get profile :display-function) current-chat)
+            current-chat)
+        (when (stringp current-chat)
+          (message "PiChat: current chat unavailable (%s); using preferred launch"
+                   current-chat))
+        (pichat--open-launch-profile profile (plist-get context :directory))))))
 
 (defun pichat--reconfigure-menu-description ()
   "Describe the captured runtime and conversation in the reconfigure menu."

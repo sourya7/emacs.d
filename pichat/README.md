@@ -1039,6 +1039,7 @@ stops any runtime.
 
 Manager keys:
 
+- `a` (Evil Normal: `g a`) — open the Actions menu;
 - `RET` — open the exact selected runtime's chat;
 - `C-o` — toggle a bounded active-branch preview which follows the selected row;
 - `n` — start an independent runtime in a recent known project, with an
@@ -1059,6 +1060,24 @@ Manager keys:
 - `g` — redraw rows from cached state, without broadcasting RPC requests;
 - `q` — bury the manager;
 - `?` — describe the mode.
+
+Actions uses the runtime selected when the menu opens, even if point moves
+later. The menu uses the same keys in native and Evil setups:
+
+- **Runtime**: `o` opens the chat, `e` names the Pi session, and `m` makes the
+  runtime preferred (only if live and not already preferred). `k` stops a live
+  runtime and is labelled **Stop…** when confirmation is required. `d` forgets
+  a stopped or failed runtime.
+- **Inspect**: `p` toggles the preview; `D` shows cached diagnostics if the
+  runtime's backend supports diagnostics.
+- **Start**: `n` starts an independent runtime in a project, `N` starts one in
+  the selected runtime's owner scope, `+` opens the launch menu, and `b` opens
+  a saved session independently.
+
+With no row selected, only **Start** and `q` (**Close**) are shown, and `N` is
+omitted. Opening or closing Actions sends no RPC. The groups stack in a frame
+narrower than `pichat-transient-single-column-width` (default 80 columns); set it
+to `0` to keep the side-by-side layout.
 
 The runtime preview reports persistence from immutable launch metadata as
 `persisted source file` or `none (--no-session)`; it does not infer persistence

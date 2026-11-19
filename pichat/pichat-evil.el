@@ -157,6 +157,7 @@ remain in their original mode maps."
     (kbd "z v") #'pichat-sessions-preview-branch-at-point
     (kbd "g r") #'pichat-sessions-list-refresh)
   (evil-define-key* 'normal pichat-session-manager-mode-map
+    (kbd "g a") #'pichat-session-manager-actions
     (kbd "q") #'pichat-session-manager-quit
     (kbd "RET") #'pichat-session-manager-open-chat
     (kbd "z v") #'pichat-session-manager-toggle-preview

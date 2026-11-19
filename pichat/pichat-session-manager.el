@@ -1047,9 +1047,12 @@ SESSION defaults to the runtime at point."
   (pichat-session-manager--close-preview)
   (quit-window))
 
+(autoload 'pichat-session-manager-actions "pichat-session-manager-actions" nil t)
+
 (defvar pichat-session-manager-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map tabulated-list-mode-map)
+    (define-key map (kbd "a") #'pichat-session-manager-actions)
     (define-key map (kbd "RET") #'pichat-session-manager-open-chat)
     (define-key map (kbd "C-o") #'pichat-session-manager-toggle-preview)
     (define-key map (kbd "n") #'pichat-session-manager-new)

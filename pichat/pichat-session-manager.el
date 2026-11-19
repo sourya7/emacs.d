@@ -861,11 +861,11 @@ Press g to refresh the preview or q to return to the manager."
   "Display exact runtime SESSION through the configured policy."
   (funcall pichat-session-manager-display-chat-function session))
 
-(defun pichat-session-manager-open-chat ()
-  "Open the selected runtime session's chat."
+(defun pichat-session-manager-open-chat (&optional session)
+  "Open the chat for runtime SESSION, defaulting to the row at point."
   (interactive)
   (pichat-session-manager--display
-   (pichat-session-manager--session-at-point)))
+   (or session (pichat-session-manager--session-at-point))))
 
 (defun pichat-session-manager--start-in-directory
     (directory &optional scope transport)
@@ -930,20 +930,22 @@ of the persistent project list."
         (pichat-session-manager--owner-directory session)
         (pichat-session-owner-scope-label session)))
 
-(defun pichat-session-manager-new-in-scope ()
-  "Start an independent runtime in the selected row's owner scope."
+(defun pichat-session-manager-new-in-scope (&optional session)
+  "Start an independent runtime in SESSION's owner scope.
+SESSION defaults to the runtime at point."
   (interactive)
-  (let* ((session (pichat-session-manager--session-at-point))
+  (let* ((session (or session (pichat-session-manager--session-at-point)))
          (directory (pichat-session-manager--owner-directory session)))
     (unless directory (user-error "Selected runtime has no owner directory"))
     (pichat-session-manager--start-in-directory
      directory (pichat-session-manager--owner-scope session)
      (pichat-session-transport session))))
 
-(defun pichat-session-manager-name ()
-  "Name the selected session through its backend."
+(defun pichat-session-manager-name (&optional session)
+  "Name SESSION's active source through its backend.
+SESSION defaults to the runtime at point."
   (interactive)
-  (let* ((session (pichat-session-manager--session-at-point))
+  (let* ((session (or session (pichat-session-manager--session-at-point)))
          (source (pichat-session-manager--preview-source-token session))
          (name (read-string "Session name: " (pichat-session-name session))))
     (unless (equal source (pichat-session-manager--preview-source-token session))
@@ -973,10 +975,10 @@ working directory determines the new runtime's project and display routing."
        (message "PiChat independent saved-session open failed: %s"
                 (or (plist-get response :error) "unknown error"))))))
 
-(defun pichat-session-manager-stop ()
-  "Stop only the selected runtime session."
+(defun pichat-session-manager-stop (&optional session)
+  "Stop only runtime SESSION, defaulting to the row at point."
   (interactive)
-  (let ((session (pichat-session-manager--session-at-point)))
+  (let ((session (or session (pichat-session-manager--session-at-point))))
     (unless (pichat-session-alive-p session)
       (user-error "Selected PiChat runtime is not live"))
     (when (cond
@@ -988,10 +990,11 @@ working directory determines the new runtime's project and display routing."
       (pichat-stop-session session)
       (pichat-session-manager-refresh))))
 
-(defun pichat-session-manager-forget ()
-  "Forget and clean up the selected stopped or failed runtime."
+(defun pichat-session-manager-forget (&optional session)
+  "Forget and clean up stopped or failed runtime SESSION.
+SESSION defaults to the runtime at point."
   (interactive)
-  (let ((session (pichat-session-manager--session-at-point)))
+  (let ((session (or session (pichat-session-manager--session-at-point))))
     (when (pichat-session-alive-p session)
       (user-error "Stop the PiChat runtime before forgetting it"))
     ;; Refuse uncertain restart claims before dismantling their recovery chat.
@@ -1003,17 +1006,19 @@ working directory determines the new runtime's project and display routing."
           (kill-buffer buffer))))
     (pichat-session-manager-refresh)))
 
-(defun pichat-session-manager-make-default ()
-  "Make the selected live runtime default for its immutable owner scope."
+(defun pichat-session-manager-make-default (&optional session)
+  "Make live runtime SESSION preferred for its immutable owner scope.
+SESSION defaults to the runtime at point."
   (interactive)
   (pichat-set-default-session
-   (pichat-session-manager--session-at-point))
+   (or session (pichat-session-manager--session-at-point)))
   (pichat-session-manager-refresh))
 
-(defun pichat-session-manager-diagnostics ()
-  "Open unified cached diagnostics for the selected runtime."
+(defun pichat-session-manager-diagnostics (&optional session)
+  "Open unified cached diagnostics for runtime SESSION.
+SESSION defaults to the runtime at point."
   (interactive)
-  (let ((session (pichat-session-manager--session-at-point)))
+  (let ((session (or session (pichat-session-manager--session-at-point))))
     (pichat-backend-require-capability
      session 'diagnostics "Cached diagnostics")
     (pichat-show-diagnostics session)))

@@ -716,8 +716,10 @@
               (goto-char (point-min))
               (search-forward "second")
               (beginning-of-line)
-              (pichat-session-manager-open-chat)
-              (should (eq second displayed)))
+              (call-interactively #'pichat-session-manager-open-chat)
+              (should (eq second displayed))
+              (pichat-session-manager-open-chat first)
+              (should (eq first displayed)))
           (when (buffer-live-p buffer) (kill-buffer buffer)))))))
 
 (ert-deftest pichat-session-manager-persistence-presentation-uses-launch-metadata ()

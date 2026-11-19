@@ -34,15 +34,64 @@
   "Section identity to explicit or initial expansion state.
 Absent sections remain in this table so reappearing sections retain choices.")
 
-(defun pichat-diagnostics-report--field (label value)
-  "Insert bounded plain VALUE with LABEL; nil means unavailable."
-  (insert label ": "
-          (if (null value) "unavailable"
-            (let ((text (pichat-chat-diagnostics--text value)))
-              (if (> (length text) 2000)
-                  (concat (substring text 0 2000) " [truncated by PiChat]")
-                text)))
-          "\n"))
+(defun pichat-diagnostics-report--text (value)
+  "Return bounded single-line text for VALUE, or nil when unavailable."
+  (when value
+    (let ((text (replace-regexp-in-string
+                 "[\n\r\t\f\v]+" " " (pichat-chat-diagnostics--text value))))
+      (unless (string-empty-p text)
+        (if (> (length text) 2000)
+            (concat (substring text 0 2000) " [truncated by PiChat]")
+          text)))))
+
+(defun pichat-diagnostics-report--dim (text)
+  "Return TEXT in the shadow face, or nil when TEXT is nil."
+  (and text (propertize text 'face 'shadow)))
+
+(defun pichat-diagnostics-report--face (text face)
+  "Return TEXT in FACE when FACE is non-nil, otherwise TEXT unchanged."
+  (if (and text face) (propertize text 'face face) text))
+
+(defun pichat-diagnostics-report--row (label &rest lines)
+  "Insert LABEL beside LINES, each a list of parts joined by middle dots.
+LABEL is bold unless it already has a face.  Nil parts and lines without
+parts are omitted; later lines are indented."
+  (let ((first t)
+        (label (if (get-text-property 0 'face label) label
+                 (propertize label 'face 'bold)))
+        (separator (pichat-diagnostics-report--dim " · ")))
+    (dolist (line lines)
+      (let ((parts (delq nil (copy-sequence line))))
+        (when parts
+          (insert (if first
+                      (concat label (make-string (max 1 (- 12 (length label))) ?\s))
+                    (make-string 12 ?\s))
+                  (string-join parts separator) "\n")
+          (setq first nil))))))
+
+(defun pichat-diagnostics-report--path (path)
+  "Return PATH with its directory dimmed so the file name stands out.
+Split textually: no file name handlers run for presentation."
+  (if (string-match "\\`\\(.*/\\)\\([^/]+\\)\\'" path)
+      (concat (pichat-diagnostics-report--dim (match-string 1 path))
+              (match-string 2 path))
+    path))
+
+(defun pichat-diagnostics-report--count (count label)
+  "Return COUNT and dimmed LABEL, highlighting a nonzero COUNT as a warning."
+  (concat (pichat-diagnostics-report--face (format "%d" count) (and (> count 0) 'warning))
+          (pichat-diagnostics-report--dim (concat " " label))))
+
+(defun pichat-diagnostics-report--severity-face (sections)
+  "Return `error' if any record in SECTIONS has error severity, else `warning'."
+  (if (seq-some (lambda (section)
+                  (seq-some (lambda (record)
+                              (and (listp record)
+                                   (member (format "%s" (plist-get record :severity))
+                                           '("error" "fatal"))))
+                            (cdr section)))
+                sections)
+      'error 'warning))
 
 (defun pichat-diagnostics-report--process (session)
   "Return SESSION's generation-valid local Emacs process object."
@@ -54,84 +103,129 @@ Absent sections remain in this table so reappearing sections retain choices.")
          process)))
 
 (defun pichat-diagnostics-report--overview (session sections)
-  "Build overview text for SESSION from cached SECTIONS only."
-  (with-temp-buffer
-    (insert "PiChat diagnostics (cached snapshot, not a live health check)\n\n"
-            "Evidence may contain secrets, paths and prompt content. Review before sharing.\n"
-            "Unavailable means no current cached snapshot, not necessarily a failure.\n"
-            "No retained records does not establish health or successful synchronization.\n\n"
-            "Runtime / process\n")
-    (pichat-diagnostics-report--field "Runtime" (pichat-session-runtime-id session))
-    (pichat-diagnostics-report--field "Backend" (pichat-session-backend-id session))
-    (pichat-diagnostics-report--field "State" (pichat-session-state session))
-    (pichat-diagnostics-report--field
-     "Snapshot" (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))
-    (let ((process (pichat-diagnostics-report--process session)))
-      (pichat-diagnostics-report--field "Process status" (and process (process-status process)))
-      ;; Even a local runtime may be a wrapper. Never call this the Pi PID.
-      (pichat-diagnostics-report--field "Emacs transport PID" (and process (process-id process)))
-      (when (and process (memq (process-status process) '(exit signal)))
-        (pichat-diagnostics-report--field "Exit status" (process-exit-status process))))
-    (pichat-diagnostics-report--field "Process generation" (pichat-session-process-generation session))
-    (when (eq (pichat-session-backend-id session) 'pi)
-      (pichat-diagnostics-report--field
-       "RPC send gate (cached; not a readiness handshake)"
-       (if (pichat-session-rpc-ready-p session) "open" "closed"))
-      (pichat-diagnostics-report--field
-       "Pending RPC requests"
-       (let ((pending (pichat-session-pending-responses session)))
-         (and (hash-table-p pending) (hash-table-count pending))))
-      (pichat-diagnostics-report--field "Queued RPC sends" (length (pichat-session-rpc-send-queue session))))
-    (pichat-diagnostics-report--field
-     "Chat buffer" (let ((buffer (pichat-session-buffer session)))
-                     (and (buffer-live-p buffer) (buffer-name buffer))))
-    (insert (if (eq (pichat-session-backend-id session) 'pi)
-                "\nPi session (last cached state)\n" "\nSession (last cached state)\n"))
-    (pichat-diagnostics-report--field "Session ID" (pichat-session-id session))
-    (pichat-diagnostics-report--field "Name" (or (pichat-session-name session) "unset / unavailable"))
-    (pichat-diagnostics-report--field
-     "Persistence"
-     (pcase (pichat-session-persistence session)
-       ('persistent "enabled; cached path does not prove a file was written")
-       ('ephemeral "disabled (--no-session)")
-       ('memory "memory; no resumable file")))
-    (let ((runtime (pichat-session-session-file session))
-          (emacs (pichat-session-emacs-session-file session)))
-      (pichat-diagnostics-report--field "Runtime saved-session path (cached)" runtime)
-      (when (and runtime (not (equal runtime emacs)))
-        (pichat-diagnostics-report--field "Emacs saved-session path (translated)" emacs)))
-    (insert "\nConfiguration (cached)\n")
-    (pichat-diagnostics-report--field
-     "Model" (unless (equal (pichat-session-model-label session) "—")
-               (pichat-session-model-label session)))
-    (pichat-diagnostics-report--field "Thinking level" (pichat-session-thinking-level session))
-    (pichat-diagnostics-report--field "Preset" (pichat-session-preset-name session))
-    (insert "\nExecution context (retained)\n")
-    (let ((transport (pichat-session-transport session)))
-      (pichat-diagnostics-report--field "Target" (and transport (pichat-transport-label transport)))
-      (pichat-diagnostics-report--field "Transport" (and transport (pichat-transport-kind transport)))
-      (pichat-diagnostics-report--field
-       "Configured executable (not running-version proof)"
-       (and transport (pichat-transport-pi-executable transport))))
-    (pichat-diagnostics-report--field
-     "Owner scope" (or (pichat-session-owner-scope-label session)
-                       (pichat-session-scope-label session)))
-    (pichat-diagnostics-report--field "Owner directory" (pichat-session-owner-directory session))
-    (pichat-diagnostics-report--field "Runtime CWD" (pichat-session-runtime-cwd session))
-    (unless (equal (pichat-session-runtime-cwd session) (pichat-session-emacs-cwd session))
-      (pichat-diagnostics-report--field "Emacs CWD" (pichat-session-emacs-cwd session)))
-    (insert "\nRecorded problems\n")
-    (dolist (section sections)
-      (insert (car section) "\n")
-      (cond
-       ((eq (cdr section) :unavailable) (insert "  unavailable (no current cached snapshot)\n"))
-       ((null (cdr section)) (insert "  none (no retained diagnostic records)\n"))
-       (t
-        (dolist (record (seq-take (cdr section) 100))
-          (insert "  " (pichat-chat-diagnostics--safe-record-line record) "\n"))
-        (when (> (length (cdr section)) 100)
-          (insert "  [additional records omitted from display]\n")))))
-    (buffer-string)))
+  "Build overview text for SESSION from cached SECTIONS only.
+Missing values are collected on one Unavailable row rather than per field.
+Only abnormal values are highlighted; descriptive words are dimmed."
+  (let* ((pi-p (eq (pichat-session-backend-id session) 'pi))
+         (process (pichat-diagnostics-report--process session))
+         (status (and process (process-status process)))
+         (exited (memq status '(exit signal)))
+         (transport (pichat-session-transport session))
+         (persistence (pichat-session-persistence session))
+         unavailable recorded empty)
+    (cl-flet ((need (name value &optional prefix face)
+                (let ((text (pichat-diagnostics-report--text value)))
+                  (if text
+                      (concat (pichat-diagnostics-report--dim prefix)
+                              (pichat-diagnostics-report--face text face))
+                    (push name unavailable)
+                    nil)))
+              (dim (text) (pichat-diagnostics-report--dim text)))
+      (with-temp-buffer
+        (pichat-diagnostics-report--row
+         "Runtime"
+         (list (need "backend" (pichat-session-backend-id session))
+               (need "state" (pichat-session-state session) nil
+                     (pcase (pichat-session-state session)
+                       ((or 'error 'failed) 'error)
+                       ((or 'stopped 'retrying) 'warning)))
+               (need "chat buffer" (let ((buffer (pichat-session-buffer session)))
+                                     (and (buffer-live-p buffer) (buffer-name buffer))))))
+        (pichat-diagnostics-report--row
+         "Process"
+         (list (need "process" status nil (and exited 'error))
+               ;; Even a local runtime may be a wrapper. Never call this the Pi PID.
+               (and process (process-id process)
+                    (concat (dim "Emacs transport PID ") (format "%s" (process-id process))))
+               (and exited
+                    (concat (dim "exit status ")
+                            (propertize (format "%s" (process-exit-status process)) 'face 'error)))
+               (need "process generation" (pichat-session-process-generation session)
+                     "generation ")))
+        (when pi-p
+          (let ((pending (pichat-session-pending-responses session))
+                (open (pichat-session-rpc-ready-p session)))
+            (unless (hash-table-p pending) (push "pending RPC requests" unavailable))
+            (pichat-diagnostics-report--row
+             "RPC"
+             (list (concat (dim "send gate ")
+                           (if open "open" (propertize "closed" 'face 'warning)))
+                   (and (hash-table-p pending)
+                        (pichat-diagnostics-report--count (hash-table-count pending) "pending"))
+                   (pichat-diagnostics-report--count
+                    (length (pichat-session-rpc-send-queue session)) "queued")))))
+        (let* ((runtime (pichat-diagnostics-report--text (pichat-session-session-file session)))
+               (emacs (and runtime
+                           (pichat-diagnostics-report--text
+                            (pichat-session-emacs-session-file session))))
+               (translated (and emacs (not (equal runtime emacs)))))
+          (unless (or runtime (memq persistence '(ephemeral memory)))
+            (push "saved-session path" unavailable))
+          (pichat-diagnostics-report--row
+           (if pi-p "Pi session" "Session")
+           (list (need "session name" (pichat-session-name session)))
+           (list (need "session ID" (pichat-session-id session))
+                 (pcase persistence
+                   ('persistent "persistent")
+                   ('ephemeral "ephemeral (--no-session)")
+                   ('memory "in memory (no resumable file)")
+                   (_ (need "persistence" nil))))
+           (list (and runtime (concat (and translated (dim "runtime "))
+                                      (pichat-diagnostics-report--path runtime))))
+           (list (and translated (concat (dim "Emacs ")
+                                         (pichat-diagnostics-report--path emacs))))))
+        (pichat-diagnostics-report--row
+         "Config"
+         (list (need "model" (unless (equal (pichat-session-model-label session) "—")
+                               (pichat-session-model-label session)))
+               (need "thinking level" (pichat-session-thinking-level session) "thinking ")
+               (need "preset" (pichat-session-preset-name session) "preset ")))
+        (let* ((label (and transport (pichat-transport-label transport)))
+               (kind (and transport (pichat-transport-kind transport)))
+               (target (need "target" label))
+               (cwd (pichat-session-runtime-cwd session))
+               (owner (pichat-session-owner-directory session))
+               (emacs-cwd (pichat-session-emacs-cwd session)))
+          (pichat-diagnostics-report--row
+           "Context"
+           (list (if (and target kind (not (equal label (format "%s" kind))))
+                     (concat target (dim (format " (%s)" (pichat-diagnostics-report--text kind))))
+                   target)
+                 (need "owner scope" (or (pichat-session-owner-scope-label session)
+                                         (pichat-session-scope-label session))
+                       "scope ")
+                 (need "runtime working directory" cwd))
+           (list (if (equal owner cwd) nil
+                   (need "owner directory" owner "owner directory ")))
+           (list (unless (equal cwd emacs-cwd)
+                   (need "host working directory" emacs-cwd "host working directory ")))
+           (list (need "configured executable"
+                       (and transport (pichat-transport-pi-executable transport))
+                       "executable "))))
+        (dolist (section sections)
+          (pcase (cdr section)
+            (:unavailable (push (concat (car section) " snapshot") unavailable))
+            ('nil (push (car section) empty))
+            (_ (push section recorded))))
+        (when unavailable
+          (pichat-diagnostics-report--row
+           (dim "Unavailable") (list (dim (string-join (reverse unavailable) ", ")))))
+        (insert "\n")
+        (setq empty (nreverse empty) recorded (nreverse recorded))
+        (let ((none (dim (and empty (format "none retained (%s)" (string-join empty ", "))))))
+          (if (null recorded)
+              (pichat-diagnostics-report--row
+               "Problems" (list (or none (dim "no current cached snapshots"))))
+            (let ((face (pichat-diagnostics-report--severity-face recorded)))
+              (insert (propertize "Problems" 'face (list 'bold face)) "\n")
+              (dolist (section recorded)
+                (insert "  " (propertize (car section) 'face face) "\n")
+                (dolist (record (seq-take (cdr section) 100))
+                  (insert "    " (pichat-chat-diagnostics--safe-record-line record) "\n"))
+                (when (> (length (cdr section)) 100)
+                  (insert "    " (dim "[additional records omitted from display]") "\n"))))
+            (when none (insert "  " none "\n"))))
+        (buffer-string)))))
 
 (defun pichat-diagnostics-report--records (records &optional limit)
   "Return bounded display text for retained RECORDS, up to LIMIT (default 100)."
@@ -145,19 +239,39 @@ Absent sections remain in this table so reappearing sections retain choices.")
   "Return captured startup selections, without resolving configuration."
   (let ((selection (pichat-session-tool-selection session))
         (spec (pichat-session-preset-spec session)))
-    (concat
-     "Startup selections, not proof of active tools or connection health.\n"
-     (if (or selection spec)
-         (pichat-chat-diagnostics--print-value
-          (list :builtins (if selection (or (plist-get selection :builtins) :none)
-                            (or (plist-get spec :tools) :none))
-                :extensions (if selection (or (plist-get selection :extensions) :none)
-                              :pi-configuration-unchecked)
-                :mcp (if selection (or (plist-get selection :mcp) :disabled)
-                       :pi-configuration-unchecked)
-                :emacs (if selection (or (plist-get selection :emacs) :none)
-                         :unavailable)))
-       "unavailable (no captured configuration)\n"))))
+    (if (or selection spec)
+        (pichat-chat-diagnostics--print-value
+         (list :builtins (if selection (or (plist-get selection :builtins) :none)
+                           (or (plist-get spec :tools) :none))
+               :extensions (if selection (or (plist-get selection :extensions) :none)
+                             :pi-configuration-unchecked)
+               :mcp (if selection (or (plist-get selection :mcp) :disabled)
+                      :pi-configuration-unchecked)
+               :emacs (if selection (or (plist-get selection :emacs) :none)
+                        :unavailable)))
+      "unavailable (no captured configuration)\n")))
+
+(defun pichat-diagnostics-report--tools-summary (session)
+  "Return a short heading summary of SESSION's captured startup selections."
+  (let ((selection (pichat-session-tool-selection session))
+        (spec (pichat-session-preset-spec session)))
+    (cl-flet ((count (label values none)
+                (format "%s %s" label (if values (length values) none))))
+      (cond
+       (selection
+        (string-join (list (count "builtins" (plist-get selection :builtins) "none")
+                           (count "extensions" (plist-get selection :extensions) "none")
+                           (count "mcp" (plist-get selection :mcp) "disabled")
+                           (count "emacs" (plist-get selection :emacs) "none"))
+                     " · "))
+       (spec (count "builtins" (plist-get spec :tools) "none"))
+       (t "unavailable")))))
+
+(defun pichat-diagnostics-report--title (title &optional summary)
+  "Return evidence heading TITLE with optional parenthesized SUMMARY."
+  (if summary
+      (concat title (pichat-diagnostics-report--dim (format " (%s)" summary)))
+    title))
 
 (defun pichat-diagnostics-report--stderr (session)
   "Return bounded stderr only from SESSION's exact process buffer."
@@ -185,43 +299,65 @@ Absent sections remain in this table so reappearing sections retain choices.")
          (pi-p (eq (pichat-session-backend-id session) 'pi))
          (inspect-p (pichat-backend-capable-p session 'diagnostic-view))
          (events (and pi-p inspect-p (pichat-session-event-log session)))
-         (shown (seq-take events (max 0 (min 512 pichat-diagnostics-view-event-limit)))))
+         (shown (seq-take events (max 0 (min 512 pichat-diagnostics-view-event-limit))))
+         (stderr (and pi-p inspect-p (pichat-diagnostics-report--stderr session))))
     (unless pichat-diagnostics-report--folds
       (setq pichat-diagnostics-report--folds (make-hash-table :test #'equal)))
+    (setq header-line-format
+          (concat (propertize "PiChat diagnostics" 'face 'bold)
+                  (propertize (format " (%s)" (replace-regexp-in-string
+                                               "%" "%%" (or (pichat-diagnostics-report--text
+                                                             (pichat-session-runtime-id session))
+                                                            "unknown runtime")
+                                               t t))
+                              'face 'shadow)))
     (setq pichat-diagnostics-report--overview (pichat-diagnostics-report--overview session sections)
           pichat-diagnostics-report--evidence
           (append
            (when (and inspect-p (pichat-session-diagnostics session))
              (list (list 'latest-failure "Latest retained runtime failure"
-                         (concat "Historical retained record; may belong to an earlier source or process.\n"
-                                 (pichat-chat-diagnostics--print-value
-                                  (car (pichat-session-diagnostics session)))))))
+                         (pichat-chat-diagnostics--print-value
+                          (car (pichat-session-diagnostics session))))))
            (list
-            (list 'launch "Captured launch command"
+            (list 'launch
+                  (pichat-diagnostics-report--title
+                   "Captured launch command"
+                   (unless (and pi-p inspect-p (pichat-session-rpc-command session))
+                     "unavailable"))
                   (if (and pi-p inspect-p)
                       (if (pichat-session-rpc-command session)
-                          (concat "Captured attempt; not proof of the command currently running.\n"
-                                  (pichat-chat-diagnostics--print-value (pichat-session-rpc-command session)))
+                          (pichat-chat-diagnostics--print-value (pichat-session-rpc-command session))
                         "unavailable (no captured launch argv)\n")
                     "unavailable for this backend\n"))
-            (list 'tools "Startup tool selections" (pichat-diagnostics-report--tools session)))
+            (list 'tools
+                  (pichat-diagnostics-report--title
+                   "Startup tool selections" (pichat-diagnostics-report--tools-summary session))
+                  (pichat-diagnostics-report--tools session)))
+           ;; Empty and unavailable domains are already reported under Problems.
            (mapcar (lambda (section)
-                     (list (list 'domain (car section)) (concat (car section) " evidence")
-                           (if (eq (cdr section) :unavailable) "unavailable (no current cached snapshot)\n"
-                             (if inspect-p (pichat-diagnostics-report--records (cdr section))
-                               "unavailable for this backend\n"))))
-                   sections)
+                     (list (list 'domain (car section))
+                           (pichat-diagnostics-report--title
+                            (concat (car section) " evidence")
+                            (format "%d" (length (cdr section))))
+                           (if inspect-p (pichat-diagnostics-report--records (cdr section))
+                             "unavailable for this backend\n")))
+                   (seq-filter (lambda (section) (consp (cdr section))) sections))
            (list
-            (list 'stderr "Current stderr"
-                  (if (and pi-p inspect-p) (pichat-diagnostics-report--stderr session)
-                    "unavailable for this backend\n"))
-            (list 'events "Retained incoming events"
+            (list 'stderr
+                  (pichat-diagnostics-report--title
+                   "Current stderr"
+                   (cond ((null stderr) "unavailable")
+                         ((string-prefix-p "empty" stderr) "empty")
+                         ((string-prefix-p "unavailable" stderr) "unavailable")))
+                  (or stderr "unavailable for this backend\n"))
+            (list 'events
+                  (pichat-diagnostics-report--title
+                   "Retained incoming events"
+                   (cond ((not (and pi-p inspect-p)) "unavailable")
+                         ((null events) "none")
+                         (t (format "%d of %d" (length shown) (length events)))))
                   (if (and pi-p inspect-p)
-                      (concat
-                       (format "Bounded retained subset; %d shown, %d retained events omitted from display.\n"
-                               (length shown) (- (length events) (length shown)))
-                       "Not a complete request/response trace; source/generation and receipt times unavailable.\n"
-                       (pichat-diagnostics-report--records (reverse shown) 512))
+                      (pichat-diagnostics-report--records (reverse shown) 512)
                     "unavailable for this backend\n")))))
     ;; Only the first appearance chooses a default. Refresh must never reopen
     ;; a section the user collapsed, including after a new failure arrives.
@@ -236,7 +372,7 @@ Absent sections remain in this table so reappearing sections retain choices.")
   "Render captured strings and folds, optionally returning to SELECTED section."
   (let ((inhibit-read-only t) target)
     (erase-buffer)
-    (insert pichat-diagnostics-report--overview "\nEvidence (bounded snapshots)\n\n")
+    (insert pichat-diagnostics-report--overview "\n")
     (dolist (section pichat-diagnostics-report--evidence)
       (let* ((id (nth 0 section))
              (open (gethash id pichat-diagnostics-report--folds)))

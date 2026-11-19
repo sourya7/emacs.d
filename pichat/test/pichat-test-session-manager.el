@@ -328,7 +328,8 @@
             (with-current-buffer report
               (should (eq selected pichat-diagnostics--owner))
               (should (eq major-mode 'pichat-diagnostics-mode))
-              (should (string-match-p "cached snapshot" (buffer-string))))
+              (should (string-match-p "^Runtime +pi · stopped" (buffer-string)))
+              (should (string-prefix-p "PiChat diagnostics" header-line-format)))
             ;; Capability rejection uses the unified operation's name, not
             ;; transport-only wording, and does not silently select OTHER.
             (setf (pichat-session-backend selected) 'unsupported)

@@ -50,7 +50,7 @@
             (setf (pichat-session-state a) 'stopped)
             (with-current-buffer safe
               (should (eq safe (pichat-show-diagnostics)))
-              (should (string-match-p "State: stopped" (buffer-string)))
+              (should (string-match-p "^Runtime +pi · stopped" (buffer-string)))
               (should (eq a pichat-diagnostics--owner))))
         (when (buffer-live-p safe) (kill-buffer safe))))))
 
@@ -113,11 +113,16 @@
           (setq buffer (pichat-show-diagnostics session))
           (with-current-buffer buffer
             (let ((text (buffer-string)))
-              (should (string-match-p (pichat-session-runtime-id session) text))
-              (should (string-match-p "Backend: pi" text))
-              (should (string-match-p "State: error\nSnapshot: [0-9].*Z" text))
-              (should (string-match-p "Runtime CWD: /secret/project/" text))
-              (should (string-match-p "Configured executable.*: /secret/pi" text))
+              (should (equal (substring-no-properties header-line-format)
+                             (format "PiChat diagnostics (%s)"
+                                     (pichat-session-runtime-id session))))
+              (should (eq 'bold (get-text-property 0 'face header-line-format)))
+              (should (string-match-p "^Runtime +pi · error" text))
+              (should (string-match-p "^Context +.* · /secret/project/$" text))
+              (should (string-match-p "^ +executable /secret/pi$" text))
+              ;; Header-level caveats and render timestamps are not repeated.
+              (should-not (string-match-p "Snapshot:\\|cached snapshot,\\|before sharing" text))
+              (should-not (string-match-p "Unavailable.*configured executable" text))
               (should-not (string-match-p "--secret" text))
               (should-not (string-match-p "g / Evil\\|asks first" text)))))
       (when (buffer-live-p buffer) (kill-buffer buffer)))))
@@ -214,8 +219,11 @@
                   (setf (pichat-session-id session) "source-b")
                   (pichat-diagnostics-refresh)
                   (let ((text (buffer-string)))
-                    (dolist (title '("Canonical transcript" "Live tail" "Session History"))
-                      (should (string-match-p (concat title "\n  unavailable") text)))
+                    (should (string-match-p
+                             (concat "^Unavailable .*Canonical transcript snapshot, "
+                                     "Live tail snapshot, Session History snapshot$")
+                             text))
+                    (should (string-match-p "^Problems\n  Runtime / transport\n    " text))
                     (should-not (string-match-p "canonical-notice\\|live-notice\\|history-notice" text))
                     (should (string-match-p "REDACTED" text))))
                 (should (equal before (pichat-session-diagnostics session)))
@@ -244,14 +252,16 @@
           (setq report (pichat-show-diagnostics session))
           (with-current-buffer report
             (let ((text (buffer-string)))
-              (should (string-match-p "cached snapshot, not a live health check" text))
-              (should (string-match-p "not necessarily a failure" text))
-              (should (string-match-p "Live tail\n  none" text))
-              (should (string-match-p "Session History\n  unavailable" text))
+              (should-not (string-match-p "not a live health check\\|not necessarily a failure" text))
+              (should (string-match-p "^  none retained (Live tail)$" text))
+              (should (string-match-p "^Unavailable .*Session History snapshot$" text))
+              ;; Empty or unavailable domains get no evidence heading.
+              (should (string-match-p "Canonical transcript evidence (4)" text))
+              (should-not (string-match-p "Live tail evidence\\|Session History evidence" text))
               (should (string-match-p
                        (regexp-quote "[error/missing-credential; 2020-01-02T03:04:05Z] failure-notice") text))
               (should (string-match-p (regexp-quote "[warning/compatibility] no-time") text))
-              (should (string-match-p "\n  legacy-notice\n  bad-time\n" text))
+              (should (string-match-p "\n    legacy-notice\n    bad-time\n" text))
               (should-not (string-match-p "hidden\\|/private/path" text)))))
       (when (buffer-live-p report) (kill-buffer report)))))
 
@@ -322,6 +332,10 @@
                         "pichat-diagnostics-open-interactive-pi" "pichat-diagnostics-probe-pi"))
           (should (string-match-p (regexp-quote text) (buffer-string))))))))
 
+(defconst pichat-test-diagnostics-unavailable-process
+  "^Unavailable +\\(?:.*, \\)?process\\(?:,\\|$\\)"
+  "Match the overview row listing an unavailable process.")
+
 (defun pichat-test-diagnostics-toggle (title)
   "Activate the report evidence heading with exact TITLE."
   (goto-char (point-min))
@@ -347,12 +361,12 @@
               (cl-letf (((symbol-function 'pichat-session-emacs-session-file)
                          (lambda (_) "/emacs/session.jsonl")))
                 (setq report (pichat-show-diagnostics session)))
-              (should (string-match-p "Session ID: pi-source" (buffer-string)))
-              (should (string-match-p "Runtime saved-session path (cached): /runtime/session.jsonl" (buffer-string)))
-              (should (string-match-p "Emacs saved-session path (translated): /emacs/session.jsonl" (buffer-string)))
-              (should (string-match-p "does not prove a file was written" (buffer-string)))
-              (should (string-match-p "Model: fake/offline" (buffer-string)))
-              (should (string-match-p "Process status: unavailable" (buffer-string)))
+              (should (string-match-p "^Pi session +pi-source" (buffer-string)))
+              (should (string-match-p "^ +runtime /runtime/session.jsonl\n +Emacs /emacs/session.jsonl$"
+                                      (buffer-string)))
+              (should (string-match-p "^Config +fake/offline · thinking low" (buffer-string)))
+              (should (string-match-p "Startup tool selections (builtins 1)" (buffer-string)))
+              (should (string-match-p pichat-test-diagnostics-unavailable-process (buffer-string)))
               (should-not (string-match-p "explicit-secret" (buffer-string)))
               (pichat-test-diagnostics-toggle "Captured launch command")
               (should (string-match-p "explicit-secret" (buffer-string)))
@@ -366,7 +380,7 @@
                     (pichat-session-state session) 'stopped)
               (pichat-diagnostics-refresh)
               (should (eq report (current-buffer)))
-              (should (string-match-p "Session ID: replacement-source" (buffer-string)))
+              (should (string-match-p "^Pi session +replacement-source" (buffer-string)))
               (should-not (string-match-p "explicit-secret" (buffer-string)))
               (call-interactively (key-binding (kbd "q")))
               (should (eq origin (current-buffer))))
@@ -428,10 +442,10 @@
                     ((symbol-function 'file-readable-p) no-io))
             (setq report (pichat-show-diagnostics session))
             (with-current-buffer report
+              (should (string-match-p "Retained incoming events (1 of 2)" (buffer-string)))
               (pichat-test-diagnostics-toggle "Retained incoming events")
               (pichat-diagnostics-refresh)
-              (should (string-match-p "1 shown, 1 retained events omitted" (buffer-string)))
-              (should (string-match-p "Not a complete request/response trace" (buffer-string)))
+              (should (string-match-p "Retained incoming events (1 of 2)" (buffer-string)))
               (should (string-match-p "newest" (buffer-string)))
               (should-not (string-match-p "omitted-event" (buffer-string)))
               (should (string-match-p "truncated by PiChat" (buffer-string)))
@@ -452,6 +466,7 @@
             (process-put process 'pichat-stderr-buffer stderr)
             (setq report (pichat-show-diagnostics session))
             (with-current-buffer report
+              (should (string-match-p "Current stderr (empty)" (buffer-string)))
               (pichat-test-diagnostics-toggle "Current stderr")
               (should (string-match-p "empty (owning live stderr buffer)" (buffer-string)))
               (with-current-buffer stderr (insert "stderr-secret-long-value"))
@@ -464,7 +479,7 @@
               (process-put process 'pichat-stderr-buffer stderr)
               (setf (pichat-session-process-generation session) 8)
               (pichat-diagnostics-refresh)
-              (should (string-match-p "Process status: unavailable" (buffer-string)))
+              (should (string-match-p pichat-test-diagnostics-unavailable-process (buffer-string)))
               (should-not (string-match-p "stderr-secre" (buffer-string)))))
         (when (buffer-live-p report) (kill-buffer report))
         (when (buffer-live-p stderr) (kill-buffer stderr))))))
@@ -478,13 +493,61 @@
           (cl-letf (((symbol-function 'pichat-view-display) #'ignore))
             (setq report (pichat-show-diagnostics session))
             (with-current-buffer report
-              (should (string-match-p "Persistence: disabled (--no-session)" (buffer-string)))
-              (should (string-match-p "saved-session path (cached): unavailable" (buffer-string)))
+              (should (string-match-p "ephemeral (--no-session)$" (buffer-string)))
+              (should-not (string-match-p "saved-session path" (buffer-string)))
               (pichat-test-diagnostics-toggle "Captured launch command")
               (if (eq backend 'pi)
                   (should (string-match-p "secret-launch" (buffer-string)))
                 (should-not (string-match-p "secret-launch" (buffer-string)))
                 (should (string-match-p "unavailable for this backend" (buffer-string))))))
+        (when (buffer-live-p report) (kill-buffer report))))))
+
+(defun pichat-test-diagnostics-face (regexp &optional group)
+  "Return the face at the start of GROUP of the first REGEXP match."
+  (goto-char (point-min))
+  (re-search-forward regexp)
+  (get-text-property (match-beginning (or group 0)) 'face))
+
+(ert-deftest pichat-diagnostics-report-highlights-only-abnormal-values ()
+  (pichat-test-with-clean-state
+    (let ((session (pichat-register-session
+                    (pichat-session-make :state 'idle :persistence 'persistent
+                                         :session-file "/runtime/dir/session.jsonl")))
+          report)
+      (unwind-protect
+          (cl-letf (((symbol-function 'pichat-view-display) #'ignore))
+            (setq report (pichat-show-diagnostics session))
+            (with-current-buffer report
+              ;; Healthy: bold labels, dimmed descriptors, plain values.
+              (should (eq 'bold (pichat-test-diagnostics-face "^Runtime")))
+              (should-not (pichat-test-diagnostics-face "^Runtime +pi · \\(idle\\)" 1))
+              (should (eq 'shadow (pichat-test-diagnostics-face "^Runtime +pi\\( · \\)" 1)))
+              (should-not (pichat-test-diagnostics-face "send gate \\(open\\)" 1))
+              (should (eq 'shadow (pichat-test-diagnostics-face "send gate")))
+              (should-not (pichat-test-diagnostics-face "\\(0\\) pending" 1))
+              (should (eq 'shadow (pichat-test-diagnostics-face "0\\( pending\\)" 1)))
+              (should (eq 'shadow (pichat-test-diagnostics-face "/runtime/dir/")))
+              (should-not (pichat-test-diagnostics-face "session\\.jsonl"))
+              (should (eq 'shadow (pichat-test-diagnostics-face "^Unavailable")))
+              (should (eq 'shadow (pichat-test-diagnostics-face "Session History snapshot")))
+              (should (eq 'bold (pichat-test-diagnostics-face "^Problems")))
+              (should (eq 'shadow (pichat-test-diagnostics-face "none retained")))
+              (should (eq 'shadow (pichat-test-diagnostics-face "Retained incoming events\\( (none)\\)" 1)))
+              ;; Abnormal: state, closed gate, nonzero counts and problems stand out.
+              (setf (pichat-session-state session) 'error
+                    (pichat-session-rpc-ready-p session) nil
+                    (pichat-session-rpc-send-queue session) '(queued))
+              (puthash 1 'request (pichat-session-pending-responses session))
+              (pichat-chat-diagnostics-record session :origin 'rpc-response :message "failed")
+              (pichat-diagnostics-refresh)
+              (should (eq 'error (pichat-test-diagnostics-face "^Runtime +pi · \\(error\\)" 1)))
+              (should (eq 'warning (pichat-test-diagnostics-face "send gate \\(closed\\)" 1)))
+              (should (eq 'warning (pichat-test-diagnostics-face "\\(1\\) pending" 1)))
+              (should (eq 'warning (pichat-test-diagnostics-face "\\(1\\) queued" 1)))
+              (should (equal '(bold error) (pichat-test-diagnostics-face "^Problems")))
+              (should (eq 'error (pichat-test-diagnostics-face "^  \\(Runtime / transport\\)" 1)))
+              (should (eq 'shadow (pichat-test-diagnostics-face
+                                   "Runtime / transport evidence\\( (1)\\)" 1)))))
         (when (buffer-live-p report) (kill-buffer report))))))
 
 (provide 'pichat-test-diagnostics-views)

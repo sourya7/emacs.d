@@ -2017,26 +2017,37 @@ Use `M-x pichat-show-diagnostics`, Chat Actions → **Diagnostics (cached)**,
 **Diagnostics**. All reach the same report for that runtime. Jobs keeps its
 recorded execution-diagnostics view when no usable runtime is retained.
 
-This is a **cached snapshot, not a live health check**. Its overview shows
-runtime/process and RPC state, the current Pi session identity and cached
-saved-session path, model/configuration and execution context, even when no
-problems were recorded. Runtime and Pi session IDs are distinct; translated
-Emacs paths appear when different. Cached paths do not prove a file exists or
-was written. Disabled persistence, unavailable values and empty caches are
-labelled separately. See `GLOSSARY.md` for these identity/lifetime distinctions.
+This is a **cached snapshot, not a live health check**. The header line names
+the runtime (it is not part of copied buffer text). The overview is one compact
+row per area: runtime, process, RPC, Pi session (ID, persistence and cached
+saved-session path), configuration and execution context, even when no problems
+were recorded. Runtime and Pi session IDs are distinct. Values that repeat
+another (transport equal to target, owner directory or host working directory
+equal to the runtime working directory, translated Emacs paths) appear only when
+different. Cached paths do not prove a file exists or was written; the
+configured executable is not proof of the running version. Missing values are
+collected on one `Unavailable` row. Only abnormal values are highlighted: an
+error or stopped state, an exited process, a closed send gate, nonzero
+pending/queued counts and recorded problems. See `GLOSSARY.md` for these
+identity/lifetime distinctions.
 
-Recorded problems include runtime/transport failures, canonical transcript and
-live-tail compatibility notices, and available current Session History warnings.
-`none` means a current cache contains no records; `unavailable` is not a health
-verdict. Stale source-bound sections are unavailable, not copied into the runtime
+Problems cover runtime/transport failures, canonical transcript and live-tail
+compatibility notices, and available current Session History warnings. Areas
+with records are listed with their summaries; the rest collapse into one
+`none retained (…)` line, meaning a current cache contains no records, which is
+not a health verdict. Areas without a current cache appear on the `Unavailable`
+row. Stale source-bound sections are unavailable, not copied into the runtime
 failure log. Safe problem summaries remain redacted and bounded, with metadata
 only where retained.
 
 Expandable evidence holds captured launch arguments, startup tool selections,
 domain records, current or retained stderr/failures and incoming events.
+Headings show a short summary (counts, `empty`, `none` or `unavailable`); domains
+without records have no evidence heading.
 **The report can contain paths, prompts and credentials; review before sharing.**
 Incoming events are a bounded retained subset, **not a complete request/response
-trace**. Known omissions and display truncation are labelled. Startup selections
+trace**; the heading shows how many retained events are displayed (`N of M`).
+Value truncation is labelled inline. Startup selections
 are configuration, not proof that tools are active or healthy.
 
 Opening, expanding and refreshing use retained state and non-launching local

@@ -170,7 +170,7 @@
                 (call-interactively (key-binding (kbd "RET")))
                 (let ((text (buffer-substring-no-properties
                              (point-min) (point-max))))
-                  (should (string-match-p "Review before sharing" text))
+                  (should-not (string-match-p "Review before sharing" text))
                   (should (string-match-p "raw stderr secret" text))
                   (should (string-match-p "event secret" text))
                   (should (< (string-match "oldest" text)
@@ -308,15 +308,16 @@
           (with-current-buffer buffer
             (let ((text (buffer-string)))
               (should (string-match-p "unknown-entry at entry (context_edit)" text))
-              (should (string-match-p "Live tail\n  none" text))
-              (should (string-match-p "Session History\n  unavailable" text))
+              (should (string-match-p "^  none retained (Live tail)$" text))
+              (should (string-match-p "^Unavailable .*Session History snapshot$" text))
               (should (string-match-p "secret-value" text))
               (should (string-match-p "raw-private-output" text))
               ;; Only explicit evidence, not the overview or ordinary chat,
               ;; exposes the bounded retained payload.
               (should-not (string-match-p
                            "secret-value\\|raw-private-output"
-                           (substring text 0 (string-match "Evidence (bounded snapshots)" text))))))
+                           pichat-diagnostics-report--overview))
+              (should (string-prefix-p pichat-diagnostics-report--overview text))))
           (should (= 1 (length (pichat-session-diagnostics session)))))
       (when (buffer-live-p buffer) (kill-buffer buffer)))))
 

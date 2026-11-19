@@ -55,6 +55,7 @@
 (require 'pichat-test-reference)
 (require 'pichat-test-session-completion)
 (require 'pichat-test-session-manager)
+(require 'pichat-test-session-manager-actions)
 (require 'pichat-test-archive)
 (require 'pichat-test-consult)
 (require 'pichat-test-sessions-tree)

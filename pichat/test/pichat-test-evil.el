@@ -212,7 +212,8 @@
             (should (eq (key-binding (kbd "z v"))
                         #'pichat-session-manager-toggle-preview))
             (dolist (binding
-                     '(("g c" . pichat-session-manager-new)
+                     '(("g a" . pichat-session-manager-actions)
+                       ("g c" . pichat-session-manager-new)
                        ("g C" . pichat-session-manager-new-in-scope)
                        ("g L" . pichat-session-manager-launch)
                        ("g b" . pichat-session-manager-browse-saved)

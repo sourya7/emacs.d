@@ -673,9 +673,9 @@ Construction rejection is presented by the shared view, never a runtime notice."
         (unless completed
           (setq pichat-session-manager--preview-request-id request-id))))))
 
-(defun pichat-session-manager--preview-selected (&optional force)
-  "Preview the selected runtime; FORCE requests fresh Pi data."
-  (let* ((session (pichat-session-manager--session-at-point))
+(defun pichat-session-manager--preview-selected (&optional force session)
+  "Preview SESSION or the selected runtime; FORCE requests fresh Pi data."
+  (let* ((session (or session (pichat-session-manager--session-at-point)))
          (runtime-id (pichat-session-runtime-id session))
          (snapshot (pichat-session-manager--cached-preview session force))
          (active-p (memq (pichat-session-state session)
@@ -738,8 +738,9 @@ Construction rejection is presented by the shared view, never a runtime notice."
   (setq pichat-session-manager--preview-window nil
         pichat-session-manager--preview-runtime-id nil))
 
-(defun pichat-session-manager-toggle-preview ()
-  "Toggle a side preview of the selected runtime's active branch."
+(defun pichat-session-manager-toggle-preview (&optional session)
+  "Toggle a side preview of SESSION's active branch.
+SESSION defaults to the runtime at point."
   (interactive)
   (if (pichat-session-manager--preview-window-live-p)
       (pichat-session-manager--close-preview)
@@ -753,7 +754,16 @@ Construction rejection is presented by the shared view, never a runtime notice."
       (setq pichat-session-manager--preview-window
             (display-buffer-in-side-window
              buffer '((side . right) (slot . 1) (window-width . 0.45))))
-      (pichat-session-manager--preview-selected))))
+      (if session
+          (progn
+            ;; The open pane follows the selected row.  Return to the
+            ;; captured row so selection tracking won't replace the preview.
+            (when-let* ((row (text-property-any
+                              (point-min) (point-max) 'tabulated-list-id
+                              (pichat-session-runtime-id session))))
+              (goto-char row))
+            (pichat-session-manager--preview-selected nil session))
+        (pichat-session-manager--preview-selected)))))
 
 (defun pichat-session-manager-preview-refresh ()
   "Refresh the runtime represented by the current preview."
@@ -941,13 +951,15 @@ SESSION defaults to the runtime at point."
      directory (pichat-session-manager--owner-scope session)
      (pichat-session-transport session))))
 
-(defun pichat-session-manager-name (&optional session)
+(defun pichat-session-manager-name (&optional session revalidate)
   "Name SESSION's active source through its backend.
-SESSION defaults to the runtime at point."
+SESSION defaults to the runtime at point.  Call optional REVALIDATE after
+reading the name, before sending it."
   (interactive)
   (let* ((session (or session (pichat-session-manager--session-at-point)))
          (source (pichat-session-manager--preview-source-token session))
          (name (read-string "Session name: " (pichat-session-name session))))
+    (when revalidate (funcall revalidate))
     (unless (equal source (pichat-session-manager--preview-source-token session))
       (user-error "Selected runtime changed source while naming"))
     (pichat-backend-name-session
@@ -958,37 +970,43 @@ SESSION defaults to the runtime at point."
          ;; callback owns no UI buffer and remains safe after manager death.
          (pichat-backend-get-state s (lambda (&rest _ignored) nil)))))))
 
-(defun pichat-session-manager-browse-saved ()
+(cl-defun pichat-session-manager-browse-saved
+    (&optional (session (ignore-errors (pichat-session-manager--session-at-point))))
   "Load a selected saved source in a new independent runtime.
-Use the manager row only for archive discovery.  The saved source's recorded
-working directory determines the new runtime's project and display routing."
+Use SESSION only for archive discovery.  With no argument, use the row at
+point, if any; an explicit nil browses without a row.  The saved source's
+recorded working directory determines the new runtime's project and display."
   (interactive)
-  (let ((selected (ignore-errors (pichat-session-manager--session-at-point))))
-    (when selected
-      (pichat-backend-require-capability
-       selected 'saved-sessions "Saved-session browsing"))
-    (pichat-sessions-browse-files-independently
-     :session selected
-     :display-function #'pichat-session-manager--display
-     :error-callback
-     (lambda (response _session)
-       (message "PiChat independent saved-session open failed: %s"
-                (or (plist-get response :error) "unknown error"))))))
+  (when session
+    (pichat-backend-require-capability
+     session 'saved-sessions "Saved-session browsing"))
+  (pichat-sessions-browse-files-independently
+   :session session
+   :display-function #'pichat-session-manager--display
+   :error-callback
+   (lambda (response _session)
+     (message "PiChat independent saved-session open failed: %s"
+              (or (plist-get response :error) "unknown error")))))
 
-(defun pichat-session-manager-stop (&optional session)
-  "Stop only runtime SESSION, defaulting to the row at point."
+(defun pichat-session-manager--stop-prompt (session)
+  "Return SESSION's Stop confirmation prompt, or nil for no prompt."
+  (cond ((eq (pichat-session-persistence session) 'ephemeral)
+         "Discard conversation? ")
+        ((pichat-session-streaming-p session)
+         "Abort running turn? ")))
+
+(defun pichat-session-manager-stop (&optional session revalidate)
+  "Stop only runtime SESSION, defaulting to the row at point.
+Call optional REVALIDATE before dispatch, after any confirmation."
   (interactive)
   (let ((session (or session (pichat-session-manager--session-at-point))))
     (unless (pichat-session-alive-p session)
       (user-error "Selected PiChat runtime is not live"))
-    (when (cond
-           ((eq (pichat-session-persistence session) 'ephemeral)
-            (yes-or-no-p "Discard conversation? "))
-           ((pichat-session-streaming-p session)
-            (yes-or-no-p "Abort running turn? "))
-           (t t))
-      (pichat-stop-session session)
-      (pichat-session-manager-refresh))))
+    (let ((prompt (pichat-session-manager--stop-prompt session)))
+      (when (or (not prompt) (yes-or-no-p prompt))
+        (when revalidate (funcall revalidate))
+        (pichat-stop-session session)
+        (pichat-session-manager-refresh)))))
 
 (defun pichat-session-manager-forget (&optional session)
   "Forget and clean up stopped or failed runtime SESSION.

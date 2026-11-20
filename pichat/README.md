@@ -995,7 +995,9 @@ Earlier, `:extensions` listed extension tool names; such a bare word (for
 example `"project_search"`) is now refused with an error naming the `:tools`
 form. Write a relative directory as `./name`. Reconfiguring a runtime to
 another preset loads that preset's extensions instead and keeps the ones
-added in the launcher. Jobs refuse presets that load extensions.
+added in the launcher. A job whose preset loads extensions captures them
+and loads them with `-e` when its run starts; a run in which one fails to
+load stops before the prompt (see [Jobs](#jobs)).
 
 A group `(SOURCE . :all)` (**Include future tools**) selects every tool that
 extension registers, including tools a later version adds:
@@ -1235,8 +1237,8 @@ Added extensions are launch choices of the runtime, not of its Pi session or
 saved session file. **Save preset as…** stores the checked ones in the new
 preset's `:extensions` (see [Saving presets from the
 launcher](#saving-presets-from-the-launcher)); a preset loads them itself (see
-[Extension tools](#extension-tools)). Job
-definitions cannot declare them.
+[Extension tools](#extension-tools)), also in job runs. Job
+definitions cannot declare them otherwise.
 
 ### Tool-policy boundaries
 
@@ -1724,7 +1726,13 @@ evidence have independent lifetimes. Pending input, cancellation and uncertain
 execution do not automatically discard their runtime tracking.
 
 Execution settings are captured, including resolved preset prompts, Tools,
-model, command and target/path mappings. Instruction/name edits preserve them.
+the extensions the preset loads, model, command and target/path mappings.
+Instruction/name edits preserve them. A run loads the preset's extensions with
+`-e` and holds the prompt until Pi has loaded them; if one fails to install or
+load, the runtime stops and the run finishes as failed with Pi's reason, before
+any prompt (as in [Added extensions](#added-extensions); with `--offline`, an
+uncached package is skipped silently). Reviewing an authored job definition
+shows them as **Loaded extensions**.
 Changing execution re-resolves the preset/target from current configuration;
 cancelling a sub-picker retains earlier staged choices in the composer.
 Closing the composer discards all staged choices. Model/workspace/target edits preserve

@@ -445,8 +445,21 @@ inspection."
                              (pichat-job-executor--failed execution reason)
                            (pichat-job-executor--uncertain execution reason)))))))
 
+(defun pichat-job-executor--extension-failure (session)
+  "Return SESSION's refusal of an extension it loads with -e, or nil.
+The startup checks record it before the runtime stops; the run reports
+it instead of the generic process exit or ended runtime."
+  (when-let* (((pichat-session-p session))
+              (record (seq-find (lambda (record)
+                                  (eq (plist-get record :category) 'extension-failed))
+                                (pichat-session-diagnostics session)))
+              ((eql (car (plist-get record :notice-context))
+                    (pichat-session-process-generation session))))
+    (plist-get record :summary)))
+
 (defun pichat-job-executor--failed (execution reason)
-  "Handle a control failure with REASON, not as successful completion."
+  "Handle a control failure with REASON, not as successful completion.
+Before submission, a refused extension replaces REASON."
   (when (pichat-job-executor--owned-p execution)
     (cond
      ((pichat-job-execution-submitted execution)
@@ -454,7 +467,11 @@ inspection."
      ((pichat-job-execution-borrowed execution)
       (pichat-job-executor--conversation-invalidated
        (pichat-job-execution-executor execution) (pichat-job-execution-id execution) reason))
-     (t (pichat-job-executor--stop-before-prompt execution "failed" reason)))))
+     (t (pichat-job-executor--stop-before-prompt
+         execution "failed"
+         (or (pichat-job-executor--extension-failure
+              (pichat-job-execution-session execution))
+             reason))))))
 
 (defun pichat-job-executor--stop-before-prompt (execution result reason &optional captured)
   "Stop EXECUTION's exact owned lifetime and finish only on exit evidence.

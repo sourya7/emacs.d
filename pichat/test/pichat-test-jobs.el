@@ -38,19 +38,70 @@
     (should-error (pichat-job-launch-capture "Test" "Prompt" project-dir nil)
                   :type 'user-error)))
 
-(ert-deftest pichat-job-launch-refuses-presets-that-load-extensions ()
+(ert-deftest pichat-job-launch-captures-and-loads-preset-extensions ()
   (pichat-test-with-job-executor ()
     (let ((pichat-presets (copy-tree pichat-presets)))
       (pichat-make-preset 'guarded
-        :tools '("read" ("./guard.ts" "guard_check")) :extensions '("./guard.ts"))
-      ;; A capture would not record them, so no run could check they loaded.
-      (should (string-match-p
-               "Jobs cannot use presets that load extensions (guarded)"
-               (cadr (should-error
-                      (pichat-job-launch-capture
-                       "Test" "Prompt" project-dir
-                       '(:preset guarded :model "pichat-fake/pichat-fake" :target local))
-                      :type 'user-error))))
+        :tools '("read" ("./guard.ts" "guard_check"))
+        :extensions '("./guard.ts" "npm:pkg@1"))
+      ;; The capture records the preset's extensions; its command loads them.
+      (let* ((captured (pichat-job-launch-capture
+                        "Test" "Prompt" project-dir
+                        '(:preset guarded :model "pichat-fake/pichat-fake" :target local)))
+             (job (pichat-job-save store captured))
+             ;; Decoded from the JSON store, as a run reads it.
+             (spec (plist-get (pichat-job-record (pichat-job-store-open
+                                                 (pichat-job-store-file store))
+                                                'jobs job)
+                              :spec))
+             (config (plist-get spec :configuration))
+             (command (append (plist-get config :command) nil))
+             (pichat-presets nil))
+        (should (equal ["./guard.ts" "npm:pkg@1"]
+                       (plist-get (plist-get config :preset) :load-extensions)))
+        ;; Reviewing a definition shows and compares them.
+        (should (equal ["./guard.ts" "npm:pkg@1"]
+                       (cdr (assoc "Loaded extensions"
+                                   (pichat-job-definition-ui--fields spec)))))
+        (should (string-search "Loaded extensions: ./guard.ts, npm:pkg@1\n"
+                               (with-temp-buffer
+                                 (pichat-job-definition-ui--inspector-settings nil spec)
+                                 (buffer-string))))
+        (should (equal '("-e" "./guard.ts" "-e" "npm:pkg@1")
+                       (seq-take (member "-e" (member "--session-dir" command)) 4)))
+        (pcase-let ((`(,runtime ,prepared) (pichat-job-launch-prepare spec)))
+          (should (equal command prepared))
+          ;; The run's startup barrier and stderr checks watch these.
+          (should (equal '("./guard.ts" "npm:pkg@1")
+                         (pichat-rpc-session-extensions runtime)))
+          (should (equal '("guard_check")
+                         (plist-get (pichat-session-tool-selection runtime) :extensions)))
+          ;; A restart rebuilds the same -e arguments.
+          (should (equal '("-e" "./guard.ts" "-e" "npm:pkg@1")
+                         (seq-take (member "-e" (member "--session-dir"
+                                                        (pichat-rpc-build-command runtime)))
+                                   4))))
+        ;; A command that would not load them is refused before any start.
+        (let* ((position (cl-position "npm:pkg@1" command :test #'equal))
+               (stripped (append (seq-take command (1- position))
+                                 (nthcdr (1+ position) command)))
+               (tampered (copy-tree spec)))
+          (setf (plist-get (plist-get tampered :configuration) :command) (vconcat stripped))
+          (should (string-match-p
+                   "does not load the extensions of its preset"
+                   (cadr (should-error (pichat-job-launch-prepare tampered)
+                                       :type 'user-error)))))
+        ;; Invalid captured specs are refused by the snapshot validation.
+        (let ((invalid (copy-tree spec)))
+          (setf (plist-get (plist-get (plist-get invalid :configuration) :preset)
+                           :load-extensions)
+                ["myext"])
+          (should-error (pichat-job-launch-prepare invalid) :type 'user-error)))
+      ;; Captures without the key (presets loading nothing) are unchanged.
+      (let ((spec (pichat-test-job-spec project-dir)))
+        (should-not (plist-member (plist-get (plist-get spec :configuration) :preset)
+                                  :load-extensions))
+        (should-not (pichat-rpc-session-extensions (car (pichat-job-launch-prepare spec)))))
       ;; Grouped extension tools alone are captured as exact names.
       (pichat-make-preset 'grouped :tools '("read" ("npm:pkg" "pkg_tool")))
       (let* ((spec (pichat-job-launch-capture
@@ -61,6 +112,83 @@
                        (plist-get (pichat-session-preset-spec runtime) :extensions)))
         (should (equal '("pkg_tool")
                        (plist-get (pichat-session-tool-selection runtime) :extensions)))))))
+
+(defconst pichat-test-jobs--guard
+  (expand-file-name "fixtures/hook-only-guard-extension.ts" pichat-test-directory)
+  "Secrets guard with only a `tool_call' hook: no tools, no commands.")
+
+(when pichat-test-include-integration
+  (ert-deftest pichat-integration-job-runs-with-the-extensions-its-preset-loads ()
+    ;; A hook-only guard is invisible to discovery and Tools, so only the
+    ;; run's behaviour shows that it loaded.
+    (pichat-test-with-job-executor
+        (:script '(:turns [(:toolCall (:id "read-env" :name "read"
+                                      :arguments (:path ".env")))
+                          (:expectToolResultError "read"
+                           :expectContextIncludes "hook-only-guard: secrets are protected"
+                           :text "guard observed")]))
+      (let ((pichat-presets (copy-tree pichat-presets)))
+        (with-temp-file (expand-file-name ".env" project-dir)
+          (insert "PICHAT_TEST_SECRET=do-not-read\n"))
+        (pichat-make-preset 'job-guarded
+          :tools '("read") :extensions (list pichat-test-jobs--guard))
+        (let* ((spec (pichat-job-launch-capture
+                      "Guarded" "Read the secrets." project-dir
+                      '(:preset job-guarded :model "pichat-fake/pichat-fake" :target local)))
+               (id (pichat-job-executor-submit executor spec)))
+          (should (member pichat-test-jobs--guard
+                          (append (plist-get (plist-get spec :configuration) :command) nil)))
+          (pichat-test-job-wait store id "finished")
+          (should (equal "completed" (plist-get (pichat-job-record store 'runs id) :result)))
+          ;; The provider saw the guard's error result, never the secret.
+          (pichat-test-assert-provider-script-consumed status-file)
+          (should-not (string-search
+                       "do-not-read"
+                       (with-temp-buffer
+                         (dolist (file (directory-files-recursively session-dir "\\.jsonl\\'"))
+                           (insert-file-contents file))
+                         (buffer-string))))))))
+
+  (ert-deftest pichat-integration-job-refuses-a-runtime-whose-preset-extension-failed ()
+    ;; A missing local path makes Pi exit; a package that fails to install
+    ;; (a missing local tarball: npm needs no network) lets Pi start without
+    ;; it.  Installs need Pi online, so drop the offline settings.
+    (let ((cases (lambda (dir)
+                   (let ((missing (expand-file-name "missing-extension.ts" dir))
+                         (package (concat "npm:" (expand-file-name "missing-package.tgz" dir))))
+                     (list (list missing (format "Failed to load extension \"%s\"" missing))
+                           (list package (format "Extension package \"%s\": failed to install"
+                                                 package)))))))
+      (dotimes (index 2)
+        (pichat-test-with-job-executor (:script '(:turns [(:text "must not run")]))
+          (pcase-let* ((`(,extension ,reported) (nth index (funcall cases project-dir)))
+                       (process-environment (cons "PI_OFFLINE" process-environment))
+                       (pichat-pi-default-args (remove "--offline" pichat-pi-default-args))
+                       (pichat-presets (copy-tree pichat-presets)))
+            (ert-info ((format "Spec: %s" extension))
+              (pichat-make-preset 'job-failing :tools '("read") :extensions (list extension))
+              (let* ((spec (pichat-job-launch-capture
+                            "Failing" "Do the work." project-dir
+                            '(:preset job-failing :model "pichat-fake/pichat-fake"
+                                      :target local)))
+                     (id (pichat-job-executor-submit executor spec)))
+                (pichat-test-wait-until
+                 (lambda () (member (plist-get (pichat-job-record store 'runs id) :state)
+                                    '("finished" "uncertain")))
+                 60 "refused job run")
+                (let ((run (pichat-job-record store 'runs id)))
+                  (should (equal "finished" (plist-get run :state)))
+                  (should (equal "failed" (plist-get run :result)))
+                  ;; The run reports the refusal, not the process exit.
+                  (should (string-prefix-p "Added extension failed" (plist-get run :reason)))
+                  (should (string-search (truncate-string-to-width reported 40)
+                                         (plist-get run :reason))))
+                ;; No prompt reached the model.
+                (should-not (plist-get (pichat-test-provider-status status-file)
+                                       :consumedAll))
+                (should-not (seq-some (lambda (runtime)
+                                        (process-live-p (pichat-session-process runtime)))
+                                      (pichat-session-list)))))))))))
 
 (ert-deftest pichat-job-prepare-and-hidden-chat-preserve-current-context ()
   (pichat-test-with-job-executor ()

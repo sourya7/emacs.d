@@ -79,7 +79,7 @@ and extension activation changes do not trigger it automatically."
          (restart-token (plist-get (pichat-session-restart-operation session) :token))
          (request-id (format "pichat-enable-%s" (gensym)))
          (names (plist-get control :names))
-         payload handled finished)
+         payload handled finished extension-failed)
     (unless control (error "No captured extension tool policy"))
     (setf (plist-get control :verified) nil
           (plist-get control :process) process
@@ -99,6 +99,7 @@ and extension activation changes do not trigger it automatically."
              ;; Also when Pi exited: its reason is more precise than ours.
              (when-let* ((failure (pichat-tool-runtime--extension-failure session)))
                (setq success nil
+                     extension-failed t
                      reason (pichat-rpc-extension-failure-message failure)))
              (if success
                  (progn
@@ -108,7 +109,9 @@ and extension activation changes do not trigger it automatically."
                      (dolist (line queue) (pichat-rpc--write-line session line)))
                    (when callback (funcall callback t nil)))
                (let ((reason (truncate-string-to-width (or reason "Tool verification failed") 600 nil nil "…")))
-                 (let ((diagnostic (pichat-chat-diagnostics-record session :origin 'tool-control :message reason)))
+                 (let ((diagnostic (pichat-chat-diagnostics-record
+                                    session :origin 'tool-control :message reason
+                                    :category (and extension-failed 'extension-failed))))
                    (pichat-emit session 'error :message (plist-get diagnostic :summary) :diagnostic diagnostic))
                  ;; Stop before notifying any waiter; no selected-but-unverified
                  ;; runtime can remain usable after a failure.

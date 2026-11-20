@@ -44,7 +44,12 @@
    ;; Likewise for an MCP baseline.  A preset model is not captured here:
    ;; the job's own :model is authoritative.
    (when-let* ((pairs (plist-get preset :mcp)))
-     (list :mcp (pichat-job-launch--pairs pairs)))))
+     (list :mcp (pichat-job-launch--pairs pairs)))
+   ;; The extensions the preset loads with -e.  The captured command
+   ;; already passes them; the decoded snapshot names them so the run's
+   ;; startup checks refuse a runtime in which one failed to load.
+   (when-let* ((specs (plist-get preset :load-extensions)))
+     (list :load-extensions (vconcat specs)))))
 
 (defun pichat-job-launch--optional-strings (values)
   "Decode optional captured string VALUES; older captures omit them."
@@ -64,14 +69,25 @@
                :append-system-prompt (plist-get preset :append-system-prompt)))
         (emacs (pichat-job-launch--optional-strings (plist-get preset :emacs-tools)))
         (mcp (and (plist-get preset :mcp)
-                  (pichat-job-launch--unpairs (plist-get preset :mcp)))))
-    (pichat-presets-validate-snapshot
-     (append result
-             (when emacs (list :emacs-tools emacs))
-             (when mcp (list :mcp mcp))))
-    (append result
-            (when emacs (list :emacs-tools emacs))
-            (when mcp (list :mcp mcp)))))
+                  (pichat-job-launch--unpairs (plist-get preset :mcp))))
+        (load (pichat-job-launch--optional-strings
+               (plist-get preset :load-extensions))))
+    (setq result (append result
+                         (when emacs (list :emacs-tools emacs))
+                         (when mcp (list :mcp mcp))
+                         (when load (list :load-extensions load))))
+    (pichat-presets-validate-snapshot result)
+    result))
+
+(defun pichat-job-launch--check-extensions (preset command)
+  "Signal unless captured COMMAND loads every extension of PRESET with -e.
+The run's startup checks only watch the extensions the snapshot names, so
+a command without them would start without what the preset loads."
+  (when-let* ((extensions (pichat-presets-load-extensions preset)))
+    (let ((args (pichat-rpc-extension-args extensions)))
+      (unless (cl-loop for tail on command
+                       thereis (equal args (seq-take tail (length args))))
+        (user-error "Captured job command does not load the extensions of its preset")))))
 
 (defun pichat-job-launch--tools (tools)
   "Encode resolved TOOLS."
@@ -151,12 +167,6 @@ submission.  Complete wrappers and conversation-loading flags are unsupported."
                            :tools (plist-get profile :tools) :model model
                            :target (unless (eq (plist-get profile :target) 'inferred)
                                      (plist-get profile :target)))))
-           (_ (when (pichat-presets-load-extensions
-                     (pichat-session-preset-spec session))
-                ;; Captures do not record them, so no run could check that
-                ;; they loaded; refuse rather than run unprotected.
-                (user-error "Jobs cannot use presets that load extensions (%s)"
-                            (plist-get (pichat-session-preset-spec session) :name))))
            (transport (pichat-session-transport session))
            (context (pichat-session-path-context session))
            (command (pichat-rpc-build-command session))
@@ -195,6 +205,7 @@ Return (SESSION COMMAND).  This does not consult preset or target registries."
                  (file-name-absolute-p runtime-directory)
                  (not (file-remote-p runtime-directory)) command)
       (user-error "Invalid captured job launch configuration"))
+    (pichat-job-launch--check-extensions preset command)
     (let* ((scope (pichat--scope-for-directory directory nil transport))
            (session (pichat-session-make
                      :cwd directory :emacs-cwd directory :runtime-cwd runtime-directory

@@ -630,7 +630,7 @@ retains its current-tab display behavior.
 | `m` | Model | List models and stage a listed or entered ID for this launch (implies independent); with a model staged, `m` clears it back to the preset's model or Pi's default |
 | `p` | Preset | Choose a named tool/prompt preset; explicit selection implies independent and restores its model |
 | `x` | Tools | Choose that preset's built-ins, extension tools and direct MCP tools for a new independent runtime |
-| `l` | Extensions | Add extensions for this launch (a path, `npm:` or `git:` spec; checked ones imply independent), with Recent (3) and the extensions Pi discovered that register tools or commands. Loading them is not implemented yet: a launch with checked extensions is refused |
+| `l` | Extensions | Add extensions for this launch (a path, `npm:` or `git:` spec; checked ones imply independent), with Recent (3) and the extensions Pi discovered that register tools or commands. Checked ones are passed to Pi as `-e` (unchanged, also to SSH targets) at startup, restart and reconfiguration, and to the `x Tools` discovery probe, so their tools can be selected; changing them invalidates that discovery. A complete `pichat-rpc-command` wrapper refuses them |
 | `s` | Conversation | Pick a saved session, or clear the staged selection |
 | `r` | Reconfigure this runtime | From its owning chat, enter a separate captured-runtime menu; never implied by launching |
 | `c` | Save preset as… | Save the selected preset, Tools and model under a name; see [Saving presets from the launcher](#saving-presets-from-the-launcher) |
@@ -692,7 +692,8 @@ independent-open ownership and actions.
 
 From an owning chat, `r` opens **Reconfigure this runtime**. The menu captures
 that exact runtime, its current conversation, and its resolved preset/Tools
-snapshots, not the present registry defaults. `p` explicitly resolves the
+snapshots and added extensions (loaded again with `-e`), not the present
+registry defaults. `p` explicitly resolves the
 selected current definition; `x` edits Tools against the captured draft. `b`
 returns to the untouched launch draft. `RET` with no effective prompt/tool
 change is a no-op. Otherwise PiChat checks fresh Pi state, asks for confirmation,

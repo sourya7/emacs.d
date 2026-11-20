@@ -211,16 +211,33 @@ Consumers still receive the complete event, not the diagnostic snapshot."
           (user-error "Pi arguments conflict with preset %s: %s"
                       (plist-get preset :name) arg))))))
 
+(defun pichat-rpc-extension-args (extensions)
+  "Return Pi arguments loading added EXTENSIONS, a list of specs, in order."
+  (mapcan (lambda (spec) (list "-e" spec)) extensions))
+
+(defun pichat-rpc--validate-extensions (extensions)
+  "Return a copy of added EXTENSIONS, or signal unless they are valid.
+EXTENSIONS is a list of distinct `pichat-presets-extension-spec-p' specs."
+  (unless (and (proper-list-p extensions)
+               (cl-every #'pichat-presets-extension-spec-p extensions)
+               (= (length extensions)
+                  (length (delete-dups (copy-sequence extensions)))))
+    (user-error "Invalid or duplicate PiChat extensions: %S" extensions))
+  (copy-sequence extensions))
+
 (defun pichat-rpc-normalize-launch-options (&optional launch-options)
   "Return validated low-level LAUNCH-OPTIONS.
-Supported keys include `:persistence', `:preset-spec', `:tools' and an exact
-`:model' reference.  Complete local commands cannot safely be amended."
+Supported keys include `:persistence', `:preset-spec', `:tools', an exact
+`:model' reference and added `:extensions' (specs passed as `-e').
+Complete local commands cannot safely be amended."
   (when (plist-member launch-options :execution)
     (user-error "Obsolete :execution option; select a PiChat :preset instead"))
   (let ((persistence (or (plist-get launch-options :persistence) 'persistent))
         (preset (plist-get launch-options :preset-spec))
         (model (plist-get launch-options :model))
         (preset-args (plist-get launch-options :preset-args))
+        (extensions (pichat-rpc--validate-extensions
+                     (plist-get launch-options :extensions)))
         (structured-p (plist-get launch-options :structured-transport)))
     (unless (memq persistence '(persistent ephemeral))
       (user-error "Invalid PiChat persistence: %S" persistence))
@@ -238,15 +255,21 @@ Supported keys include `:persistence', `:preset-spec', `:tools' and an exact
     (when (and model pichat-rpc-command (not structured-p))
       (user-error
        "Run-local PiChat models are not yet supported with `pichat-rpc-command'"))
+    ;; A complete command would silently start without them.
+    (when (and extensions pichat-rpc-command (not structured-p))
+      (user-error
+       "Added PiChat extensions cannot be loaded through `pichat-rpc-command'"))
     (when (and (pichat-presets-overrides-p preset) pichat-rpc-command
                (not structured-p))
       (user-error
        "Configured PiChat presets require a structured Pi command; choose standard for this wrapper"))
-    (list :persistence persistence :preset-spec preset :model model)))
+    (append (list :persistence persistence :preset-spec preset :model model)
+            (when extensions (list :extensions extensions)))))
 
 (defun pichat-rpc-build-command (&optional session)
   "Return argv list for starting Pi RPC for optional SESSION.
-The session snapshot controls `--no-session', preset flags and the model."
+The session snapshot controls `--no-session', preset flags, the model and
+the added extensions (one `-e' each, passed unchanged, also to SSH targets)."
   (let* ((persistence (if session
                           (pichat-session-persistence session)
                         'persistent))
@@ -255,6 +278,7 @@ The session snapshot controls `--no-session', preset flags and the model."
                              (or (pichat-session-tool-selection session)
                                  (pichat-tool-selection-resolve preset))))
          (startup-model (and session (pichat-session-startup-model session)))
+         (extensions (and session (pichat-session-extensions session)))
          (transport (and session (pichat-session-transport session)))
          (remote-p (and transport
                         (eq (pichat-transport-kind transport) 'ssh)))
@@ -263,6 +287,7 @@ The session snapshot controls `--no-session', preset flags and the model."
                          pichat-pi-executable)))
     (pichat-rpc-normalize-launch-options
      (list :persistence persistence :preset-spec preset :model startup-model
+           :extensions extensions
            :preset-args (append pichat-pi-default-args
                                 (and transport (pichat-transport-pi-args transport))
                                 (unless remote-p pichat-pi-extra-args))
@@ -284,6 +309,7 @@ The session snapshot controls `--no-session', preset flags and the model."
                   (list "--session-dir" pichat-pi-session-dir))
                 (when-let* ((bridge (pichat-rpc-bridge-file transport tool-snapshot)))
                   (list "-e" bridge))
+                (pichat-rpc-extension-args extensions)
                 (when (eq persistence 'ephemeral)
                   (list "--no-session"))
                 (unless remote-p pichat-pi-extra-args)

@@ -54,6 +54,9 @@
   preset-name
   preset-spec
   tool-selection
+  ;; Extensions added for this runtime: specs passed to Pi as `-e', in order,
+  ;; on every start, restart and reconfiguration.
+  extensions
   session-file
   session-file-back-stack
   session-file-forward-stack

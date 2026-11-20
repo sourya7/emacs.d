@@ -548,6 +548,7 @@ Prevent a second writer for the same saved session file."
                        :target (unless (eq target 'inferred) target)
                        :preset (plist-get profile :preset)
                        :tools (plist-get profile :tools)
+                       :extensions (plist-get profile :extensions)
                        :model (and (stringp (plist-get profile :model))
                                    (plist-get profile :model)))
                  :display-function (plist-get profile :display-function)
@@ -632,9 +633,6 @@ Prompted-model profiles first select a model asynchronously and return nil,
 as do presets whose MCP baseline is first checked at the destination."
   (let* ((profile (pichat--normalize-launch-profile profile))
          (model (plist-get profile :model)))
-    (when (plist-get profile :extensions)
-      ;; Never start a runtime without extensions the user chose to load.
-      (user-error "Added extensions cannot be loaded yet; uncheck them in l Extensions"))
     (cond
      ((eq model 'prompt)
       (pichat--select-model-before-launch profile directory)
@@ -658,6 +656,7 @@ as do presets whose MCP baseline is first checked at the destination."
               (list :persistence persistence
                     :preset (plist-get profile :preset)
                     :tools (copy-tree (plist-get profile :tools))
+                    :extensions (copy-sequence (plist-get profile :extensions))
                     :model (and (stringp model) model)
                     :target (unless (eq target 'inferred) target)))
              (previous-session pichat-current-session)
@@ -679,7 +678,8 @@ as do presets whose MCP baseline is first checked at the destination."
 (defun pichat-prepare-session (&optional cwd scope launch-options)
   "Prepare a runtime rooted at CWD without registering or starting it.
 SCOPE is the immutable (KEY CWD LABEL) owner scope.  LAUNCH-OPTIONS supports
-`:persistence', `:preset', `:tools', `:transport' and run-local `:model'.
+`:persistence', `:preset', `:tools', `:transport', run-local `:model' and
+`:extensions', specs Pi loads with `-e' on every start of the runtime.
 Instead of a `:preset' name, `:preset-spec' may supply an already resolved
 preset snapshot (for example a job's captured preset); the preset registry is
 then not consulted.  A non-nil `:restore-saved-model' (refused together with
@@ -749,6 +749,7 @@ not become current/preferred and no RPC process or chat is created."
                    :preset-name preset-name
                    :preset-spec preset-spec
                    :tool-selection tool-selection
+                   :extensions (plist-get normalized-options :extensions)
                    :startup-model (plist-get normalized-options :model)
                    :restore-saved-model
                    (and (plist-get launch-options :restore-saved-model) t)
@@ -1485,12 +1486,15 @@ model and conversation are shown by their own menu entries."
          (setq next (plist-put next :launch-args args))
          (transient-setup 'pichat-launch nil nil :scope next)))
      (and (stringp (plist-get profile :model)) (plist-get profile :model))
-     (plist-get context :tool-discovery))))
+     (plist-get context :tool-discovery)
+     ;; Their tools are offered too; changing them invalidates discovery.
+     (plist-get profile :extensions))))
 
 (defun pichat--launch-discovery-context (args context)
   "Return the discovery probe context for launcher ARGS and CONTEXT.
 It follows the launch's destination, preset and model, as the Tools
-picker's probe does.  Signal when discovery is unavailable there."
+picker's probe does, but loads no added extensions: it shows what Pi
+discovers by itself.  Signal when discovery is unavailable there."
   (let* ((profile (pichat--launch-profile-from-arguments args context))
          (preset (plist-get profile :preset))
          (spec (pichat-presets-resolve
@@ -1867,7 +1871,9 @@ says when it does not, and what blocks it."
      (let ((model (pichat-session-model session)))
        (when (and (plist-get model :provider) (plist-get model :id))
          (concat (plist-get model :provider) "/" (plist-get model :id))))
-     (plist-get scope :tool-discovery))))
+     (plist-get scope :tool-discovery)
+     ;; The replacement keeps the runtime's added extensions.
+     (pichat-session-extensions session))))
 
 (transient-define-suffix pichat-reconfigure-back ()
   "Return to the untouched normal launch draft."

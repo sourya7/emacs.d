@@ -89,15 +89,110 @@
     (ert-info ((format "Profile: %S" profile))
       (should-error (pichat--normalize-launch-profile profile) :type 'user-error))))
 
-(ert-deftest pichat-launch-extensions-launch-refuses-before-starting-a-runtime ()
+(ert-deftest pichat-launch-extensions-launch-passes-checked-specs-to-a-new-runtime ()
   (pichat-test-with-clean-state
     (let ((context (list :directory "/tmp/" :display-function #'ignore
-                         :extensions '(("~/pi-ext/protect-secrets.ts" . t)))))
+                         :extensions '(("~/pi-ext/protect-secrets.ts" . t)
+                                       ("npm:unchecked" . nil)
+                                       ("npm:@pi-vault/pi-guardrails@1.2.3" . t))))
+          started)
       (cl-letf (((symbol-function 'pichat-start-session)
-                 (lambda (&rest _) (ert-fail "Started a runtime")))
+                 (lambda (_cwd _scope options) (setq started options) 'runtime))
+                ((symbol-function 'pichat--preferred-session-for-exact-scope)
+                 (lambda (&rest _) (ert-fail "Reused the preferred runtime")))
+                ((symbol-function 'pichat--display-and-synchronize-session) #'ignore)
                 ((symbol-function 'transient-args) (lambda (_) nil))
                 ((symbol-function 'transient-scope) (lambda (&rest _) context)))
-        (should-error (call-interactively #'pichat-launch-execute) :type 'user-error)))))
+        (call-interactively #'pichat-launch-execute)
+        (should (equal '("~/pi-ext/protect-secrets.ts" "npm:@pi-vault/pi-guardrails@1.2.3")
+                       (plist-get started :extensions)))))))
+
+(ert-deftest pichat-launch-extensions-load-with-e-on-start-restart-and-reconfiguration ()
+  (let ((pichat-rpc-command nil)
+        (pichat-pi-executable "/opt/pi")
+        (pichat-pi-default-args '("--mode" "rpc"))
+        (pichat-default-model nil)
+        (pichat-pi-session-dir nil)
+        (pichat-bridge-extension-file "/tmp/bridge.ts")
+        (pichat-pi-extra-args '("--offline"))
+        (pichat-path-mappings nil)
+        (specs '("~/pi-ext/protect-secrets.ts" "npm:@pi-vault/pi-guardrails@1.2.3")))
+    (let* ((session (pichat-prepare-session
+                     "/tmp/" nil (list :preset 'manual :extensions (copy-sequence specs))))
+           (argv (pichat-rpc-build-command session)))
+      ;; Captured with the runtime, in order, after the bridge.
+      (should (equal specs (pichat-session-extensions session)))
+      (should (equal (list "-e" "/tmp/bridge.ts" "-e" (nth 0 specs) "-e" (nth 1 specs))
+                     (seq-take (member "-e" argv) 6)))
+      ;; Every later start of the runtime rebuilds the same argv.
+      (should (equal argv (pichat-rpc-build-command session)))
+      ;; A reconfiguration replacement keeps them with the new Tools.
+      (let ((replacement (pichat-reconfigure-validated-command
+                          session
+                          (pichat-reconfigure-select-tools
+                           (pichat-reconfigure-captured-configuration session)
+                           '(:builtins ("read")))
+                          '(:model (:provider "p" :id "m")))))
+        (should (equal (list "-e" (nth 0 specs) "-e" (nth 1 specs))
+                       (seq-take (cddr (member "-e" replacement)) 4)))
+        (should (equal '("--tools" "read")
+                       (seq-take (member "--tools" replacement) 2)))))
+    ;; Without added extensions the argv is unchanged.
+    (should (equal '("/opt/pi" "--mode" "rpc" "-e" "/tmp/bridge.ts" "--offline")
+                   (pichat-rpc-build-command
+                    (pichat-prepare-session "/tmp/" nil '(:preset standard)))))
+    ;; SSH targets get the specs unchanged; they name remote paths.
+    (let* ((transport (pichat-transport--create
+                       :id 'remote :kind 'ssh :label "remote"
+                       :tramp-prefix "/ssh:remote:" :pi-executable "pi"))
+           (session (pichat-session-make :transport transport :extensions specs)))
+      (should (equal (list "-e" (nth 0 specs) "-e" (nth 1 specs))
+                     (seq-take (member "-e" (pichat-rpc-build-command session)) 4))))
+    ;; Invalid specs, and a complete command wrapper that would drop them,
+    ;; are refused before any runtime exists.
+    (dolist (extensions '(("-x") ("a.ts" "a.ts") "a.ts"))
+      (should-error (pichat-prepare-session "/tmp/" nil (list :extensions extensions))
+                    :type 'user-error))
+    (let ((pichat-rpc-command '("/opt/pi-wrapper")))
+      (should (pichat-prepare-session "/tmp/" nil '(:preset standard)))
+      (should (string-match-p
+               "extensions cannot be loaded through"
+               (cadr (should-error (pichat-prepare-session
+                                    "/tmp/" nil (list :preset 'standard :extensions specs))
+                                   :type 'user-error)))))))
+
+(ert-deftest pichat-launch-extensions-tools-discovery-loads-checked-extensions ()
+  (let ((pichat-rpc-command nil) (pichat-pi-extra-args nil)
+        (pichat-pi-default-args '("--mode" "rpc")) (pichat-default-model nil)
+        (pichat-bridge-extension-file nil) (pichat-path-mappings nil)
+        (context (list :directory "/tmp/" :display-function #'ignore
+                       :extensions '(("a.ts" . t) ("npm:b" . nil))))
+        opened)
+    (cl-letf (((symbol-function 'transient-args) (lambda (_) nil))
+              ((symbol-function 'transient-scope) (lambda (&rest _) context))
+              ((symbol-function 'pichat-tool-picker-open)
+               (lambda (&rest args) (setq opened args))))
+      ;; x Tools probes with the checked extensions, so their tools show.
+      (call-interactively #'pichat-launch-tools)
+      (should (equal '("a.ts") (nth 8 opened))))
+    (let* ((spec (pichat-presets-resolve 'manual))
+           (probe (lambda (extensions)
+                    (plist-get (cdr (pichat-tool-picker-discovery-context
+                                     spec "/tmp/" pichat-transport-local "pi" nil extensions))
+                               :args)))
+           (draft (pichat-tool-discovery-draft-create
+                   :status 'ready :tools '((:name "x"))
+                   :context (list :args (funcall probe '("a.ts"))))))
+      (should (equal '("--mode" "rpc" "-e" "a.ts" "-e" "npm:b")
+                     (funcall probe '("a.ts" "npm:b"))))
+      (should (equal '("--mode" "rpc") (funcall probe nil)))
+      ;; A changed list of extensions invalidates cached discovery.
+      (pichat-tool-discovery-draft-reset draft (list :args (funcall probe '("a.ts" "npm:b"))))
+      (should-not (pichat-tool-discovery-draft-status draft))
+      (should-not (pichat-tool-discovery-draft-tools draft)))
+    ;; The Extensions menu lists what Pi discovers by itself.
+    (should-not (member "-e" (plist-get (pichat--launch-discovery-context nil context)
+                                        :args)))))
 
 (ert-deftest pichat-launch-extensions-launcher-entry-counts-checked-and-round-trips ()
   (let* ((context (list :directory "/tmp/" :display-function #'ignore
@@ -263,6 +358,87 @@
           (put 'pichat-recent-extensions (car property) (cdr property)))
         (when-let* ((buffer (find-buffer-visiting file)))
           (kill-buffer buffer))))))
+
+(defconst pichat-test-launch-extensions--fixture
+  (expand-file-name "fixtures/tool-control-extension.ts" pichat-test-directory)
+  "Extension registering the probe tools, loaded only when added.")
+
+(declare-function pichat-test-extension-tools-active "pichat-test-extension-tools" (session))
+
+(when pichat-test-include-integration
+  (ert-deftest pichat-launch-extensions-real-pi-discovery-loads-added-extensions ()
+    (pichat-test-with-integration-session (session :preset 'manual :script '(:turns []))
+      (let ((pichat-pi-default-args
+             (list "--mode" "rpc" "--offline" "--no-approve" "--no-context-files"
+                   "--no-skills" "--no-prompt-templates" "--no-themes" "--no-extensions"
+                   "--no-mcp" "-e" pichat-test-fake-provider-extension
+                   "--model" "pichat-fake/pichat-fake"))
+            (fixture (file-truename pichat-test-launch-extensions--fixture))
+            (draft (pichat-tool-discovery-draft-create)))
+        (cl-flet ((discover (extensions)
+                    (let (done)
+                      (pichat-tool-discovery-draft-reset
+                       draft (cdr (pichat-tool-picker-discovery-context
+                                   (pichat-presets-resolve 'standard) project-dir
+                                   pichat-transport-local pichat-test-pi-executable
+                                   nil extensions)))
+                      (pichat-tool-discovery-draft-refresh draft (lambda (_) (setq done t)))
+                      (pichat-test-wait-until (lambda () done) 15 "real discovery probe")
+                      (should (eq 'ready (pichat-tool-discovery-draft-status draft)))
+                      (cl-find "probe_child" (pichat-tool-discovery-draft-tools draft)
+                               :key (lambda (tool) (plist-get tool :name)) :test #'equal))))
+          (unwind-protect
+              (progn
+                (should-not (discover nil))
+                (let ((tool (discover (list pichat-test-launch-extensions--fixture))))
+                  (should tool)
+                  (should (equal fixture (file-truename
+                                          (plist-get (plist-get tool :source) :path))))))
+            (when-let* ((cancel (pichat-tool-discovery-draft-cancel draft)))
+              (funcall cancel)))))))
+
+  (ert-deftest pichat-launch-extensions-real-pi-loads-added-extension-at-start-and-restart ()
+    (pichat-test-with-integration-session (session :preset 'manual :script '(:turns []))
+      (let ((pichat-chat-stop-session-on-kill nil)
+            (fixture pichat-test-launch-extensions--fixture)
+            added buffer result)
+        (unwind-protect
+            (progn
+              ;; The fixture is not otherwise loaded: only as an added extension.
+              (setq added (pichat-start-session
+                           project-dir nil
+                           (list :preset 'manual :extensions (list fixture)
+                                 :tools '(:builtins ("read") :extensions ("probe_child")))))
+              (pichat-rpc-get-state added (lambda (value _s) (setq result value))
+                                    (lambda (value _s) (setq result value)))
+              (pichat-test-wait-until (lambda () result) 15 "runtime with added extension")
+              (should (plist-get result :success))
+              (should (equal (list fixture) (pichat-session-extensions added)))
+              (should (equal "-e" (nth (1- (cl-position fixture (pichat-session-rpc-command added)
+                                                        :test #'equal))
+                                       (pichat-session-rpc-command added))))
+              (should (member "probe_child" (pichat-test-extension-tools-active added)))
+              ;; Reconfiguration restarts Pi with the same added extension.
+              (setq buffer (pichat-chat-open added t))
+              (pichat-test-wait-until (lambda () (pichat-chat-canonical-entry-cache added))
+                                      5 "initial empty cache")
+              (setq result nil)
+              (pichat-reconfigure-restart
+               (pichat-reconfigure-capture-origin added)
+               (pichat-reconfigure-select-tools
+                (pichat-reconfigure-captured-configuration added)
+                '(:builtins ("read") :extensions ("probe_session")))
+               (lambda (success reason) (setq result (list success reason))))
+              (pichat-test-wait-until (lambda () result) 15 "restart with added extension")
+              (should (car result))
+              (should (member fixture (pichat-session-rpc-command added)))
+              (let ((active (pichat-test-extension-tools-active added)))
+                (should (member "probe_session" active))
+                (should-not (member "probe_child" active))))
+          (when (buffer-live-p buffer) (kill-buffer buffer))
+          (when (pichat-session-p added)
+            (pichat-rpc-stop added)
+            (pichat-forget-session added)))))))
 
 (provide 'pichat-test-launch-extensions)
 ;;; pichat-test-launch-extensions.el ends here

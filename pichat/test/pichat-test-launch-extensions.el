@@ -517,6 +517,10 @@
   (expand-file-name "fixtures/tool-control-extension.ts" pichat-test-directory)
   "Extension registering the probe tools, loaded only when added.")
 
+(defconst pichat-test-launch-extensions--guard
+  (expand-file-name "fixtures/hook-only-guard-extension.ts" pichat-test-directory)
+  "Secrets guard with only a `tool_call' hook: no tools, no commands.")
+
 (declare-function pichat-test-extension-tools-active "pichat-test-extension-tools" (session))
 
 (when pichat-test-include-integration
@@ -624,6 +628,72 @@
                 (should (member "probe_session" active))
                 (should-not (member "probe_child" active))))
           (when (buffer-live-p buffer) (kill-buffer buffer))
+          (when (pichat-session-p added)
+            (pichat-rpc-stop added)
+            (pichat-forget-session added))))))
+
+  (ert-deftest pichat-launch-extensions-real-pi-hook-only-guard-protects-a-manual-runtime ()
+    ;; The motivating case: a hook-only secrets guard added for a `manual'
+    ;; runtime.  Pi lists nothing for it, yet it is loaded and blocks.
+    (pichat-test-with-integration-session
+        (session :preset 'manual
+                 :script '(:turns [(:toolCall (:id "read-env" :name "read"
+                                               :arguments (:path ".env")))
+                                   (:expectToolResultError "read"
+                                    :expectContextIncludes "hook-only-guard: secrets are protected"
+                                    :text "guard observed")]))
+      (let ((pichat-chat-stop-session-on-kill nil)
+            (guard pichat-test-launch-extensions--guard)
+            (draft (pichat-tool-discovery-draft-create))
+            added result)
+        (with-temp-file (expand-file-name ".env" project-dir)
+          (insert "PICHAT_TEST_SECRET=do-not-read\n"))
+        (unwind-protect
+            (progn
+              ;; Discovery loads it without error, but it registers nothing:
+              ;; no Tools group and no Discovered entry.
+              (let ((pichat-pi-default-args
+                     (list "--mode" "rpc" "--offline" "--no-approve" "--no-context-files"
+                           "--no-skills" "--no-prompt-templates" "--no-themes" "--no-extensions"
+                           "--no-mcp" "-e" pichat-test-fake-provider-extension
+                           "--model" "pichat-fake/pichat-fake"))
+                    done)
+                (pichat-tool-discovery-draft-reset
+                 draft (cdr (pichat-tool-picker-discovery-context
+                             (pichat-presets-resolve 'standard) project-dir
+                             pichat-transport-local pichat-test-pi-executable nil (list guard))))
+                (pichat-tool-discovery-draft-refresh draft (lambda (_) (setq done t)))
+                (pichat-test-wait-until (lambda () done) 15 "real discovery probe")
+                (should (eq 'ready (pichat-tool-discovery-draft-status draft)))
+                (let* ((pichat-tool-picker--state (list :servers nil :discovery draft))
+                       (groups (pichat-tool-picker--extension-groups)))
+                  (should-not (assoc guard groups))
+                  (should-not (assq :unattributed groups)))
+                (should-not (rassoc guard (pichat-launch-extensions-discovered draft))))
+              ;; The runtime starts with the guard and Pi's manual tools.
+              (setq added (pichat-start-session
+                           project-dir nil (list :preset 'manual :extensions (list guard))))
+              (pichat-rpc-get-state added (lambda (value _s) (setq result value))
+                                    (lambda (value _s) (setq result value)))
+              (pichat-test-wait-until (lambda () result) 15 "runtime with the guard")
+              (should (plist-get result :success))
+              (should (member guard (pichat-session-rpc-command added)))
+              (should (equal '("--tools" "read,grep,find,ls,edit,write")
+                             (seq-take (member "--tools" (pichat-session-rpc-command added)) 2)))
+              ;; The guard blocks reading the secrets file.
+              (pichat-test-prompt-and-wait added "read the secrets")
+              (let* ((messages (plist-get (plist-get (pichat-test-rpc-call added "get_messages")
+                                                     :data)
+                                          :messages))
+                     (tool-result (cl-find "toolResult" messages
+                                           :key (lambda (message) (plist-get message :role))
+                                           :test #'equal)))
+                (should (plist-get tool-result :isError))
+                (should (string-search "hook-only-guard: secrets are protected"
+                                       (format "%S" (plist-get tool-result :content))))
+                (should-not (string-search "do-not-read" (format "%S" messages)))))
+          (when-let* ((cancel (pichat-tool-discovery-draft-cancel draft)))
+            (funcall cancel))
           (when (pichat-session-p added)
             (pichat-rpc-stop added)
             (pichat-forget-session added))))))

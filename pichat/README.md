@@ -630,7 +630,7 @@ retains its current-tab display behavior.
 | `m` | Model | List models and stage a listed or entered ID for this launch (implies independent); with a model staged, `m` clears it back to the preset's model or Pi's default |
 | `p` | Preset | Choose a named tool/prompt preset; explicit selection implies independent and restores its model |
 | `x` | Tools | Choose that preset's built-ins, extension tools and direct MCP tools for a new independent runtime |
-| `l` | Extensions | Add extensions for this launch (a path, `npm:` or `git:` spec; checked ones imply independent), with Recent (3) and the extensions Pi discovered that register tools or commands. Checked ones are passed to Pi as `-e` (unchanged, also to SSH targets) at startup, restart and reconfiguration, and to the `x Tools` discovery probe, so their tools can be selected; changing them invalidates that discovery. A complete `pichat-rpc-command` wrapper refuses them. Adding one that Pi already loads (the same `npm:` / `git:` source, or a path resolving to a discovered extension's file or directory) is refused with a message; while such a one is checked, Done refuses and Refresh reports it. When Pi reports that a checked one failed to install, or that any extension failed to load (for example a missing path or a tool name conflict), the `x Tools` discovery fails and the runtime is stopped before it accepts input, with Pi's line as the message |
+| `l` | Extensions | Add extensions for this launch: a path, `npm:` or `git:` spec loaded with `-e` on top of the extensions Pi discovers; checked ones imply independent. See [Added extensions](#added-extensions) |
 | `s` | Conversation | Pick a saved session, or clear the staged selection |
 | `r` | Reconfigure this runtime | From its owning chat, enter a separate captured-runtime menu; never implied by launching |
 | `c` | Save preset as… | Save the selected preset, Tools and model under a name; see [Saving presets from the launcher](#saving-presets-from-the-launcher) |
@@ -975,6 +975,123 @@ shutdown. Successful SSH catalogue probes explicitly request helper-owned
 shutdown rather than relying on stdin EOF through TRAMP. Local and real-SSH
 discovery/activation are covered by isolated Pi 1.4.0 tests, including activation
 after reloading a saved Pi session.
+
+### Added extensions
+
+An **added extension** is loaded for one runtime only: PiChat passes it to Pi
+as `-e SPEC` on top of the extensions Pi discovers by itself (its settings
+packages and its global and project extension directories), which need no
+PiChat setup. Use it for an extension you want in some runtimes and not
+others, for example a secrets guard that has only event hooks, for a `manual`
+runtime:
+
+```text
+Added for this launch
+ 1 [✓] ~/pi-ext/protect-secrets.ts
+ 2 [✓] npm:@pi-vault/pi-guardrails@1.2.3
+ 3 [ ] git:github.com/owner/pi-sentry@v0.1.0
+
+Recent (1)
+ A ~/pi-ext/read-audit.ts
+
+Discovered (with tools or commands)
+   pi-archive  git:github.com/sourya7/pi-archive
+   Pi built-in  builtin:codemode, builtin:tool-search
+
+Actions     Action
+ + Add…      RET Done
+ - Remove…   q Cancel
+ r Refresh
+```
+
+- `+` **Add…** reads a spec as Pi accepts it for `-e`: a path (absolute,
+  `~` or relative to the launch directory), `npm:NAME[@VERSION]`, or a git
+  source (`git:host/owner/repo[@ref]`, `https:`, `ssh:`). The spec is kept
+  exactly as entered (surrounding spaces trimmed) and added checked. Specs
+  starting with `-`, repeated specs and multi-line text are refused.
+- `1`…`0` check or uncheck an added extension; only checked ones are
+  loaded, and they make the launch an independent runtime (`RET` reads
+  **Launch independent**). `-` **Remove…** drops one.
+- **Recent** (`A`…`C`) lists the last three checked specs, except those
+  already added; choosing one adds it checked. Done records the checked
+  specs in the `pichat-recent-extensions` user option, saved in
+  `custom-file` with the same safeguards as saved presets; when saving is
+  not safe the list lasts for this Emacs session and a message says why.
+- **Discovered** lists what Pi loads without added extensions, from a
+  discovery probe (shared with `x Tools`), grouped and labelled as in
+  [Extension tools](#extension-tools). Pi reports only extensions that
+  register tools or commands: hook-only extensions do not appear here, and
+  an added hook-only extension never appears in `x Tools` either, although
+  it is loaded. `r` **Refresh** probes again.
+- `RET` **Done** applies the list to the launch draft; `q` **Cancel** (or
+  quitting) discards the changes.
+
+Checked extensions are loaded at startup, on every restart and in the
+replacement started by **Reconfigure this runtime**, which keeps the
+runtime's added extensions (it cannot change them). Opening `x Tools` probes
+with them, so their tools can be selected; they group under the spec as
+added. Changing the checked list discards that discovery. Their tools are
+opt-in like any extension tool: a hook-only guard needs no tool choice, while
+a tool-registering extension's tools must be checked in `x Tools` to be
+enabled in an explicit-tool preset (`manual` and others). A complete
+`pichat-rpc-command` wrapper cannot take `-e` arguments and refuses added
+extensions before anything starts.
+
+PiChat refuses, with a message, rather than run without an extension you
+asked for:
+
+- **Duplicates.** Adding an extension Pi already loads (the same `npm:` or
+  `git:` source as a discovered package, or a path resolving to a discovered
+  extension's file or directory; locally also through symbolic links) is
+  refused. An entry checked before discovery was ready is judged when it
+  is: Done refuses while it stays checked, and Refresh reports it. A
+  duplicate that registers tools also fails Pi's load (tool name conflict),
+  which refuses the launch as below.
+- **Failed loads.** When Pi reports that a checked package failed to install
+  (Pi then starts without it) or that an extension failed to load (a missing
+  path, where Pi exits, or a tool name conflict), the `x Tools` discovery
+  fails and the runtime is stopped before it accepts input, with Pi's line
+  as the message. Without added extensions Pi's warnings stay
+  informational.
+
+On SSH targets the specs are passed to the remote Pi unchanged: paths are
+paths on the remote host (`~` is the remote home and is never resolved on
+this host), and `npm:` / `git:` specs are installed by the remote Pi. Host
+files are not staged. Duplicates are judged against the remote discovery,
+and remote load and install failures refuse the launch the same way.
+
+**Added extensions run with your permissions.** Like any Pi extension they
+can read files, credentials and prompts and run programs, and they run as
+soon as they load: during the `x Tools` discovery probe, not only in the
+runtime. Pi fetches and installs an `npm:` or `git:` spec on first use. The
+Discovered probe of `l Extensions` loads no added extension. Add only
+extensions whose source you trust; pin and review third-party packages.
+
+**Pin versions for reproducible runtimes.** Pi caches `-e` packages under
+`~/.pi/agent/tmp/extensions/` and checks them on every start of Pi, so also
+for every discovery probe, restart and reconfiguration: an `npm:` spec
+without an exact version is reinstalled when the registry has a newer
+matching version, and a git branch or tag is fetched and reset. An exact npm
+version (`npm:pkg@1.2.3`) or a git commit hash that is already checked out
+is not checked. A version that changes between `x Tools` and startup can
+change the tools; a checked tool that is no longer registered fails startup.
+
+**Offline.** With `--offline` or `PI_OFFLINE=1` Pi loads only cached copies.
+An `npm:` / `git:` spec that is not cached yet is skipped silently: Pi
+reports nothing, so PiChat cannot detect it and the runtime starts
+**without** that extension. Load it once while online (for example through
+`x Tools`) before relying on it offline. Missing local paths are still
+refused.
+
+**Changed extensions.** Pi loads added extensions when it starts. Pi's
+`/reload` is an interactive (TUI) command that RPC mode, which PiChat uses,
+does not run, so edits to a local added extension, or a newer package
+version, reach a runtime only when Pi starts again: launch a new runtime, or
+restart this one through **Reconfigure this runtime**.
+
+Added extensions are launch choices of the runtime, not of its Pi session or
+saved session file, and are not yet stored by **Save preset as…**. Job
+definitions cannot declare them.
 
 ### Tool-policy boundaries
 
@@ -2890,7 +3007,8 @@ can coexist and later customization changes do not reinterpret settled links.
 Remote Pi loads its own settings, credentials, extensions, skills, and session
 store. PiChat does not inject host extension paths into SSH startup; the bundled
 tool-control helper is explicitly copied to private target storage when needed,
-not passed as an inaccessible host path. An explicit SSH target never falls
+not passed as an inaccessible host path. [Added extensions](#added-extensions)
+are passed unchanged, as specs for the remote Pi. An explicit SSH target never falls
 back to local Pi. Automatic reconnect, host/guest
 session synchronization, and remote compilation reruns are not provided.
 

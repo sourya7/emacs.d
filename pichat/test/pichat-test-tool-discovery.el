@@ -20,6 +20,101 @@
     (puthash "tools" nil data)
     (should-error (pichat-tool-discovery--catalogue data "test"))))
 
+(ert-deftest pichat-tool-discovery-validates-and-stores-provenance ()
+  (let* ((raw (concat
+               "{\"protocolVersion\":1,\"requestId\":\"test\",\"ok\":true,\"tools\":["
+               "{\"name\":\"read\",\"description\":\"\",\"exposure\":\"direct\","
+               "\"sourceInfo\":{\"path\":\"builtin:read\",\"source\":\"builtin\","
+               "\"scope\":\"temporary\",\"origin\":\"top-level\"}},"
+               "{\"name\":\"archive_search\",\"description\":\"\",\"exposure\":\"direct\","
+               "\"sourceInfo\":{\"path\":\"/pkg/index.ts\",\"source\":\"git:example/pkg\","
+               "\"scope\":\"user\",\"origin\":\"package\",\"baseDir\":\"/pkg\"}},"
+               "{\"name\":\"legacy\",\"description\":\"\",\"exposure\":\"direct\",\"sourceInfo\":null},"
+               "{\"name\":\"older\",\"description\":\"\",\"exposure\":\"direct\"}],"
+               "\"activeTools\":[],"
+               "\"commands\":[{\"name\":\"archive\",\"description\":\"Search\","
+               "\"sourceInfo\":{\"path\":\"/pkg/index.ts\",\"source\":\"git:example/pkg\","
+               "\"scope\":\"user\",\"origin\":\"package\"}},"
+               "{\"name\":\"bare\",\"description\":\"\",\"sourceInfo\":null}]}"))
+         (data (json-parse-string raw :array-type 'array))
+         (tools (pichat-tool-discovery--catalogue data "test"))
+         (commands (pichat-tool-discovery--commands data)))
+    (cl-flet ((source (name) (plist-get (cl-find name tools :key (lambda (tool) (plist-get tool :name))
+                                                 :test #'equal)
+                                        :source)))
+      (should (equal (source "read") '(:path "builtin:read" :source "builtin"
+                                       :scope "temporary" :origin "top-level")))
+      (should (equal (source "archive_search")
+                     '(:path "/pkg/index.ts" :source "git:example/pkg" :scope "user"
+                       :origin "package" :base-dir "/pkg")))
+      ;; Older Pi: no provenance, the tool stays usable and unattributed.
+      (should-not (source "legacy"))
+      (should-not (source "older"))
+      (should (plist-get (cl-find "older" tools :key (lambda (tool) (plist-get tool :name))
+                                  :test #'equal)
+                         :eligible)))
+    (should (equal commands
+                   '((:name "archive" :description "Search"
+                      :source (:path "/pkg/index.ts" :source "git:example/pkg"
+                               :scope "user" :origin "package"))
+                     (:name "bare" :description "" :source nil))))
+    ;; The runtime verifier parses JSON null as nil; both mean "absent".
+    (should (equal (pichat-tool-discovery--catalogue
+                    (json-parse-string raw :array-type 'array :null-object nil) "test")
+                   tools))
+    (remhash "commands" data)
+    (should-not (pichat-tool-discovery--commands data))
+    ;; Identities are never guessed: malformed provenance refuses the catalogue.
+    (dolist (bad (list "wrong" (make-hash-table :test #'equal)
+                       (let ((info (make-hash-table :test #'equal)))
+                         (dolist (field '("path" "source" "scope" "origin"))
+                           (puthash field "x" info))
+                         (puthash "path" (make-string 1025 ?x) info)
+                         info)
+                       (let ((info (make-hash-table :test #'equal)))
+                         (dolist (field '("path" "source" "scope" "origin"))
+                           (puthash field "x" info))
+                         (puthash "baseDir" 7 info)
+                         info)))
+      (let ((copy (json-parse-string raw :array-type 'array)))
+        (puthash "sourceInfo" bad (aref (gethash "tools" copy) 0))
+        (should-error (pichat-tool-discovery--catalogue copy "test"))
+        (puthash "commands" (vector (let ((command (make-hash-table :test #'equal)))
+                                      (puthash "name" "c" command)
+                                      (puthash "description" "" command)
+                                      (puthash "sourceInfo" bad command)
+                                      command))
+                 copy)
+        (should-error (pichat-tool-discovery--commands copy))))
+    (dolist (bad (list "commands" (vector "name") (make-vector 4097 nil)
+                       (vector (let ((command (make-hash-table :test #'equal)))
+                                 (puthash "name" "" command)
+                                 (puthash "description" "" command)
+                                 command))))
+      (puthash "commands" bad data)
+      (should-error (pichat-tool-discovery--commands data)))))
+
+(ert-deftest pichat-tool-discovery-draft-stores-commands-with-tools ()
+  (let ((draft (pichat-tool-discovery-draft-create)) callback options)
+    (cl-letf (((symbol-function 'pichat-tool-discovery-start)
+               (lambda (_transport _cwd _executable function &rest rest)
+                 (setq callback function options rest)
+                 #'ignore)))
+      (pichat-tool-discovery-draft-reset draft '(:cwd "/first"))
+      (pichat-tool-discovery-draft-refresh draft nil)
+      (should (plist-get options :with-commands))
+      (funcall callback '((:name "tool" :source nil)) nil '((:name "command" :source nil)))
+      (should (equal (pichat-tool-discovery-draft-commands draft) '((:name "command" :source nil))))
+      (pichat-tool-discovery-draft-refresh draft nil)
+      (should-not (pichat-tool-discovery-draft-commands draft))
+      (funcall callback nil "failed" nil)
+      (should (eq (pichat-tool-discovery-draft-status draft) 'failed))
+      (should-not (pichat-tool-discovery-draft-commands draft))
+      (pichat-tool-discovery-draft-refresh draft nil)
+      (funcall callback '((:name "tool")) nil '((:name "command")))
+      (pichat-tool-discovery-draft-reset draft '(:cwd "/second"))
+      (should-not (pichat-tool-discovery-draft-commands draft)))))
+
 (ert-deftest pichat-tool-discovery-draft-invalidates-without-implicit-probes ()
   (let ((draft (pichat-tool-discovery-draft-create)) callbacks cancelled)
     (cl-letf (((symbol-function 'pichat-tool-discovery-start)
@@ -237,6 +332,34 @@
               (pichat-test-assert-provider-script-consumed status-file)
               (should-not (directory-files session-dir nil "\\.jsonl\\'")))
           (when cancel (funcall cancel))))))
+
+  (ert-deftest pichat-tool-discovery-real-pi-probe-stores-provenance-and-commands ()
+    (pichat-test-with-tool-probe (:scenario "normal")
+      (let ((draft (pichat-tool-discovery-draft-create))
+            (fixture (file-truename pichat-test-tool-control-fixture))
+            done)
+        (unwind-protect
+            (progn
+              (pichat-tool-discovery-draft-reset
+               draft (list :transport pichat-transport-local :cwd project-dir
+                           :executable pichat-test-pi-executable :args args
+                           :environment process-environment))
+              (pichat-tool-discovery-draft-refresh draft (lambda (_draft) (setq done t)))
+              (pichat-test-wait-until (lambda () done) 15 "real draft probe completion")
+              (should (eq (pichat-tool-discovery-draft-status draft) 'ready))
+              (let* ((tools (pichat-tool-discovery-draft-tools draft))
+                     (commands (pichat-tool-discovery-draft-commands draft))
+                     (read (cl-find "read" tools :key (lambda (tool) (plist-get tool :name)) :test #'equal))
+                     (probe (cl-find "probe_loader" tools :key (lambda (tool) (plist-get tool :name)) :test #'equal))
+                     (command (cl-find "probe-report" commands :key (lambda (item) (plist-get item :name)) :test #'equal)))
+                (should (equal (plist-get (plist-get read :source) :path) "builtin:read"))
+                (should (equal (plist-get (plist-get probe :source) :source) "cli"))
+                (should (equal (file-truename (plist-get (plist-get probe :source) :path)) fixture))
+                (should command)
+                (should (equal (file-truename (plist-get (plist-get command :source) :path)) fixture))
+                (should-not (cl-find pichat-tool-discovery--command commands
+                                     :key (lambda (item) (plist-get item :name)) :test #'equal))))
+          (when-let* ((cancel (pichat-tool-discovery-draft-cancel draft))) (funcall cancel))))))
 
   (ert-deftest pichat-tool-discovery-real-pi-helper-absence-never-prompts-model ()
     (pichat-test-with-tool-probe (:scenario "normal")

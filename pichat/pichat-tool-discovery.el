@@ -102,8 +102,62 @@ Use this with draft-reset when launch context changes.  This does not start Pi."
           :executable executable :args (copy-sequence args)
           :environment (pichat-pi-process-environment))))
 
+(defconst pichat-tool-discovery--source-field-limit 1024
+  "Maximum length of one provenance field, matching the helper's bound.")
+
+(defun pichat-tool-discovery--source (info)
+  "Validate helper provenance INFO; return a plist or nil when absent.
+INFO is Pi's bounded `sourceInfo' object: required non-empty `path',
+`source', `scope' and `origin' strings and an optional `baseDir'.  JSON
+null or a missing value (older Pi) yields nil; callers then treat the
+tool or command as unattributed, as before provenance existed.  Values
+are identities, so a malformed object is an error, never a guess."
+  (cond
+   ((memq info '(nil :null)) nil)
+   ((not (hash-table-p info)) (error "Invalid tool provenance"))
+   (t
+    (cl-flet ((field (name optional)
+                (let ((value (gethash name info)))
+                  (cond
+                   ((and optional (memq value '(nil :null))) nil)
+                   ((and (stringp value) (<= 1 (length value)
+                                             pichat-tool-discovery--source-field-limit))
+                    value)
+                   (t (error "Invalid tool provenance field %s" name))))))
+      (let ((result (list :path (field "path" nil) :source (field "source" nil)
+                          :scope (field "scope" nil) :origin (field "origin" nil))))
+        (if-let* ((base (field "baseDir" t)))
+            (append result (list :base-dir base))
+          result))))))
+
+(defun pichat-tool-discovery--commands (data)
+  "Validate the extension `commands' array of helper DATA; return plists.
+Each plist has :name, :description and :source (see
+`pichat-tool-discovery--source').  A catalogue without the array, from an
+older helper or a test fixture, has no extension commands."
+  (let ((commands (gethash "commands" data)))
+    (cond
+     ((memq commands '(nil :null)) nil)
+     ((not (and (vectorp commands) (<= (length commands) 4096)))
+      (error "Invalid extension command array"))
+     (t
+      (mapcar
+       (lambda (command)
+         (unless (hash-table-p command) (error "Invalid extension command record"))
+         (let ((name (gethash "name" command))
+               (description (gethash "description" command)))
+           (unless (and (stringp name) (<= 1 (length name) 256)
+                        (stringp description) (<= (length description) 1024))
+             (error "Invalid extension command metadata"))
+           (list :name name :description description
+                 :source (pichat-tool-discovery--source (gethash "sourceInfo" command)))))
+       (append commands nil))))))
+
 (defun pichat-tool-discovery--catalogue (data request-id)
-  "Validate helper DATA correlated with REQUEST-ID; return normalized tools."
+  "Validate helper DATA correlated with REQUEST-ID; return normalized tools.
+Each tool plist carries :source, its validated provenance or nil when Pi
+did not report one (see `pichat-tool-discovery--source').  Extension
+commands are returned separately by `pichat-tool-discovery--commands'."
   (unless (and (hash-table-p data) (equal (gethash "protocolVersion" data) 1)
                (equal (gethash "requestId" data) request-id))
     (error "Invalid tool-control envelope"))
@@ -130,6 +184,7 @@ Use this with draft-reset when launch context changes.  This does not start Pi."
                (error "Invalid or duplicate tool metadata"))
              (puthash name t seen)
              (list :name name :description description :exposure exposure
+                   :source (pichat-tool-discovery--source (gethash "sourceInfo" tool))
                    :active (not (null (member name (append active nil))))
                    :eligible (and (not (equal exposure "hidden"))
                                   (string-match-p "\\`[A-Za-z0-9_-]+\\'" name)))))
@@ -138,9 +193,12 @@ Use this with draft-reset when launch context changes.  This does not start Pi."
         (error "Active tool missing from catalogue")))))
 
 (cl-defun pichat-tool-discovery-start
-    (transport runtime-cwd executable callback &key (args nil args-p) model environment)
+    (transport runtime-cwd executable callback
+               &key (args nil args-p) model environment with-commands)
   "Probe TRANSPORT in RUNTIME-CWD using EXECUTABLE; return a cancel function.
-CALLBACK receives (TOOLS ERROR), exactly once unless cancelled.  ARGS, when
+CALLBACK receives (TOOLS ERROR), exactly once unless cancelled; with
+WITH-COMMANDS non-nil it receives (TOOLS ERROR COMMANDS), where COMMANDS
+are the validated extension commands (nil on error).  ARGS, when
 supplied, is the captured Pi resource/model argv (without the helper or preset
 allowlist); otherwise ordinary PiChat settings apply.  ENVIRONMENT can supply
 an already captured process environment.  Only the verified internal command
@@ -154,7 +212,8 @@ teardown.  Forced SSH teardown reports uncertain remote cleanup."
         (remainder "") (early-output "") early-error
         (bytes 0) (stderr-bytes 0)
         process stderr-process stderr-buffer timer shutdown-timer startup-timer helper
-        phase done closing result-tools result-error payload-received prompt-handled)
+        phase done closing result-tools result-commands result-error
+        payload-received prompt-handled)
     (cl-labels
         ((send (record)
            (process-send-string process (concat (json-serialize record) "\n")))
@@ -175,9 +234,12 @@ teardown.  Forced SSH teardown reports uncertain remote cleanup."
                (condition-case err (funcall (plist-get helper :cleanup))
                  (error (setq result-error (format "Helper cleanup failed: %s" (error-message-string err))))))
              (when result-error
-               (setq result-tools nil
+               (setq result-tools nil result-commands nil
                      result-error (truncate-string-to-width result-error 600 nil nil "…")))
-             (when callback (funcall callback result-tools result-error))))
+             (when callback
+               (if with-commands
+                   (funcall callback result-tools result-error result-commands)
+                 (funcall callback result-tools result-error)))))
          (finish (tools error)
            (unless (or closing done)
              (setq closing t result-tools tools result-error error)
@@ -261,9 +323,11 @@ teardown.  Forced SSH teardown reports uncertain remote cleanup."
                     (let ((raw (gethash "placeholder" data)))
                       (unless (and (stringp raw) (<= (string-bytes raw) pichat-tool-discovery--limit))
                         (error "Invalid or oversized tool-control payload"))
-                      (setq result-tools
-                            (pichat-tool-discovery--catalogue
-                             (json-parse-string raw :array-type 'array) request-id)))
+                      (let ((catalogue (json-parse-string raw :array-type 'array)))
+                        (setq result-tools
+                              (pichat-tool-discovery--catalogue catalogue request-id)
+                              result-commands
+                              (pichat-tool-discovery--commands catalogue))))
                     (send (list :type "extension_ui_response" :id (gethash "id" data) :value "ack"))
                     (setq payload-received t)
                     (maybe-finish))
@@ -362,8 +426,10 @@ teardown.  Forced SSH teardown reports uncertain remote cleanup."
 
 (cl-defstruct (pichat-tool-discovery-draft
                (:constructor pichat-tool-discovery-draft-create))
-  "Owner-scoped discovery cache; never global or attached to a live runtime."
-  context tools error status cancel token)
+  "Owner-scoped discovery cache; never global or attached to a live runtime.
+TOOLS carry :source provenance (nil when Pi reports none); COMMANDS are the
+extension commands from the same probe."
+  context tools error status cancel token commands)
 
 (defun pichat-tool-discovery-draft-reset (draft context)
   "Invalidate DRAFT if captured CONTEXT changed; cancel obsolete callbacks.
@@ -373,6 +439,7 @@ and :environment; include resolved model/resource/trust argv, not preset flags."
     (when-let* ((cancel (pichat-tool-discovery-draft-cancel draft))) (funcall cancel))
     (setf (pichat-tool-discovery-draft-context draft) (copy-tree context t)
           (pichat-tool-discovery-draft-tools draft) nil
+          (pichat-tool-discovery-draft-commands draft) nil
           (pichat-tool-discovery-draft-error draft) nil
           (pichat-tool-discovery-draft-status draft) nil
           (pichat-tool-discovery-draft-cancel draft) nil
@@ -388,19 +455,22 @@ No reads or redraws implicitly start a process.  Reset cancels obsolete work."
     (setf (pichat-tool-discovery-draft-token draft) token
           (pichat-tool-discovery-draft-status draft) 'loading
           (pichat-tool-discovery-draft-tools draft) nil
+          (pichat-tool-discovery-draft-commands draft) nil
           (pichat-tool-discovery-draft-error draft) nil)
     (setf (pichat-tool-discovery-draft-cancel draft)
           (pichat-tool-discovery-start
            (plist-get context :transport) (plist-get context :cwd)
            (plist-get context :executable)
-           (lambda (tools error)
+           (lambda (tools error &optional commands)
              (when (and (eq context (pichat-tool-discovery-draft-context draft))
                         (eq token (pichat-tool-discovery-draft-token draft)))
                (setf (pichat-tool-discovery-draft-tools draft) tools
+                     (pichat-tool-discovery-draft-commands draft) commands
                      (pichat-tool-discovery-draft-error draft) error
                      (pichat-tool-discovery-draft-status draft) (if error 'failed 'ready))
                (when callback (funcall callback draft))))
-           :args (plist-get context :args) :environment (plist-get context :environment)))))
+           :args (plist-get context :args) :environment (plist-get context :environment)
+           :with-commands t))))
 
 (provide 'pichat-tool-discovery)
 ;;; pichat-tool-discovery.el ends here

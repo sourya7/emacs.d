@@ -49,12 +49,17 @@
   (setf (plist-get pichat-launch-extensions--state :added) added))
 
 (defun pichat-launch-extensions--add (spec)
-  "Add SPEC, checked, to the draft; signal for an invalid or repeated SPEC."
+  "Add SPEC, checked, to the draft; signal for an invalid or repeated SPEC.
+Also refuse SPEC when the menu's ready discovery shows that Pi already
+loads it (see `pichat-launch-extensions-duplicate')."
   (let ((added (pichat-launch-extensions--added)))
     (unless (pichat-presets-extension-spec-p spec)
       (user-error "Invalid extension %S: one line, not starting with `-'" spec))
     (when (assoc spec added)
       (user-error "%s is already added" spec))
+    (when-let* ((found (pichat-launch-extensions--duplicate spec)))
+      (user-error "%s is not added: Pi already loads it (discovered as %s)"
+                  spec found))
     (when (>= (length added) (length pichat-launch-extensions--keys))
       (user-error "At most %d extensions can be added"
                   (length pichat-launch-extensions--keys)))
@@ -108,6 +113,74 @@ Order: discovery order, then Unattributed, then Pi built-in."
                  (_ (cons (if (> (cl-count label labels :test #'equal) 1) key label)
                           key)))))))
 
+;;; Duplicates
+
+(defun pichat-launch-extensions--package-spec-p (spec)
+  "Return non-nil when SPEC names an `npm:' or `git:' package, not a path."
+  (string-match-p "\\`\\(?:npm\\|git\\):" spec))
+
+(defun pichat-launch-extensions--path (path cwd local)
+  "Return PATH resolved against CWD, without a trailing slash, or nil.
+LOCAL non-nil means PATH is on this host: resolve symbolic links too.  A
+remote PATH is a path on the target (passed to its Pi unchanged), so
+only an absolute or relative path is resolved, never `~'."
+  (cond
+   (local (directory-file-name (file-truename (expand-file-name path cwd))))
+   ((string-prefix-p "~" path) nil)
+   (t (directory-file-name (expand-file-name path cwd)))))
+
+(defun pichat-launch-extensions-duplicate (spec draft)
+  "Return how discovery DRAFT shows that Pi already loads SPEC, or nil.
+DRAFT must hold ready results of a probe without added extensions.  A
+package SPEC (`npm:' / `git:') duplicates a discovered package source
+exactly; a path duplicates, after resolution against the probe's
+directory (and, locally, symbolic links), a discovered extension's path
+or base directory.  The result is that source or path.  Only extensions
+that register tools or commands are discovered, and Pi's built-in tools
+are not files."
+  (when (eq (pichat-tool-discovery-draft-status draft) 'ready)
+    (let* ((context (pichat-tool-discovery-draft-context draft))
+           (cwd (or (plist-get context :cwd) default-directory))
+           (transport (plist-get context :transport))
+           (local (not (and (pichat-transport-p transport)
+                            (eq 'ssh (pichat-transport-kind transport)))))
+           (package (pichat-launch-extensions--package-spec-p spec))
+           (wanted (unless package (pichat-launch-extensions--path spec cwd local)))
+           (sources (delq nil (mapcar (lambda (item) (plist-get item :source))
+                                      (append (pichat-tool-discovery-draft-tools draft)
+                                              (pichat-tool-discovery-draft-commands draft))))))
+      (cl-loop for source in sources
+               for kind = (plist-get source :source)
+               thereis
+               (cond
+                ((equal kind "builtin") nil)
+                (package (and (equal kind spec) kind))
+                (wanted
+                 (cl-loop for path in (list (plist-get source :path)
+                                            (plist-get source :base-dir))
+                          thereis (and path
+                                       (equal wanted (pichat-launch-extensions--path
+                                                      path cwd local))
+                                       path))))))))
+
+(defun pichat-launch-extensions--duplicate (spec)
+  "Return how the open menu's discovery shows Pi already loads SPEC, or nil."
+  (pichat-launch-extensions-duplicate
+   spec (plist-get pichat-launch-extensions--state :discovery)))
+
+(defun pichat-launch-extensions--duplicates (added)
+  "Return (SPEC . FOUND) for the checked specs of ADDED that Pi already loads."
+  (cl-loop for spec in (pichat-launch-extensions-checked added)
+           for found = (pichat-launch-extensions--duplicate spec)
+           when found collect (cons spec found)))
+
+(defun pichat-launch-extensions--duplicates-message (duplicates)
+  "Return a message naming DUPLICATES, (SPEC . FOUND) pairs."
+  (format "Pi already loads %s; uncheck or remove %s"
+          (mapconcat (lambda (pair) (format "%s (discovered as %s)" (car pair) (cdr pair)))
+                     duplicates ", ")
+          (if (cdr duplicates) "them" "it")))
+
 ;;; Discovery
 
 (defun pichat-launch-extensions--stop-discovery ()
@@ -134,11 +207,14 @@ shown instead of results and nothing starts."
                                        '(ready loading))))
       (pichat-tool-discovery-draft-refresh
        draft (lambda (_draft)
-               (when (and (eq state pichat-launch-extensions--state)
-                          transient--prefix
-                          (eq (oref transient--prefix command)
-                              'pichat-launch-extensions-menu))
-                 (pichat-launch-extensions--show)))))))
+               (when (eq state pichat-launch-extensions--state)
+                 (when-let* ((duplicates (pichat-launch-extensions--duplicates
+                                          (pichat-launch-extensions--added))))
+                   (message "%s" (pichat-launch-extensions--duplicates-message duplicates)))
+                 (when (and transient--prefix
+                            (eq (oref transient--prefix command)
+                                'pichat-launch-extensions-menu))
+                   (pichat-launch-extensions--show))))))))
 
 ;;; Menu entries
 
@@ -182,7 +258,9 @@ shown instead of results and nothing starts."
             (let ((spec spec))
               (list key (pichat-launch-extensions--fit spec 5)
                     (lambda () (interactive)
-                      (pichat-launch-extensions--add spec)
+                      (condition-case err
+                          (pichat-launch-extensions--add spec)
+                        (user-error (message "%s" (error-message-string err))))
                       (pichat-launch-extensions--show))
                     :transient t)))))
 
@@ -266,13 +344,20 @@ A refusal or quit is reported and leaves the draft unchanged."
 
 (transient-define-suffix pichat-launch-extensions-done ()
   "Apply the added extensions to the launch draft.
-The checked ones become the most recently used extensions."
+The checked ones become the most recently used extensions.  Refuse, and
+stay in the menu, while a checked one is already loaded by Pi according
+to the ready discovery."
   (interactive)
-  (let ((added (pichat-launch-extensions--added)))
-    (when-let* ((reason (pichat-presets-note-recent-extensions
-                         (pichat-launch-extensions-checked added))))
-      (message "Recent extensions kept for this session only: %s" reason))
-    (pichat-launch-extensions--return (copy-tree added))))
+  (let* ((added (pichat-launch-extensions--added))
+         (duplicates (pichat-launch-extensions--duplicates added)))
+    (if duplicates
+        (progn
+          (message "%s" (pichat-launch-extensions--duplicates-message duplicates))
+          (pichat-launch-extensions--show))
+      (when-let* ((reason (pichat-presets-note-recent-extensions
+                           (pichat-launch-extensions-checked added))))
+        (message "Recent extensions kept for this session only: %s" reason))
+      (pichat-launch-extensions--return (copy-tree added)))))
 
 (transient-define-suffix pichat-launch-extensions-cancel ()
   "Discard changes to the added extensions."

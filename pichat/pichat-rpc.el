@@ -215,6 +215,32 @@ Consumers still receive the complete event, not the diagnostic snapshot."
   "Return Pi arguments loading added EXTENSIONS, a list of specs, in order."
   (mapcan (lambda (spec) (list "-e" spec)) extensions))
 
+(defun pichat-rpc-extension-failure (stderr extensions)
+  "Return the line of Pi STDERR that refuses added EXTENSIONS, or nil.
+Without EXTENSIONS, nil: stderr keeps its earlier, informational role.
+With them, Pi reported a failure when a line says that one of these specs
+failed to install (Pi then starts without it; a missing local path makes
+Pi exit instead) or that any extension failed to load, for example on a
+tool name conflict.  Such a runtime might lack a protection the user chose
+to load, so callers refuse it."
+  (when (and extensions (stringp stderr))
+    (seq-some
+     (lambda (line)
+       (let ((line (string-trim line)))
+         (when (or (string-match-p "Failed to load extension \"" line)
+                   (seq-some (lambda (spec)
+                               (string-search
+                                (format "Extension package \"%s\": failed to install"
+                                        spec)
+                                line))
+                             extensions))
+           (truncate-string-to-width line 500 nil nil "…"))))
+     (split-string stderr "\n" t))))
+
+(defun pichat-rpc-extension-failure-message (failure)
+  "Return the message refusing a runtime or probe for Pi's FAILURE line."
+  (format "Added extension failed, so PiChat refused to use Pi: %s" failure))
+
 (defun pichat-rpc--validate-extensions (extensions)
   "Return a copy of added EXTENSIONS, or signal unless they are valid.
 EXTENSIONS is a list of distinct `pichat-presets-extension-spec-p' specs."
@@ -436,7 +462,10 @@ committed configuration).  A local startup failure retains a diagnostic."
             (when-let* ((note (pichat-tool-selection-emacs-note
                                tool-selection (pichat-rpc-bridge-p transport))))
               (message "PiChat: %s" note)))
+          ;; Added extensions also use the startup barrier: it holds input
+          ;; until Pi's stderr shows they loaded (see `pichat-tool-runtime').
           (when (or (plist-get tool-selection :extensions)
+                    (pichat-session-extensions session)
                     (eq (pichat-transport-kind transport) 'ssh))
             (require 'pichat-tool-runtime)
             (let ((path (if skill
@@ -557,16 +586,29 @@ When LIMIT is non-nil, copy at most LIMIT leading characters."
               (pichat-session-rpc-ready-timer session) nil
               (pichat-session-rpc-send-queue session) nil)
         (let* ((intentional (pichat-session-stop-requested-p session))
+               (_ (when-let* (((pichat-session-extensions session))
+                              (buffer (process-get process 'pichat-stderr-buffer))
+                              ((buffer-live-p buffer))
+                              (stderr (get-buffer-process buffer))
+                              ((process-live-p stderr)))
+                    ;; Read why Pi refused an added extension before exiting.
+                    (accept-process-output stderr 0 nil t)))
                (stderr (pichat-rpc--buffer-string
                         (process-get process 'pichat-stderr-buffer)
                         (1+ pichat-diagnostics-stderr-limit)))
                (reason (if intentional 'stopped 'error))
                (exit-status (process-exit-status process))
+               ;; For example a missing added path: Pi exits after saying so.
+               (failure (pichat-rpc-extension-failure
+                         stderr (pichat-session-extensions session)))
                (diagnostic
                 (unless intentional
                   (pichat-chat-diagnostics-record
                    session :origin 'process-exit
-                   :message (format "Pi RPC process %s" (string-trim event))
+                   :message (if failure
+                                (pichat-rpc-extension-failure-message failure)
+                              (format "Pi RPC process %s" (string-trim event)))
+                   :category (and failure 'extension-failed)
                    :stderr stderr :exit-status exit-status
                    :command (pichat-session-rpc-command session)))))
           (pichat-rpc--fail-pending

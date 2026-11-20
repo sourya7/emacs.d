@@ -287,6 +287,8 @@ codes, or missing files in unrelated output."
                           (pichat-chat-diagnostics--setup-hint setup-kind)))))
             ('process-exit
              (pcase category
+               ;; Pi refused an added extension; the message names why.
+               ('extension-failed message)
                ('executable-not-found
                 "The selected runtime could not find the Pi executable. Check its target executable and remote PATH policy.")
                ('missing-credential

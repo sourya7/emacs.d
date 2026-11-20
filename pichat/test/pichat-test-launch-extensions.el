@@ -10,6 +10,7 @@
 
 (require 'pichat-test-support)
 (require 'pichat)
+(require 'pichat-tool-runtime)
 
 (defconst pichat-test-launch-extensions--probe
   '(:transport local :cwd "/tmp/" :args ("--offline"))
@@ -359,6 +360,159 @@
         (when-let* ((buffer (find-buffer-visiting file)))
           (kill-buffer buffer))))))
 
+(ert-deftest pichat-launch-extensions-menu-refuses-extensions-pi-already-loads ()
+  (pichat-test-with-temp-dir dir
+    (let* ((real (expand-file-name "guard" dir))
+           (link (expand-file-name "guard-link" dir))
+           (single (expand-file-name "single.ts" dir))
+           (draft (pichat-test-launch-extensions--draft)))
+      (make-directory real)
+      (make-symbolic-link real link)
+      (setf (pichat-tool-discovery-draft-commands draft)
+            (append (pichat-tool-discovery-draft-commands draft)
+                    `((:name "guard" :source (:path ,(expand-file-name "index.ts" real)
+                                              :source "local" :base-dir ,real))
+                      (:name "single" :source (:path ,single :source "auto")))))
+      ;; Package sources match exactly; paths after resolution against the
+      ;; probe's directory and symbolic links, by path or base directory.
+      (dolist (case `(("npm:@pi-vault/pi-guardrails@1.2.3" . "npm:@pi-vault/pi-guardrails@1.2.3")
+                      ("git:github.com/sourya7/pi-archive" . "git:github.com/sourya7/pi-archive")
+                      (,(concat link "/") . ,real)
+                      (,single . ,single)
+                      ("npm:@pi-vault/pi-guardrails@1.2.4" . nil)
+                      ("builtin:codemode" . nil)
+                      ("/cache/pi-guardrails" . nil)))
+        (ert-info ((format "Spec: %s" (car case)))
+          (should (equal (cdr case) (pichat-launch-extensions-duplicate (car case) draft)))))
+      (let ((relative (pichat-tool-discovery-draft-create
+                       :status 'ready :context (list :cwd (file-name-as-directory dir))
+                       :tools `((:name "t" :source (:path ,single :source "cli"))))))
+        (should (equal single (pichat-launch-extensions-duplicate "single.ts" relative))))
+      ;; Remote paths are the target's: `~' is never resolved on this host.
+      (let ((remote (pichat-tool-discovery-draft-create
+                     :status 'ready
+                     :context (list :cwd "/srv/" :transport (pichat-transport--create
+                                                            :id 'remote :kind 'ssh))
+                     :tools '((:name "t" :source (:path "/srv/ext/x.ts" :source "local"))))))
+        (should (equal "/srv/ext/x.ts" (pichat-launch-extensions-duplicate "ext/x.ts" remote)))
+        (should-not (pichat-launch-extensions-duplicate "~/ext/x.ts" remote)))
+      ;; Without ready results nothing is judged.
+      (setf (pichat-tool-discovery-draft-status draft) 'failed)
+      (should-not (pichat-launch-extensions-duplicate
+                   "git:github.com/sourya7/pi-archive" draft))))
+  ;; Add and Recent refuse a duplicate with a message; the menu stays.
+  (pichat-test-launch-extensions--with-menu nil result
+    (setq pichat-recent-extensions '("npm:@pi-vault/pi-guardrails@1.2.3"))
+    (let (messages)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format &rest args) (push (apply #'format format args) messages)))
+                ((symbol-function 'read-string)
+                 (lambda (&rest _) "git:github.com/sourya7/pi-archive")))
+        (pichat-launch-extensions-add)
+        (pichat-test-launch-extensions--press "A"))
+      (should-not (pichat-launch-extensions--added))
+      (should (string-match-p "\\`git:github.com/sourya7/pi-archive is not added: Pi already loads it"
+                              (cadr messages)))
+      (should (string-match-p "discovered as npm:@pi-vault/pi-guardrails@1.2.3" (car messages))))
+    (should (eq 'pending result)))
+  ;; An entry added before discovery was ready: Done refuses while it is
+  ;; checked, and applies once it is unchecked.
+  (pichat-test-launch-extensions--with-menu
+      '(("git:github.com/sourya7/pi-archive" . t) ("a.ts" . t)) result
+    (let (messages)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format &rest args) (push (apply #'format format args) messages))))
+        (pichat-launch-extensions-done))
+      (should (eq 'pending result))
+      (should pichat-launch-extensions--state)
+      (should (equal (concat "Pi already loads git:github.com/sourya7/pi-archive (discovered as "
+                             "git:github.com/sourya7/pi-archive); uncheck or remove it")
+                     (car messages))))
+    (pichat-test-launch-extensions--press "1")
+    (pichat-launch-extensions-done)
+    (should (equal '(("git:github.com/sourya7/pi-archive" . nil) ("a.ts" . t)) result)))
+  ;; Refresh reports duplicates among the checked entries when it completes.
+  (let ((pichat-launch-extensions--state nil)
+        (draft (pichat-tool-discovery-draft-create))
+        messages)
+    (cl-letf (((symbol-function 'transient-setup) #'ignore)
+              ((symbol-function 'message)
+               (lambda (format &rest args) (push (apply #'format format args) messages)))
+              ((symbol-function 'pichat-tool-discovery-draft-refresh)
+               (lambda (refreshed callback)
+                 (let ((ready (pichat-test-launch-extensions--draft)))
+                   (setf (pichat-tool-discovery-draft-status refreshed) 'ready
+                         (pichat-tool-discovery-draft-tools refreshed)
+                         (pichat-tool-discovery-draft-tools ready)
+                         (pichat-tool-discovery-draft-commands refreshed)
+                         (pichat-tool-discovery-draft-commands ready)))
+                 (funcall callback refreshed))))
+      (pichat-launch-extensions-open
+       '(("npm:@pi-vault/pi-guardrails@1.2.3" . t)) draft
+       (lambda () (copy-tree pichat-test-launch-extensions--probe)) #'ignore)
+      (should (string-match-p "\\`Pi already loads npm:@pi-vault/pi-guardrails@1.2.3"
+                              (car messages)))
+      (pichat-launch-extensions--abandoned))))
+
+(ert-deftest pichat-launch-extensions-pi-stderr-failures-refuse-added-extensions ()
+  (let ((install "Warning: Extension package \"npm:bad@1\": failed to install (npm install bad@1 failed with code 1). Check the source and try again.")
+        (load "Error: Failed to load extension \"/tmp/nope.ts\": Extension path does not exist: /tmp/nope.ts"))
+    ;; An added spec that failed to install, or any extension load error.
+    (should (equal install (pichat-rpc-extension-failure
+                            (concat "Cloning…\n" install "\n") '("a.ts" "npm:bad@1"))))
+    (should (equal load (pichat-rpc-extension-failure (concat load "\nHint: …\n") '("x.ts"))))
+    ;; A settings package's failure is not about the added extensions.
+    (should-not (pichat-rpc-extension-failure
+                 "Warning: Extension package \"npm:other\": failed to install (x)." '("npm:bad@1")))
+    ;; Without added extensions stderr stays informational.
+    (should-not (pichat-rpc-extension-failure (concat install "\n" load) nil))
+    (should-not (pichat-rpc-extension-failure "added 1 package in 189ms" '("npm:bad@1")))
+    ;; A probe loading added extensions fails with Pi's line; one without
+    ;; them keeps its ordinary error.
+    (dolist (case `((,install ("npm:bad@1") 0 ,install)
+                    (,load ("/tmp/nope.ts") 1 ,load)
+                    (,install nil 0 nil)))
+      (pcase-let ((`(,line ,extensions ,status ,expected) case)
+                  (result nil))
+        (cl-letf (((symbol-function 'pichat-transport-make-process)
+                   (lambda (_transport _cwd &rest args)
+                     (apply #'make-process
+                            (plist-put args :command
+                                       (list "sh" "-c" (format "printf '%%s\\n' \"$1\" >&2; exit %d"
+                                                               status)
+                                             "sh" line))))))
+          (pichat-tool-discovery-start
+           pichat-transport-local temporary-file-directory "pi"
+           (lambda (tools error) (setq result (list tools error)))
+           :args nil :extensions extensions)
+          (pichat-test-wait-until (lambda () result) 5 "failed probe")
+          (should-not (car result))
+          (if expected
+              (should (equal (pichat-rpc-extension-failure-message expected) (cadr result)))
+            (should (equal "Pi tool probe exited before discovery completed"
+                           (cadr result)))))))
+    ;; The discovery context names the added extensions for the probe.
+    (let ((pichat-rpc-command nil) (pichat-pi-extra-args nil)
+          (pichat-pi-default-args '("--mode" "rpc")) (pichat-default-model nil)
+          (pichat-bridge-extension-file nil) (pichat-path-mappings nil)
+          (spec (pichat-presets-resolve 'manual)))
+      (should (equal '("a.ts") (plist-get (cdr (pichat-tool-picker-discovery-context
+                                                spec "/tmp/" pichat-transport-local "pi"
+                                                nil '("a.ts")))
+                                          :extensions)))
+      (should-not (plist-member (cdr (pichat-tool-picker-discovery-context
+                                      spec "/tmp/" pichat-transport-local "pi"))
+                                :extensions)))
+    ;; Pi starts without a package that failed to install: the startup
+    ;; barrier reads its stderr and refuses the runtime.
+    (with-temp-buffer
+      (insert install "\n")
+      (let ((session (pichat-session-make :extensions '("npm:bad@1")
+                                          :stderr-buffer (current-buffer))))
+        (should (equal install (pichat-tool-runtime--extension-failure session)))
+        (setf (pichat-session-extensions session) nil)
+        (should-not (pichat-tool-runtime--extension-failure session))))))
+
 (defconst pichat-test-launch-extensions--fixture
   (expand-file-name "fixtures/tool-control-extension.ts" pichat-test-directory)
   "Extension registering the probe tools, loaded only when added.")
@@ -438,7 +592,57 @@
           (when (buffer-live-p buffer) (kill-buffer buffer))
           (when (pichat-session-p added)
             (pichat-rpc-stop added)
-            (pichat-forget-session added)))))))
+            (pichat-forget-session added))))))
+
+  (ert-deftest pichat-launch-extensions-real-pi-refuses-failed-installs-and-missing-paths ()
+    (pichat-test-with-integration-session (session :preset 'manual :script '(:turns []))
+      ;; A missing local path makes Pi exit; a package that fails to install
+      ;; (a missing local tarball: npm needs no network) lets Pi start
+      ;; without it.  Installs need Pi online, so drop the offline setting.
+      (let* ((process-environment (cons "PI_OFFLINE" process-environment))
+             (pichat-pi-default-args
+              (list "--mode" "rpc" "--no-approve" "--no-context-files" "--no-skills"
+                    "--no-prompt-templates" "--no-themes" "--no-extensions"
+                    "-e" pichat-test-fake-provider-extension
+                    "--model" "pichat-fake/pichat-fake"))
+             (missing (expand-file-name "missing-extension.ts" project-dir))
+             (package (concat "npm:" (expand-file-name "missing-package.tgz" project-dir)))
+             (draft (pichat-tool-discovery-draft-create)))
+        (dolist (case (list (list missing (format "Failed to load extension \"%s\"" missing))
+                            (list package (format "Extension package \"%s\": failed to install"
+                                                  package))))
+          (pcase-let ((`(,spec ,reported) case))
+            (ert-info ((format "Spec: %s" spec))
+              ;; Discovery for x Tools refuses with Pi's reason.
+              (let (done)
+                (pichat-tool-discovery-draft-reset
+                 draft (cdr (pichat-tool-picker-discovery-context
+                             (pichat-presets-resolve 'standard) project-dir
+                             pichat-transport-local pichat-test-pi-executable nil (list spec))))
+                (pichat-tool-discovery-draft-refresh draft (lambda (_) (setq done t)))
+                (pichat-test-wait-until (lambda () done) 60 "failed discovery probe")
+                (should (eq 'failed (pichat-tool-discovery-draft-status draft)))
+                (should (string-match-p (concat "\\`Added extension failed.*" (regexp-quote reported))
+                                        (pichat-tool-discovery-draft-error draft))))
+              ;; The launch is refused: the runtime stops with the reason and
+              ;; never accepts input.
+              (let ((added (pichat-start-session
+                            project-dir nil (list :preset 'manual :extensions (list spec))))
+                    answered)
+                (unwind-protect
+                    (progn
+                      (pichat-rpc-get-state added (lambda (&rest _) (setq answered 'success))
+                                            (lambda (&rest _) (setq answered 'failure)))
+                      (pichat-test-wait-until
+                       (lambda () (memq (pichat-session-state added) '(error stopped)))
+                       60 "refused runtime")
+                      (should-not (eq answered 'success))
+                      (should-not (process-live-p (pichat-session-process added)))
+                      (let ((summary (pichat-chat-diagnostics-latest-summary added)))
+                        (should (string-match-p "\\`Added extension failed" summary))
+                        (should (string-search (truncate-string-to-width reported 40) summary))))
+                  (pichat-rpc-stop added)
+                  (pichat-forget-session added))))))))))
 
 (provide 'pichat-test-launch-extensions)
 ;;; pichat-test-launch-extensions.el ends here

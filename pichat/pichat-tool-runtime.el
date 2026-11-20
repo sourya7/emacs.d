@@ -52,9 +52,25 @@ Return the helper path.  Only actual startup stages resources, not preflight."
                   session :origin 'tool-control
                   :message "Tool-control helper cleanup failed" :condition err)))))))
 
+(defun pichat-tool-runtime--extension-failure (session)
+  "Return Pi's stderr line refusing SESSION's added extensions, or nil.
+Pi reports install and load failures on stderr before it answers RPC
+requests; read what is already pending before deciding."
+  (when-let* ((extensions (pichat-session-extensions session))
+              (buffer (pichat-session-stderr-buffer session))
+              ((buffer-live-p buffer)))
+    (when-let* ((stderr (get-buffer-process buffer))
+                ((process-live-p stderr)))
+      (accept-process-output stderr 0 nil t))
+    (pichat-rpc-extension-failure
+     (with-current-buffer buffer (buffer-substring-no-properties (point-min) (point-max)))
+     extensions)))
+
 (defun pichat-tool-runtime-begin (session &optional callback)
   "Enable and verify SESSION's selections, then call CALLBACK (SUCCESS REASON).
-The startup barrier also runs without CALLBACK.  Explicit initial saved-source
+The startup barrier also runs without CALLBACK.  It fails, stopping the
+runtime, when Pi reported that an added extension failed to install or
+load (see `pichat-rpc-extension-failure').  Explicit initial saved-source
 loading may call this again after its startup handlers; later source switches
 and extension activation changes do not trigger it automatically."
   (let* ((control (pichat-session-rpc-startup-control session))
@@ -80,6 +96,10 @@ and extension activation changes do not trigger it automatically."
              (setf (plist-get control :timer) nil (plist-get control :handler) nil)
              (dolist (id (plist-get control :requests)) (pichat-rpc-cancel-request session id))
              (setf (plist-get control :requests) nil)
+             ;; Also when Pi exited: its reason is more precise than ours.
+             (when-let* ((failure (pichat-tool-runtime--extension-failure session)))
+               (setq success nil
+                     reason (pichat-rpc-extension-failure-message failure)))
              (if success
                  (progn
                    (setf (plist-get control :verified) t)

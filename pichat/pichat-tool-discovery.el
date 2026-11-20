@@ -194,14 +194,18 @@ commands are returned separately by `pichat-tool-discovery--commands'."
 
 (cl-defun pichat-tool-discovery-start
     (transport runtime-cwd executable callback
-               &key (args nil args-p) model environment with-commands)
+               &key (args nil args-p) model environment with-commands extensions)
   "Probe TRANSPORT in RUNTIME-CWD using EXECUTABLE; return a cancel function.
 CALLBACK receives (TOOLS ERROR), exactly once unless cancelled; with
 WITH-COMMANDS non-nil it receives (TOOLS ERROR COMMANDS), where COMMANDS
 are the validated extension commands (nil on error).  ARGS, when
 supplied, is the captured Pi resource/model argv (without the helper or preset
 allowlist); otherwise ordinary PiChat settings apply.  ENVIRONMENT can supply
-an already captured process environment.  Only the verified internal command
+an already captured process environment.  EXTENSIONS are the added specs
+that ARGS load with `-e': when Pi's stderr reports that one failed to
+install or any extension failed to load (`pichat-rpc-extension-failure'),
+the probe fails with that line instead of returning tools.  Only the
+verified internal command
 is sent through RPC prompt; no conversation prompt or model turn is requested.
 Cancellation suppresses callbacks.  SSH probes request helper-owned shutdown
 after acknowledgement; local probes use EOF.  A one-second grace bounds
@@ -210,7 +214,7 @@ teardown.  Forced SSH teardown reports uncertain remote cleanup."
         (args (if args-p args (pichat-tool-discovery--args transport model)))
         (request-id (format "pichat-%s" (gensym)))
         (remainder "") (early-output "") early-error
-        (bytes 0) (stderr-bytes 0)
+        (bytes 0) (stderr-bytes 0) (stderr-chunks nil)
         process stderr-process stderr-buffer timer shutdown-timer startup-timer helper
         phase done closing result-tools result-commands result-error
         payload-received prompt-handled)
@@ -224,6 +228,13 @@ teardown.  Forced SSH teardown reports uncertain remote cleanup."
              (when shutdown-timer (cancel-timer shutdown-timer))
              (when startup-timer (cancel-timer startup-timer))
              (when (and process (process-live-p process)) (delete-process process))
+             (when (and extensions stderr-process (process-live-p stderr-process))
+               ;; Collect what Pi wrote before it stopped.
+               (ignore-errors (accept-process-output stderr-process 0 nil t)))
+             (when-let* ((failure (pichat-rpc-extension-failure
+                                   (apply #'concat (reverse stderr-chunks)) extensions)))
+               ;; Also more precise than "exited before discovery completed".
+               (setq result-error (pichat-rpc-extension-failure-message failure)))
              (when (and stderr-process (process-live-p stderr-process))
                (delete-process stderr-process))
              (when (buffer-live-p stderr-buffer)
@@ -342,6 +353,8 @@ teardown.  Forced SSH teardown reports uncertain remote cleanup."
               (error "Unexpected model/conversation activity in tool discovery"))))
          (stderr-filter (_proc chunk)
            (cl-incf stderr-bytes (string-bytes chunk))
+           (when (and extensions (<= stderr-bytes pichat-tool-discovery--limit))
+             (push chunk stderr-chunks))
            (when (> stderr-bytes pichat-tool-discovery--limit)
              (if process
                  (finish nil "Pi tool discovery stderr is too large")
@@ -403,6 +416,8 @@ teardown.  Forced SSH teardown reports uncertain remote cleanup."
               (with-current-buffer stderr-buffer
                 (unless (zerop (buffer-size))
                   (cl-incf stderr-bytes (string-bytes (buffer-string)))
+                  (when (and extensions (<= stderr-bytes pichat-tool-discovery--limit))
+                    (push (buffer-string) stderr-chunks))
                   (when (> stderr-bytes pichat-tool-discovery--limit)
                     (setq early-error "Pi tool discovery stderr is too large"))
                   (erase-buffer))))
@@ -434,7 +449,9 @@ extension commands from the same probe."
 (defun pichat-tool-discovery-draft-reset (draft context)
   "Invalidate DRAFT if captured CONTEXT changed; cancel obsolete callbacks.
 CONTEXT is a caller-captured plist with :transport, :cwd, :executable, :args,
-and :environment; include resolved model/resource/trust argv, not preset flags."
+and :environment; include resolved model/resource/trust argv, not preset flags.
+An optional :extensions names the added specs that :args load with `-e',
+so a refresh refuses their install and load failures."
   (unless (equal context (pichat-tool-discovery-draft-context draft))
     (when-let* ((cancel (pichat-tool-discovery-draft-cancel draft))) (funcall cancel))
     (setf (pichat-tool-discovery-draft-context draft) (copy-tree context t)
@@ -470,6 +487,7 @@ No reads or redraws implicitly start a process.  Reset cancels obsolete work."
                      (pichat-tool-discovery-draft-status draft) (if error 'failed 'ready))
                (when callback (funcall callback draft))))
            :args (plist-get context :args) :environment (plist-get context :environment)
+           :extensions (plist-get context :extensions)
            :with-commands t))))
 
 (provide 'pichat-tool-discovery)

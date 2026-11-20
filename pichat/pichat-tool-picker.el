@@ -686,8 +686,9 @@ DIRECTORY is resolved on TRANSPORT; EXECUTABLE and MODEL qualify the probe,
 which also carries the preset's prompt arguments and loads the added
 EXTENSIONS (specs, each passed as `-e').  Owners reset their discovery
 cache with PROBE-CONTEXT, so menus sharing one cache share results, and a
-changed list of extensions invalidates them.  Signal when discovery is
-unavailable there.  Start nothing."
+changed list of extensions invalidates them.  With EXTENSIONS, the context
+also names them as :extensions, so a failed install or load fails the
+probe.  Signal when discovery is unavailable there.  Start nothing."
   (let* ((cwd (file-name-as-directory (expand-file-name directory)))
          (context (pichat-transport-path-context transport (and (boundp 'pichat-path-mappings) pichat-path-mappings)))
          (runtime-cwd (or (plist-get (pichat-path-resolve-to-runtime cwd context) :path)
@@ -703,6 +704,10 @@ unavailable there.  Start nothing."
                     (list "--system-prompt" (plist-get preset :system-prompt)))
                   (when (plist-get preset :append-system-prompt)
                     (list "--append-system-prompt" (plist-get preset :append-system-prompt)))))
+    (when extensions
+      ;; Their install and load failures then fail the probe.
+      (setq probe-context (plist-put probe-context :extensions
+                                     (copy-sequence extensions))))
     (cons runtime-cwd probe-context)))
 
 (defun pichat-tool-picker-open (preset selection directory transport executable callback

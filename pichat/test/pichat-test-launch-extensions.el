@@ -874,6 +874,58 @@
             (pichat-rpc-stop runtime)
             (pichat-forget-session runtime))))))
 
+  (ert-deftest pichat-launch-extensions-real-pi-saved-preset-round-trips-added-extension-tools ()
+    (pichat-test-with-integration-session (session :preset 'manual :script '(:turns []))
+      (let ((pichat-chat-stop-session-on-kill nil)
+            (pichat-presets (copy-tree pichat-presets))
+            (pichat-saved-presets nil)
+            (fixture pichat-test-launch-extensions--fixture)
+            (draft (pichat-tool-discovery-draft-create))
+            runtime result done)
+        (unwind-protect
+            (progn
+              ;; Real discovery, as x Tools probes with the added extension.
+              (let ((pichat-pi-default-args
+                     (list "--mode" "rpc" "--offline" "--no-approve" "--no-context-files"
+                           "--no-skills" "--no-prompt-templates" "--no-themes" "--no-extensions"
+                           "--no-mcp" "-e" pichat-test-fake-provider-extension
+                           "--model" "pichat-fake/pichat-fake")))
+                (pichat-tool-discovery-draft-reset
+                 draft (cdr (pichat-tool-picker-discovery-context
+                             (pichat-presets-resolve 'standard) project-dir
+                             pichat-transport-local pichat-test-pi-executable nil (list fixture))))
+                (pichat-tool-discovery-draft-refresh draft (lambda (_) (setq done t)))
+                (pichat-test-wait-until (lambda () done) 15 "real discovery probe")
+                (should (eq 'ready (pichat-tool-discovery-draft-status draft))))
+              (let* ((sources (pichat-tool-picker-tool-sources '("probe_child") draft))
+                     (context (list :tool-selection '(:builtins ("read") :extensions ("probe_child"))
+                                    :tool-sources sources
+                                    :extensions (list (cons fixture t))
+                                    :model 'default))
+                     (spec (pichat--launch-preset-definition
+                            (pichat--launch-profile-from-arguments '("--preset=manual") context)
+                            context 'fixture-saved)))
+                ;; The tool is saved under the added spec exactly as typed.
+                (should (equal (list (cons "probe_child" fixture)) sources))
+                (should (equal (list "read" (list fixture "probe_child")) (plist-get spec :tools)))
+                (should (equal (list fixture) (plist-get spec :extensions)))
+                (apply #'pichat-make-preset 'fixture-saved spec))
+              ;; A runtime of the saved preset loads the extension and its tool.
+              (setq runtime (pichat-start-session project-dir nil '(:preset fixture-saved)))
+              (pichat-rpc-get-state runtime (lambda (value _s) (setq result value))
+                                    (lambda (value _s) (setq result value)))
+              (pichat-test-wait-until (lambda () result) 15 "runtime of the saved preset")
+              (should (plist-get result :success))
+              (should (member fixture (pichat-session-rpc-command runtime)))
+              (let ((active (pichat-test-extension-tools-active runtime)))
+                (should (member "probe_child" active))
+                (should-not (member "probe_session" active))))
+          (when-let* ((cancel (pichat-tool-discovery-draft-cancel draft)))
+            (funcall cancel))
+          (when (pichat-session-p runtime)
+            (pichat-rpc-stop runtime)
+            (pichat-forget-session runtime))))))
+
   (ert-deftest pichat-launch-extensions-real-pi-include-future-tools-expand-at-launch ()
     (pichat-test-with-integration-session (session :preset 'manual :script '(:turns []))
       (let ((pichat-chat-stop-session-on-kill nil)

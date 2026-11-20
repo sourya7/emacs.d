@@ -288,6 +288,31 @@ This expands a (SOURCE . :all) group to the tools discovered now."
                               (equal (plist-get info :path) source))))
            collect (plist-get tool :name)))
 
+(defun pichat-tool-picker-tool-sources (names draft)
+  "Return (NAME . SOURCE) for each extension tool NAME as DRAFT groups it.
+DRAFT is the discovery draft the Tools picker chose NAMES from.  SOURCE
+is the preset group source of the tool's group in the picker
+(`pichat-tool-picker--extension-group-key' with the draft's
+added-extension attribution): an added spec exactly as given, a package
+source, or a path; for \"Pi built-in\" the tool's `builtin:' path.  It is
+nil when the source is not stable (\"Unattributed\"), the tool was not
+discovered, or DRAFT is not ready.  Saving a preset groups NAMES by it."
+  (let* ((ready (and draft (eq 'ready (pichat-tool-discovery-draft-status draft))))
+         (tools (and ready (pichat-tool-discovery-draft-tools draft)))
+         (attribution (and ready (pichat-tool-picker-added-attribution
+                                  (pichat-tool-discovery-draft-context draft)))))
+    (mapcar (lambda (name)
+              (let* ((tool (cl-find name tools :key (lambda (tool) (plist-get tool :name))
+                                    :test #'equal))
+                     (key (and tool (pichat-tool-picker--extension-group-key
+                                     tool attribution)))
+                     (source (cond ((stringp key) key)
+                                   ((eq key :builtin)
+                                    (plist-get (plist-get tool :source) :path)))))
+                (cons name (and (pichat-presets-extension-spec-p source)
+                                (copy-sequence source)))))
+            names)))
+
 (defun pichat-tool-picker-expand-all (preset draft)
   "Return resolved PRESET with its :all groups expanded from DRAFT.
 DRAFT is a ready discovery draft probed with the runtime's context; its

@@ -1376,6 +1376,7 @@ Return a name without changing state."
     (unless (equal chosen initial)
       ;; A newly selected preset brings its own baseline and model policy.
       (setf (plist-get scope :tool-selection) nil
+            (plist-get scope :tool-sources) nil
             (plist-get scope :tool-target) nil
             (plist-get scope :model) nil))
     chosen))
@@ -1587,6 +1588,13 @@ model and conversation are shown by their own menu entries."
        (let ((next (copy-sequence context)))
          (unless (eq result :cancel)
            (setq next (plist-put next :tool-selection result))
+           ;; Where discovery placed the chosen extension tools, so Save
+           ;; preset as… can group them after discovery has moved on.
+           (setq next (plist-put next :tool-sources
+                                 (and result
+                                      (pichat-tool-picker-tool-sources
+                                       (plist-get result :extensions)
+                                       (plist-get context :tool-discovery)))))
            (setq next (plist-put next :tool-target
                                  (and result (list directory
                                                    (plist-get profile :scope)
@@ -1726,41 +1734,64 @@ policy (its model, or Pi's default) again."
       (pichat--launch-select-model
        context args (pichat--launch-profile-from-arguments args context)))))
 
-(defun pichat--launch-preset-tool-groups (groups names &optional all)
-  "Return preset tool GROUPS reduced to the selected extension tool NAMES.
-Groups and their tools keep their order; empty groups are dropped.  A
-(SOURCE . :all) group is kept when ALL, the sources whose future tools
-are still included, lists SOURCE.  Signal when a name belongs to none of
-the exact groups: the tools of an :all group, or chosen in Tools, are not
-mapped to their groups yet."
-  (when-let* ((missing (cl-remove-if
-                        (lambda (name)
-                          (cl-some (lambda (group) (and (listp (cdr group))
-                                                        (member name (cdr group))))
-                                   groups))
-                        names)))
-    (user-error "Saving extension tools chosen in Tools is not supported yet%s: %s"
-                (if (cl-some (lambda (group) (eq (cdr group) :all)) groups)
-                    " (with Include future tools)" "")
-                (string-join missing ", ")))
-  (delq nil (mapcar (lambda (group)
-                      (if (eq (cdr group) :all)
-                          (when (member (car group) all)
-                            (cons (copy-sequence (car group)) :all))
-                        (when-let* ((kept (cl-remove-if-not
-                                           (lambda (name) (member name names))
-                                           (cdr group))))
-                          (cons (copy-sequence (car group)) (copy-sequence kept)))))
-                    groups)))
+(defun pichat--launch-preset-tool-groups (groups names all sources)
+  "Return the preset tool groups that save extension tool NAMES.
+GROUPS are the source preset's tool groups.  ALL lists the sources whose
+future tools are included: each becomes (SOURCE . :all), and its tools
+are not listed by name.  SOURCES maps the names chosen in Tools to the
+group source discovery attributed them to (see
+`pichat-tool-picker-tool-sources').  A name in one of GROUPS keeps that
+group; any other goes to its SOURCES group.  The source preset's groups
+come first, in their order and with their names first, then new groups
+in the order of NAMES; empty groups are dropped.  Signal when a name has
+no known source."
+  (let* ((source-of
+          (lambda (name)
+            (or (car (cl-find-if (lambda (group) (and (listp (cdr group))
+                                                       (member name (cdr group))))
+                                 groups))
+                (cdr (assoc name sources)))))
+         (missing (cl-remove-if source-of names)))
+    (when missing
+      (user-error "Extension tools without a known extension cannot be saved in a preset group (Unattributed in Tools): %s"
+                  (string-join missing ", ")))
+    (delq nil
+          (mapcar
+           (lambda (source)
+             (if (member source all)
+                 (cons (copy-sequence source) :all)
+               (let* ((own (cdr (assoc source groups)))
+                      (kept (cl-remove-if-not
+                             (lambda (name) (equal source (funcall source-of name)))
+                             (cl-remove-duplicates
+                              (append (and (listp own)
+                                           (cl-remove-if-not (lambda (name) (member name names))
+                                                             own))
+                                      names)
+                              :test #'equal :from-end t))))
+                 (when kept
+                   (cons (copy-sequence source) (copy-sequence kept))))))
+           (cl-remove-duplicates
+            (append (mapcar #'car groups) (mapcar source-of names) all)
+            :test #'equal :from-end t)))))
+
+(defun pichat--launch-preset-extension-spec (spec)
+  "Return launcher-added extension SPEC as a preset's :extensions writes it.
+A bare word such as `myext' is a valid added extension (a path relative
+to the runtime's directory), but a preset refuses it as an old-style
+tool name; it is saved as the equivalent `./myext'."
+  (if (pichat-presets--old-extension-name-p spec) (concat "./" spec) spec))
 
 (defun pichat--launch-preset-definition (profile context name)
   "Return the definition to save as NAME from PROFILE and launcher CONTEXT.
 Capture the effective built-in, extension, Emacs-defined and MCP tools, the
-source preset's own extensions and prompt sources, and the model policy.
-Extension tools keep the source preset's groups; one outside them cannot
-be saved yet.  Extensions added in the launcher are not saved.  Shared
-`pichat-append-system-prompt' text, targets, scope, persistence and
-conversation choices are not part of a preset."
+extensions to load (the source preset's own, then the checked added ones),
+the prompt sources and the model policy.  Extension tools keep the source
+preset's groups; others are grouped by the source Tools found them under
+\(CONTEXT's :tool-sources), and groups with \"Include future tools\" on
+are saved as (SOURCE . :all).  Shared `pichat-append-system-prompt' text,
+unchecked added extensions, targets, scope, persistence and conversation
+choices are not part of a preset."
   (let* ((preset (plist-get profile :preset))
          (source (if (eq preset 'default) pichat-default-preset preset))
          (definition (or (pichat-get-preset source)
@@ -1768,30 +1799,46 @@ conversation choices are not part of a preset."
          (tools (plist-get context :tool-selection))
          (selection (pichat-tool-selection-resolve
                      (pichat-presets-resolve source) tools))
+         (own (plist-get definition :extensions))
+         (added (cl-remove-if (lambda (spec) (member spec own))
+                              (plist-get profile :extensions)))
+         (renamed (mapcar (lambda (spec)
+                            (cons spec (pichat--launch-preset-extension-spec spec)))
+                          added))
+         (rename (lambda (spec) (or (cdr (assoc spec renamed)) spec)))
          (model (plist-get profile :model)))
     (unless (or (stringp model) (eq model 'default))
       (user-error "Choose a concrete model with m first; a choice at launch cannot be saved"))
     (append
      (list :description
-           (if (and (eq source name) (not tools))
+           (if (and (eq source name) (not tools) (not added))
                (plist-get definition :description)
-             (format "Saved from %s%s" source (if tools " with customized tools" ""))))
+             (format "Saved from %s%s%s" source
+                     (if tools " with customized tools" "")
+                     (cond ((not added) "")
+                           (tools " and added extensions")
+                           (t " with added extensions")))))
      (if selection
          (append
           (list :tools
                 (append
                  (copy-sequence (plist-get selection :builtins))
-                 (pichat--launch-preset-tool-groups
-                  (pichat-presets-tool-groups (plist-get definition :tools))
-                  (plist-get selection :extensions)
-                  (plist-get selection :all))))
+                 (mapcar (lambda (group)
+                           (cons (funcall rename (car group)) (cdr group)))
+                         (pichat--launch-preset-tool-groups
+                          (pichat-presets-tool-groups (plist-get definition :tools))
+                          (plist-get selection :extensions)
+                          (plist-get selection :all)
+                          (and tools (plist-get context :tool-sources))))))
           (when-let* ((names (plist-get selection :emacs)))
             (list :emacs-tools (copy-sequence names)))
           (when-let* ((pairs (plist-get selection :mcp)))
             (list :mcp (copy-tree pairs))))
        (list :tools :default))
-     (when-let* ((specs (plist-get definition :extensions)))
-       (list :extensions (copy-sequence specs)))
+     (when-let* ((specs (cl-remove-duplicates
+                         (append own (mapcar #'cdr renamed))
+                         :test #'equal :from-end t)))
+       (list :extensions (copy-tree specs)))
      (when-let* ((source (plist-get definition :system-prompt)))
        (list :system-prompt (copy-tree source)))
      (when-let* ((source (plist-get definition :append-system-prompt)))
@@ -1799,9 +1846,11 @@ conversation choices are not part of a preset."
      (list :model (if (stringp model) (copy-sequence model) 'default)))))
 
 (transient-define-suffix pichat-launch-save-preset ()
-  "Save the selected preset, Tools and model as a named preset.
+  "Save the selected preset, Tools, checked extensions and model as a preset.
 The definition is written to `custom-file' and selected in the launcher;
-nothing is launched, and other launch choices remain unsaved."
+nothing is launched, and other launch choices remain unsaved.  The saved
+preset loads the checked added extensions itself, so they are unchecked
+in the launcher (and stay listed under Added)."
   (interactive)
   (let* ((args (transient-args 'pichat-launch))
          (context (copy-sequence (transient-scope)))
@@ -1824,7 +1873,9 @@ nothing is launched, and other launch choices remain unsaved."
        context
        (cons (format "--preset=%s" name)
              (cl-remove-if (lambda (arg) (string-prefix-p "--preset=" arg)) args))
-       :tool-selection nil :tool-target nil :model nil)
+       :tool-selection nil :tool-sources nil :tool-target nil :model nil
+       :extensions (mapcar (lambda (entry) (cons (car entry) nil))
+                           (plist-get context :extensions)))
       (message "Saved PiChat preset %s to %s" name (abbreviate-file-name file)))))
 
 (transient-define-suffix pichat-launch-execute (arguments context)

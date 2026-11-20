@@ -633,7 +633,7 @@ retains its current-tab display behavior.
 | `l` | Extensions | Add extensions for this launch: a path, `npm:` or `git:` spec loaded with `-e` on top of the extensions Pi discovers; checked ones imply independent. See [Added extensions](#added-extensions) |
 | `s` | Conversation | Pick a saved session, or clear the staged selection |
 | `r` | Reconfigure this runtime | From its owning chat, enter a separate captured-runtime menu; never implied by launching |
-| `c` | Save preset as… | Save the selected preset, Tools and model under a name; see [Saving presets from the launcher](#saving-presets-from-the-launcher) |
+| `c` | Save preset as… | Save the selected preset, Tools, checked extensions and model under a name; see [Saving presets from the launcher](#saving-presets-from-the-launcher) |
 | `RET` | Open / launch | Open the current chat or launch with the displayed reuse policy and preset |
 
 With no switches set, `RET` returns to the originating chat if it owns a live
@@ -844,7 +844,8 @@ not change models.
 
 To reuse a configuration, set it up in `pichat-launch` and press `c`:
 
-1. Choose a preset with `p`, adjust `x Tools`, and optionally choose `m Model`.
+1. Choose a preset with `p`, adjust `x Tools`, check extensions under
+   `l Extensions`, and optionally choose `m Model`.
 2. Press `c` (**Save preset as…**) and enter a name, such as `web-search`.
 3. For a new name the preset is saved immediately. An existing name, including
    a shipped or programmatic preset, asks `Replace preset web-search?` first;
@@ -855,11 +856,25 @@ prompts and model; nothing is launched. A saved preset records the effective
 built-in, extension, Emacs-defined and MCP tools, the source preset's own prompt
 sources (not `pichat-append-system-prompt`, which still applies to every
 preset), and the model: an exact ID, or `default` for Pi's default policy.
-The source preset's `:extensions` are kept and selected extension tools keep
-its `:tools` groups; a `(SOURCE . :all)` group is kept while its **Include
-future tools** is on. Saving extension tools outside those groups (including
-the tools an `:all` group found when Tools were opened), and extensions added
-in `l Extensions`, is not supported yet.
+Extensions and extension tools are saved in the [preset
+forms](#extension-tools):
+
+- `:extensions` lists the source preset's own extensions, then the extensions
+  checked under **Added** in `l Extensions` (unchecked ones are not saved). A
+  bare word such as `myext`, which a preset would refuse as an old-style tool
+  name, is saved as the equivalent `./myext`.
+- Selected extension tools keep the source preset's `:tools` groups. Other
+  tools chosen in `x Tools` are saved under the group Tools showed them in:
+  an added extension's spec as typed, a discovered package's source, a
+  path-loaded extension's path, or a Pi built-in's `builtin:` path. Tools
+  records these groups on Apply, so later discovery (for example the
+  Extensions menu's) does not change them. Tools in **Unattributed** have no
+  stable source, so a draft that selects them is refused.
+- A group whose **Include future tools** is on is saved as `(SOURCE . :all)`,
+  without the names it found; one turned off is saved as exact names.
+
+After saving, the checked extensions are unchecked under Added (they stay
+listed), since the new preset loads them itself.
 Target, scope, persistence, conversation and runtime state are
 not saved. Saving does not start, stop or reconfigure a runtime, or change Pi's
 global model or `pichat-default-preset`. Tools Apply/Cancel stay run-local; only
@@ -1155,8 +1170,10 @@ version, reach a runtime only when Pi starts again: launch a new runtime, or
 restart this one through **Reconfigure this runtime**.
 
 Added extensions are launch choices of the runtime, not of its Pi session or
-saved session file, and are not yet stored by **Save preset as…**. A preset
-can load extensions itself (see [Extension tools](#extension-tools)). Job
+saved session file. **Save preset as…** stores the checked ones in the new
+preset's `:extensions` (see [Saving presets from the
+launcher](#saving-presets-from-the-launcher)); a preset loads them itself (see
+[Extension tools](#extension-tools)). Job
 definitions cannot declare them.
 
 ### Tool-policy boundaries

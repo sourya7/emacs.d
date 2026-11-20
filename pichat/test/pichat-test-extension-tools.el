@@ -351,6 +351,41 @@ EXTRA-TOOLS are appended to the catalogue."
     (should (equal '("other" "pkg_a" "codemode") (plist-get expanded :extensions)))
     (should-not (pichat-tool-picker-group-tool-names "builtin:read" (pichat-tool-discovery-draft-tools draft)))))
 
+(ert-deftest pichat-extension-tools-tool-sources-name-the-saved-group-of-each-tool ()
+  (let* ((cache "/home/u/.pi/agent/tmp/extensions/npm/f35b2129/node_modules/@probe/pkg/index.ts")
+         (stray "/home/u/.pi/agent/tmp/extensions/npm/0123abcd/node_modules/other/index.ts")
+         (cli (lambda (path) (list :path path :source "cli" :scope "temporary" :origin "top-level")))
+         (draft (pichat-tool-discovery-draft-create
+                 :status 'ready
+                 :context (list :transport pichat-transport-local :cwd "/w/"
+                                :extensions '("npm:@probe/pkg@1"))
+                 :tools (list (list :name "pkg_a" :eligible t :source (funcall cli cache))
+                              (list :name "stray" :eligible t :source (funcall cli stray))
+                              (list :name "codemode" :eligible t
+                                    :source (pichat-test-extension-tools-source
+                                             "builtin" "builtin:codemode"))
+                              (list :name "git_tool" :eligible t
+                                    :source (pichat-test-extension-tools-source
+                                             "git:github.com/o/r" "/git/r/index.ts" "/git/r"))
+                              (list :name "local_tool" :eligible t
+                                    :source (pichat-test-extension-tools-source
+                                             "local" "/ext/pkg/index.ts" "/ext/pkg"))
+                              (list :name "old_pi" :eligible t)))))
+    ;; The Tools picker's group key, as a preset source: the added spec,
+    ;; package source or path; Pi built-ins by their path.  Unattributed
+    ;; and undiscovered tools have none.
+    (should (equal '(("pkg_a" . "npm:@probe/pkg@1") ("codemode" . "builtin:codemode")
+                     ("git_tool" . "git:github.com/o/r") ("local_tool" . "/ext/pkg")
+                     ("stray") ("old_pi") ("absent"))
+                   (pichat-tool-picker-tool-sources
+                    '("pkg_a" "codemode" "git_tool" "local_tool" "stray" "old_pi" "absent")
+                    draft)))
+    ;; Without ready discovery nothing is known.
+    (should (equal '(("pkg_a"))
+                   (pichat-tool-picker-tool-sources
+                    '("pkg_a") (pichat-tool-discovery-draft-create :status 'failed))))
+    (should (equal '(("pkg_a")) (pichat-tool-picker-tool-sources '("pkg_a") nil)))))
+
 (ert-deftest pichat-extension-tools-picker-labels-sources-and-pages-groups ()
   ;; Path-loaded sources group by package directory (or file) and are
   ;; labelled by file name, or by directory name for index files.

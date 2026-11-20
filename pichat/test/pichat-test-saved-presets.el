@@ -275,6 +275,10 @@ The saved preset collection, its Custom properties and FILE are restored."
     (pichat-presets-save-definition
      'web '(:tools ("read") :mcp (("ketch" . "search")) :model "provider/model"))
     (pichat-presets-save-definition 'fast '(:tools nil :model default))
+    ;; Grouped tools, included future tools and extensions to load.
+    (pichat-presets-save-definition
+     'guarded '(:tools ("read" ("npm:x@1" "x_tool") ("./g.ts" . :all))
+                :extensions ("./g.ts" "npm:x@1")))
     (let ((directory (file-name-directory (locate-library "pichat-presets"))))
       (dolist (order '(before after))
         (with-temp-buffer
@@ -283,14 +287,20 @@ The saved preset collection, its Custom properties and FILE are restored."
                   (expand-file-name invocation-name invocation-directory) nil t nil
                   "-Q" "--batch" "-L" directory
                   "--eval"
-                  (format "(progn %s (require 'pichat-presets) %s (prin1 (list (pichat-presets-names) (pichat-presets-resolve 'web) (pichat-presets-model 'fast))))"
+                  (format "(progn %s (require 'pichat-presets) %s (prin1 (list (pichat-presets-names) (pichat-presets-resolve 'web) (pichat-presets-model 'fast) (pichat-presets-resolve 'guarded))))"
                           (if (eq order 'before) (format "(load %S nil t)" file) "")
                           (if (eq order 'after) (format "(load %S nil t)" file) "")))))
             (should (eql 0 status))
             (goto-char (point-max))
             (backward-sexp)
-            (pcase-let ((`(,names ,web ,fast) (read (current-buffer))))
-              (should (equal '(manual coding review conversation standard web fast) names))
+            (pcase-let ((`(,names ,web ,fast ,guarded) (read (current-buffer))))
+              (should (equal '(manual coding review conversation standard web fast guarded)
+                             names))
+              (should (equal '("read") (plist-get guarded :tools)))
+              (should (equal '("x_tool") (plist-get guarded :extensions)))
+              (should (equal '(("npm:x@1" "x_tool") ("./g.ts" . :all))
+                             (plist-get guarded :tool-groups)))
+              (should (equal '("./g.ts" "npm:x@1") (plist-get guarded :load-extensions)))
               (should (equal '(("ketch" . "search")) (plist-get web :mcp)))
               (should (equal "provider/model" (plist-get web :model)))
               (should (eq 'default fast)))))))))
@@ -456,18 +466,30 @@ Reopening the launcher records its (ARGS . SCOPE) in `staged'."
                         '("--preset=source") '(:model prompt))
                        '(:model prompt) 'web)
                       :type 'user-error)
-        ;; Extension tools outside the source preset's groups have no group
-        ;; to be saved in yet.
+        ;; Extension tools outside the source preset's groups go to the
+        ;; group Tools found them under; without a known one they cannot
+        ;; be saved.
         (let ((context '(:tool-selection (:builtins ("read") :extensions ("picked")))))
           (should (string-match-p
-                   "not supported yet: picked"
+                   "without a known extension.*: picked"
                    (cadr (should-error
                           (pichat--launch-preset-definition
                            (pichat--launch-profile-from-arguments '("--preset=source") context)
                            context 'web)
                           :type 'user-error)))))
+        (let* ((context '(:tool-selection (:builtins ("read")
+                                           :extensions ("picked" "other_tool" "ext_tool"))
+                          :tool-sources (("picked" . "npm:pkg@1") ("other_tool" . "./ext.ts")
+                                         ("ext_tool" . "./ext.ts"))))
+               (spec (pichat--launch-preset-definition
+                      (pichat--launch-profile-from-arguments '("--preset=source") context)
+                      context 'web)))
+          ;; The source preset's group keeps its order; new groups follow.
+          (should (equal '("read" ("./ext.ts" "ext_tool" "other_tool") ("npm:pkg@1" "picked"))
+                         (plist-get spec :tools)))
+          (should (pichat-presets--validate 'web spec)))
         ;; Include future tools: the baseline keeps its (SOURCE . :all)
-        ;; group; Tools choices with discovered names are not saved yet.
+        ;; group; with Tools, the names it found are not listed.
         (pichat-make-preset 'future :tools '("read" ("./ext.ts" . :all) ("npm:x" "x_tool"))
                             :extensions '("./ext.ts"))
         (let* ((profile (pichat--launch-profile-from-arguments '("--preset=future") nil))
@@ -483,15 +505,67 @@ Reopening the launcher records its (ARGS . SCOPE) in `staged'."
                                       '("--preset=future") context)
                                      context 'web)
                                     :tools))))
-        (let ((context '(:tool-selection (:builtins ("read") :extensions ("ext_a")
-                                          :all ("./ext.ts")))))
-          (should (string-match-p
-                   "not supported yet (with Include future tools): ext_a"
-                   (cadr (should-error
-                          (pichat--launch-preset-definition
-                           (pichat--launch-profile-from-arguments '("--preset=future") context)
-                           context 'web)
-                          :type 'user-error)))))))))
+        (let* ((context '(:tool-selection (:builtins ("read")
+                                           :extensions ("ext_a" "pkg_a" "pkg_b" "x_tool")
+                                           :all ("./ext.ts" "git:github.com/o/r"))
+                          :tool-sources (("ext_a" . "./ext.ts") ("pkg_a" . "git:github.com/o/r")
+                                         ("pkg_b" . "git:github.com/o/r")
+                                         ("x_tool" . "npm:x"))))
+               (spec (pichat--launch-preset-definition
+                      (pichat--launch-profile-from-arguments '("--preset=future") context)
+                      context 'web)))
+          ;; Future tools turned on in Tools save (SOURCE . :all), also
+          ;; for a group the source preset did not have.
+          (should (equal '("read" ("./ext.ts" . :all) ("npm:x" "x_tool")
+                           ("git:github.com/o/r" . :all))
+                         (plist-get spec :tools)))
+          (should (pichat-presets--validate 'web spec)))))))
+
+(ert-deftest pichat-saved-presets-definition-saves-checked-added-extensions ()
+  (pichat-test-with-presets
+    (pichat-make-preset 'guarded :tools '("read" ("./guard.ts" "guard_status"))
+                        :extensions '("./guard.ts"))
+    (let* ((context (list :tool-selection
+                          '(:builtins ("read") :extensions ("guard_status" "my_tool" "pkg_tool"))
+                          :tool-sources '(("guard_status" . "./guard.ts") ("my_tool" . "myext")
+                                          ("pkg_tool" . "npm:@s/pkg@1.2.3"))
+                          :extensions '(("myext" . t) ("npm:@s/pkg@1.2.3" . t)
+                                        ("./guard.ts" . t) ("npm:unchecked" . nil))
+                          :model "provider/model"))
+           (profile (pichat--launch-profile-from-arguments '("--preset=guarded") context))
+           (spec (pichat--launch-preset-definition profile context 'saved)))
+      ;; The preset's own extensions first, then the checked added ones;
+      ;; a bare added word is saved as the equivalent ./ path, also as its
+      ;; group source.  Unchecked entries are not saved.
+      (should (equal '("./guard.ts" "./myext" "npm:@s/pkg@1.2.3") (plist-get spec :extensions)))
+      (should (equal '("read" ("./guard.ts" "guard_status") ("./myext" "my_tool")
+                       ("npm:@s/pkg@1.2.3" "pkg_tool"))
+                     (plist-get spec :tools)))
+      (should (equal "Saved from guarded with customized tools and added extensions"
+                     (plist-get spec :description)))
+      (apply #'pichat-make-preset 'saved spec)
+      ;; It resolves into the same exact tools and loads the extensions.
+      (let ((snapshot (pichat-presets-resolve 'saved)))
+        (should (equal '("./guard.ts" "./myext" "npm:@s/pkg@1.2.3")
+                       (pichat-presets-load-extensions snapshot)))
+        (should (equal '("--tools" "read,guard_status,my_tool,pkg_tool" "--no-mcp")
+                       (pichat-tool-selection-args (pichat-tool-selection-resolve snapshot))))))
+    ;; Added extensions without Tools keep the baseline tools.
+    (let* ((context (list :extensions '(("npm:extra" . t)) :model 'default))
+           (spec (pichat--launch-preset-definition
+                  (pichat--launch-profile-from-arguments '("--preset=guarded") context)
+                  context 'guarded)))
+      (should (equal '("read" ("./guard.ts" "guard_status")) (plist-get spec :tools)))
+      (should (equal '("./guard.ts" "npm:extra") (plist-get spec :extensions)))
+      (should (equal "Saved from guarded with added extensions" (plist-get spec :description))))
+    ;; Pass-through presets load added extensions too.
+    (let* ((context (list :extensions '(("npm:extra" . t)) :model 'default))
+           (spec (pichat--launch-preset-definition
+                  (pichat--launch-profile-from-arguments '("--preset=standard") context)
+                  context 'mine)))
+      (should (eq :default (plist-get spec :tools)))
+      (should (equal '("npm:extra") (plist-get spec :extensions)))
+      (should (pichat-presets--validate 'mine spec)))))
 
 (ert-deftest pichat-saved-presets-launcher-save-registers-and-selects-name ()
   (pichat-test-with-custom-file file
@@ -527,6 +601,66 @@ Reopening the launcher records its (ARGS . SCOPE) in `staged'."
       (should (eq default-preset pichat-default-preset))
       (should-not pichat-default-model)
       (should (string-match-p "(web " (pichat-test-saved-presets--file-string file))))))
+
+(ert-deftest pichat-saved-presets-launcher-saves-tools-grouped-by-discovery-and-added-extensions ()
+  (pichat-test-with-custom-file file
+    (let* ((pichat-rpc-command nil)
+           (cache "/home/u/.pi/agent/tmp/extensions/npm/f35b2129/node_modules/@probe/pkg/index.ts")
+           (draft (pichat-tool-discovery-draft-create
+                   :status 'ready
+                   :context (list :transport pichat-transport-local :cwd "/tmp/"
+                                  :extensions '("npm:@probe/pkg@1"))
+                   :tools (list (list :name "pkg_a" :eligible t
+                                      :source (list :path cache :source "cli"
+                                                    :scope "temporary" :origin "top-level"))
+                                (list :name "codemode" :eligible t
+                                      :source (list :path "builtin:codemode" :source "builtin"
+                                                    :scope "temporary" :origin "top-level")))))
+           (context (list :directory "/tmp/" :model "provider/model" :tool-discovery draft
+                          :extensions '(("npm:@probe/pkg@1" . t) ("./off.ts" . nil))))
+           (args '("--preset=manual"))
+           opened)
+      ;; Tools records where discovery placed the chosen tools.
+      (pichat-test-with-launcher context args
+        (cl-letf (((symbol-function 'pichat-tool-picker-open)
+                   (lambda (_preset _selection _directory _transport _executable callback
+                                    &optional _model discovery extensions)
+                     (setq opened (list discovery extensions))
+                     (funcall callback '(:builtins ("read") :mcp nil
+                                         :extensions ("pkg_a" "codemode")
+                                         :all ("npm:@probe/pkg@1"))))))
+          (pichat-launch-tools))
+        (should (eq draft (car opened)))
+        (should (equal '("npm:@probe/pkg@1") (cadr opened)))
+        (setq context (cdar staged)))
+      (should (equal '(("pkg_a" . "npm:@probe/pkg@1") ("codemode" . "builtin:codemode"))
+                     (plist-get context :tool-sources)))
+      ;; Discovery may move on (the Extensions menu probes without added
+      ;; extensions); Save uses what was recorded.
+      (pichat-tool-discovery-draft-reset draft '(:other t))
+      (pichat-test-with-launcher context args
+        (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "guarded")))
+          (pichat-launch-save-preset))
+        (pcase-let ((`(,next-args . ,next) (car staged)))
+          (should (equal '("--preset=guarded") next-args))
+          (dolist (key '(:tool-selection :tool-sources :tool-target :model))
+            (should-not (plist-get next key)))
+          ;; The preset loads the checked extensions now, so they are
+          ;; unchecked in the launcher but stay listed.
+          (should (equal '(("npm:@probe/pkg@1") ("./off.ts")) (plist-get next :extensions)))))
+      (should (equal '((guarded :description "Saved from manual with customized tools and added extensions"
+                                :tools ("read" ("builtin:codemode" "codemode")
+                                        ("npm:@probe/pkg@1" . :all))
+                                :extensions ("npm:@probe/pkg@1")
+                                :model "provider/model"))
+                     pichat-saved-presets))
+      ;; Selecting another preset discards the recorded sources with Tools.
+      (let* ((scope (list :tool-selection '(:builtins nil) :tool-sources '(("a" . "b"))))
+             (transient--prefix (transient--init-prefix 'pichat-launch (list :scope scope))))
+        (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "review"))
+                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+          (pichat--launch-read-preset "Preset: " "manual" nil))
+        (should-not (plist-get scope :tool-sources))))))
 
 (ert-deftest pichat-saved-presets-launcher-replacement-needs-confirmation ()
   (pichat-test-with-custom-file file

@@ -80,7 +80,159 @@
                          (:name "codemode") (:name "child"))))))
     (should (equal '("mcp__unlisted__tool" "codemode" "child")
                    (mapcar (lambda (tool) (plist-get tool :name))
-                           (pichat-tool-picker--extension-tools))))))
+                           (pichat-tool-picker--extension-tools))))
+    ;; Without provenance (older Pi) the picker keeps one flat list.
+    (should-not (pichat-tool-picker--grouped-p))))
+
+(defun pichat-test-extension-tools-source (source path &optional base-dir)
+  "Return discovery provenance for SOURCE and PATH, with BASE-DIR."
+  (append (list :path path :source source
+                :scope (if (equal source "builtin") "temporary" "user")
+                :origin (if base-dir "package" "top-level"))
+          (when base-dir (list :base-dir base-dir))))
+
+(defun pichat-test-extension-tools-grouped-state (&optional extra-tools)
+  "Return a Tools picker state whose discovery reports provenance.
+EXTRA-TOOLS are appended to the catalogue."
+  (let ((guardrails (pichat-test-extension-tools-source
+                     "npm:@pi-vault/pi-guardrails@1.2.3"
+                     "/cache/node_modules/@pi-vault/pi-guardrails/index.ts"
+                     "/cache/node_modules/@pi-vault/pi-guardrails"))
+        (builtin (lambda (name) (pichat-test-extension-tools-source "builtin" (concat "builtin:" name)))))
+    (list :preset (pichat-presets-resolve 'manual) :baseline '("read")
+          :draft '(:builtins ("read") :mcp nil :extensions ("guardrails_status") :emacs nil)
+          :servers '((:name "known" :tools ((:name "tool")))) :loaded t :page 0
+          :discovery
+          (pichat-tool-discovery-draft-create
+           :status 'ready
+           :tools
+           (append
+            (list (list :name "read" :eligible t :description "Read" :source (funcall builtin "read"))
+                  (list :name "codemode" :eligible t :description "Run code"
+                        :source (funcall builtin "codemode"))
+                  (list :name "guardrails_status" :eligible t :description "Status" :source guardrails)
+                  (list :name "mcp__known__tool" :eligible t :description "Listed MCP"
+                        :source (funcall builtin "mcp"))
+                  (list :name "mcp__unlisted__tool" :eligible t :description "Unlisted MCP"
+                        :source (funcall builtin "mcp"))
+                  (list :name "archive_search" :eligible t :description "Search"
+                        :source (pichat-test-extension-tools-source
+                                 "git:github.com/example/pi-archive@v1" "/git/pi-archive/index.ts"
+                                 "/git/pi-archive"))
+                  (list :name "guardrails_policy" :eligible t :description "Policy" :source guardrails)
+                  (list :name "guardrails_hidden" :eligible nil :description "Hidden" :source guardrails)
+                  (list :name "probe_child" :eligible t :description "Child"
+                        :source (pichat-test-extension-tools-source "cli" "/ext/probe.ts"))
+                  (list :name "legacy" :eligible t :description "No provenance")
+                  (list :name "tool_search" :eligible t :description "Find tools"
+                        :source (funcall builtin "tool-search")))
+            extra-tools)))))
+
+(defun pichat-test-extension-tools-render (prefix)
+  "Return the text of PREFIX for the current picker state."
+  (let* ((transient--prefix (transient--init-prefix prefix))
+         (transient--layout (transient--init-suffixes prefix))
+         (transient--suffixes (transient--flatten-suffixes transient--layout)))
+    (with-temp-buffer (transient--insert-groups) (buffer-string))))
+
+(defun pichat-test-extension-tools-run (prefix key)
+  "Run the suffix bound to KEY in PREFIX for the current picker state."
+  (let* ((transient--prefix (transient--init-prefix prefix))
+         (transient--layout (transient--init-suffixes prefix))
+         (suffix (cl-find key (transient--flatten-suffixes transient--layout)
+                          :key (lambda (suffix) (oref suffix key)) :test #'equal)))
+    (should suffix)
+    (funcall (oref suffix command))))
+
+(ert-deftest pichat-extension-tools-picker-groups-by-provenance-with-pi-built-in-last ()
+  (let ((pichat-tool-picker--state (pichat-test-extension-tools-grouped-state)))
+    ;; Core built-ins and listed or builtin:mcp tools are not extension tools.
+    (should (equal '("codemode" "guardrails_status" "archive_search" "guardrails_policy"
+                     "guardrails_hidden" "probe_child" "legacy" "tool_search")
+                   (mapcar (lambda (tool) (plist-get tool :name))
+                           (pichat-tool-picker--extension-tools))))
+    (should (equal '(("npm:@pi-vault/pi-guardrails@1.2.3" "pi-guardrails"
+                      "guardrails_status" "guardrails_policy" "guardrails_hidden")
+                     ("git:github.com/example/pi-archive@v1" "pi-archive" "archive_search")
+                     ("/ext/probe.ts" "probe" "probe_child")
+                     (:unattributed "Unattributed" "legacy")
+                     (:builtin "Pi built-in" "codemode" "tool_search"))
+                   (mapcar (lambda (group)
+                             (append (list (car group) (cadr group))
+                                     (mapcar (lambda (tool) (plist-get tool :name)) (cddr group))))
+                           (pichat-tool-picker--extension-groups))))
+    (let ((text (pichat-test-extension-tools-render 'pichat-tool-picker)))
+      (should (string-match-p "e1 pi-guardrails (1/3) →" text))
+      (should (string-match-p "e2 pi-archive (0/1) →" text))
+      (should (string-match-p "e3 probe (0/1) →" text))
+      (should (string-match-p "e4 Unattributed (0/1) →" text))
+      (should (string-match-p "e5 Pi built-in (0/2) →" text))
+      (should-not (string-match-p "guardrails_policy\\|mcp__" text)))
+    ;; Labels shared by two packages fall back to the exact source.
+    (let ((pichat-tool-picker--state
+           (pichat-test-extension-tools-grouped-state
+            (list (list :name "other_status" :eligible t :description ""
+                        :source (pichat-test-extension-tools-source
+                                 "npm:pi-guardrails" "/cache/node_modules/pi-guardrails/index.ts"
+                                 "/cache/node_modules/pi-guardrails"))))))
+      (should (equal '("npm:@pi-vault/pi-guardrails@1.2.3" "pi-archive" "probe" "npm:pi-guardrails")
+                     (cl-subseq (mapcar #'cadr (pichat-tool-picker--extension-groups)) 0 4))))))
+
+(ert-deftest pichat-extension-tools-picker-group-page-checks-pages-and-returns ()
+  (let ((pichat-tool-picker--state
+         (pichat-test-extension-tools-grouped-state
+          ;; 21 more guardrails tools need a second group page.
+          (cl-loop for index from 1 to 21
+                   collect (list :name (format "guard_%02d" index) :eligible t :description "More"
+                                 :source (pichat-test-extension-tools-source
+                                          "npm:@pi-vault/pi-guardrails@1.2.3" "/cache/g/index.ts"
+                                          "/cache/node_modules/@pi-vault/pi-guardrails")))))
+        opened)
+    (setf (plist-get pichat-tool-picker--state :draft)
+          '(:builtins ("read") :mcp nil :extensions ("guardrails_status" "codemode") :emacs nil))
+    (cl-letf (((symbol-function 'transient-setup) (lambda (prefix &rest _) (setq opened prefix))))
+      (pichat-test-extension-tools-run 'pichat-tool-picker "e1")
+      (should (eq opened 'pichat-tool-picker-extension-group))
+      (should (equal "npm:@pi-vault/pi-guardrails@1.2.3"
+                     (plist-get pichat-tool-picker--state :extension-group)))
+      (let ((text (pichat-test-extension-tools-render 'pichat-tool-picker-extension-group)))
+        (should (string-match-p "^pi-guardrails: 1/24 selected$" text))
+        (should (string-match-p "npm:@pi-vault/pi-guardrails@1\\.2\\.3" text))
+        (should (string-match-p "\\[✓\\] guardrails_status — Status" text))
+        (should (string-match-p "guardrails_hidden (unavailable)" text))
+        (should (string-match-p "All in extension" text))
+        (should-not (string-match-p "guard_21\\|archive_search" text)))
+      ;; Checkboxes toggle exact names; hidden tools cannot be enabled.
+      (pichat-test-extension-tools-run 'pichat-tool-picker-extension-group "2")
+      (should (member "guardrails_policy" (plist-get (pichat-tool-picker--selection) :extensions)))
+      (should-error (pichat-test-extension-tools-run 'pichat-tool-picker-extension-group "3")
+                    :type 'user-error)
+      ;; All/None change only this group's current eligible tools.
+      (pichat-tool-picker-extension-group-all)
+      (let ((checked (plist-get (pichat-tool-picker--selection) :extensions)))
+        (should (= 24 (length checked)))
+        (should (member "codemode" checked))
+        (should (member "guard_21" checked))
+        (should-not (member "guardrails_hidden" checked)))
+      (pichat-tool-picker-extension-group-none)
+      (should (equal '("codemode") (plist-get (pichat-tool-picker--selection) :extensions)))
+      ;; Paging stays within the group's tools.
+      (pichat-tool-picker--page 1 'pichat-tool-picker-extension-group)
+      (should (= 1 (plist-get pichat-tool-picker--state :page)))
+      (pichat-tool-picker--page 1 'pichat-tool-picker-extension-group)
+      (should (= 1 (plist-get pichat-tool-picker--state :page)))
+      (should (string-match-p "guard_21" (pichat-test-extension-tools-render
+                                          'pichat-tool-picker-extension-group)))
+      (pichat-tool-picker-back)
+      (should (eq opened 'pichat-tool-picker))
+      (should (= 0 (plist-get pichat-tool-picker--state :page)))
+      (should (string-match-p "e5 Pi built-in (1/2) →"
+                              (pichat-test-extension-tools-render 'pichat-tool-picker)))
+      ;; Top-level All checks every visible eligible extension tool.
+      (pichat-tool-picker-all)
+      (should (equal (cl-loop for tool in (pichat-tool-picker--extension-tools)
+                              when (plist-get tool :eligible) collect (plist-get tool :name))
+                     (plist-get (pichat-tool-picker--selection) :extensions))))))
 
 (ert-deftest pichat-extension-tools-picker-fails-closed-on-stale-or-hidden-selection ()
   (let ((pichat-tool-picker--state

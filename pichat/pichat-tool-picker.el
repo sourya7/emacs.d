@@ -21,7 +21,8 @@
 (defconst pichat-tool-picker--page-size 20)
 
 (defconst pichat-tool-picker--prefixes
-  '(pichat-tool-picker pichat-tool-picker-server pichat-tool-picker-emacs-group)
+  '(pichat-tool-picker pichat-tool-picker-server pichat-tool-picker-emacs-group
+    pichat-tool-picker-extension-group)
   "Transient prefixes owned by the Tools picker.")
 
 (defun pichat-tool-picker--refresh-display ()
@@ -88,10 +89,18 @@ reminder, so it is dropped when too little room is left for it."
                                         (member name (plist-get (pichat-tool-picker--selection) :builtins)) name))
                             :transient t)))))
 
+(defun pichat-tool-picker--mcp-source-p (tool)
+  "Return non-nil when Pi reports TOOL as registered by its built-in MCP."
+  (let ((source (plist-get tool :source)))
+    (and (equal (plist-get source :source) "builtin")
+         (equal (plist-get source :path) "builtin:mcp"))))
+
 (defun pichat-tool-picker--extension-tools ()
-  "Return custom tools, excluding exact known built-in and MCP names.
-Do not guess provenance from prefixes.  Unlisted extension-registered MCP
-servers may consequently appear here rather than in the shell MCP listing."
+  "Return custom tools, excluding known built-in and MCP tools.
+Exact known built-in and listed MCP names are excluded, and so are tools Pi
+attributes to its built-in MCP (`builtin:mcp'), which belong under MCP
+servers.  Do not guess provenance from prefixes.  Tools of MCP servers that
+an extension registers may consequently appear here, under that extension."
   (let ((mcp-names (cl-loop for server in (plist-get pichat-tool-picker--state :servers)
                             append (mapcar (lambda (tool)
                                              (pichat-tool-selection--name
@@ -99,35 +108,183 @@ servers may consequently appear here rather than in the shell MCP listing."
                                            (plist-get server :tools)))))
     (when-let* ((draft (plist-get pichat-tool-picker--state :discovery)))
       (cl-remove-if
-       (lambda (tool) (member (plist-get tool :name)
-                             (append pichat-presets--known-built-in-tools mcp-names)))
+       (lambda (tool) (or (member (plist-get tool :name)
+                                 (append pichat-presets--known-built-in-tools mcp-names))
+                         (pichat-tool-picker--mcp-source-p tool)))
        (pichat-tool-discovery-draft-tools draft)))))
 
+;;; Extension tool groups
+
+(defun pichat-tool-picker--grouped-p ()
+  "Return non-nil when Pi reported provenance for some extension tool.
+Older Pi reports none; the picker then keeps one flat checkbox list."
+  (cl-some (lambda (tool) (plist-get tool :source))
+           (pichat-tool-picker--extension-tools)))
+
+(defun pichat-tool-picker--extension-group-key (tool)
+  "Return the group identity of extension TOOL from its provenance.
+The identity is `:builtin' for tools shipped with Pi (\"Pi built-in\"),
+`:unattributed' without provenance, the package directory or file path for
+extensions Pi loaded from a path (`cli', `local', `auto' sources), and
+otherwise the package source exactly as Pi reports it (for example
+`npm:name@1.2.3' or `git:github.com/owner/repo')."
+  (let* ((info (plist-get tool :source))
+         (source (plist-get info :source)))
+    (cond
+     ((not info) :unattributed)
+     ((equal source "builtin") :builtin)
+     ((member source '("cli" "local" "auto" "sdk"))
+      (or (plist-get info :base-dir) (plist-get info :path)))
+     (t source))))
+
+(defun pichat-tool-picker--extension-group-label (key)
+  "Return a short label for group KEY: package or file name."
+  (pcase key
+    (:builtin "Pi built-in")
+    (:unattributed "Unattributed")
+    ((pred file-name-absolute-p)
+     (let* ((path (directory-file-name key))
+            (base (file-name-base path)))
+       (if (equal base "index")
+           (file-name-nondirectory (directory-file-name (file-name-directory path)))
+         base)))
+    (_
+     ;; Strip a scheme, a trailing @version (not a leading npm @scope) and
+     ;; a .git suffix, then keep the last path component.
+     (let* ((spec (replace-regexp-in-string "\\`[a-z]+:\\(//\\)?" "" key))
+            (spec (replace-regexp-in-string "\\(.\\)@[^@/]*\\'" "\\1" spec))
+            (spec (replace-regexp-in-string "\\.git\\'" "" spec))
+            (name (file-name-nondirectory (directory-file-name spec))))
+       (if (string-empty-p name) key name)))))
+
+(defun pichat-tool-picker--extension-groups ()
+  "Return ordered (KEY LABEL . TOOLS) extension tool groups.
+Extensions come in discovery order, then \"Unattributed\", then \"Pi
+built-in\".  Labels shared by several groups fall back to their keys."
+  (let (groups)
+    (dolist (tool (pichat-tool-picker--extension-tools))
+      (let* ((key (pichat-tool-picker--extension-group-key tool))
+             (entry (assoc key groups)))
+        (if entry (setcdr entry (append (cdr entry) (list tool)))
+          (push (list key tool) groups))))
+    (setq groups (nreverse groups))
+    (setq groups (append (cl-remove-if (lambda (group) (keywordp (car group))) groups)
+                         (cl-remove-if-not (lambda (group) (eq (car group) :unattributed)) groups)
+                         (cl-remove-if-not (lambda (group) (eq (car group) :builtin)) groups)))
+    (let ((labels (mapcar (lambda (group) (pichat-tool-picker--extension-group-label (car group)))
+                          groups)))
+      (cl-loop for (key . tools) in groups
+               for label in labels
+               collect (cons key (cons (if (and (stringp key) (> (cl-count label labels :test #'equal) 1))
+                                           key label)
+                                       tools))))))
+
+(defun pichat-tool-picker--extension-group (key)
+  "Return the (KEY LABEL . TOOLS) group for KEY, or nil."
+  (assoc key (pichat-tool-picker--extension-groups)))
+
+(defun pichat-tool-picker--extension-count (tools)
+  "Return how many of TOOLS the draft checks."
+  (cl-count-if (lambda (tool) (member (plist-get tool :name)
+                                      (plist-get (pichat-tool-picker--selection) :extensions)))
+               tools))
+
+(defun pichat-tool-picker--extension-checkbox (key tool width)
+  "Return a suffix spec checking extension TOOL under KEY.
+WIDTH bounds the description."
+  (let ((name (plist-get tool :name)) (eligible (plist-get tool :eligible))
+        (description (truncate-string-to-width
+                      (replace-regexp-in-string "[[:cntrl:]]" " " (plist-get tool :description))
+                      width nil nil "…")))
+    (list key name
+          (lambda () (interactive)
+            (if (or eligible (member name (plist-get (pichat-tool-picker--selection) :extensions)))
+                (pichat-tool-picker--toggle :extensions name)
+              (user-error "Tool %s cannot be enabled" name)))
+          :description
+          (lambda ()
+            (pichat-tool-picker--with-description
+             key
+             (concat (pichat-tool-picker--description
+                      (member name (plist-get (pichat-tool-picker--selection) :extensions)) name)
+                     (if eligible "" " (unavailable)"))
+             description))
+          :transient t)))
+
 (defun pichat-tool-picker--extensions (_)
-  "Build simple extension checkboxes with descriptions."
+  "Build extension group shortcuts, or flat checkboxes without provenance."
   (transient-parse-suffixes
    'pichat-tool-picker
-   (cl-loop for tool in (pichat-tool-picker--page-items (pichat-tool-picker--extension-tools))
+   (if (pichat-tool-picker--grouped-p)
+       (cl-loop for (group-key label . _) in (pichat-tool-picker--page-items
+                                              (pichat-tool-picker--extension-groups))
+                for key in pichat-tool-picker--keys
+                collect
+                (let ((group-key group-key))
+                  (list (concat "e" key) label
+                        (lambda () (interactive)
+                          (setf (plist-get pichat-tool-picker--state :extension-group) group-key
+                                (plist-get pichat-tool-picker--state :page) 0)
+                          (transient-setup 'pichat-tool-picker-extension-group))
+                        :description
+                        (lambda ()
+                          (pcase-let ((`(,_ ,label . ,tools)
+                                       (pichat-tool-picker--extension-group group-key)))
+                            (format "%s (%d/%d) →" label
+                                    (pichat-tool-picker--extension-count tools) (length tools))))
+                        :transient t)))
+     (cl-loop for tool in (pichat-tool-picker--page-items (pichat-tool-picker--extension-tools))
+              for key in pichat-tool-picker--keys
+              collect (pichat-tool-picker--extension-checkbox
+                       (concat "e" key) tool 65)))))
+
+(defun pichat-tool-picker--extension-group-tools ()
+  "Return the tools of the open extension group."
+  (cddr (pichat-tool-picker--extension-group
+         (plist-get pichat-tool-picker--state :extension-group))))
+
+(defun pichat-tool-picker--extension-tool-entries (_)
+  "Build checkboxes for the open extension group."
+  (transient-parse-suffixes
+   'pichat-tool-picker-extension-group
+   (cl-loop for tool in (pichat-tool-picker--page-items (pichat-tool-picker--extension-group-tools))
             for key in pichat-tool-picker--keys
-            collect
-            (let ((name (plist-get tool :name)) (eligible (plist-get tool :eligible))
-                  (description (truncate-string-to-width
-                                (replace-regexp-in-string "[[:cntrl:]]" " " (plist-get tool :description))
-                                65 nil nil "…")))
-              (list (concat "e" key) name
-                    (lambda () (interactive)
-                      (if (or eligible (member name (plist-get (pichat-tool-picker--selection) :extensions)))
-                          (pichat-tool-picker--toggle :extensions name)
-                        (user-error "Tool %s cannot be enabled" name)))
-                    :description
-                    (lambda ()
-                      (pichat-tool-picker--with-description
-                       (concat "e" key)
-                       (concat (pichat-tool-picker--description
-                                (member name (plist-get (pichat-tool-picker--selection) :extensions)) name)
-                               (if eligible "" " (unavailable)"))
-                       description))
-                    :transient t)))))
+            collect (pichat-tool-picker--extension-checkbox
+                     key tool 60))))
+
+(defun pichat-tool-picker--extension-group-description ()
+  "Head the open extension group with its label, source and count."
+  (let* ((key (plist-get pichat-tool-picker--state :extension-group))
+         (group (pichat-tool-picker--extension-group key))
+         (tools (cddr group)))
+    (concat (format "%s: %d/%d selected" (or (cadr group) "Extension")
+                    (pichat-tool-picker--extension-count tools) (length tools))
+            (when (and (stringp key) (not (equal key (cadr group))))
+              (concat "\n" (propertize (pichat-transient-fill key) 'face 'shadow))))))
+
+(defun pichat-tool-picker--extension-group-set (selected)
+  "Check the open group's eligible tools when SELECTED, else none of them.
+Only that group's current tools change; tools registered later are not
+included."
+  (let* ((tools (pichat-tool-picker--extension-group-tools))
+         (members (mapcar (lambda (tool) (plist-get tool :name)) tools))
+         (selection (copy-tree (pichat-tool-picker--selection)))
+         (others (cl-remove-if (lambda (name) (member name members))
+                               (plist-get selection :extensions))))
+    (pichat-tool-picker--set-selection
+     (plist-put selection :extensions
+                (if selected
+                    (append others (cl-loop for tool in tools
+                                            when (plist-get tool :eligible)
+                                            collect (plist-get tool :name)))
+                  others)))))
+
+(transient-define-suffix pichat-tool-picker-extension-group-all ()
+  "Check this extension's eligible tools." :transient t
+  (interactive) (pichat-tool-picker--extension-group-set t))
+(transient-define-suffix pichat-tool-picker-extension-group-none ()
+  "Uncheck this extension's tools." :transient t
+  (interactive) (pichat-tool-picker--extension-group-set nil))
 
 (defun pichat-tool-picker--current-server ()
   "Return the selected MCP server."
@@ -363,8 +520,12 @@ Emacs-defined tools remain explicit per-group or per-tool choices."
                   ('pichat-tool-picker-emacs-group
                    (length (pichat-tool-picker--emacs-group-tools
                             (plist-get pichat-tool-picker--state :emacs-group))))
+                  ('pichat-tool-picker-extension-group
+                   (length (pichat-tool-picker--extension-group-tools)))
                   (_ (max (length (plist-get pichat-tool-picker--state :servers))
-                          (length (pichat-tool-picker--extension-tools))))))
+                          (length (if (pichat-tool-picker--grouped-p)
+                                      (pichat-tool-picker--extension-groups)
+                                    (pichat-tool-picker--extension-tools)))))))
          (last (max 0 (1- (ceiling count pichat-tool-picker--page-size)))))
     (setf (plist-get pichat-tool-picker--state :page)
           (min last (max 0 (+ delta (or (plist-get pichat-tool-picker--state :page) 0)))))
@@ -500,6 +661,15 @@ Emacs-defined tools remain explicit per-group or per-tool choices."
     ("[" "Previous page" pichat-tool-picker-prev) ("]" "Next page" pichat-tool-picker-next)]
    ["Action" ("RET" "Done" pichat-tool-picker-back) ("q" "Back" pichat-tool-picker-back)]]
   (interactive) (transient-setup 'pichat-tool-picker-emacs-group))
+(transient-define-prefix pichat-tool-picker-extension-group ()
+  "Select the tools of one extension."
+  [:description pichat-tool-picker--extension-group-description
+   :class transient-column :setup-children pichat-tool-picker--extension-tool-entries]
+  [["Selection" ("a" "All in extension" pichat-tool-picker-extension-group-all)
+    ("n" "None in extension" pichat-tool-picker-extension-group-none)
+    ("[" "Previous page" pichat-tool-picker-prev) ("]" "Next page" pichat-tool-picker-next)]
+   ["Action" ("RET" "Done" pichat-tool-picker-back) ("q" "Back" pichat-tool-picker-back)]]
+  (interactive) (transient-setup 'pichat-tool-picker-extension-group))
 (transient-define-prefix pichat-tool-picker-server ()
   "Select MCP server tools."
   ["Server tools" :class transient-column :setup-children pichat-tool-picker--server-tools]
@@ -537,6 +707,7 @@ owner's DISCOVERY cache qualify the probe; no unrelated runtime is queried."
                 :draft (copy-tree (or selection (pichat-tool-selection-resolve preset)))
                 :discovery discovery :transport transport :runtime-cwd runtime-cwd
                 :emacs-catalogue (pichat-tools-catalogue) :emacs-group nil
+                :extension-group nil
                 :executable executable :callback callback :page 0 :cancel nil
                 :servers nil :loaded nil :error nil :version 0))
     (transient-setup 'pichat-tool-picker)

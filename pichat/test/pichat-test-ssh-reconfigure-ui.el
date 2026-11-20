@@ -38,15 +38,23 @@
           30 "live SSH extension and MCP catalogue discovery")
          (should (window-live-p transient--window))
          ;; Locate the displayed keys by tool name, not catalogue ordering.
-         (let ((index (cl-position "write" (plist-get pichat-tool-picker--state :baseline)
-                                   :test #'equal))
-               (extension-index
-                (cl-position "probe_child" (pichat-tool-picker--extension-tools)
-                             :key (lambda (tool) (plist-get tool :name)) :test #'equal)))
+         ;; Pi reports provenance, so probe_child sits in its extension's group.
+         (let* ((index (cl-position "write" (plist-get pichat-tool-picker--state :baseline)
+                                    :test #'equal))
+                (named (lambda (tool) (equal "probe_child" (plist-get tool :name))))
+                (groups (pichat-tool-picker--extension-groups))
+                (group-index (cl-position-if (lambda (group) (cl-some named (cddr group))) groups))
+                (tool-index (and group-index
+                                 (cl-position-if named (cddr (nth group-index groups))))))
            (should index)
-           (should extension-index)
+           (should (pichat-tool-picker--grouped-p))
+           (should tool-index)
            (execute-kbd-macro (kbd (nth index pichat-tool-picker--keys)))
-           (execute-kbd-macro (kbd (concat "e" (nth extension-index pichat-tool-picker--keys)))))
+           (execute-kbd-macro (kbd (concat "e" (nth group-index pichat-tool-picker--keys))))
+           (should (eq 'pichat-tool-picker-extension-group (oref transient--prefix command)))
+           (execute-kbd-macro (kbd (nth tool-index pichat-tool-picker--keys)))
+           (execute-kbd-macro (kbd "RET"))
+           (should (eq 'pichat-tool-picker (oref transient--prefix command))))
          (execute-kbd-macro (kbd "RET"))
          (pichat-test-wait-until
           (lambda () (and transient--prefix

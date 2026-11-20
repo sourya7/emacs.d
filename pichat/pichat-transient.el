@@ -33,7 +33,7 @@ packages' menus are not affected."
     pichat-jobs-actions-menu pichat-job-edit-menu pichat-job-definition-menu
     pichat-job-schedule-menu
     pichat-tool-picker pichat-tool-picker-server pichat-tool-picker-emacs-group
-    pichat-tool-picker-extension-group)
+    pichat-tool-picker-extension-group pichat-launch-extensions-menu)
   "PiChat Transient prefixes that follow `pichat-transient-single-column-width'.")
 
 (defvar-local pichat-transient--no-wrap nil

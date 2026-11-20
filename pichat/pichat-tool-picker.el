@@ -679,18 +679,17 @@ Emacs-defined tools remain explicit per-group or per-tool choices."
    ["Action" ("RET" "Done" pichat-tool-picker-back) ("q" "Back" pichat-tool-picker-back)]]
   (interactive) (transient-setup 'pichat-tool-picker-server))
 
-(defun pichat-tool-picker-open (preset selection directory transport executable callback
-                                     &optional model discovery)
-  "Open PRESET/SELECTION for DIRECTORY on TRANSPORT using EXECUTABLE.
-CALLBACK receives a raw selection, nil baseline or :cancel.  MODEL and the
-owner's DISCOVERY cache qualify the probe; no unrelated runtime is queried."
-  (when (eq (plist-get preset :tools) :default)
-    (user-error "Preset %s uses Pi defaults; Tools cannot customize it" (plist-get preset :name)))
+(defun pichat-tool-picker-discovery-context (preset directory transport executable
+                                                   &optional model)
+  "Return (RUNTIME-CWD . PROBE-CONTEXT) for discovering tools of PRESET.
+DIRECTORY is resolved on TRANSPORT; EXECUTABLE and MODEL qualify the probe,
+which also carries the preset's prompt arguments.  Owners reset their
+discovery cache with PROBE-CONTEXT, so menus sharing one cache share
+results.  Signal when discovery is unavailable there.  Start nothing."
   (let* ((cwd (file-name-as-directory (expand-file-name directory)))
          (context (pichat-transport-path-context transport (and (boundp 'pichat-path-mappings) pichat-path-mappings)))
          (runtime-cwd (or (plist-get (pichat-path-resolve-to-runtime cwd context) :path)
                           (user-error "Directory is unavailable to target %s" (pichat-transport-label transport))))
-         (discovery (or discovery (pichat-tool-discovery-draft-create)))
          (probe-context (pichat-tool-discovery-context
                          transport runtime-cwd
                          (or (pichat-transport-pi-executable transport) executable) model)))
@@ -701,6 +700,19 @@ owner's DISCOVERY cache qualify the probe; no unrelated runtime is queried."
                     (list "--system-prompt" (plist-get preset :system-prompt)))
                   (when (plist-get preset :append-system-prompt)
                     (list "--append-system-prompt" (plist-get preset :append-system-prompt)))))
+    (cons runtime-cwd probe-context)))
+
+(defun pichat-tool-picker-open (preset selection directory transport executable callback
+                                     &optional model discovery)
+  "Open PRESET/SELECTION for DIRECTORY on TRANSPORT using EXECUTABLE.
+CALLBACK receives a raw selection, nil baseline or :cancel.  MODEL and the
+owner's DISCOVERY cache qualify the probe; no unrelated runtime is queried."
+  (when (eq (plist-get preset :tools) :default)
+    (user-error "Preset %s uses Pi defaults; Tools cannot customize it" (plist-get preset :name)))
+  (pcase-let* ((`(,runtime-cwd . ,probe-context)
+                (pichat-tool-picker-discovery-context
+                 preset directory transport executable model))
+               (discovery (or discovery (pichat-tool-discovery-draft-create))))
     (pichat-tool-discovery-draft-reset discovery probe-context)
     (setq pichat-tool-picker--state
           (list :preset preset :baseline (copy-sequence (plist-get preset :tools))

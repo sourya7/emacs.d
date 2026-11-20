@@ -3,6 +3,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'seq)
 (require 'subr-x)
 
 (defgroup pichat-presets nil "PiChat runtime presets." :group 'pichat)
@@ -340,19 +341,22 @@ rewrite an ambiguous structure."
 
 (declare-function custom-file "cus-edit" (&optional no-error))
 
-(defun pichat-presets--check-custom-file ()
-  "Return the custom file presets are saved to, or signal why it is unsafe."
+(defun pichat-presets--check-custom-file (&optional what)
+  "Return the custom file presets are saved to, or signal why it is unsafe.
+WHAT names the value being saved in messages; it defaults to \"a preset\"."
   (require 'cus-edit)
+  (setq what (or what "a preset"))
   (unless (and custom-file (custom-file t))
-    (user-error "Saving presets requires `custom-file' (Emacs started without an init file?)"))
+    (user-error "Saving %s requires `custom-file' (Emacs started without an init file?)"
+                what))
   (let* ((file (custom-file))
          (buffer (find-buffer-visiting file)))
     (when buffer
       (when (buffer-modified-p buffer)
-        (user-error "Save or revert %s before saving a preset" (buffer-name buffer)))
+        (user-error "Save or revert %s before saving %s" (buffer-name buffer) what))
       (unless (verify-visited-file-modtime buffer)
-        (user-error "%s changed on disk; revert %s before saving a preset"
-                    file (buffer-name buffer))))
+        (user-error "%s changed on disk; revert %s before saving %s"
+                    file (buffer-name buffer) what)))
     ;; Custom rewrites every saved variable from memory.  Refuse when the file
     ;; holds saved values this Emacs does not, for example after another
     ;; instance saved, rather than silently discarding them.
@@ -361,6 +365,26 @@ rewrite an ambiguous structure."
         (user-error "%s has saved settings this Emacs has not loaded (%s); reload it first"
                     file (car entry))))
     file))
+
+(defun pichat-presets--save-variable (symbol value what)
+  "Save VALUE as SYMBOL's Custom value in `custom-file'; return the file.
+WHAT names the value in refusals.  Only SYMBOL is newly saved; other
+unsaved Custom changes are not written.  On any failure SYMBOL's value
+and Custom state are left unchanged."
+  (let* ((file (pichat-presets--check-custom-file what))
+         (old-value (pichat-presets--copy (default-value symbol)))
+         (properties '(saved-value theme-value customized-value variable-comment
+                       saved-variable-comment customized-variable-comment))
+         (old-properties (mapcar (lambda (property)
+                                   (cons property (copy-tree (get symbol property))))
+                                 properties)))
+    (condition-case err
+        (progn (customize-save-variable symbol value) file)
+      ((error quit)
+       (set-default symbol old-value)
+       (dolist (property old-properties)
+         (put symbol (car property) (cdr property)))
+       (signal (car err) (cdr err))))))
 
 (defun pichat-presets-save-definition (name spec)
   "Save preset NAME with definition SPEC to `custom-file' and register it.
@@ -372,26 +396,67 @@ file written.  Callers confirm replacing an existing name."
   (unless (and (symbolp name) name (not (memq name pichat-presets--reserved-names)))
     (user-error "Invalid PiChat preset name: %S" name))
   (pichat-presets--validate name spec)
-  (let* ((file (pichat-presets--check-custom-file))
-         (symbol 'pichat-saved-presets)
-         (old-value (pichat-presets--copy pichat-saved-presets))
-         (properties '(saved-value theme-value customized-value variable-comment
-                       saved-variable-comment customized-variable-comment))
-         (old-properties (mapcar (lambda (property)
-                                   (cons property (copy-tree (get symbol property))))
-                                 properties))
+  (let* ((old-value pichat-saved-presets)
          (entry (cons name (pichat-presets--copy spec)))
          (value (if (assq name old-value)
                     (mapcar (lambda (item) (if (eq (car item) name) entry item))
                             old-value)
-                  (append old-value (list entry)))))
-    (condition-case err
-        (progn (customize-save-variable symbol value) file)
-      ((error quit)
-       (set-default symbol old-value)
-       (dolist (property old-properties)
-         (put symbol (car property) (cdr property)))
-       (signal (car err) (cdr err))))))
+                  (append (pichat-presets--copy old-value) (list entry)))))
+    (pichat-presets--save-variable 'pichat-saved-presets value "a preset")))
+
+;;; Recently added extensions
+
+(defcustom pichat-recent-extensions nil
+  "Extensions most recently added for a launch, newest first.
+Each element is an extension as given to Pi's -e option: a path, or an
+`npm:' or `git:' package specification.  The launcher's Extensions menu
+offers these again under Recent and updates the list, keeping at most
+three, when its additions are applied.  The value is saved through
+`custom-file' when that is safe; otherwise it lasts for this Emacs session."
+  :type '(repeat (string :tag "Extension"))
+  :group 'pichat-presets)
+
+(defconst pichat-presets--recent-extensions-limit 3
+  "How many recently added extensions `pichat-recent-extensions' keeps.")
+
+(defun pichat-presets-extension-spec-p (spec)
+  "Return non-nil if SPEC can name one extension added for a launch.
+SPEC is a non-empty single-line string without surrounding spaces, at
+most 1024 characters, that cannot be read as a Pi option (it does not
+start with `-').  Pi decides what the path or package specification means."
+  (and (stringp spec) (<= 1 (length spec) 1024)
+       (equal spec (string-trim spec))
+       (not (string-match-p "[[:cntrl:]]" spec))
+       (not (string-prefix-p "-" spec))))
+
+(defun pichat-presets-recent-extensions ()
+  "Return the valid entries of `pichat-recent-extensions', newest first.
+Invalid and repeated entries of a hand-edited value are skipped."
+  (let ((value pichat-recent-extensions))
+    (seq-take (cl-remove-duplicates
+               (cl-remove-if-not #'pichat-presets-extension-spec-p
+                                 (and (proper-list-p value) value))
+               :test #'equal :from-end t)
+              pichat-presets--recent-extensions-limit)))
+
+(defun pichat-presets-note-recent-extensions (specs)
+  "Record extension SPECS, in order, as the most recently used.
+They go before the other recent entries, of which at most three remain in
+total.  Save the result through `custom-file'.  When saving is unsafe or
+fails, keep the new value for this Emacs session and return the reason as
+a string; return nil when it was saved or nothing changed."
+  (let ((new (seq-take (cl-remove-duplicates
+                        (append (cl-remove-if-not #'pichat-presets-extension-spec-p specs)
+                                (pichat-presets-recent-extensions))
+                        :test #'equal :from-end t)
+                       pichat-presets--recent-extensions-limit)))
+    (unless (equal new pichat-recent-extensions)
+      (condition-case err
+          (progn (pichat-presets--save-variable
+                  'pichat-recent-extensions (copy-sequence new) "recent extensions")
+                 nil)
+        (error (set-default 'pichat-recent-extensions new)
+               (error-message-string err))))))
 
 (pichat-make-preset 'manual
   :description "Inspect and edit files without built-in bash."

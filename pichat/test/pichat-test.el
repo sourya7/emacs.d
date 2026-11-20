@@ -24,6 +24,7 @@
 (require 'pichat-test-process-lifetime-protocol)
 (require 'pichat-test-reconfigure-ssh)
 (require 'pichat-test-launch)
+(require 'pichat-test-launch-extensions)
 (require 'pichat-test-presets)
 (require 'pichat-test-saved-presets)
 (require 'pichat-test-tool-selection)

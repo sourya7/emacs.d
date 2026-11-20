@@ -239,5 +239,27 @@
       (pichat-test-transient-width--check
        'pichat-tool-picker nil "^Emacs-defined tools (not over SSH)$"))))
 
+(ert-deftest pichat-transient-width-launch-extensions-menu-fits-narrow-frame ()
+  (with-temp-buffer
+    (pichat-test-transient-width--check
+     'pichat-launch
+     (list :origin-buffer (current-buffer) :directory "/tmp/" :display-function #'ignore
+           :extensions '(("~/pi-ext/protect-secrets.ts" . t)))
+     "l Extensions (1 added) →" "RET Launch independent"))
+  (let ((pichat-launch-extensions--state
+         (list :added '(("~/pi-ext/protect-secrets.ts" . t)
+                        ("npm:@pi-vault/pi-guardrails@1.2.3" . nil)
+                        ("git:github.com/kirang89/pi-sentry-with-a-long-name@v0.1.0" . nil))
+               :discovery (pichat-tool-discovery-draft-create
+                           :status 'ready
+                           :commands '((:name "archive" :description ""
+                                        :source (:path "/x/index.ts"
+                                                 :source "git:github.com/sourya7/pi-archive"))))))
+        (pichat-recent-extensions '("~/pi-ext/read-audit.ts")))
+    (pichat-test-transient-width--check
+     'pichat-launch-extensions-menu nil
+     "1 \\[✓\\] ~/pi-ext/protect-secrets.ts" "3 \\[ \\] …" "^Recent (1)$"
+     "A ~/pi-ext/read-audit.ts" "pi-archive  …" "RET Done")))
+
 (provide 'pichat-test-transient-width)
 ;;; pichat-test-transient-width.el ends here

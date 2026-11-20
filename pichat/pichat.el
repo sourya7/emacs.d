@@ -20,6 +20,7 @@
 (require 'pichat-rpc)
 (require 'pichat-reconfigure)
 (require 'pichat-tool-picker)
+(require 'pichat-launch-extensions)
 (require 'pichat-presets)
 (require 'pichat-pi)
 (require 'pichat-chat)
@@ -345,6 +346,7 @@ preferred runtime."
          (persistence (or (plist-get profile :persistence) 'persistent))
          (preset (or (plist-get profile :preset) 'default))
          (tools (plist-get profile :tools))
+         (extensions (plist-get profile :extensions))
          (model (or (plist-get profile :model)
                     (and (not (eq preset 'default))
                          (pichat-presets-defined-p preset)
@@ -354,7 +356,7 @@ preferred runtime."
          (reuse (or (plist-get profile :reuse)
                     (if (or (eq persistence 'ephemeral)
                             (not (eq preset 'default))
-                            tools
+                            tools extensions
                             (eq model 'prompt)
                             (stringp model))
                         'new
@@ -391,8 +393,15 @@ preferred runtime."
                 (and (eq (plist-get conversation :kind) 'saved)
                      (listp (plist-get conversation :selection))))
       (user-error "Invalid PiChat launch conversation selection"))
+    (unless (and (proper-list-p extensions)
+                 (cl-every #'pichat-presets-extension-spec-p extensions)
+                 (= (length extensions)
+                    (length (delete-dups (copy-sequence extensions)))))
+      (user-error "Invalid or duplicate PiChat launch extensions: %S" extensions))
     (when (and conversation (eq reuse 'preferred))
       (user-error "Selected conversations require an independent runtime"))
+    (when (and extensions (eq reuse 'preferred))
+      (user-error "Added extensions require an independent runtime"))
     (when (and (eq reuse 'preferred)
                (or (eq persistence 'ephemeral)
                    (not (eq preset 'default))
@@ -412,7 +421,9 @@ preferred runtime."
                   :tools (copy-tree tools)
                   :model model
                   :display-function display-function)
-            (when conversation (list :conversation conversation)))))
+            (when conversation (list :conversation conversation))
+            ;; Omitted when empty so existing profiles remain unchanged.
+            (when extensions (list :extensions (copy-sequence extensions))))))
 
 (defun pichat--resolve-launch-scope (scope &optional directory target)
   "Resolve launch SCOPE and TARGET using optional invocation DIRECTORY."
@@ -621,6 +632,9 @@ Prompted-model profiles first select a model asynchronously and return nil,
 as do presets whose MCP baseline is first checked at the destination."
   (let* ((profile (pichat--normalize-launch-profile profile))
          (model (plist-get profile :model)))
+    (when (plist-get profile :extensions)
+      ;; Never start a runtime without extensions the user chose to load.
+      (user-error "Added extensions cannot be loaded yet; uncheck them in l Extensions"))
     (cond
      ((eq model 'prompt)
       (pichat--select-model-before-launch profile directory)
@@ -1286,13 +1300,15 @@ Return a name without changing state."
                            (user-error "Unknown PiChat preset: %s" name)))
                    'default))
          (tools (plist-get context :tool-selection))
+         (extensions (pichat-launch-extensions-checked
+                      (plist-get context :extensions)))
          (conversation (plist-get context :conversation))
          ;; Nil follows the preset; a staged choice from `m' overrides it.
          (model (cond (prompt-p 'prompt)
                       ((plist-get context :model))))
          (independent-p (or (member "--new" arguments)
                             (eq (plist-get conversation :kind) 'saved)
-                            ephemeral-p prompt-p tools
+                            ephemeral-p prompt-p tools extensions
                             (memq model '(prompt)) (stringp model)
                             (not (eq preset 'default)))))
     (pichat--normalize-launch-profile
@@ -1303,6 +1319,7 @@ Return a name without changing state."
            :persistence (if ephemeral-p 'ephemeral 'persistent)
            :preset preset
            :tools tools
+           :extensions extensions
            :conversation conversation
            :model model
            :display-function (or (plist-get context :display-function)
@@ -1469,6 +1486,52 @@ model and conversation are shown by their own menu entries."
          (transient-setup 'pichat-launch nil nil :scope next)))
      (and (stringp (plist-get profile :model)) (plist-get profile :model))
      (plist-get context :tool-discovery))))
+
+(defun pichat--launch-discovery-context (args context)
+  "Return the discovery probe context for launcher ARGS and CONTEXT.
+It follows the launch's destination, preset and model, as the Tools
+picker's probe does.  Signal when discovery is unavailable there."
+  (let* ((profile (pichat--launch-profile-from-arguments args context))
+         (preset (plist-get profile :preset))
+         (spec (pichat-presets-resolve
+                (if (eq preset 'default) pichat-default-preset preset)))
+         (destination (pichat--launch-destination profile (plist-get context :directory)))
+         (transport (cdr destination))
+         (model (plist-get profile :model)))
+    (when (and pichat-rpc-command (eq (pichat-transport-kind transport) 'local))
+      (user-error "Discovery cannot use a complete Pi command wrapper"))
+    (cdr (pichat-tool-picker-discovery-context
+          spec (nth 1 (car destination)) transport pichat-pi-executable
+          (and (stringp model) model)))))
+
+(defun pichat--launch-extensions-description ()
+  "Describe the launcher's Extensions entry with its checked count."
+  (let ((count (length (pichat-launch-extensions-checked
+                        (plist-get (transient-scope) :extensions)))))
+    (if (zerop count) "Extensions →"
+      (concat "Extensions "
+              (propertize (format "(%d added)" count) 'face 'transient-value)
+              " →"))))
+
+(transient-define-suffix pichat-launch-extensions ()
+  "Choose extensions added for this launch.
+Checked extensions make the launch use an independent runtime."
+  (interactive)
+  (let* ((args (transient-args 'pichat-launch))
+         (context (transient-scope)))
+    (setq context (plist-put context :tool-discovery
+                             (or (plist-get context :tool-discovery)
+                                 (pichat-tool-discovery-draft-create))))
+    (pichat-launch-extensions-open
+     (plist-get context :extensions)
+     (plist-get context :tool-discovery)
+     (lambda () (pichat--launch-discovery-context args context))
+     (lambda (result)
+       (let ((next (copy-sequence context)))
+         (unless (eq result :cancel)
+           (setq next (plist-put next :extensions result)))
+         (transient-setup 'pichat-launch nil nil
+                          :scope (plist-put next :launch-args args)))))))
 
 (defvar pichat--launch-model-request nil
   "Token owning the launcher's pending asynchronous model listing.
@@ -1924,7 +1987,9 @@ says when it does not, and what blocks it."
     ("p" "Preset" "--preset=" :choices pichat--launch-preset-choices
      :reader pichat--launch-read-preset)
     ("m" pichat-launch-model :description pichat--launch-model-description)
-    ("x" pichat-launch-tools :description pichat--launch-tools-description)]]
+    ("x" pichat-launch-tools :description pichat--launch-tools-description)
+    ("l" pichat-launch-extensions
+     :description pichat--launch-extensions-description)]]
   [["Action" :description pichat--launch-action-heading
     ("c" "Save preset as…" pichat-launch-save-preset)
     ("RET" pichat-launch-execute

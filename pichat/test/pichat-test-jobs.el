@@ -38,6 +38,30 @@
     (should-error (pichat-job-launch-capture "Test" "Prompt" project-dir nil)
                   :type 'user-error)))
 
+(ert-deftest pichat-job-launch-refuses-presets-that-load-extensions ()
+  (pichat-test-with-job-executor ()
+    (let ((pichat-presets (copy-tree pichat-presets)))
+      (pichat-make-preset 'guarded
+        :tools '("read" ("./guard.ts" "guard_check")) :extensions '("./guard.ts"))
+      ;; A capture would not record them, so no run could check they loaded.
+      (should (string-match-p
+               "Jobs cannot use presets that load extensions (guarded)"
+               (cadr (should-error
+                      (pichat-job-launch-capture
+                       "Test" "Prompt" project-dir
+                       '(:preset guarded :model "pichat-fake/pichat-fake" :target local))
+                      :type 'user-error))))
+      ;; Grouped extension tools alone are captured as exact names.
+      (pichat-make-preset 'grouped :tools '("read" ("npm:pkg" "pkg_tool")))
+      (let* ((spec (pichat-job-launch-capture
+                    "Test" "Prompt" project-dir
+                    '(:preset grouped :model "pichat-fake/pichat-fake" :target local)))
+             (runtime (car (pichat-job-launch-prepare spec))))
+        (should (equal '("pkg_tool")
+                       (plist-get (pichat-session-preset-spec runtime) :extensions)))
+        (should (equal '("pkg_tool")
+                       (plist-get (pichat-session-tool-selection runtime) :extensions)))))))
+
 (ert-deftest pichat-job-prepare-and-hidden-chat-preserve-current-context ()
   (pichat-test-with-job-executor ()
     (let* ((current (pichat-session-make))

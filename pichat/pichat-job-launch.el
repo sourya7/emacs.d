@@ -65,15 +65,10 @@
         (emacs (pichat-job-launch--optional-strings (plist-get preset :emacs-tools)))
         (mcp (and (plist-get preset :mcp)
                   (pichat-job-launch--unpairs (plist-get preset :mcp)))))
-    (pichat-presets--validate
-     (plist-get result :name)
-     (list :description (plist-get result :description)
-           :tools (plist-get result :tools)
-           :extensions (plist-get result :extensions)
-           :emacs-tools emacs
-           :mcp mcp
-           :system-prompt (plist-get result :system-prompt)
-           :append-system-prompt (plist-get result :append-system-prompt)))
+    (pichat-presets-validate-snapshot
+     (append result
+             (when emacs (list :emacs-tools emacs))
+             (when mcp (list :mcp mcp))))
     (append result
             (when emacs (list :emacs-tools emacs))
             (when mcp (list :mcp mcp)))))
@@ -156,6 +151,12 @@ submission.  Complete wrappers and conversation-loading flags are unsupported."
                            :tools (plist-get profile :tools) :model model
                            :target (unless (eq (plist-get profile :target) 'inferred)
                                      (plist-get profile :target)))))
+           (_ (when (pichat-presets-load-extensions
+                     (pichat-session-preset-spec session))
+                ;; Captures do not record them, so no run could check that
+                ;; they loaded; refuse rather than run unprotected.
+                (user-error "Jobs cannot use presets that load extensions (%s)"
+                            (plist-get (pichat-session-preset-spec session) :name))))
            (transport (pichat-session-transport session))
            (context (pichat-session-path-context session))
            (command (pichat-rpc-build-command session))

@@ -227,5 +227,86 @@
                     :type 'user-error)
       (should-not (pichat-session-list)))))
 
+(ert-deftest pichat-presets-grouped-tools-and-extensions-validate-and-resolve ()
+  (let ((pichat-presets (copy-tree pichat-presets))
+        (pichat-append-system-prompt nil))
+    ;; The agreed form: built-ins and per-extension groups in :tools, the
+    ;; extensions to load in :extensions.
+    (pichat-make-preset 'manual-guarded
+      :description "Manual tools with the secrets guard loaded."
+      :tools '("read" "grep" "find" "ls" "edit" "write"
+               ("npm:@pi-vault/pi-guardrails@1.2.3"
+                "guardrails_status" "guardrails_policy")
+               ("builtin:codemode" "codemode"))
+      :extensions '("~/pi-ext/protect-secrets.ts"
+                    "npm:@pi-vault/pi-guardrails@1.2.3"))
+    (let* ((spec (pichat-presets-resolve 'manual-guarded))
+           (tools (pichat-tool-selection-resolve spec)))
+      (should (equal '("read" "grep" "find" "ls" "edit" "write") (plist-get spec :tools)))
+      (should (equal '("guardrails_status" "guardrails_policy" "codemode")
+                     (plist-get spec :extensions)))
+      (should (equal '(("npm:@pi-vault/pi-guardrails@1.2.3"
+                        "guardrails_status" "guardrails_policy")
+                       ("builtin:codemode" "codemode"))
+                     (plist-get spec :tool-groups)))
+      (should (equal '("~/pi-ext/protect-secrets.ts" "npm:@pi-vault/pi-guardrails@1.2.3")
+                     (plist-get spec :load-extensions)))
+      (should (equal (plist-get spec :load-extensions) (pichat-presets-load-extensions spec)))
+      (should (equal '("~/pi-ext/protect-secrets.ts" "npm:@pi-vault/pi-guardrails@1.2.3" "x.ts")
+                     (pichat-presets-load-extensions
+                      spec '("npm:@pi-vault/pi-guardrails@1.2.3" "x.ts"))))
+      (should (eq spec (pichat-presets-validate-snapshot spec)))
+      (should (equal (list "--tools" (concat "read,grep,find,ls,edit,write,"
+                                             "codemode,guardrails_policy,guardrails_status")
+                           "--no-mcp")
+                     (pichat-tool-selection-args tools))))
+    ;; Presets without the new keys resolve as before.
+    (let ((spec (pichat-presets-resolve 'manual)))
+      (should-not (plist-member spec :tool-groups))
+      (should-not (plist-member spec :load-extensions))
+      (should-not (pichat-presets-load-extensions spec)))
+    ;; Extensions may be loaded with Pi's default tools.
+    (pichat-make-preset 'standard-guarded :tools :default :extensions '("./guard.ts"))
+    (should (equal '("./guard.ts")
+                   (plist-get (pichat-presets-resolve 'standard-guarded) :load-extensions)))
+    (should-not (pichat-tool-selection-args
+                 (pichat-tool-selection-resolve (pichat-presets-resolve 'standard-guarded))))
+    ;; Old-style tool names in :extensions get a clear refusal.
+    (should (string-match-p
+             "\"child\" looks like an extension tool name: select tools in :tools as (SOURCE \"child\" ...)"
+             (cadr (should-error (pichat-make-preset 'old :tools '("read") :extensions '("child"))
+                                 :type 'user-error))))
+    (should (string-match-p
+             "Include future tools (:all) is not supported yet"
+             (cadr (should-error (pichat-make-preset 'all :tools '("read" ("npm:x" . :all)))
+                                 :type 'user-error))))
+    (dolist (spec '((:tools ("read" ("npm:x")))                  ; empty group
+                    (:tools (("-x" "tool")))                     ; source like an option
+                    (:tools ((("npm:x") "tool")))                ; source not a string
+                    (:tools (("npm:x" "read")))                  ; built-in in a group
+                    (:tools (("npm:x" "a" . "b")))               ; improper group
+                    (:tools (("npm:x" "a") ("npm:x" "b")))       ; same source twice
+                    (:tools (("npm:x" "a") ("npm:y" "a")))       ; same tool twice
+                    (:tools :default :emacs-tools ("e"))
+                    (:tools (("npm:x" "same")) :emacs-tools ("same"))
+                    (:tools (("npm:x" "mcp__s__t")) :mcp (("s" . "t")))
+                    (:extensions ("a.ts" "a.ts"))
+                    (:extensions "a.ts")
+                    (:extensions ("-e"))
+                    (:extensions (" a.ts"))
+                    (:extensions ("npm:x" 1))))
+      (should-error (apply #'pichat-make-preset 'invalid spec) :type 'user-error))
+    ;; A saved definition with the old form fails when resolved.
+    (let ((pichat-saved-presets '((legacy :tools ("read") :extensions ("child")))))
+      (should-error (pichat-presets-resolve 'legacy) :type 'user-error))
+    ;; Captured snapshots (jobs) keep exact extension tool names.
+    (should (pichat-presets-validate-snapshot
+             '(:name captured :tools ("read") :extensions ("child"))))
+    (dolist (snapshot '((:name bad :tools :default :extensions ("child"))
+                        (:name bad :tools ("read" ("npm:x" "a")))
+                        (:name bad :tools ("read") :extensions ("read"))
+                        (:name bad :tools ("read") :load-extensions ("child"))))
+      (should-error (pichat-presets-validate-snapshot snapshot) :type 'user-error))))
+
 (provide 'pichat-test-presets)
 ;;; pichat-test-presets.el ends here

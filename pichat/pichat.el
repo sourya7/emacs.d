@@ -1487,8 +1487,9 @@ model and conversation are shown by their own menu entries."
          (transient-setup 'pichat-launch nil nil :scope next)))
      (and (stringp (plist-get profile :model)) (plist-get profile :model))
      (plist-get context :tool-discovery)
-     ;; Their tools are offered too; changing them invalidates discovery.
-     (plist-get profile :extensions))))
+     ;; The preset's and the added extensions' tools are offered too;
+     ;; changing them invalidates discovery.
+     (pichat-presets-load-extensions spec (plist-get profile :extensions)))))
 
 (defun pichat--launch-discovery-context (args context)
   "Return the discovery probe context for launcher ARGS and CONTEXT.
@@ -1617,10 +1618,29 @@ policy (its model, or Pi's default) again."
       (pichat--launch-select-model
        context args (pichat--launch-profile-from-arguments args context)))))
 
+(defun pichat--launch-preset-tool-groups (groups names)
+  "Return preset tool GROUPS reduced to the selected extension tool NAMES.
+Groups and their tools keep their order; empty groups are dropped.
+Signal when a name belongs to none of GROUPS."
+  (when-let* ((missing (cl-remove-if
+                        (lambda (name)
+                          (cl-some (lambda (group) (member name (cdr group))) groups))
+                        names)))
+    (user-error "Saving extension tools chosen in Tools is not supported yet: %s"
+                (string-join missing ", ")))
+  (delq nil (mapcar (lambda (group)
+                      (when-let* ((kept (cl-remove-if-not
+                                         (lambda (name) (member name names))
+                                         (cdr group))))
+                        (cons (copy-sequence (car group)) (copy-sequence kept))))
+                    groups)))
+
 (defun pichat--launch-preset-definition (profile context name)
   "Return the definition to save as NAME from PROFILE and launcher CONTEXT.
 Capture the effective built-in, extension, Emacs-defined and MCP tools, the
-source preset's own prompt sources and the model policy.  Shared
+source preset's own extensions and prompt sources, and the model policy.
+Extension tools keep the source preset's groups; one outside them cannot
+be saved yet.  Extensions added in the launcher are not saved.  Shared
 `pichat-append-system-prompt' text, targets, scope, persistence and
 conversation choices are not part of a preset."
   (let* ((preset (plist-get profile :preset))
@@ -1640,14 +1660,19 @@ conversation choices are not part of a preset."
              (format "Saved from %s%s" source (if tools " with customized tools" ""))))
      (if selection
          (append
-          (list :tools (copy-sequence (plist-get selection :builtins)))
-          (when-let* ((names (plist-get selection :extensions)))
-            (list :extensions (copy-sequence names)))
+          (list :tools
+                (append
+                 (copy-sequence (plist-get selection :builtins))
+                 (pichat--launch-preset-tool-groups
+                  (pichat-presets-tool-groups (plist-get definition :tools))
+                  (plist-get selection :extensions))))
           (when-let* ((names (plist-get selection :emacs)))
             (list :emacs-tools (copy-sequence names)))
           (when-let* ((pairs (plist-get selection :mcp)))
             (list :mcp (copy-tree pairs))))
        (list :tools :default))
+     (when-let* ((specs (plist-get definition :extensions)))
+       (list :extensions (copy-sequence specs)))
      (when-let* ((source (plist-get definition :system-prompt)))
        (list :system-prompt (copy-tree source)))
      (when-let* ((source (plist-get definition :append-system-prompt)))
@@ -1872,8 +1897,10 @@ says when it does not, and what blocks it."
        (when (and (plist-get model :provider) (plist-get model :id))
          (concat (plist-get model :provider) "/" (plist-get model :id))))
      (plist-get scope :tool-discovery)
-     ;; The replacement keeps the runtime's added extensions.
-     (pichat-session-extensions session))))
+     ;; The replacement keeps the runtime's added extensions and loads
+     ;; those of the drafted preset.
+     (pichat-presets-load-extensions (plist-get draft :preset-spec)
+                                     (pichat-session-extensions session)))))
 
 (transient-define-suffix pichat-reconfigure-back ()
   "Return to the untouched normal launch draft."

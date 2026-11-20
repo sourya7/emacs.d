@@ -412,8 +412,8 @@ Reopening the launcher records its (ARGS . SCOPE) in `staged'."
         (with-temp-file prompt-file (insert "From file"))
         (pichat-make-preset 'source
           :description "Source"
-          :tools '("read" "grep" "bash")
-          :extensions '("ext_tool")
+          :tools '("read" "grep" "bash" ("./ext.ts" "ext_tool" "other_tool"))
+          :extensions '("./ext.ts")
           :system-prompt "Replace"
           :append-system-prompt (list "Inline" (list :file prompt-file)))
         (let* ((context (list :tool-selection
@@ -423,8 +423,11 @@ Reopening the launcher records its (ARGS . SCOPE) in `staged'."
                (profile (pichat--launch-profile-from-arguments
                          '("--preset=source") context))
                (spec (pichat--launch-preset-definition profile context 'web)))
-          (should (equal '("read") (plist-get spec :tools)))
-          (should (equal '("ext_tool") (plist-get spec :extensions)))
+          ;; Selected extension tools keep the source preset's group, and
+          ;; the source preset's extensions are kept.
+          (should (equal '("read" ("./ext.ts" "ext_tool")) (plist-get spec :tools)))
+          (should (equal '("./ext.ts") (plist-get spec :extensions)))
+          (should (pichat-presets--validate 'web spec))
           (should (equal '(("ketch" . "search")) (plist-get spec :mcp)))
           (should (equal "provider/model" (plist-get spec :model)))
           (should (equal "Replace" (plist-get spec :system-prompt)))
@@ -438,7 +441,8 @@ Reopening the launcher records its (ARGS . SCOPE) in `staged'."
         ;; Without Tools, the baseline itself; Pi's default model is a policy.
         (let* ((profile (pichat--launch-profile-from-arguments '("--preset=source") nil))
                (spec (pichat--launch-preset-definition profile nil 'source)))
-          (should (equal '("read" "grep" "bash") (plist-get spec :tools)))
+          (should (equal '("read" "grep" "bash" ("./ext.ts" "ext_tool" "other_tool"))
+                         (plist-get spec :tools)))
           (should (eq 'default (plist-get spec :model)))
           (should (equal "Source" (plist-get spec :description))))
         ;; Pass-through presets stay pass-through.
@@ -451,7 +455,17 @@ Reopening the launcher records its (ARGS . SCOPE) in `staged'."
                        (pichat--launch-profile-from-arguments
                         '("--preset=source") '(:model prompt))
                        '(:model prompt) 'web)
-                      :type 'user-error)))))
+                      :type 'user-error)
+        ;; Extension tools outside the source preset's groups have no group
+        ;; to be saved in yet.
+        (let ((context '(:tool-selection (:builtins ("read") :extensions ("picked")))))
+          (should (string-match-p
+                   "not supported yet: picked"
+                   (cadr (should-error
+                          (pichat--launch-preset-definition
+                           (pichat--launch-profile-from-arguments '("--preset=source") context)
+                           context 'web)
+                          :type 'user-error)))))))))
 
 (ert-deftest pichat-saved-presets-launcher-save-registers-and-selects-name ()
   (pichat-test-with-custom-file file

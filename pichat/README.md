@@ -855,6 +855,9 @@ prompts and model; nothing is launched. A saved preset records the effective
 built-in, extension, Emacs-defined and MCP tools, the source preset's own prompt
 sources (not `pichat-append-system-prompt`, which still applies to every
 preset), and the model: an exact ID, or `default` for Pi's default policy.
+The source preset's `:extensions` are kept and selected extension tools keep
+its `:tools` groups; saving extension tools outside those groups, and
+extensions added in `l Extensions`, is not supported yet.
 Target, scope, persistence, conversation and runtime state are
 not saved. Saving does not start, stop or reconfigure a runtime, or change Pi's
 global model or `pichat-default-preset`. Tools Apply/Cancel stay run-local; only
@@ -875,16 +878,46 @@ To rename or delete saved presets, edit `pichat-saved-presets` with
 
 ### Extension tools
 
-An explicit-tool preset can precheck exact extension tool names with
-`:extensions`. For example, **after configuring a trusted extension that
-registers `project_search`**:
+An explicit-tool preset can precheck exact extension tool names in `:tools`,
+grouped by extension as `(SOURCE "tool" ...)`, and can load extensions with
+`:extensions`. For example, **after configuring a trusted package
+`git:github.com/owner/project-search` that registers `project_search`**:
 
 ```elisp
 (pichat-make-preset 'project-review
   :description "Read files and use the configured project search tool."
-  :tools '("read" "grep" "find" "ls")
-  :extensions '("project_search"))
+  :tools '("read" "grep" "find" "ls"
+           ("git:github.com/owner/project-search" "project_search")))
 ```
+
+SOURCE names the extension the way the Tools picker groups it (below): the
+spec exactly as written in `:extensions`, a package's source exactly as in
+Pi settings, or a `builtin:` path such as `builtin:codemode`. A version bump
+edits both places. Pi refuses two tools with the same name, so the names
+select the tools; `--tools` gets the exact names.
+
+`:extensions` lists extensions that every runtime of the preset loads with
+Pi's `-e`, before any added in `l Extensions`, at startup, restart and
+reconfiguration, and in `x Tools` discovery, with the same refusals as
+[Added extensions](#added-extensions). It also works with `:tools :default`.
+The motivating case, a hook-only secrets guard for manual tools:
+
+```elisp
+(pichat-make-preset 'manual-guarded
+  :description "Manual tools with the secrets guard loaded."
+  :tools '("read" "grep" "find" "ls" "edit" "write"
+           ("npm:@pi-vault/pi-guardrails@1.2.3"
+            "guardrails_status" "guardrails_policy"))
+  :extensions '("~/pi-ext/protect-secrets.ts"
+                "npm:@pi-vault/pi-guardrails@1.2.3"))
+```
+
+Earlier, `:extensions` listed extension tool names; such a bare word (for
+example `"project_search"`) is now refused with an error naming the `:tools`
+form. Write a relative directory as `./name`. Reconfiguring a runtime to
+another preset loads that preset's extensions instead and keeps the ones
+added in the launcher. Jobs refuse presets that load extensions.
+`(SOURCE . :all)` is not supported yet.
 
 In `x Tools`, **Extension tools** lists one entry per extension that registers
 tools, `e1 pi-guardrails (2/3) →`, with the checked and total counts. The
@@ -893,7 +926,7 @@ for tools that cannot be enabled), `a` **All in extension** (its current
 eligible tools only; tools registered later are not included), `n` **None in
 extension**, `[` / `]` paging, and `RET` or `q` back to the main page. The
 top-level `a` still checks every eligible extension tool, in all groups.
-Selections remain exact tool names in `:extensions`.
+Selections are exact tool names.
 
 Groups follow the provenance Pi reports for each tool (`sourceInfo`):
 
@@ -1090,7 +1123,8 @@ version, reach a runtime only when Pi starts again: launch a new runtime, or
 restart this one through **Reconfigure this runtime**.
 
 Added extensions are launch choices of the runtime, not of its Pi session or
-saved session file, and are not yet stored by **Save preset as…**. Job
+saved session file, and are not yet stored by **Save preset as…**. A preset
+can load extensions itself (see [Extension tools](#extension-tools)). Job
 definitions cannot declare them.
 
 ### Tool-policy boundaries
@@ -1898,7 +1932,8 @@ An example reviewer preset that reads the work and can restart the worker:
 ```
 
 Presets select built-in, extension and Emacs-defined tools. Shell tools that
-are registered as extension tools can be added with `:extensions`. MCP tools
+are registered as extension tools can be added as `:tools` groups
+`(SOURCE "tool")`. MCP tools
 cannot be named in a preset yet: select them in `x Tools` when composing the
 reviewer job in Jobs (an authored file takes its tools from its preset only).
 The model is part of the job, not the preset.

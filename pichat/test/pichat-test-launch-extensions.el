@@ -162,6 +162,68 @@
                                     "/tmp/" nil (list :preset 'standard :extensions specs))
                                    :type 'user-error)))))))
 
+(ert-deftest pichat-launch-extensions-preset-extensions-load-with-grouped-tools ()
+  (let ((pichat-rpc-command nil)
+        (pichat-pi-executable "/opt/pi")
+        (pichat-pi-default-args '("--mode" "rpc"))
+        (pichat-default-model nil)
+        (pichat-pi-session-dir nil)
+        (pichat-bridge-extension-file "/tmp/bridge.ts")
+        (pichat-pi-extra-args nil)
+        (pichat-path-mappings nil)
+        (pichat-append-system-prompt nil)
+        (pichat-presets (copy-tree pichat-presets)))
+    (pichat-make-preset 'guarded
+      :tools '("read" ("./guard.ts" "guard_check"))
+      :extensions '("./guard.ts" "npm:pkg@1"))
+    (let* ((session (pichat-prepare-session
+                     "/tmp/" nil '(:preset guarded :extensions ("npm:pkg@1" "extra.ts"))))
+           (argv (pichat-rpc-build-command session)))
+      ;; The runtime keeps its added extensions; the preset's load first.
+      (should (equal '("npm:pkg@1" "extra.ts") (pichat-session-extensions session)))
+      (should (equal '("./guard.ts" "npm:pkg@1" "extra.ts")
+                     (pichat-rpc-session-extensions session)))
+      (should (equal '("-e" "/tmp/bridge.ts" "-e" "./guard.ts" "-e" "npm:pkg@1" "-e" "extra.ts")
+                     (seq-take (member "-e" argv) 8)))
+      (should (equal '("--tools" "read,guard_check") (seq-take (member "--tools" argv) 2)))
+      (should (equal argv (pichat-rpc-build-command session)))
+      ;; Reconfiguring to another preset drops the old preset's extensions
+      ;; and keeps the added ones; that is an effective change.
+      (let* ((before (pichat-reconfigure-captured-configuration session))
+             (after (pichat-reconfigure-select-preset before 'manual))
+             (replacement (pichat-reconfigure-validated-command
+                           session after '(:model (:provider "p" :id "m")))))
+        (should (equal '("-e" "/tmp/bridge.ts" "-e" "npm:pkg@1" "-e" "extra.ts")
+                       (seq-take (member "-e" replacement) 6)))
+        (should-not (member "./guard.ts" replacement))
+        (should (pichat-reconfigure-effective-change-p before after))
+        (let ((unloaded (list :preset-spec
+                              (plist-put (copy-sequence (plist-get before :preset-spec))
+                                         :load-extensions nil)
+                              :tool-selection (plist-get before :tool-selection))))
+          (should (pichat-reconfigure-effective-change-p before unloaded))
+          (should-not (pichat-reconfigure-effective-change-p before before)))))
+    ;; A preset's extensions alone make it use the startup failure checks.
+    (let ((session (pichat-prepare-session "/tmp/" nil '(:preset guarded))))
+      (should-not (pichat-session-extensions session))
+      (should (equal '("./guard.ts" "npm:pkg@1") (pichat-rpc-session-extensions session))))
+    ;; A complete wrapper would drop them.
+    (let ((pichat-rpc-command '("/opt/pi-wrapper")))
+      (should (string-match-p
+               "extensions cannot be loaded through"
+               (cadr (should-error (pichat-prepare-session "/tmp/" nil '(:preset guarded))
+                                   :type 'user-error)))))
+    ;; Launcher x Tools probes with the preset's and the checked extensions.
+    (let ((context (list :directory "/tmp/" :display-function #'ignore
+                         :extensions '(("extra.ts" . t) ("./guard.ts" . t))))
+          opened)
+      (cl-letf (((symbol-function 'transient-args) (lambda (_) '("--preset=guarded")))
+                ((symbol-function 'transient-scope) (lambda (&rest _) context))
+                ((symbol-function 'pichat-tool-picker-open)
+                 (lambda (&rest args) (setq opened args))))
+        (call-interactively #'pichat-launch-tools)
+        (should (equal '("./guard.ts" "npm:pkg@1" "extra.ts") (nth 8 opened)))))))
+
 (ert-deftest pichat-launch-extensions-tools-discovery-loads-checked-extensions ()
   (let ((pichat-rpc-command nil) (pichat-pi-extra-args nil)
         (pichat-pi-default-args '("--mode" "rpc")) (pichat-default-model nil)
@@ -631,6 +693,51 @@
           (when (pichat-session-p added)
             (pichat-rpc-stop added)
             (pichat-forget-session added))))))
+
+  (ert-deftest pichat-launch-extensions-real-pi-preset-loads-its-extensions-and-grouped-tools ()
+    (pichat-test-with-integration-session (session :preset 'manual :script '(:turns []))
+      (let ((pichat-chat-stop-session-on-kill nil)
+            (pichat-presets (copy-tree pichat-presets))
+            (fixture pichat-test-launch-extensions--fixture)
+            runtime buffer result)
+        ;; The fixture is loaded only because the preset names it.
+        (pichat-make-preset 'fixture-guarded
+          :tools (list "read" (list fixture "probe_child"))
+          :extensions (list fixture))
+        (unwind-protect
+            (progn
+              (setq runtime (pichat-start-session project-dir nil '(:preset fixture-guarded)))
+              (pichat-rpc-get-state runtime (lambda (value _s) (setq result value))
+                                    (lambda (value _s) (setq result value)))
+              (pichat-test-wait-until (lambda () result) 15 "runtime of the preset")
+              (should (plist-get result :success))
+              (should-not (pichat-session-extensions runtime))
+              (should (member fixture (pichat-session-rpc-command runtime)))
+              (let ((active (pichat-test-extension-tools-active runtime)))
+                (should (member "probe_child" active))
+                (should-not (member "probe_session" active)))
+              ;; Reconfiguring to manual restarts Pi without the fixture.
+              (setq buffer (pichat-chat-open runtime t))
+              (pichat-test-wait-until (lambda () (pichat-chat-canonical-entry-cache runtime))
+                                      5 "initial empty cache")
+              (setq result nil)
+              (pichat-reconfigure-restart
+               (pichat-reconfigure-capture-origin runtime)
+               (pichat-reconfigure-select-preset
+                (pichat-reconfigure-captured-configuration runtime) 'manual)
+               (lambda (success reason) (setq result (list success reason))))
+              (pichat-test-wait-until (lambda () result) 15 "restart without the fixture")
+              (should (car result))
+              ;; (The fixture's /probe-report is gone with it, so argv is the
+              ;; evidence here.)
+              (should-not (member fixture (pichat-session-rpc-command runtime)))
+              (should (equal '("--tools" "read,grep,find,ls,edit,write")
+                             (seq-take (member "--tools" (pichat-session-rpc-command runtime))
+                                       2))))
+          (when (buffer-live-p buffer) (kill-buffer buffer))
+          (when (pichat-session-p runtime)
+            (pichat-rpc-stop runtime)
+            (pichat-forget-session runtime))))))
 
   (ert-deftest pichat-launch-extensions-real-pi-hook-only-guard-protects-a-manual-runtime ()
     ;; The motivating case: a hook-only secrets guard added for a `manual'

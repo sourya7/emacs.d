@@ -62,6 +62,86 @@ Built-ins cannot be opted into through the extension policy."
                         (not (member name pichat-presets--known-built-in-tools)))) names)
        (= (length names) (length (delete-dups (copy-sequence names))))))
 
+(defun pichat-presets-extension-spec-p (spec)
+  "Return non-nil if SPEC can name one extension added for a launch.
+SPEC is a non-empty single-line string without surrounding spaces, at
+most 1024 characters, that cannot be read as a Pi option (it does not
+start with `-').  Pi decides what the path or package specification means."
+  (and (stringp spec) (<= 1 (length spec) 1024)
+       (equal spec (string-trim spec))
+       (not (string-match-p "[[:cntrl:]]" spec))
+       (not (string-prefix-p "-" spec))))
+
+(defun pichat-presets-tool-group-p (value)
+  "Return non-nil if VALUE is an extension tool group of a preset's :tools.
+A group is (SOURCE NAME...): SOURCE identifies the extension (an added
+spec exactly as in :extensions, a discovered package source, or a
+built-in's `builtin:' path) and NAMES are its exact tool names, at least
+one.  Names are checked with the rest of :tools."
+  (and (consp value) (pichat-presets-extension-spec-p (car value))
+       (consp (cdr value)) (proper-list-p (cdr value))))
+
+(defun pichat-presets-tool-builtins (tools)
+  "Return the built-in tool names of a preset's TOOLS value, in order."
+  (if (eq tools :default) :default (seq-filter #'stringp tools)))
+
+(defun pichat-presets-tool-groups (tools)
+  "Return the extension tool groups of a preset's TOOLS value, in order."
+  (unless (eq tools :default) (seq-filter #'consp tools)))
+
+(defun pichat-presets--old-extension-name-p (spec)
+  "Return non-nil when preset :extensions entry SPEC looks like a tool name.
+Before extensions were loaded by presets, :extensions listed extension
+tool names; such a bare word is refused rather than passed to `-e'."
+  (and (stringp spec) (string-match-p "\\`[A-Za-z0-9_-]+\\'" spec)))
+
+(defun pichat-presets--validate-tools (value)
+  "Signal unless VALUE is a valid preset :tools value.
+Nil, :default, or a list of built-in names and extension tool groups."
+  (unless (or (null value) (eq value :default)
+              (and (consp value) (proper-list-p value)
+                   (cl-every (lambda (tool)
+                               (or (member tool pichat-presets--built-in-tools)
+                                   (consp tool)))
+                             value)))
+    (user-error "Invalid preset tools: %S" value))
+  (let ((groups (pichat-presets-tool-groups value)))
+    (dolist (group groups)
+      (when (and (consp group) (eq (cdr group) :all))
+        (user-error "Preset tool group %S: Include future tools (:all) is not supported yet"
+                    (car group)))
+      (unless (pichat-presets-tool-group-p group)
+        (user-error "Invalid preset tool group; use (SOURCE \"tool\" ...): %S" group))
+      (unless (pichat-presets-extension-names-p (cdr group))
+        (user-error "Invalid or duplicate extension tools in preset group %s: %S"
+                    (car group) (cdr group))))
+    (unless (= (length groups)
+               (length (cl-remove-duplicates (mapcar #'car groups) :test #'equal)))
+      (user-error "Duplicate preset tool group source"))
+    (let ((names (apply #'append (mapcar #'cdr groups))))
+      (unless (= (length names) (length (delete-dups (copy-sequence names))))
+        (user-error "Extension tool selected in more than one preset group")))))
+
+(defun pichat-presets--validate-extensions (value)
+  "Signal unless VALUE is a valid preset :extensions list of specs to load."
+  (unless (proper-list-p value)
+    (user-error "Invalid preset extensions: %S" value))
+  (dolist (spec value)
+    (when (pichat-presets--old-extension-name-p spec)
+      (user-error "Preset :extensions lists extensions to load (a path, or an npm: or git: spec); %S looks like an extension tool name: select tools in :tools as (SOURCE \"%s\" ...), and write a relative directory as ./%s"
+                  spec spec spec))
+    (unless (pichat-presets-extension-spec-p spec)
+      (user-error "Invalid preset extension: %S" spec)))
+  (unless (= (length value) (length (delete-dups (copy-sequence value))))
+    (user-error "Duplicate preset extension")))
+
+(defun pichat-presets-load-extensions (snapshot &optional added)
+  "Return the extensions a runtime of resolved preset SNAPSHOT loads with -e.
+The preset's own extensions come first, then ADDED specs (for example
+those added in the launcher) that it does not already load."
+  (cl-remove-duplicates (append (plist-get snapshot :load-extensions) added)
+                        :test #'equal :from-end t))
+
 (defun pichat-presets-mcp-name (server tool)
   "Return Pi's unambiguous MCP name for SERVER and original TOOL.
 Reject normalized collisions against the complete server catalogue first:
@@ -126,9 +206,7 @@ Thinking-level suffixes are rejected, as for authored job definitions."
             (:description
              (unless (or (null value) (stringp value))
                (user-error "Invalid preset description")))
-            (:extensions
-             (unless (pichat-presets-extension-names-p value)
-               (user-error "Invalid or duplicate preset extension tools")))
+            (:extensions (pichat-presets--validate-extensions value))
             (:emacs-tools
              (unless (pichat-presets-extension-names-p value)
                (user-error "Invalid or duplicate preset Emacs-defined tools")))
@@ -140,22 +218,21 @@ Thinking-level suffixes are rejected, as for authored job definitions."
                          (pichat-presets-model-p value))
                (user-error "Invalid preset model; use provider/model or default: %S"
                            value)))
-            (:tools
-             (unless (or (null value) (eq value :default)
-                         (and (consp value) (proper-list-p value)
-                              (cl-every (lambda (tool)
-                                          (member tool pichat-presets--built-in-tools))
-                                        value)))
-               (user-error "Invalid preset tools: %S" value)))
+            (:tools (pichat-presets--validate-tools value))
             (_ (unless (or (null value)
                            (pichat-presets--source-p value)
                            (and (consp value) (proper-list-p value)
                                 (cl-every #'pichat-presets--source-p value)))
                  (user-error "Invalid preset prompt source: %S" value))))))))
-  (when (and (plist-get spec :extensions)
-             (or (not (plist-member spec :tools))
-                 (eq (plist-get spec :tools) :default)))
-    (user-error "Extension baselines require an explicit built-in tool preset"))
+  (pichat-presets--validate-tool-names spec
+                                       (apply #'append
+                                              (mapcar #'cdr (pichat-presets-tool-groups
+                                                             (plist-get spec :tools))))))
+
+(defun pichat-presets--validate-tool-names (spec extension-tools)
+  "Check SPEC's Emacs-defined and MCP tools against EXTENSION-TOOLS names.
+They require explicit built-in tools and may not name the same tool.
+Return SPEC."
   (when (and (plist-get spec :emacs-tools)
              (or (not (plist-member spec :tools))
                  (eq (plist-get spec :tools) :default)))
@@ -164,12 +241,12 @@ Thinking-level suffixes are rejected, as for authored job definitions."
              (or (not (plist-member spec :tools))
                  (eq (plist-get spec :tools) :default)))
     (user-error "MCP baselines require an explicit built-in tool preset"))
-  (when (cl-intersection (plist-get spec :emacs-tools) (plist-get spec :extensions)
+  (when (cl-intersection (plist-get spec :emacs-tools) extension-tools
                          :test #'equal)
     (user-error "Tool selected as both Emacs-defined and extension"))
   (let ((names (mapcar (lambda (pair) (pichat-presets-mcp-name (car pair) (cdr pair)))
                        (plist-get spec :mcp))))
-    (when (cl-intersection names (append (plist-get spec :extensions)
+    (when (cl-intersection names (append extension-tools
                                          (plist-get spec :emacs-tools))
                            :test #'equal)
       (user-error "Tool selected as both MCP and extension or Emacs-defined")))
@@ -204,12 +281,17 @@ programmatic one of the same name in place, and other saved names follow in
 Supported keys are :description, :tools, :extensions, :emacs-tools, :mcp,
 :model, :system-prompt and :append-system-prompt.  Prompt sources are text,
 (:file ABSOLUTE-PATH), or an ordered list of these.  Nil tools means no
-built-in tools; omitted or :default tools leaves Pi's default selection
-alone.  :extensions supplies an explicit baseline of exact extension tool
-names; it defaults to none.  :emacs-tools likewise lists exact
+tools; omitted or :default tools leaves Pi's default selection alone.  An
+explicit :tools list holds built-in names and extension tool groups
+(SOURCE \"tool\" ...), exact names under the extension SOURCE: a spec as
+written in :extensions, a discovered package's source such as
+\"git:github.com/owner/repo\", or a `builtin:' path.  :extensions lists the
+extensions every runtime of the preset loads with Pi's -e option (paths,
+or `npm:' and `git:' specs), in addition to those Pi discovers; a bare
+word such as an old-style tool name is refused.  :emacs-tools lists exact
 Emacs-defined tool names exposed through the PiChat bridge; it defaults to
-none and, like :extensions, requires explicit built-in tools.  Pass-through
-presets expose no Emacs-defined tools.  :mcp lists exact (SERVER . TOOL)
+none and requires explicit built-in tools.  Pass-through presets expose no
+Emacs-defined tools.  :mcp lists exact (SERVER . TOOL)
 pairs selected by default; it also requires explicit built-in tools, and
 omitting it keeps MCP disabled.  :model is an exact provider/model used for
 runtimes launched by naming this preset, or `default' for Pi's normal model
@@ -269,10 +351,14 @@ see `pichat-saved-presets'."
           :tools (if (plist-member spec :tools)
                      (let ((tools (plist-get spec :tools)))
                        (if (eq tools :default) :default
-                         (cl-remove-duplicates (pichat-presets--copy tools)
-                                               :test #'equal :from-end t)))
+                         (cl-remove-duplicates
+                          (pichat-presets--copy (pichat-presets-tool-builtins tools))
+                          :test #'equal :from-end t)))
                    :default)
-          :extensions (pichat-presets--copy (plist-get spec :extensions))
+          ;; The snapshot keeps exact extension tool names, as before groups.
+          :extensions (pichat-presets--copy
+                       (apply #'append (mapcar #'cdr (pichat-presets-tool-groups
+                                                      (plist-get spec :tools)))))
           :system-prompt (pichat-presets--prompt (plist-get spec :system-prompt))
           :append-system-prompt
           (pichat-presets--prompt
@@ -282,6 +368,10 @@ see `pichat-saved-presets'."
                                (list source)
                              source))))
      ;; Omitted when empty so existing snapshots remain unchanged.
+     (when-let* ((groups (pichat-presets-tool-groups (plist-get spec :tools))))
+       (list :tool-groups (pichat-presets--copy groups)))
+     (when-let* ((specs (plist-get spec :extensions)))
+       (list :load-extensions (pichat-presets--copy specs)))
      (when-let* ((names (plist-get spec :emacs-tools)))
        (list :emacs-tools (pichat-presets--copy names)))
      (when-let* ((pairs (plist-get spec :mcp)))
@@ -290,6 +380,34 @@ see `pichat-saved-presets'."
      ;; reconfiguration keeps the runtime's active model.
      (when (stringp (plist-get spec :model))
        (list :model (copy-sequence (plist-get spec :model)))))))
+
+(defun pichat-presets-validate-snapshot (snapshot)
+  "Return resolved preset SNAPSHOT, or signal unless its tool data is valid.
+A snapshot, as returned by `pichat-presets-resolve' or decoded from a
+job's capture, has built-in :tools (or :default), exact extension tool
+names in :extensions, and optional :tool-groups and :load-extensions."
+  (let ((name (plist-get snapshot :name))
+        (names (plist-get snapshot :extensions)))
+    (pichat-presets--validate
+     name (append
+           (list :description (plist-get snapshot :description)
+                 :tools (plist-get snapshot :tools)
+                 :system-prompt (plist-get snapshot :system-prompt)
+                 :append-system-prompt (plist-get snapshot :append-system-prompt))
+           (when-let* ((specs (plist-get snapshot :load-extensions)))
+             (list :extensions specs))
+           (when-let* ((value (plist-get snapshot :emacs-tools)))
+             (list :emacs-tools value))
+           (when-let* ((value (plist-get snapshot :mcp)))
+             (list :mcp value))))
+    (unless (cl-every #'stringp (and (listp (plist-get snapshot :tools))
+                                     (plist-get snapshot :tools)))
+      (user-error "Invalid captured preset tools"))
+    (unless (pichat-presets-extension-names-p names)
+      (user-error "Invalid or duplicate preset extension tools"))
+    (when (and names (eq (plist-get snapshot :tools) :default))
+      (user-error "Extension tool baselines require an explicit built-in tool preset"))
+    (pichat-presets--validate-tool-names snapshot names)))
 
 (defun pichat-presets-overrides-p (snapshot)
   "Return non-nil when SNAPSHOT changes Pi tools or prompt."
@@ -418,16 +536,6 @@ three, when its additions are applied.  The value is saved through
 
 (defconst pichat-presets--recent-extensions-limit 3
   "How many recently added extensions `pichat-recent-extensions' keeps.")
-
-(defun pichat-presets-extension-spec-p (spec)
-  "Return non-nil if SPEC can name one extension added for a launch.
-SPEC is a non-empty single-line string without surrounding spaces, at
-most 1024 characters, that cannot be read as a Pi option (it does not
-start with `-').  Pi decides what the path or package specification means."
-  (and (stringp spec) (<= 1 (length spec) 1024)
-       (equal spec (string-trim spec))
-       (not (string-match-p "[[:cntrl:]]" spec))
-       (not (string-prefix-p "-" spec))))
 
 (defun pichat-presets-recent-extensions ()
   "Return the valid entries of `pichat-recent-extensions', newest first.

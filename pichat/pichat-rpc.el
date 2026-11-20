@@ -211,6 +211,12 @@ Consumers still receive the complete event, not the diagnostic snapshot."
           (user-error "Pi arguments conflict with preset %s: %s"
                       (plist-get preset :name) arg))))))
 
+(defun pichat-rpc-session-extensions (session)
+  "Return the extensions SESSION loads with -e, in order.
+Those of its preset snapshot come first, then its added extensions."
+  (pichat-presets-load-extensions (pichat-session-preset-spec session)
+                                  (pichat-session-extensions session)))
+
 (defun pichat-rpc-extension-args (extensions)
   "Return Pi arguments loading added EXTENSIONS, a list of specs, in order."
   (mapcan (lambda (spec) (list "-e" spec)) extensions))
@@ -282,7 +288,8 @@ Complete local commands cannot safely be amended."
       (user-error
        "Run-local PiChat models are not yet supported with `pichat-rpc-command'"))
     ;; A complete command would silently start without them.
-    (when (and extensions pichat-rpc-command (not structured-p))
+    (when (and (or extensions (pichat-presets-load-extensions preset))
+               pichat-rpc-command (not structured-p))
       (user-error
        "Added PiChat extensions cannot be loaded through `pichat-rpc-command'"))
     (when (and (pichat-presets-overrides-p preset) pichat-rpc-command
@@ -304,7 +311,7 @@ the added extensions (one `-e' each, passed unchanged, also to SSH targets)."
                              (or (pichat-session-tool-selection session)
                                  (pichat-tool-selection-resolve preset))))
          (startup-model (and session (pichat-session-startup-model session)))
-         (extensions (and session (pichat-session-extensions session)))
+         (extensions (and session (pichat-rpc-session-extensions session)))
          (transport (and session (pichat-session-transport session)))
          (remote-p (and transport
                         (eq (pichat-transport-kind transport) 'ssh)))
@@ -465,7 +472,7 @@ committed configuration).  A local startup failure retains a diagnostic."
           ;; Added extensions also use the startup barrier: it holds input
           ;; until Pi's stderr shows they loaded (see `pichat-tool-runtime').
           (when (or (plist-get tool-selection :extensions)
-                    (pichat-session-extensions session)
+                    (pichat-rpc-session-extensions session)
                     (eq (pichat-transport-kind transport) 'ssh))
             (require 'pichat-tool-runtime)
             (let ((path (if skill
@@ -586,7 +593,7 @@ When LIMIT is non-nil, copy at most LIMIT leading characters."
               (pichat-session-rpc-ready-timer session) nil
               (pichat-session-rpc-send-queue session) nil)
         (let* ((intentional (pichat-session-stop-requested-p session))
-               (_ (when-let* (((pichat-session-extensions session))
+               (_ (when-let* (((pichat-rpc-session-extensions session))
                               (buffer (process-get process 'pichat-stderr-buffer))
                               ((buffer-live-p buffer))
                               (stderr (get-buffer-process buffer))
@@ -600,7 +607,7 @@ When LIMIT is non-nil, copy at most LIMIT leading characters."
                (exit-status (process-exit-status process))
                ;; For example a missing added path: Pi exits after saying so.
                (failure (pichat-rpc-extension-failure
-                         stderr (pichat-session-extensions session)))
+                         stderr (pichat-rpc-session-extensions session)))
                (diagnostic
                 (unless intentional
                   (pichat-chat-diagnostics-record

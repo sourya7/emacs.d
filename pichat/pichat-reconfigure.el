@@ -76,6 +76,8 @@ preset name or description is not a reason to restart the process."
                       (plist-get after :system-prompt)))
           (not (equal (plist-get before :append-system-prompt)
                       (plist-get after :append-system-prompt)))
+          (not (equal (pichat-presets-load-extensions before)
+                      (pichat-presets-load-extensions after)))
           (not (equal (pichat-tool-selection-args tools-before)
                       (pichat-tool-selection-args tools-after)))
           (not (equal (plist-get tools-before :emacs)

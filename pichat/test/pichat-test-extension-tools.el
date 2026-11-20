@@ -10,13 +10,15 @@
 
 (ert-deftest pichat-extension-tools-presets-are-explicit-and-pass-through-is-unchanged ()
   (let ((pichat-presets (copy-tree pichat-presets)))
-    (pichat-make-preset 'custom :tools '("read") :extensions '("child"))
+    (pichat-make-preset 'custom :tools '("read" ("npm:pkg" "child")))
     (should (equal '("--tools" "read,child" "--no-mcp")
                    (pichat-tool-selection-args (pichat-tool-selection-resolve (pichat-presets-resolve 'custom)))))
     (dolist (names '(("read") ("powershell") ("child" "child") ("wild*") ("comma,name") ("")))
-      (should-error (pichat-make-preset 'bad :tools nil :extensions names) :type 'user-error))
-    (should-error (pichat-make-preset 'bad :extensions '("child")) :type 'user-error)
-    (should-error (pichat-make-preset 'bad :tools :default :extensions '("child")) :type 'user-error)
+      (should-error (pichat-make-preset 'bad :tools (list (cons "npm:pkg" names)))
+                    :type 'user-error))
+    ;; Old-style tool names in :extensions are refused.
+    (should-error (pichat-make-preset 'bad :tools '("read") :extensions '("child"))
+                  :type 'user-error)
     (should-not (plist-get (pichat-tool-selection-resolve (pichat-presets-resolve 'manual)) :extensions))
     (should-not (pichat-tool-selection-args (pichat-tool-selection-resolve (pichat-presets-resolve 'standard))))))
 

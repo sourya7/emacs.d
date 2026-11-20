@@ -276,16 +276,15 @@
              "\"child\" looks like an extension tool name: select tools in :tools as (SOURCE \"child\" ...)"
              (cadr (should-error (pichat-make-preset 'old :tools '("read") :extensions '("child"))
                                  :type 'user-error))))
-    (should (string-match-p
-             "Include future tools (:all) is not supported yet"
-             (cadr (should-error (pichat-make-preset 'all :tools '("read" ("npm:x" . :all)))
-                                 :type 'user-error))))
     (dolist (spec '((:tools ("read" ("npm:x")))                  ; empty group
                     (:tools (("-x" "tool")))                     ; source like an option
                     (:tools ((("npm:x") "tool")))                ; source not a string
                     (:tools (("npm:x" "read")))                  ; built-in in a group
                     (:tools (("npm:x" "a" . "b")))               ; improper group
                     (:tools (("npm:x" "a") ("npm:x" "b")))       ; same source twice
+                    (:tools (("npm:x" . :all) ("npm:x" "b")))    ; same source, :all
+                    (:tools (("npm:x" . :some)))                 ; unknown keyword
+                    (:tools (("npm:x" :all)))                    ; :all as a tool name
                     (:tools (("npm:x" "a") ("npm:y" "a")))       ; same tool twice
                     (:tools :default :emacs-tools ("e"))
                     (:tools (("npm:x" "same")) :emacs-tools ("same"))
@@ -307,6 +306,86 @@
                         (:name bad :tools ("read") :extensions ("read"))
                         (:name bad :tools ("read") :load-extensions ("child"))))
       (should-error (pichat-presets-validate-snapshot snapshot) :type 'user-error))))
+
+(ert-deftest pichat-presets-include-future-tools-expand-before-a-runtime-starts ()
+  (let ((pichat-presets (copy-tree pichat-presets))
+        (pichat-saved-presets nil)
+        (pichat-append-system-prompt nil))
+    (pichat-make-preset 'future
+      :tools '("read" ("npm:pkg@1" . :all) ("./guard.ts" "guard_check"))
+      :extensions '("npm:pkg@1" "./guard.ts"))
+    (let* ((spec (pichat-presets-resolve 'future))
+           (baseline (pichat-tool-selection-resolve spec)))
+      ;; The :all group is kept; only exact names are in :extensions.
+      (should (equal '(("npm:pkg@1" . :all) ("./guard.ts" "guard_check"))
+                     (plist-get spec :tool-groups)))
+      (should (equal '("guard_check") (plist-get spec :extensions)))
+      (should (equal '("npm:pkg@1") (pichat-presets-all-sources spec)))
+      (should (equal '("npm:pkg@1") (pichat-presets-pending-all spec)))
+      ;; Its baseline cannot start a runtime: the names are incomplete.
+      (should (equal '("npm:pkg@1") (plist-get baseline :all)))
+      (should (equal '("npm:pkg@1") (plist-get baseline :unexpanded)))
+      ;; Re-resolving that baseline as a selection keeps it incomplete.
+      (should (plist-get (pichat-tool-selection-resolve spec baseline) :unexpanded))
+      (should (string-match-p
+               "Preset future includes future tools of npm:pkg@1"
+               (cadr (should-error (pichat-tool-selection-check-expanded baseline 'future)
+                                   :type 'user-error))))
+      (should (string-match-p
+               "includes future tools of npm:pkg@1"
+               (cadr (should-error (pichat-prepare-session "/tmp/" nil '(:preset future))
+                                   :type 'user-error))))
+      ;; Expansion records the discovered names with the snapshot.
+      (let* ((expanded (pichat-presets-expand-all
+                        spec '(("npm:pkg@1" "pkg_b" "pkg_a" "guard_check"))))
+             (tools (pichat-tool-selection-resolve expanded)))
+        (should (equal '("guard_check" "pkg_b" "pkg_a") (plist-get expanded :extensions)))
+        (should (equal '(("npm:pkg@1" "pkg_b" "pkg_a" "guard_check"))
+                       (plist-get expanded :expanded-all)))
+        (should-not (pichat-presets-pending-all expanded))
+        (should-not (plist-get tools :unexpanded))
+        (should (equal '("npm:pkg@1") (plist-get tools :all)))
+        (should (equal '("--tools" "read,guard_check,pkg_a,pkg_b" "--no-mcp")
+                       (pichat-tool-selection-args tools)))
+        ;; The input snapshot is unchanged.
+        (should (pichat-presets-pending-all spec))
+        ;; A runtime records the expanded snapshot and restarts with it.
+        (let* ((pichat-rpc-command nil) (pichat-pi-extra-args nil)
+               (pichat-bridge-extension-file nil) (pichat-path-mappings nil)
+               (session (pichat-prepare-session "/tmp/" nil
+                                                (list :preset-spec expanded))))
+          (should (equal expanded (pichat-session-preset-spec session)))
+          (should (equal '("--tools" "read,guard_check,pkg_a,pkg_b")
+                         (seq-take (member "--tools" (pichat-rpc-build-command session)) 2)))
+          (let ((base (pichat-reconfigure-captured-configuration session)))
+            (should (equal expanded (plist-get base :preset-spec)))
+            (should-not (pichat-reconfigure-effective-change-p base base))
+            ;; Re-selecting the preset needs a new expansion first.
+            (let ((reselected (pichat-reconfigure-select-preset base 'future)))
+              (should (pichat-reconfigure-effective-change-p base reselected))
+              (should-error (pichat-reconfigure-validated-command
+                             session reselected '(:model (:provider "p" :id "m")))
+                            :type 'user-error)))))
+        ;; An empty expansion is complete too.
+        (should-not (plist-get (pichat-tool-selection-resolve
+                                (pichat-presets-expand-all spec '(("npm:pkg@1"))))
+                               :unexpanded))
+      ;; Missing, invalid or conflicting expansions are refused.
+      (dolist (expansions '(nil (("npm:pkg@1" "read")) (("npm:pkg@1" "bad name"))))
+        (should-error (pichat-presets-expand-all spec expansions) :type 'user-error))
+      ;; An explicit selection is complete and may keep :all.
+      (let ((tools (pichat-tool-selection-resolve
+                    spec '(:builtins ("read") :extensions ("pkg_a") :all ("npm:pkg@1")))))
+        (should-not (plist-get tools :unexpanded))
+        (should (equal '("npm:pkg@1") (plist-get tools :all))))
+      (dolist (all '(("npm:pkg@1" "npm:pkg@1") ("-x") "npm:pkg@1"))
+        (should-error (pichat-tool-selection-resolve
+                       spec (list :builtins '("read") :all all))
+                      :type 'user-error)))
+    ;; Presets without :all groups never need an expansion.
+    (should-not (pichat-presets-pending-all (pichat-presets-resolve 'manual)))
+    (should-not (plist-member (pichat-tool-selection-resolve (pichat-presets-resolve 'manual))
+                              :all))))
 
 (provide 'pichat-test-presets)
 ;;; pichat-test-presets.el ends here

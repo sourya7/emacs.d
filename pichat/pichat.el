@@ -544,13 +544,15 @@ Prevent a second writer for the same saved session file."
                  :source-session source :readiness 'transcript-ready
                  :expected-session-id (plist-get selection :session-id)
                  :launch-options
-                 (list :persistence 'persistent
-                       :target (unless (eq target 'inferred) target)
-                       :preset (plist-get profile :preset)
+                 (append
+                  (list :persistence 'persistent
+                        :target (unless (eq target 'inferred) target))
+                  (pichat--launch-preset-option profile)
+                  (list
                        :tools (plist-get profile :tools)
                        :extensions (plist-get profile :extensions)
                        :model (and (stringp (plist-get profile :model))
-                                   (plist-get profile :model)))
+                                   (plist-get profile :model))))
                  :display-function (plist-get profile :display-function)
                  :ready (lambda (session)
                           (release)
@@ -566,6 +568,27 @@ Prevent a second writer for the same saved session file."
 (defvar pichat--launch-mcp-verified nil
   "Non-nil while continuing a launch whose preset MCP tools were verified.")
 
+(defvar pichat--launch-expanded-preset nil
+  "Preset snapshot whose future tools were discovered for the launch continued.
+See `pichat--expand-launch-all'.")
+
+(defun pichat--launch-reuses-live-runtime-p (profile directory)
+  "Return non-nil when PROFILE reuses a live preferred runtime in DIRECTORY."
+  (and (eq (plist-get profile :reuse) 'preferred)
+       (let* ((scope (pichat--resolve-launch-scope
+                      (plist-get profile :scope) directory
+                      (plist-get profile :target)))
+              (session (gethash (nth 0 scope) pichat--sessions-by-scope)))
+         (and session (pichat-session-alive-p session)))))
+
+(defun pichat--launch-preset-option (profile)
+  "Return the launch options naming PROFILE's preset for a new runtime.
+After `pichat--expand-launch-all', the expanded snapshot is passed as
+:preset-spec, so the runtime records the tools discovered for it."
+  (if pichat--launch-expanded-preset
+      (list :preset-spec (pichat-presets--copy pichat--launch-expanded-preset))
+    (list :preset (plist-get profile :preset))))
+
 (defun pichat--launch-baseline-mcp (profile directory)
   "Return PROFILE's preset MCP baseline when a new runtime would use it.
 Nil when Tools were customized (Apply already checked them), the baseline has
@@ -577,14 +600,81 @@ no MCP tools, or a live preferred runtime in DIRECTORY's scope is reused."
                                                   preset))
                              :mcp)))
       (when (and pairs
-                 (not (and (eq (plist-get profile :reuse) 'preferred)
-                           (let* ((scope (pichat--resolve-launch-scope
-                                          (plist-get profile :scope) directory
-                                          (plist-get profile :target)))
-                                  (session (gethash (nth 0 scope)
-                                                    pichat--sessions-by-scope)))
-                             (and session (pichat-session-alive-p session))))))
+                 (not (pichat--launch-reuses-live-runtime-p profile directory)))
         pairs))))
+
+(defun pichat--launch-pending-all (profile directory)
+  "Return PROFILE's resolved preset when its future tools are discovered first.
+That is a preset with (SOURCE . :all) groups whose own tools a new runtime
+would use: not when Tools were customized (the picker applied exact names),
+not when they are already expanded, and not when a live preferred runtime
+in DIRECTORY's scope is reused."
+  (unless (or pichat--launch-expanded-preset (plist-get profile :tools))
+    (let* ((preset (plist-get profile :preset))
+           (name (if (eq preset 'default) pichat-default-preset preset))
+           (tools (plist-get (pichat-get-preset name) :tools)))
+      ;; Resolving reads prompt files, so check the definition first.
+      (when (and (cl-some (lambda (group) (eq (cdr group) :all))
+                          (pichat-presets-tool-groups tools))
+                 (not (pichat--launch-reuses-live-runtime-p profile directory)))
+        (pichat-presets-resolve name)))))
+
+(defun pichat--expand-preset-all (spec directory transport model extensions callback)
+  "Discover the future tools of resolved preset SPEC; call CALLBACK.
+The probe is the one x Tools would run for a runtime in DIRECTORY on
+TRANSPORT with MODEL (nil for Pi's default), SPEC's prompts and the
+EXTENSIONS it loads.  CALLBACK receives (EXPANDED ERROR), later and
+once: SPEC with its (SOURCE . :all) groups expanded to the eligible
+tools found now (`pichat-tool-picker-expand-all'), or nil and the
+reason.  Return the probe's cancel function, which suppresses CALLBACK."
+  (when (and pichat-rpc-command (eq (pichat-transport-kind transport) 'local))
+    (user-error "Included future tools cannot be discovered through a complete Pi command wrapper"))
+  (let ((draft (pichat-tool-discovery-draft-create)))
+    (pichat-tool-discovery-draft-reset
+     draft (cdr (pichat-tool-picker-discovery-context
+                 spec directory transport pichat-pi-executable model extensions)))
+    (pichat-tool-discovery-draft-refresh
+     draft
+     (lambda (draft)
+       (run-at-time
+        0 nil
+        (lambda ()
+          (when callback
+            (let ((result
+                   (condition-case err
+                       (progn
+                         (unless (eq 'ready (pichat-tool-discovery-draft-status draft))
+                           (user-error "Tool discovery failed: %s"
+                                       (pichat-tool-discovery-draft-error draft)))
+                         (list (pichat-tool-picker-expand-all spec draft) nil))
+                     (error (list nil (error-message-string err))))))
+              (apply callback result)))))))
+    (let ((cancel (pichat-tool-discovery-draft-cancel draft)))
+      (lambda ()
+        (setq callback nil)
+        (when cancel (funcall cancel))))))
+
+(defun pichat--expand-launch-all (profile directory spec continue)
+  "Discover SPEC's future tools for PROFILE, then call CONTINUE.
+SPEC is PROFILE's resolved preset with unexpanded (SOURCE . :all) groups.
+The probe runs at the destination of PROFILE from DIRECTORY, with its
+model and every extension the runtime loads (`pichat--expand-preset-all').
+CONTINUE receives the expanded SPEC; the launch does not report which
+tools that added.  A failed probe cancels the launch with a message."
+  (pcase-let* ((`(,scope . ,transport) (pichat--launch-destination profile directory))
+               (model (plist-get profile :model)))
+    (message "Discovering tools for preset %s..." (plist-get spec :name))
+    (pichat--expand-preset-all
+     spec (nth 1 scope) transport (and (stringp model) model)
+     (pichat-presets-load-extensions spec (plist-get profile :extensions))
+     (lambda (expanded error)
+       (if error
+           (message "PiChat launch cancelled: %s" error)
+         (condition-case err
+             (funcall continue expanded)
+           (error
+            (message "PiChat launch cancelled: %s" (error-message-string err)))))))
+    nil))
 
 (defun pichat--verify-launch-mcp (profile directory continue)
   "Check PROFILE's preset MCP baseline at its destination, then call CONTINUE.
@@ -632,16 +722,30 @@ Return the exact runtime synchronously when its model is already known.
 Prompted-model profiles first select a model asynchronously and return nil,
 as do presets whose MCP baseline is first checked at the destination."
   (let* ((profile (pichat--normalize-launch-profile profile))
-         (model (plist-get profile :model)))
+         (model (plist-get profile :model))
+         (pending (and (not (eq model 'prompt))
+                       (pichat--launch-pending-all profile directory))))
     (cond
      ((eq model 'prompt)
       (pichat--select-model-before-launch profile directory)
       nil)
+     (pending
+      (let ((verified pichat--launch-mcp-verified))
+        (pichat--expand-launch-all
+         profile directory pending
+         (lambda (expanded)
+           (let ((pichat--launch-expanded-preset expanded)
+                 (pichat--launch-mcp-verified verified))
+             (pichat--open-launch-profile profile directory)))))
+      nil)
      ((and (not pichat--launch-mcp-verified)
            (pichat--launch-baseline-mcp profile directory))
-      (pichat--verify-launch-mcp
-       profile directory
-       (lambda () (pichat--open-launch-profile profile directory)))
+      (let ((expanded pichat--launch-expanded-preset))
+        (pichat--verify-launch-mcp
+         profile directory
+         (lambda ()
+           (let ((pichat--launch-expanded-preset expanded))
+             (pichat--open-launch-profile profile directory)))))
       nil)
      ((eq (plist-get (plist-get profile :conversation) :kind) 'saved)
       (pichat--open-selected-conversation-profile profile directory))
@@ -653,12 +757,14 @@ as do presets whose MCP baseline is first checked at the destination."
              (persistence (plist-get profile :persistence))
              (display-function (plist-get profile :display-function))
              (launch-options
-              (list :persistence persistence
-                    :preset (plist-get profile :preset)
+              (append
+               (list :persistence persistence)
+               (pichat--launch-preset-option profile)
+               (list
                     :tools (copy-tree (plist-get profile :tools))
                     :extensions (copy-sequence (plist-get profile :extensions))
                     :model (and (stringp model) model)
-                    :target (unless (eq target 'inferred) target)))
+                    :target (unless (eq target 'inferred) target))))
              (previous-session pichat-current-session)
              (session
               (if (eq reuse 'preferred)
@@ -708,8 +814,10 @@ not become current/preferred and no RPC process or chat is created."
          (preset-spec (if captured
                           (pichat-presets--copy captured)
                         (pichat-presets-resolve preset-name)))
-         (tool-selection (pichat-tool-selection-resolve preset-spec
-                                               (plist-get launch-options :tools)))
+         (tool-selection (pichat-tool-selection-check-expanded
+                          (pichat-tool-selection-resolve preset-spec
+                                                         (plist-get launch-options :tools))
+                          preset-name))
          (transport-override (plist-get launch-options :transport))
          (target (plist-get launch-options :target))
          (cwd (file-name-as-directory
@@ -1618,21 +1726,31 @@ policy (its model, or Pi's default) again."
       (pichat--launch-select-model
        context args (pichat--launch-profile-from-arguments args context)))))
 
-(defun pichat--launch-preset-tool-groups (groups names)
+(defun pichat--launch-preset-tool-groups (groups names &optional all)
   "Return preset tool GROUPS reduced to the selected extension tool NAMES.
-Groups and their tools keep their order; empty groups are dropped.
-Signal when a name belongs to none of GROUPS."
+Groups and their tools keep their order; empty groups are dropped.  A
+(SOURCE . :all) group is kept when ALL, the sources whose future tools
+are still included, lists SOURCE.  Signal when a name belongs to none of
+the exact groups: the tools of an :all group, or chosen in Tools, are not
+mapped to their groups yet."
   (when-let* ((missing (cl-remove-if
                         (lambda (name)
-                          (cl-some (lambda (group) (member name (cdr group))) groups))
+                          (cl-some (lambda (group) (and (listp (cdr group))
+                                                        (member name (cdr group))))
+                                   groups))
                         names)))
-    (user-error "Saving extension tools chosen in Tools is not supported yet: %s"
+    (user-error "Saving extension tools chosen in Tools is not supported yet%s: %s"
+                (if (cl-some (lambda (group) (eq (cdr group) :all)) groups)
+                    " (with Include future tools)" "")
                 (string-join missing ", ")))
   (delq nil (mapcar (lambda (group)
-                      (when-let* ((kept (cl-remove-if-not
-                                         (lambda (name) (member name names))
-                                         (cdr group))))
-                        (cons (copy-sequence (car group)) (copy-sequence kept))))
+                      (if (eq (cdr group) :all)
+                          (when (member (car group) all)
+                            (cons (copy-sequence (car group)) :all))
+                        (when-let* ((kept (cl-remove-if-not
+                                           (lambda (name) (member name names))
+                                           (cdr group))))
+                          (cons (copy-sequence (car group)) (copy-sequence kept)))))
                     groups)))
 
 (defun pichat--launch-preset-definition (profile context name)
@@ -1665,7 +1783,8 @@ conversation choices are not part of a preset."
                  (copy-sequence (plist-get selection :builtins))
                  (pichat--launch-preset-tool-groups
                   (pichat-presets-tool-groups (plist-get definition :tools))
-                  (plist-get selection :extensions))))
+                  (plist-get selection :extensions)
+                  (plist-get selection :all))))
           (when-let* ((names (plist-get selection :emacs)))
             (list :emacs-tools (copy-sequence names)))
           (when-let* ((pairs (plist-get selection :mcp)))
@@ -1778,19 +1897,69 @@ says when it does not, and what blocks it."
     (pichat-transient-fill
      (cond
       ((pichat--reconfigure-action-inapt-p)
-       (format "Blocked: %s" (car (plist-get scope :blockers))))
+       (format "Blocked: %s" (car (pichat--reconfigure-blockers scope))))
       ((and (plist-get scope :empty-unwritten)
             (pichat-reconfigure-effective-change-p
              (plist-get scope :base) (plist-get scope :draft)))
        "Action\nNew empty Pi session; keep chat and draft")
       (t "Action")))))
 
+(defun pichat--reconfigure-blockers (scope)
+  "Return what blocks the restart of reconfiguration SCOPE's draft.
+A draft whose preset includes future tools not yet discovered is blocked
+first (see `pichat--reconfigure-expand-draft'), then preflight blockers."
+  (append (when (plist-get (plist-get (plist-get scope :draft) :tool-selection)
+                           :unexpanded)
+            (list (or (plist-get scope :expansion)
+                      "Included future tools are not discovered yet")))
+          (plist-get scope :blockers)))
+
 (defun pichat--reconfigure-action-inapt-p ()
   "Return non-nil if a changed draft has preflight blockers."
   (let ((scope (transient-scope)))
-    (and (plist-get scope :blockers)
+    (and (pichat--reconfigure-blockers scope)
          (pichat-reconfigure-effective-change-p
           (plist-get scope :base) (plist-get scope :draft)))))
+
+(defun pichat--reconfigure-expand-draft (scope)
+  "Discover future tools of SCOPE's drafted preset, then update the draft.
+Only a draft whose Tools are the preset's unexpanded baseline is probed,
+with the runtime's directory, target, model and the extensions the
+replacement would load.  Until the probe finishes, or when it fails,
+the restart is blocked with the reason under :expansion.  A later draft
+or a changed runtime ignores the result."
+  (when-let* ((cancel (plist-get scope :expansion-cancel))) (funcall cancel))
+  (plist-put scope :expansion-cancel nil)
+  (plist-put scope :expansion nil)
+  (let* ((draft (plist-get scope :draft))
+         (spec (plist-get draft :preset-spec))
+         (origin (plist-get scope :origin))
+         (session (plist-get origin :session)))
+    (when (plist-get (plist-get draft :tool-selection) :unexpanded)
+      (plist-put scope :expansion "Discovering included future tools…")
+      (plist-put
+       scope :expansion-cancel
+       (pichat--expand-preset-all
+        spec (pichat-session-emacs-cwd session) (pichat-session-transport session)
+        (let ((model (pichat-session-model session)))
+          (when (and (plist-get model :provider) (plist-get model :id))
+            (concat (plist-get model :provider) "/" (plist-get model :id))))
+        (pichat-presets-load-extensions spec (pichat-session-extensions session))
+        (lambda (expanded error)
+          (when (and (eq draft (plist-get scope :draft))
+                     (pichat-reconfigure-origin-current-p origin))
+            (plist-put scope :expansion-cancel nil)
+            (if error
+                (plist-put scope :expansion (format "Included future tools: %s" error))
+              (plist-put scope :expansion nil)
+              (plist-put scope :draft
+                         (list :preset-spec expanded
+                               :tool-selection (pichat-tool-selection-resolve expanded))))
+            (when (and (boundp 'transient--prefix) transient--prefix
+                       (eq (oref transient--prefix command) 'pichat-reconfigure-menu)
+                       (eq (plist-get scope :menu-token)
+                           (plist-get (transient-scope) :menu-token)))
+              (transient-setup 'pichat-reconfigure-menu nil nil :scope scope)))))))))
 
 (defun pichat--reconfigure-draft-description ()
   "Describe the exact selected preset and Tools draft."
@@ -1869,6 +2038,8 @@ says when it does not, and what blocks it."
     (unless (pichat-reconfigure-origin-current-p origin)
       (user-error "Runtime changed; reopen reconfiguration"))
     (plist-put scope :draft (pichat-reconfigure-select-preset draft name))
+    ;; Its future tools, if any, are discovered before it can restart.
+    (pichat--reconfigure-expand-draft scope)
     (pichat--reconfigure-show scope)))
 
 (transient-define-suffix pichat-reconfigure-tools ()
@@ -1922,8 +2093,8 @@ says when it does not, and what blocks it."
       (user-error "Runtime changed; reopen reconfiguration"))
     (if (not (pichat-reconfigure-effective-change-p base draft))
         (message "PiChat runtime unchanged")
-      (when (plist-get scope :blockers)
-        (user-error "%s" (string-join (plist-get scope :blockers) "; ")))
+      (when-let* ((blockers (pichat--reconfigure-blockers scope)))
+        (user-error "%s" (string-join blockers "; ")))
       (when (yes-or-no-p "Restart runtime? ")
         (pichat-reconfigure-restart
          origin draft

@@ -18,10 +18,16 @@
 (defun pichat-tool-selection-resolve (preset &optional selection)
   "Resolve PRESET and optional explicit SELECTION into a runtime snapshot.
 SELECTION contains :builtins, :mcp (SERVER . TOOL) pairs, :extensions and
-:emacs exact names.  Omission means the preset baseline, including its :mcp
-pairs; MCP is disabled when the baseline has none.  An explicit selection is
-complete, so an empty :mcp stays empty.  The pass-through preset returns nil
-and cannot accept a selection."
+:emacs exact names, and :all, the extension group sources whose future
+tools are included (the Tools picker's \"Include future tools\"; their
+current tools are among :extensions).  Omission means the preset baseline,
+including its :mcp pairs and the sources of its (SOURCE . :all) groups;
+MCP is disabled when the baseline has none.  A baseline whose :all groups
+are not expanded yet (`pichat-presets-pending-all') also lists them as
+:unexpanded, and so does a SELECTION that carries them on: its exact names
+are incomplete, so no runtime may start from it.  An explicit selection
+is complete, so an empty :mcp stays empty.  The pass-through preset
+returns nil and cannot accept a selection."
   (let ((baseline (plist-get preset :tools)))
     (if (eq baseline :default)
         (progn
@@ -35,7 +41,17 @@ and cannot accept a selection."
             (extensions (if selection (plist-get selection :extensions)
                           (plist-get preset :extensions)))
             (emacs (if selection (plist-get selection :emacs)
-                     (plist-get preset :emacs-tools))))
+                     (plist-get preset :emacs-tools)))
+            (all (if selection (plist-get selection :all)
+                   (pichat-presets-all-sources preset)))
+            ;; A selection derived from such a baseline stays incomplete
+            ;; until the Tools picker adds the discovered tools.
+            (unexpanded (if selection (plist-get selection :unexpanded)
+                          (pichat-presets-pending-all preset))))
+        (unless (and (proper-list-p all)
+                     (cl-every #'pichat-presets-extension-spec-p all)
+                     (= (length all) (length (delete-dups (copy-sequence all)))))
+          (user-error "Invalid or duplicate extension groups with future tools: %S" all))
         (unless (pichat-presets-extension-names-p extensions)
           (user-error "Invalid or duplicate extension tool selection"))
         (unless (pichat-presets-extension-names-p emacs)
@@ -70,7 +86,21 @@ and cannot accept a selection."
                   (when extensions
                     (list :extensions (sort (pichat-presets--copy extensions) #'string<)))
                   (when emacs
-                    (list :emacs (sort (pichat-presets--copy emacs) #'string<)))))))))
+                    (list :emacs (sort (pichat-presets--copy emacs) #'string<)))
+                  (when all
+                    (list :all (sort (pichat-presets--copy all) #'string<)))
+                  (when unexpanded
+                    (list :unexpanded (pichat-presets--copy unexpanded)))))))))
+
+(defun pichat-tool-selection-check-expanded (snapshot preset-name)
+  "Return resolved Tools SNAPSHOT, or signal when it is not expanded.
+PRESET-NAME names its preset in the refusal.  A snapshot with
+:unexpanded sources lacks the tools of the preset's (SOURCE . :all)
+groups, so a runtime started from it would silently miss them."
+  (when-let* ((sources (plist-get snapshot :unexpanded)))
+    (user-error "Preset %s includes future tools of %s; launch it from `pichat-launch' (which discovers them first) or choose its tools with x Tools"
+                preset-name (string-join sources ", ")))
+  snapshot)
 
 (defun pichat-tool-selection-emacs-unavailable (snapshot &optional bridge-p)
   "Return SNAPSHOT's selected Emacs-defined tools a runtime cannot offer.

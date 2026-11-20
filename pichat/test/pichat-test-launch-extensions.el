@@ -575,6 +575,141 @@
         (setf (pichat-session-extensions session) nil)
         (should-not (pichat-tool-runtime--extension-failure session))))))
 
+(ert-deftest pichat-launch-extensions-include-future-tools-expand-before-launch ()
+  (pichat-test-with-clean-state
+    (let* ((pichat-rpc-command nil) (pichat-pi-extra-args nil)
+           (pichat-pi-default-args '("--mode" "rpc")) (pichat-default-model nil)
+           (pichat-bridge-extension-file nil) (pichat-path-mappings nil)
+           (pichat-append-system-prompt nil)
+           (pichat-presets (copy-tree pichat-presets)) (pichat-saved-presets nil)
+           (cache "/a/tmp/extensions/npm/abcdef01/node_modules/pkg/index.ts")
+           (tools (list (list :name "pkg_a" :eligible t
+                              :source (list :path cache :source "cli"
+                                            :scope "temporary" :origin "top-level"))
+                        (list :name "read" :eligible t
+                              :source '(:path "builtin:read" :source "builtin"))))
+           (probe-error nil)
+           probes mcp-checks started messages)
+      (pichat-make-preset 'future
+        :tools '("read" ("npm:pkg@1" . :all)) :extensions '("npm:pkg@1"))
+      (pichat-make-preset 'future-mcp
+        :tools '("read" ("npm:pkg@1" . :all)) :extensions '("npm:pkg@1")
+        :mcp '(("s" . "t")))
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_time _repeat function &rest args) (apply function args) nil))
+                ((symbol-function 'pichat-tool-discovery-draft-refresh)
+                 (lambda (draft callback)
+                   (push (pichat-tool-discovery-draft-context draft) probes)
+                   (setf (pichat-tool-discovery-draft-tools draft) (and (not probe-error) tools)
+                         (pichat-tool-discovery-draft-error draft) probe-error
+                         (pichat-tool-discovery-draft-status draft)
+                         (if probe-error 'failed 'ready))
+                   (funcall callback draft)))
+                ((symbol-function 'pichat-mcp-discovery-start)
+                 (lambda (_transport _cwd _executable callback)
+                   (push 'mcp mcp-checks)
+                   (funcall callback '((:name "s" :tools ((:name "t" :eligible t)))) nil)))
+                ((symbol-function 'pichat-start-session)
+                 (lambda (_cwd _scope options) (push options started) 'runtime))
+                ((symbol-function 'pichat--display-and-synchronize-session) #'ignore)
+                ((symbol-function 'message)
+                 (lambda (format &rest args) (push (apply #'format-message format args) messages))))
+        ;; Without Tools, one probe with the preset's extensions expands the
+        ;; group silently, and the runtime records the expanded snapshot.
+        (should-not (pichat--open-launch-profile '(:preset future :display-function ignore)
+                                                 "/tmp/"))
+        (should (= 1 (length probes)))
+        (should (equal '("npm:pkg@1") (plist-get (car probes) :extensions)))
+        (should (member "npm:pkg@1" (plist-get (car probes) :args)))
+        (let ((options (car started)))
+          (should-not (plist-member options :preset))
+          (should (equal '(("npm:pkg@1" "pkg_a"))
+                         (plist-get (plist-get options :preset-spec) :expanded-all)))
+          (should (equal '("pkg_a") (plist-get (plist-get options :preset-spec) :extensions))))
+        (should-not (cl-some (lambda (text) (string-search "pkg_a" text)) messages))
+        ;; With MCP too, each check runs once, then the runtime starts.
+        (setq probes nil started nil)
+        (pichat--open-launch-profile '(:preset future-mcp :display-function ignore) "/tmp/")
+        (should (= 1 (length probes)))
+        (should (equal '(mcp) mcp-checks))
+        (should (= 1 (length started)))
+        (should (plist-get (plist-get (car started) :preset-spec) :expanded-all))
+        ;; Tools chosen in the picker are exact names: no probe.
+        (setq probes nil started nil)
+        (pichat--open-launch-profile
+         '(:preset future :display-function ignore
+           :tools (:builtins ("read") :extensions ("pkg_a") :all ("npm:pkg@1")))
+         "/tmp/")
+        (should-not probes)
+        (should (eq 'future (plist-get (car started) :preset)))
+        ;; A failed probe cancels the launch with its reason.
+        (setq probes nil started nil messages nil probe-error "Pi exited")
+        (pichat--open-launch-profile '(:preset future :display-function ignore) "/tmp/")
+        (should-not started)
+        (should (cl-some (lambda (text)
+                           (string-match-p "\\`PiChat launch cancelled: Tool discovery failed: Pi exited"
+                                           text))
+                         messages))))))
+
+(ert-deftest pichat-launch-extensions-reconfigure-expands-a-reselected-preset ()
+  (let* ((pichat-rpc-command nil) (pichat-pi-extra-args nil)
+         (pichat-pi-default-args '("--mode" "rpc")) (pichat-default-model nil)
+         (pichat-bridge-extension-file nil) (pichat-path-mappings nil)
+         (pichat-append-system-prompt nil)
+         (pichat-presets (copy-tree pichat-presets)) (pichat-saved-presets nil)
+         (tools (list (list :name "pkg_a" :eligible t
+                            :source (list :path "/a/tmp/extensions/npm/abcdef01/node_modules/pkg/x.ts"
+                                          :source "cli" :scope "temporary" :origin "top-level"))))
+         refresh)
+    (pichat-make-preset 'future
+      :tools '("read" ("npm:pkg@1" . :all)) :extensions '("npm:pkg@1"))
+    (let* ((session (pichat-prepare-session "/tmp/" nil '(:preset manual :extensions ("x.ts"))))
+           (base (pichat-reconfigure-captured-configuration session))
+           (scope (list :origin (pichat-reconfigure-capture-origin session) :base base
+                        :draft (pichat-reconfigure-select-preset base 'future))))
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_time _repeat function &rest args) (apply function args) nil))
+                ((symbol-function 'pichat-tool-discovery-draft-refresh)
+                 (lambda (draft callback) (setq refresh (list draft callback)))))
+        ;; While the probe runs the restart is blocked.
+        (pichat--reconfigure-expand-draft scope)
+        (should (equal '("Discovering included future tools…")
+                       (pichat--reconfigure-blockers scope)))
+        (should (equal '("npm:pkg@1" "x.ts")
+                       (plist-get (pichat-tool-discovery-draft-context (car refresh))
+                                  :extensions)))
+        ;; A failure keeps it blocked with the reason.
+        (pcase-let ((`(,draft ,callback) refresh))
+          (setf (pichat-tool-discovery-draft-status draft) 'failed
+                (pichat-tool-discovery-draft-error draft) "boom")
+          (funcall callback draft))
+        (should (equal '("Included future tools: Tool discovery failed: boom")
+                       (pichat--reconfigure-blockers scope)))
+        ;; A successful probe replaces the draft with the expanded preset.
+        (pichat--reconfigure-expand-draft scope)
+        (pcase-let ((`(,draft ,callback) refresh))
+          (setf (pichat-tool-discovery-draft-status draft) 'ready
+                (pichat-tool-discovery-draft-tools draft) tools)
+          (funcall callback draft))
+        (should-not (pichat--reconfigure-blockers scope))
+        (let ((draft (plist-get scope :draft)))
+          (should (equal '(("npm:pkg@1" "pkg_a"))
+                         (plist-get (plist-get draft :preset-spec) :expanded-all)))
+          (should (equal '("--tools" "read,pkg_a")
+                         (seq-take (member "--tools"
+                                           (pichat-reconfigure-validated-command
+                                            session draft '(:model (:provider "p" :id "m"))))
+                                   2))))
+        ;; A result for an older draft is ignored.
+        (plist-put scope :draft (pichat-reconfigure-select-preset base 'future))
+        (pichat--reconfigure-expand-draft scope)
+        (let ((stale refresh))
+          (plist-put scope :draft (pichat-reconfigure-select-preset base 'manual))
+          (setf (pichat-tool-discovery-draft-status (car stale)) 'ready)
+          (funcall (cadr stale) (car stale))
+          (should (eq 'manual (plist-get (plist-get (plist-get scope :draft) :preset-spec)
+                                         :name))))))))
+
 (defconst pichat-test-launch-extensions--fixture
   (expand-file-name "fixtures/tool-control-extension.ts" pichat-test-directory)
   "Extension registering the probe tools, loaded only when added.")
@@ -735,6 +870,52 @@
                              (seq-take (member "--tools" (pichat-session-rpc-command runtime))
                                        2))))
           (when (buffer-live-p buffer) (kill-buffer buffer))
+          (when (pichat-session-p runtime)
+            (pichat-rpc-stop runtime)
+            (pichat-forget-session runtime))))))
+
+  (ert-deftest pichat-launch-extensions-real-pi-include-future-tools-expand-at-launch ()
+    (pichat-test-with-integration-session (session :preset 'manual :script '(:turns []))
+      (let ((pichat-chat-stop-session-on-kill nil)
+            (pichat-presets (copy-tree pichat-presets))
+            (fixture pichat-test-launch-extensions--fixture)
+            ;; Discovery takes no session directory; the runtime needs none.
+            (pichat-pi-default-args
+             (list "--mode" "rpc" "--offline" "--no-approve" "--no-context-files"
+                   "--no-skills" "--no-prompt-templates" "--no-themes" "--no-extensions"
+                   "-e" pichat-test-fake-provider-extension
+                   "--model" "pichat-fake/pichat-fake"))
+            runtime result)
+        ;; Every tool of the fixture, which only the preset loads.
+        (pichat-make-preset 'fixture-future
+          :tools (list "read" (cons fixture :all))
+          :extensions (list fixture))
+        (unwind-protect
+            (progn
+              ;; Launching without Tools probes first, then starts the runtime.
+              (should-not (pichat--open-launch-profile
+                           (list :preset 'fixture-future :display-function #'ignore)
+                           project-dir))
+              (pichat-test-wait-until
+               (lambda ()
+                 (setq runtime (cl-find 'fixture-future (pichat-session-list)
+                                        :key #'pichat-session-preset-name)))
+               30 "runtime launched after the probe")
+              (pichat-rpc-get-state runtime (lambda (value _s) (setq result value))
+                                    (lambda (value _s) (setq result value)))
+              (pichat-test-wait-until (lambda () result) 15 "expanded runtime")
+              (should (plist-get result :success))
+              (let* ((expanded (cdr (assoc fixture (plist-get (pichat-session-preset-spec runtime)
+                                                              :expanded-all))))
+                     (active (pichat-test-extension-tools-active runtime)))
+                ;; The probe found the fixture's tools; they are recorded with
+                ;; the runtime and enabled by exact name.
+                (should (member "probe_child" expanded))
+                (should (member "probe_loader" expanded))
+                (should (cl-subsetp expanded active :test #'equal))
+                (should (string-search "probe_child"
+                                       (cadr (member "--tools"
+                                                     (pichat-session-rpc-command runtime)))))))
           (when (pichat-session-p runtime)
             (pichat-rpc-stop runtime)
             (pichat-forget-session runtime))))))

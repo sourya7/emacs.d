@@ -236,6 +236,121 @@ EXTRA-TOOLS are appended to the catalogue."
                               when (plist-get tool :eligible) collect (plist-get tool :name))
                      (plist-get (pichat-tool-picker--selection) :extensions))))))
 
+(ert-deftest pichat-extension-tools-picker-include-future-tools-checks-current-tools ()
+  (let ((pichat-presets (copy-tree pichat-presets))
+        (pichat-saved-presets nil)
+        (pichat-append-system-prompt nil)
+        (guardrails "npm:@pi-vault/pi-guardrails@1.2.3")
+        result opened)
+    (pichat-make-preset 'future
+      :tools '("read" ("npm:@pi-vault/pi-guardrails@1.2.3" . :all)))
+    (let* ((preset (pichat-presets-resolve 'future))
+           (pichat-tool-picker--state (pichat-test-extension-tools-grouped-state)))
+      ;; The picker opens on the unexpanded baseline; once discovery is
+      ;; ready the group's current eligible tools show checked.
+      (setf (plist-get pichat-tool-picker--state :preset) preset
+            (plist-get pichat-tool-picker--state :draft) (pichat-tool-selection-resolve preset)
+            (plist-get pichat-tool-picker--state :callback) (lambda (value) (setq result value)))
+      (should (plist-get (pichat-tool-picker--selection) :unexpanded))
+      (pichat-tool-picker--materialize-all)
+      (should-not (plist-member (pichat-tool-picker--selection) :unexpanded))
+      (should (equal '("guardrails_status" "guardrails_policy")
+                     (plist-get (pichat-tool-picker--selection) :extensions)))
+      (should (string-match-p "e1 pi-guardrails (all) →"
+                              (pichat-test-extension-tools-render 'pichat-tool-picker)))
+      (cl-letf (((symbol-function 'transient-setup) (lambda (prefix &rest _) (setq opened prefix))))
+        (pichat-test-extension-tools-run 'pichat-tool-picker "e1")
+        (should (eq opened 'pichat-tool-picker-extension-group))
+        (let ((text (pichat-test-extension-tools-render 'pichat-tool-picker-extension-group)))
+          (should (string-match-p "^ \\* \\[✓\\] Include future tools$" text))
+          (should (string-match-p "\\[✓\\] guardrails_policy" text)))
+        ;; Unchecking a tool of the group keeps exact names, without :all.
+        (pichat-test-extension-tools-run 'pichat-tool-picker-extension-group "2")
+        (should-not (plist-get (pichat-tool-picker--selection) :all))
+        (should (equal '("guardrails_status") (plist-get (pichat-tool-picker--selection) :extensions)))
+        (should (string-match-p "\\[ \\] Include future tools"
+                                (pichat-test-extension-tools-render
+                                 'pichat-tool-picker-extension-group)))
+        (should (string-match-p "e1 pi-guardrails (1/3) →"
+                                (pichat-test-extension-tools-render 'pichat-tool-picker)))
+        ;; Turning it on checks every current eligible tool again.
+        (pichat-test-extension-tools-run 'pichat-tool-picker-extension-group "*")
+        (should (equal (list guardrails) (plist-get (pichat-tool-picker--selection) :all)))
+        (should (equal '("guardrails_status" "guardrails_policy")
+                       (plist-get (pichat-tool-picker--selection) :extensions)))
+        ;; Turning it off keeps the tools checked; None also turns it off.
+        (pichat-test-extension-tools-run 'pichat-tool-picker-extension-group "*")
+        (should-not (plist-get (pichat-tool-picker--selection) :all))
+        (should (equal '("guardrails_status" "guardrails_policy")
+                       (plist-get (pichat-tool-picker--selection) :extensions)))
+        (pichat-test-extension-tools-run 'pichat-tool-picker-extension-group "*")
+        (pichat-tool-picker-extension-group-none)
+        (should-not (plist-get (pichat-tool-picker--selection) :all))
+        (should-not (plist-get (pichat-tool-picker--selection) :extensions))
+        ;; Groups without a stable source, such as Pi built-in, have no row.
+        (setf (plist-get pichat-tool-picker--state :extension-group) :builtin)
+        (should-not (string-match-p "Include future tools"
+                                    (pichat-test-extension-tools-render
+                                     'pichat-tool-picker-extension-group))))
+      ;; Reset restores the preset's :all with its current tools; top-level
+      ;; All never adds :all, None clears it.
+      (pichat-tool-picker-reset)
+      (should (equal (list guardrails) (plist-get (pichat-tool-picker--selection) :all)))
+      (should (equal '("guardrails_status" "guardrails_policy")
+                     (plist-get (pichat-tool-picker--selection) :extensions)))
+      (pichat-tool-picker-none)
+      (pichat-tool-picker-all)
+      (should-not (plist-get (pichat-tool-picker--selection) :all))
+      (pichat-tool-picker-reset)
+      ;; Apply returns the exact names found now with :all; the snapshot is
+      ;; complete, so a runtime can start from it.
+      (pichat-tool-picker-apply)
+      (should (equal (list guardrails) (plist-get result :all)))
+      (let ((tools (pichat-tool-selection-resolve preset result)))
+        (should-not (plist-get tools :unexpanded))
+        (should (equal '("--tools" "read,guardrails_policy,guardrails_status" "--no-mcp")
+                       (pichat-tool-selection-args tools)))))
+    ;; Without ready discovery the baseline cannot be applied.
+    (let* ((preset (pichat-presets-resolve 'future))
+           (pichat-tool-picker--state
+            (list :preset preset :baseline '("read")
+                  :draft (pichat-tool-selection-resolve preset)
+                  :discovery (pichat-tool-discovery-draft-create :status 'failed :error "boom")
+                  :servers nil :loaded t :page 0)))
+      (pichat-tool-picker--materialize-all)
+      (should (plist-get (pichat-tool-picker--selection) :unexpanded))
+      (should-error (pichat-tool-picker-apply) :type 'user-error)
+      (setf (plist-get pichat-tool-picker--state :extension-group) guardrails)
+      (setf (plist-get pichat-tool-picker--state :draft) '(:builtins ("read")))
+      (should-error (pichat-tool-picker--toggle-future guardrails) :type 'user-error))))
+
+(ert-deftest pichat-extension-tools-expand-all-uses-provenance-and-eligibility ()
+  (let* ((builtin (lambda (name) (pichat-test-extension-tools-source "builtin" (concat "builtin:" name))))
+         (cache "/home/u/.pi/agent/tmp/extensions/npm/f35b2129/node_modules/@probe/pkg/index.ts")
+         (cli (list :path cache :source "cli" :scope "temporary" :origin "top-level"))
+         (draft (pichat-tool-discovery-draft-create
+                 :status 'ready
+                 :context (list :transport pichat-transport-local :cwd "/w/"
+                                :extensions '("npm:@probe/pkg@1"))
+                 :tools (list (list :name "pkg_a" :eligible t :source cli)
+                              (list :name "pkg_hidden" :eligible nil :source cli)
+                              (list :name "read" :eligible t :source (funcall builtin "read"))
+                              (list :name "codemode" :eligible t :source (funcall builtin "codemode"))
+                              (list :name "mcp__s__t" :eligible t :source (funcall builtin "mcp"))
+                              (list :name "other" :eligible t
+                                    :source (pichat-test-extension-tools-source
+                                             "git:github.com/o/r" "/git/r/index.ts" "/git/r")))))
+         (preset (list :name 'future :tools '("read") :extensions '("other")
+                       :tool-groups '(("npm:@probe/pkg@1" . :all) ("builtin:codemode" . :all)
+                                      ("git:github.com/o/r" "other") ("npm:absent" . :all))))
+         (expanded (pichat-tool-picker-expand-all preset draft)))
+    ;; Added specs match by attribution, built-ins by their path; hidden,
+    ;; core built-in and MCP tools are never included.
+    (should (equal '(("npm:@probe/pkg@1" "pkg_a") ("builtin:codemode" "codemode") ("npm:absent"))
+                   (plist-get expanded :expanded-all)))
+    (should (equal '("other" "pkg_a" "codemode") (plist-get expanded :extensions)))
+    (should-not (pichat-tool-picker-group-tool-names "builtin:read" (pichat-tool-discovery-draft-tools draft)))))
+
 (ert-deftest pichat-extension-tools-picker-labels-sources-and-pages-groups ()
   ;; Path-loaded sources group by package directory (or file) and are
   ;; labelled by file name, or by directory name for index files.

@@ -72,7 +72,9 @@ preset name or description is not a reason to restart the process."
                          before (plist-get previous :tool-selection)))
           (tools-after (pichat-tool-selection-resolve
                         after (plist-get requested :tool-selection))))
-      (or (not (equal (plist-get before :system-prompt)
+      (or ;; Future tools still to be discovered may add any tool.
+          (plist-get tools-after :unexpanded)
+          (not (equal (plist-get before :system-prompt)
                       (plist-get after :system-prompt)))
           (not (equal (plist-get before :append-system-prompt)
                       (plist-get after :append-system-prompt)))
@@ -482,7 +484,8 @@ Recheck all settings and the command before stopping the original process."
     (let ((snapshot (copy-pichat-session session)))
       (setf (pichat-session-preset-spec snapshot) (pichat-presets--copy preset)
             (pichat-session-tool-selection snapshot)
-            (pichat-tool-selection-resolve preset tools)
+            (pichat-tool-selection-check-expanded
+             (pichat-tool-selection-resolve preset tools) (plist-get preset :name))
             (pichat-session-startup-model snapshot)
             (concat provider "/" id))
       (let ((argv (pichat-rpc-build-command snapshot)))

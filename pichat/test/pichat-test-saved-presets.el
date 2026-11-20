@@ -465,6 +465,32 @@ Reopening the launcher records its (ARGS . SCOPE) in `staged'."
                           (pichat--launch-preset-definition
                            (pichat--launch-profile-from-arguments '("--preset=source") context)
                            context 'web)
+                          :type 'user-error)))))
+        ;; Include future tools: the baseline keeps its (SOURCE . :all)
+        ;; group; Tools choices with discovered names are not saved yet.
+        (pichat-make-preset 'future :tools '("read" ("./ext.ts" . :all) ("npm:x" "x_tool"))
+                            :extensions '("./ext.ts"))
+        (let* ((profile (pichat--launch-profile-from-arguments '("--preset=future") nil))
+               (spec (pichat--launch-preset-definition profile nil 'future)))
+          (should (equal '("read" ("./ext.ts" . :all) ("npm:x" "x_tool"))
+                         (plist-get spec :tools)))
+          (should (pichat-presets--validate 'future spec)))
+        (let ((context '(:tool-selection (:builtins ("read") :extensions ("x_tool")))))
+          ;; Turning future tools off drops the :all group.
+          (should (equal '("read" ("npm:x" "x_tool"))
+                         (plist-get (pichat--launch-preset-definition
+                                     (pichat--launch-profile-from-arguments
+                                      '("--preset=future") context)
+                                     context 'web)
+                                    :tools))))
+        (let ((context '(:tool-selection (:builtins ("read") :extensions ("ext_a")
+                                          :all ("./ext.ts")))))
+          (should (string-match-p
+                   "not supported yet (with Include future tools): ext_a"
+                   (cadr (should-error
+                          (pichat--launch-preset-definition
+                           (pichat--launch-profile-from-arguments '("--preset=future") context)
+                           context 'web)
                           :type 'user-error)))))))))
 
 (ert-deftest pichat-saved-presets-launcher-save-registers-and-selects-name ()

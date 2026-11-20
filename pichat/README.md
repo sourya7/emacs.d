@@ -856,8 +856,10 @@ built-in, extension, Emacs-defined and MCP tools, the source preset's own prompt
 sources (not `pichat-append-system-prompt`, which still applies to every
 preset), and the model: an exact ID, or `default` for Pi's default policy.
 The source preset's `:extensions` are kept and selected extension tools keep
-its `:tools` groups; saving extension tools outside those groups, and
-extensions added in `l Extensions`, is not supported yet.
+its `:tools` groups; a `(SOURCE . :all)` group is kept while its **Include
+future tools** is on. Saving extension tools outside those groups (including
+the tools an `:all` group found when Tools were opened), and extensions added
+in `l Extensions`, is not supported yet.
 Target, scope, persistence, conversation and runtime state are
 not saved. Saving does not start, stop or reconfigure a runtime, or change Pi's
 global model or `pichat-default-preset`. Tools Apply/Cancel stay run-local; only
@@ -917,16 +919,45 @@ example `"project_search"`) is now refused with an error naming the `:tools`
 form. Write a relative directory as `./name`. Reconfiguring a runtime to
 another preset loads that preset's extensions instead and keeps the ones
 added in the launcher. Jobs refuse presets that load extensions.
-`(SOURCE . :all)` is not supported yet.
+
+A group `(SOURCE . :all)` (**Include future tools**) selects every tool that
+extension registers, including tools a later version adds:
+
+```elisp
+(pichat-make-preset 'manual-guarded-all
+  :tools '("read" "grep" "find" "ls" "edit" "write"
+           ("npm:@pi-vault/pi-guardrails@1.2.3" . :all))
+  :extensions '("npm:@pi-vault/pi-guardrails@1.2.3"))
+```
+
+Pi's `--tools` allowlist takes exact names and hides any other extension
+tool, so the names are found before the runtime starts. Launching such a
+preset from `pichat-launch` without opening `x Tools` first runs the same
+discovery probe as `x Tools` (target, directory, model, prompts and every
+extension the runtime loads), silently, and starts the runtime with the
+eligible tools found; a failed probe cancels the launch with a message.
+Opening `x Tools` shows those tools checked instead, and Apply uses them.
+The expanded names are recorded with the runtime, so restarts and
+reconfiguration reuse them; selecting the preset again under **Reconfigure
+this runtime** probes anew (the restart waits for it), and so does
+refreshing or reapplying `x Tools`. Pi built-in tools match a `builtin:`
+path SOURCE. Other ways of starting a runtime, such as
+`pichat-default-preset` starts outside the launcher or jobs, refuse such a
+preset unless its tools were chosen in `x Tools`.
 
 In `x Tools`, **Extension tools** lists one entry per extension that registers
-tools, `e1 pi-guardrails (2/3) →`, with the checked and total counts. The
-entry opens that extension's page: checkboxes with descriptions (`(unavailable)`
-for tools that cannot be enabled), `a` **All in extension** (its current
-eligible tools only; tools registered later are not included), `n` **None in
-extension**, `[` / `]` paging, and `RET` or `q` back to the main page. The
-top-level `a` still checks every eligible extension tool, in all groups.
-Selections are exact tool names.
+tools, `e1 pi-guardrails (2/3) →`, with the checked and total counts, or
+`(all)` while it includes future tools. The entry opens that extension's
+page: `*` **Include future tools**, checkboxes with descriptions
+(`(unavailable)` for tools that cannot be enabled), `a` **All in extension**
+(its current eligible tools only; tools registered later are not included),
+`n` **None in extension**, `[` / `]` paging, and `RET` or `q` back to the main
+page. Turning **Include future tools** on checks every current eligible tool
+and saves the group as `(SOURCE . :all)`; unchecking one of its tools, or `n`,
+turns it off (turning it off directly keeps the tools checked). Pi built-in
+and Unattributed have no stable source and so no such row. The top-level `a`
+still checks every eligible extension tool, in all groups, and never includes
+future tools; `n` turns them all off. Selections are exact tool names.
 
 Groups follow the provenance Pi reports for each tool (`sourceInfo`):
 
@@ -956,7 +987,8 @@ checkbox list. Extensions that register only commands or event hooks have no
 tools and do not appear.
 
 Existing shipped explicit presets have an empty extension baseline. Extension
-choices are opt-in; discovering tools never selects them automatically. Hidden
+choices are opt-in; discovering tools never selects them automatically, except
+for a group whose future tools a preset or the picker explicitly includes. Hidden
 tools and names that cannot safely be expressed as exact Pi tool selections are
 unavailable. Missing or stale checked names cause a clear Apply/startup failure
 rather than silently broadening the selection.

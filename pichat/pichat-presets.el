@@ -77,9 +77,60 @@ start with `-').  Pi decides what the path or package specification means."
 A group is (SOURCE NAME...): SOURCE identifies the extension (an added
 spec exactly as in :extensions, a discovered package source, or a
 built-in's `builtin:' path) and NAMES are its exact tool names, at least
-one.  Names are checked with the rest of :tools."
+one.  Names are checked with the rest of :tools.  A group may instead be
+(SOURCE . :all), \"Include future tools\": every tool the extension
+registers when a runtime starts (see `pichat-presets-expand-all')."
   (and (consp value) (pichat-presets-extension-spec-p (car value))
-       (consp (cdr value)) (proper-list-p (cdr value))))
+       (or (eq (cdr value) :all)
+           (and (consp (cdr value)) (proper-list-p (cdr value))))))
+
+(defun pichat-presets-group-names (groups)
+  "Return the exact tool names of extension tool GROUPS, in order.
+Groups that include future tools (:all) name none."
+  (cl-loop for group in groups
+           unless (eq (cdr group) :all) append (cdr group)))
+
+(defun pichat-presets-all-sources (snapshot)
+  "Return the sources whose future tools resolved preset SNAPSHOT includes.
+These are the (SOURCE . :all) groups of its :tool-groups, in order."
+  (cl-loop for group in (plist-get snapshot :tool-groups)
+           when (eq (cdr group) :all) collect (car group)))
+
+(defun pichat-presets-pending-all (snapshot)
+  "Return SNAPSHOT's :all sources not yet expanded to exact tool names.
+A runtime cannot start from such a snapshot's own tools: Pi's allowlist
+needs exact names, so they are first discovered and recorded with
+`pichat-presets-expand-all'."
+  (unless (plist-member snapshot :expanded-all)
+    (pichat-presets-all-sources snapshot)))
+
+(defun pichat-presets-expand-all (snapshot expansions)
+  "Return a copy of resolved preset SNAPSHOT with its :all groups expanded.
+EXPANSIONS is an alist (SOURCE . NAMES) giving, for each source of
+`pichat-presets-all-sources', the exact names of the tools discovered for
+it (possibly none).  The names are added to the snapshot's :extensions and
+recorded under :expanded-all, so restarts and reconfiguration reuse them.
+Signal when a source is missing or a name is invalid or conflicts."
+  (let* ((sources (pichat-presets-all-sources snapshot))
+         (expanded (mapcar (lambda (source)
+                             (let ((entry (assoc source expansions)))
+                               (unless entry
+                                 (user-error "No tools discovered for preset group %s" source))
+                               (cons (copy-sequence source)
+                                     (pichat-presets--copy (cdr entry)))))
+                           sources))
+         (names (cl-remove-duplicates
+                 (append (plist-get snapshot :extensions)
+                         (apply #'append (mapcar #'cdr expanded)))
+                 :test #'equal :from-end t))
+         (result (pichat-presets--copy snapshot)))
+    (unless (pichat-presets-extension-names-p names)
+      (user-error "Invalid extension tools discovered for preset %s: %S"
+                  (plist-get snapshot :name) names))
+    (setq result (plist-put result :extensions names))
+    (setq result (plist-put result :expanded-all expanded))
+    (pichat-presets--validate-tool-names result names)
+    result))
 
 (defun pichat-presets-tool-builtins (tools)
   "Return the built-in tool names of a preset's TOOLS value, in order."
@@ -107,18 +158,17 @@ Nil, :default, or a list of built-in names and extension tool groups."
     (user-error "Invalid preset tools: %S" value))
   (let ((groups (pichat-presets-tool-groups value)))
     (dolist (group groups)
-      (when (and (consp group) (eq (cdr group) :all))
-        (user-error "Preset tool group %S: Include future tools (:all) is not supported yet"
-                    (car group)))
       (unless (pichat-presets-tool-group-p group)
-        (user-error "Invalid preset tool group; use (SOURCE \"tool\" ...): %S" group))
-      (unless (pichat-presets-extension-names-p (cdr group))
+        (user-error "Invalid preset tool group; use (SOURCE \"tool\" ...) or (SOURCE . :all): %S"
+                    group))
+      (unless (or (eq (cdr group) :all)
+                  (pichat-presets-extension-names-p (cdr group)))
         (user-error "Invalid or duplicate extension tools in preset group %s: %S"
                     (car group) (cdr group))))
     (unless (= (length groups)
                (length (cl-remove-duplicates (mapcar #'car groups) :test #'equal)))
       (user-error "Duplicate preset tool group source"))
-    (let ((names (apply #'append (mapcar #'cdr groups))))
+    (let ((names (pichat-presets-group-names groups)))
       (unless (= (length names) (length (delete-dups (copy-sequence names))))
         (user-error "Extension tool selected in more than one preset group")))))
 
@@ -225,9 +275,8 @@ Thinking-level suffixes are rejected, as for authored job definitions."
                                 (cl-every #'pichat-presets--source-p value)))
                  (user-error "Invalid preset prompt source: %S" value))))))))
   (pichat-presets--validate-tool-names spec
-                                       (apply #'append
-                                              (mapcar #'cdr (pichat-presets-tool-groups
-                                                             (plist-get spec :tools))))))
+                                       (pichat-presets-group-names
+                                        (pichat-presets-tool-groups (plist-get spec :tools)))))
 
 (defun pichat-presets--validate-tool-names (spec extension-tools)
   "Check SPEC's Emacs-defined and MCP tools against EXTENSION-TOOLS names.
@@ -285,7 +334,9 @@ tools; omitted or :default tools leaves Pi's default selection alone.  An
 explicit :tools list holds built-in names and extension tool groups
 (SOURCE \"tool\" ...), exact names under the extension SOURCE: a spec as
 written in :extensions, a discovered package's source such as
-\"git:github.com/owner/repo\", or a `builtin:' path.  :extensions lists the
+\"git:github.com/owner/repo\", or a `builtin:' path.  A group (SOURCE . :all)
+includes future tools: every tool SOURCE registers, discovered with a
+probe before a runtime starts and recorded with it.  :extensions lists the
 extensions every runtime of the preset loads with Pi's -e option (paths,
 or `npm:' and `git:' specs), in addition to those Pi discovers; a bare
 word such as an old-style tool name is refused.  :emacs-tools lists exact
@@ -355,10 +406,11 @@ see `pichat-saved-presets'."
                           (pichat-presets--copy (pichat-presets-tool-builtins tools))
                           :test #'equal :from-end t)))
                    :default)
-          ;; The snapshot keeps exact extension tool names, as before groups.
+          ;; The snapshot keeps exact extension tool names, as before groups;
+          ;; those of (SOURCE . :all) groups are added when expanded.
           :extensions (pichat-presets--copy
-                       (apply #'append (mapcar #'cdr (pichat-presets-tool-groups
-                                                      (plist-get spec :tools)))))
+                       (pichat-presets-group-names
+                        (pichat-presets-tool-groups (plist-get spec :tools))))
           :system-prompt (pichat-presets--prompt (plist-get spec :system-prompt))
           :append-system-prompt
           (pichat-presets--prompt

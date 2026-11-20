@@ -267,6 +267,106 @@ EXTRA-TOOLS are appended to the catalogue."
       (should (string-match-p "e1 extra-18 (0/1) →" text))
       (should (string-match-p "e5 Pi built-in (0/2) →" text)))))
 
+(ert-deftest pichat-extension-tools-picker-attributes-added-extension-tools-by-resolved-path ()
+  (let* ((dir (make-temp-file "pichat-added-" t))
+         (cwd (file-name-as-directory dir))
+         (agent "/home/u/.pi/agent/tmp/extensions/")
+         (cli (lambda (name path)
+                (list :name name :eligible t :description ""
+                      :source (list :path path :source "cli" :scope "temporary"
+                                    :origin "top-level"))))
+         (specs '("./guard.ts" "pkg-link/" "npm:@pi-vault/pi-guardrails@1.2.3"
+                  "git:github.com/kirang89/pi-sentry@v0.1.0"
+                  "https://gitlab.com/owner/tool.git"))
+         (tools nil))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "pkg/extensions" dir) t)
+          (write-region "" nil (expand-file-name "guard.ts" dir))
+          (make-symbolic-link (expand-file-name "pkg" dir) (expand-file-name "pkg-link" dir))
+          (setq tools
+                (list (funcall cli "guard_check" (expand-file-name "guard.ts" dir))
+                      (funcall cli "pkg_tool" (expand-file-name "pkg/extensions/index.ts" dir))
+                      (funcall cli "guardrails_status"
+                               (concat agent "npm/f35b2129/node_modules/@pi-vault/pi-guardrails/"
+                                       "extensions/index.ts"))
+                      (funcall cli "sentry_scan"
+                               (concat agent "git-github.com/cf56c0b2/kirang89/pi-sentry/index.ts"))
+                      (funcall cli "tool_run"
+                               (concat agent "git-gitlab.com/0123abcd/owner/tool/ext.ts"))
+                      ;; Loaded with -e but not an added extension (Pi arguments).
+                      (funcall cli "other_npm"
+                               (concat agent "npm/f35b2129/node_modules/other/index.ts"))
+                      (funcall cli "probe_child" "/ext/probe.ts")))
+          ;; Added specs, as given, become the group keys.
+          (let ((pichat-tool-picker--state
+                 (list :preset (pichat-presets-resolve 'manual) :baseline '("read")
+                       :draft '(:builtins ("read") :mcp nil :extensions ("guard_check") :emacs nil)
+                       :servers nil :loaded t :page 0
+                       :discovery (pichat-tool-discovery-draft-create
+                                   :status 'ready :tools tools
+                                   :context (list :transport pichat-transport-local :cwd cwd
+                                                  :extensions specs)))))
+            (should (equal '(("./guard.ts" "guard" "guard_check")
+                             ("pkg-link/" "pkg-link" "pkg_tool")
+                             ("npm:@pi-vault/pi-guardrails@1.2.3" "pi-guardrails" "guardrails_status")
+                             ("git:github.com/kirang89/pi-sentry@v0.1.0" "pi-sentry" "sentry_scan")
+                             ("https://gitlab.com/owner/tool.git" "tool" "tool_run")
+                             ("/ext/probe.ts" "probe" "probe_child")
+                             (:unattributed "Unattributed" "other_npm"))
+                           (mapcar (lambda (group)
+                                     (append (list (car group) (cadr group))
+                                             (mapcar (lambda (tool) (plist-get tool :name))
+                                                     (cddr group))))
+                                   (pichat-tool-picker--extension-groups))))
+            (let ((text (pichat-test-extension-tools-render 'pichat-tool-picker)))
+              (should (string-match-p "e1 guard (1/1) →" text))
+              (should (string-match-p "e3 pi-guardrails (0/1) →" text)))
+            (setf (plist-get pichat-tool-picker--state :extension-group) "./guard.ts")
+            (should (string-match-p "^guard: 1/1 selected\n.*\\./guard\\.ts"
+                                    (pichat-test-extension-tools-render
+                                     'pichat-tool-picker-extension-group))))
+          ;; Without added extensions: paths group as before, and package
+          ;; cache paths, which name no stable extension, are unattributed.
+          (should (equal (expand-file-name "guard.ts" dir)
+                         (pichat-tool-picker--extension-group-key (car tools))))
+          (should (eq :unattributed (pichat-tool-picker--extension-group-key (nth 2 tools))))
+          (should-not (pichat-tool-picker-added-attribution (list :cwd cwd))))
+      (delete-directory dir t)))
+  ;; The most specific path spec wins; other git spec forms.
+  (let ((attribution (pichat-tool-picker-added-attribution
+                      (list :cwd "/w/" :extensions '("/w/ext/" "/w/ext/a.ts" "git:git@github.com:o/r"
+                                                     "github:o2/r2#main" "npm:plain")))))
+    (should (equal "/w/ext/a.ts" (pichat-tool-picker--added-extension "/w/ext/a.ts" attribution)))
+    (should (equal "/w/ext/" (pichat-tool-picker--added-extension "/w/ext/b.ts" attribution)))
+    (should-not (pichat-tool-picker--added-extension "/w/extra/b.ts" attribution))
+    (should (equal "git:git@github.com:o/r"
+                   (pichat-tool-picker--added-extension
+                    "/a/tmp/extensions/git-github.com/00000000/o/r/x.ts" attribution)))
+    (should (equal "github:o2/r2#main"
+                   (pichat-tool-picker--added-extension
+                    "/a/tmp/extensions/git-github.com/11111111/o2/r2/x.ts" attribution)))
+    (should (equal "npm:plain"
+                   (pichat-tool-picker--added-extension
+                    "/a/tmp/extensions/npm/abcdef01/node_modules/plain/x.ts" attribution)))
+    (should-not (pichat-tool-picker--added-extension
+                 "/a/tmp/extensions/npm/abcdef01/node_modules/plainer/x.ts" attribution)))
+  ;; Package specs are labelled by package or repository name.
+  (dolist (case '(("npm:@probe/fixture-pkg@file:/tmp/p/fixture-pkg-1.2.3.tgz" . "fixture-pkg")
+                  ("git:git@github.com:o/r@v1" . "r")
+                  ("github:o2/r2#main" . "r2")
+                  ("ssh://git@example.com:22/team/tool.git" . "tool")))
+    (should (equal (cdr case) (pichat-tool-picker--extension-group-label (car case)))))
+  ;; Over SSH, paths are the target's: no symbolic links, never `~'.
+  (let ((attribution (pichat-tool-picker-added-attribution
+                      (list :cwd "/srv/" :extensions '("ext/x.ts" "~/y.ts")
+                            :transport (pichat-transport--create :id 'remote :kind 'ssh)))))
+    (should (equal "ext/x.ts" (pichat-tool-picker--added-extension "/srv/ext/x.ts" attribution)))
+    (should-not (pichat-tool-picker--added-extension "/home/u/y.ts" attribution))
+    (should (equal "/home/u/y.ts"
+                   (pichat-tool-picker--extension-group-key
+                    '(:name "y" :source (:path "/home/u/y.ts" :source "cli")) attribution)))))
+
 (ert-deftest pichat-extension-tools-picker-fails-closed-on-stale-or-hidden-selection ()
   (let ((pichat-tool-picker--state
          (list :preset (pichat-presets-resolve 'manual) :baseline '("read")

@@ -248,7 +248,7 @@
       (should (string-match-p "B npm:some-ext" text))
       (should (string-match-p "pi-guardrails  npm:@pi-vault/pi-guardrails@1.2.3" text))
       (should (string-match-p "pi-archive  git:github.com/sourya7/pi-archive" text))
-      (should (string-match-p "Unattributed  1 without provenance" text))
+      (should (string-match-p "Unattributed  1 without a known source" text))
       (should (string-match-p "Pi built-in  builtin:codemode, builtin:tool-search" text))
       (should-not (string-match-p "builtin:read\\|builtin:mcp" text))
       (should (string-match-p "RET Done" text)))
@@ -550,6 +550,40 @@
                                           (plist-get (plist-get tool :source) :path))))))
             (when-let* ((cancel (pichat-tool-discovery-draft-cancel draft)))
               (funcall cancel)))))))
+
+  (ert-deftest pichat-launch-extensions-real-pi-groups-added-extension-tools-under-their-spec ()
+    (pichat-test-with-integration-session (session :preset 'manual :script '(:turns []))
+      (let ((pichat-pi-default-args
+             (list "--mode" "rpc" "--offline" "--no-approve" "--no-context-files"
+                   "--no-skills" "--no-prompt-templates" "--no-themes" "--no-extensions"
+                   "--no-mcp" "-e" pichat-test-fake-provider-extension
+                   "--model" "pichat-fake/pichat-fake"))
+            (spec "ext/guard.ts")
+            (draft (pichat-tool-discovery-draft-create))
+            done)
+        ;; A relative path, resolved by Pi against the probe's directory.
+        (make-directory (expand-file-name "ext" project-dir) t)
+        (copy-file pichat-test-launch-extensions--fixture
+                   (expand-file-name spec project-dir))
+        (unwind-protect
+            (progn
+              (pichat-tool-discovery-draft-reset
+               draft (cdr (pichat-tool-picker-discovery-context
+                           (pichat-presets-resolve 'standard) project-dir
+                           pichat-transport-local pichat-test-pi-executable nil (list spec))))
+              (pichat-tool-discovery-draft-refresh draft (lambda (_) (setq done t)))
+              (pichat-test-wait-until (lambda () done) 15 "real discovery probe")
+              (should (eq 'ready (pichat-tool-discovery-draft-status draft)))
+              (let* ((pichat-tool-picker--state (list :servers nil :discovery draft))
+                     (groups (pichat-tool-picker--extension-groups))
+                     (group (assoc spec groups)))
+                (should group)
+                (should (equal "guard" (cadr group)))
+                (should (member "probe_child" (mapcar (lambda (tool) (plist-get tool :name))
+                                                      (cddr group))))
+                (should-not (assq :unattributed groups))))
+          (when-let* ((cancel (pichat-tool-discovery-draft-cancel draft)))
+            (funcall cancel))))))
 
   (ert-deftest pichat-launch-extensions-real-pi-loads-added-extension-at-start-and-restart ()
     (pichat-test-with-integration-session (session :preset 'manual :script '(:turns []))

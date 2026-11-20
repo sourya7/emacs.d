@@ -121,20 +121,152 @@ Older Pi reports none; the picker then keeps one flat checkbox list."
   (cl-some (lambda (tool) (plist-get tool :source))
            (pichat-tool-picker--extension-tools)))
 
-(defun pichat-tool-picker--extension-group-key (tool)
+;; Pi reports every extension loaded with `-e' as source `cli' with the
+;; resolved path of its entry file, never the spec as typed (probed against
+;; Pi 1.5.1).  An `npm:' or `git:' spec is installed into Pi's temporary
+;; package cache, <agent>/tmp/extensions/npm/<hash>/node_modules/<name>/
+;; and <agent>/tmp/extensions/git-<host>/<hash>/<owner>/<repo>/, where
+;; <hash> is eight hexadecimal digits.
+
+(defconst pichat-tool-picker--git-shortcut-hosts
+  '(("github" . "github.com") ("gitlab" . "gitlab.com") ("bitbucket" . "bitbucket.org"))
+  "Hosts of the git shortcut prefixes Pi accepts.")
+
+(defconst pichat-tool-picker--package-cache-regexp
+  "/tmp/extensions/\\(?:npm\\|git-[^/]+\\)/[0-9a-f]\\{8\\}/"
+  "Match a path inside Pi's cache of packages loaded with `-e'.")
+
+(defun pichat-tool-picker-package-spec-p (spec)
+  "Return non-nil when extension SPEC names a package, not a path.
+Pi installs `npm:' specs with npm and treats `git:', `github:', `http:',
+`https:' and `ssh:' specs as git repositories; anything else is a path."
+  (string-match-p "\\`\\(?:npm\\|git\\|github\\|http\\|https\\|ssh\\):" spec))
+
+(defun pichat-tool-picker-resolve-path (path cwd local)
+  "Return PATH resolved against CWD, without a trailing slash, or nil.
+LOCAL non-nil means PATH is on this host: resolve symbolic links too.  A
+remote PATH is a path on the target (passed to its Pi unchanged), so
+only an absolute or relative path is resolved, never `~'."
+  (cond
+   (local (directory-file-name (file-truename (expand-file-name path cwd))))
+   ((string-prefix-p "~" path) nil)
+   (t (directory-file-name (expand-file-name path cwd)))))
+
+(defun pichat-tool-picker--npm-name (spec)
+  "Return the package name of `npm:' SPEC, as Pi parses it.
+The name keeps a leading @scope and drops a trailing @version."
+  (let ((spec (string-trim (substring spec (length "npm:")))))
+    (if (string-match "\\`\\(@?[^@]+\\)\\(?:@.+\\)?\\'" spec)
+        (match-string 1 spec)
+      spec)))
+
+(defun pichat-tool-picker--git-repository (spec)
+  "Return (HOST . PATH) of git SPEC as Pi installs it, or nil.
+PATH is the repository path, usually OWNER/REPO, without a @ref or
+#committish and without a .git suffix."
+  (let ((url (string-trim (string-remove-prefix "git:" spec))) host path)
+    (cond
+     ((string-match "\\`git@\\([^:/]+\\):\\(.+\\)\\'" url)
+      (setq host (match-string 1 url) path (match-string 2 url)))
+     ((string-match "\\`[a-z][a-z0-9+.-]*://\\(?:[^@/]*@\\)?\\([^/:]+\\)\\(?::[0-9]*\\)?/\\(.+\\)\\'" url)
+      (setq host (match-string 1 url) path (match-string 2 url)))
+     ((string-match "\\`\\([a-z]+\\):\\(.+\\)\\'" url)
+      (setq host (cdr (assoc (match-string 1 url) pichat-tool-picker--git-shortcut-hosts))
+            path (match-string 2 url)))
+     ((string-match "\\`\\([^/]+\\)/\\(.+\\)\\'" url)
+      (setq host (match-string 1 url) path (match-string 2 url))))
+    (when (and host path)
+      (setq path (replace-regexp-in-string "[#@].*\\'" "" path)
+            path (replace-regexp-in-string "\\.git\\'" "" path)
+            path (directory-file-name (string-trim-left path "/+")))
+      (when (string-match-p "[^/]/[^/]" path)
+        (cons host path)))))
+
+(defun pichat-tool-picker-added-attribution (context)
+  "Return how to attribute tools to the added extensions of CONTEXT, or nil.
+CONTEXT is a discovery probe context; its :extensions are the specs
+loaded with `-e'.  The result is a plist: :matchers, (SPEC KIND DATA)
+where KIND is `npm' (DATA the package name), `git' (DATA (HOST . PATH))
+or `path' (DATA the resolved path, nil when it cannot be resolved), and
+:cwd and :local for resolving the tools' paths."
+  (when-let* ((specs (plist-get context :extensions)))
+    (let* ((cwd (or (plist-get context :cwd) default-directory))
+           (transport (plist-get context :transport))
+           (local (not (and (pichat-transport-p transport)
+                            (eq 'ssh (pichat-transport-kind transport))))))
+      (list :cwd cwd :local local
+            :matchers
+            (mapcar
+             (lambda (spec)
+               (cond
+                ((string-prefix-p "npm:" spec)
+                 (list spec 'npm (pichat-tool-picker--npm-name spec)))
+                ((pichat-tool-picker-package-spec-p spec)
+                 (list spec 'git (pichat-tool-picker--git-repository spec)))
+                (t (list spec 'path
+                         (ignore-errors (pichat-tool-picker-resolve-path spec cwd local))))))
+             specs)))))
+
+(defun pichat-tool-picker--added-extension (path attribution)
+  "Return the added spec of ATTRIBUTION that Pi loaded from PATH, or nil.
+PATH is the entry file Pi reports for a tool loaded with `-e'.  A path
+spec matches its own resolved path, or for a directory any path below
+it; the most specific (longest) one wins.  An `npm:' spec matches its
+node_modules/<name>/ directory in Pi's package cache, a git spec its
+git-<host>/<hash>/<owner>/<repo>/ directory."
+  (let* ((local (plist-get attribution :local))
+         (resolved (ignore-errors
+                     (pichat-tool-picker-resolve-path
+                      path (plist-get attribution :cwd) local)))
+         best best-length)
+    (pcase-dolist (`(,spec ,kind ,data) (plist-get attribution :matchers))
+      (pcase kind
+        ('npm
+         (when (and (not best)
+                    (string-match-p (concat "/npm/[0-9a-f]\\{8\\}/node_modules/"
+                                            (regexp-quote data) "/")
+                                    path))
+           (setq best spec best-length most-positive-fixnum)))
+        ('git
+         (when (and data (not best)
+                    (string-match-p (concat "/git-" (regexp-quote (car data))
+                                            "/[0-9a-f]\\{8\\}/" (regexp-quote (cdr data)) "/")
+                                    path))
+           (setq best spec best-length most-positive-fixnum)))
+        ('path
+         (when (and data resolved
+                    (or (equal resolved data)
+                        (string-prefix-p (file-name-as-directory data) resolved))
+                    (> (length data) (or best-length -1)))
+           (setq best spec best-length (length data))))))
+    best))
+
+(defun pichat-tool-picker--extension-group-key (tool &optional attribution)
   "Return the group identity of extension TOOL from its provenance.
 The identity is `:builtin' for tools shipped with Pi (\"Pi built-in\"),
-`:unattributed' without provenance, the package directory or file path for
-extensions Pi loaded from a path (`cli', `local', `auto' sources), and
-otherwise the package source exactly as Pi reports it (for example
-`npm:name@1.2.3' or `git:github.com/owner/repo')."
+and otherwise:
+- for a tool loaded with `-e' (source `cli'): the added extension's spec
+  exactly as given, when ATTRIBUTION (see
+  `pichat-tool-picker-added-attribution') matches the tool's path to one;
+- `:unattributed' without provenance, or for an unmatched `cli' tool in
+  Pi's package cache (whose path names no stable extension);
+- the package directory or file path for other extensions Pi loaded from a
+  path (`cli', `local', `auto', `sdk' sources);
+- the package source exactly as Pi reports it (for example
+  `npm:name@1.2.3' or `git:github.com/owner/repo')."
   (let* ((info (plist-get tool :source))
-         (source (plist-get info :source)))
+         (source (plist-get info :source))
+         (path (plist-get info :path)))
     (cond
      ((not info) :unattributed)
      ((equal source "builtin") :builtin)
+     ((and (equal source "cli") attribution
+           (pichat-tool-picker--added-extension path attribution)))
+     ((and (equal source "cli")
+           (string-match-p pichat-tool-picker--package-cache-regexp path))
+      :unattributed)
      ((member source '("cli" "local" "auto" "sdk"))
-      (or (plist-get info :base-dir) (plist-get info :path)))
+      (or (plist-get info :base-dir) path))
      (t source))))
 
 (defun pichat-tool-picker--extension-group-label (key)
@@ -142,12 +274,23 @@ otherwise the package source exactly as Pi reports it (for example
   (pcase key
     (:builtin "Pi built-in")
     (:unattributed "Unattributed")
-    ((pred file-name-absolute-p)
+    ((pred (lambda (key) (not (pichat-tool-picker-package-spec-p key))))
+     ;; A path, absolute or as an added extension was given.
      (let* ((path (directory-file-name key))
             (base (file-name-base path)))
-       (if (equal base "index")
-           (file-name-nondirectory (directory-file-name (file-name-directory path)))
-         base)))
+       (cond
+        ((member base '("" "." ".." "~")) key)
+        ((equal base "index")
+         (let ((parent (file-name-directory path)))
+           (if parent (file-name-nondirectory (directory-file-name parent)) base)))
+        (t base))))
+    ((pred (string-prefix-p "npm:"))
+     ;; The package name as Pi parses it, without its @scope.
+     (let ((name (file-name-nondirectory (pichat-tool-picker--npm-name key))))
+       (if (string-empty-p name) key name)))
+    ((and (pred pichat-tool-picker--git-repository)
+          (app pichat-tool-picker--git-repository `(,_ . ,path)))
+     (file-name-nondirectory path))
     (_
      ;; Strip a scheme, a trailing @version (not a leading npm @scope) and
      ;; a .git suffix, then keep the last path component.
@@ -160,10 +303,15 @@ otherwise the package source exactly as Pi reports it (for example
 (defun pichat-tool-picker--extension-groups ()
   "Return ordered (KEY LABEL . TOOLS) extension tool groups.
 Extensions come in discovery order, then \"Unattributed\", then \"Pi
-built-in\".  Labels shared by several groups fall back to their keys."
-  (let (groups)
+built-in\".  Tools of the extensions the probe added with `-e' group
+under their specs.  Labels shared by several groups fall back to their
+keys."
+  (let ((attribution (when-let* ((draft (plist-get pichat-tool-picker--state :discovery)))
+                       (pichat-tool-picker-added-attribution
+                        (pichat-tool-discovery-draft-context draft))))
+        groups)
     (dolist (tool (pichat-tool-picker--extension-tools))
-      (let* ((key (pichat-tool-picker--extension-group-key tool))
+      (let* ((key (pichat-tool-picker--extension-group-key tool attribution))
              (entry (assoc key groups)))
         (if entry (setcdr entry (append (cdr entry) (list tool)))
           (push (list key tool) groups))))

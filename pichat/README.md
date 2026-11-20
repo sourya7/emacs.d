@@ -900,12 +900,20 @@ Groups follow the provenance Pi reports for each tool (`sourceInfo`):
 - Packages from Pi settings group by their source exactly as configured, for
   example `npm:@pi-vault/pi-guardrails@1.2.3` or
   `git:github.com/owner/repo`, labelled by package name (`pi-guardrails`).
-- Extensions loaded from a path (including `-e` paths) group by package
-  directory or file, labelled by that directory or file name (`index` files
-  use their directory name).
+- Extensions added in `l Extensions` group under their spec exactly as
+  added, labelled by package, repository or file name. Pi reports only the
+  resolved path of an extension loaded with `-e`, so PiChat matches it: a
+  path spec matches its resolved file or anything below its directory
+  (locally also through symbolic links; a remote `~` path is not resolved),
+  an `npm:` spec its `node_modules/<name>/` directory in Pi's package cache,
+  and a git spec its `<host>/<owner>/<repo>` directory there.
+- Other extensions loaded from a path (including `-e` paths in Pi
+  arguments) group by package directory or file, labelled by that directory
+  or file name (`index` files use their directory name).
 - Tools shipped with Pi other than the core built-ins, such as `codemode` and
   `tool_search`, form **Pi built-in**, listed last.
-- Tools without provenance go to **Unattributed**, before Pi built-in.
+- Tools without provenance, and tools from Pi's `-e` package cache that match
+  no added extension, go to **Unattributed**, before Pi built-in.
 - Tools Pi attributes to its built-in MCP support stay under MCP servers.
 
 Extensions come in discovery order. When two groups would share a label, both

@@ -77,10 +77,13 @@ loads it (see `pichat-launch-extensions-duplicate')."
 Each element is (LABEL . DETAIL).  Extensions are grouped as in the Tools
 picker (see `pichat-tool-picker--extension-group-key'): DETAIL is the
 package source or path, or for \"Pi built-in\" the built-in paths, or for
-\"Unattributed\" the number of tools without provenance.  Core built-in
-tools and tools of Pi's built-in MCP are not extensions and are skipped.
-Order: discovery order, then Unattributed, then Pi built-in."
-  (let (groups)
+\"Unattributed\" the number of tools and commands without a known source.
+Items of extensions the probe added are grouped under their specs.  Core
+built-in tools and tools of Pi's built-in MCP are not extensions and are
+skipped.  Order: discovery order, then Unattributed, then Pi built-in."
+  (let ((attribution (pichat-tool-picker-added-attribution
+                      (pichat-tool-discovery-draft-context draft)))
+        groups)
     (dolist (item (append
                    (cl-remove-if
                     (lambda (tool)
@@ -88,7 +91,7 @@ Order: discovery order, then Unattributed, then Pi built-in."
                           (pichat-tool-picker--mcp-source-p tool)))
                     (pichat-tool-discovery-draft-tools draft))
                    (pichat-tool-discovery-draft-commands draft)))
-      (let* ((key (pichat-tool-picker--extension-group-key item))
+      (let* ((key (pichat-tool-picker--extension-group-key item attribution))
              (entry (assoc key groups)))
         (if entry (setcdr entry (append (cdr entry) (list item)))
           (push (list key item) groups))))
@@ -109,43 +112,29 @@ Order: discovery order, then Unattributed, then Pi built-in."
                                                     items))
                                ", ")))
                  (:unattributed
-                  (cons label (format "%d without provenance" (length items))))
+                  (cons label (format "%d without a known source" (length items))))
                  (_ (cons (if (> (cl-count label labels :test #'equal) 1) key label)
                           key)))))))
 
 ;;; Duplicates
 
-(defun pichat-launch-extensions--package-spec-p (spec)
-  "Return non-nil when SPEC names an `npm:' or `git:' package, not a path."
-  (string-match-p "\\`\\(?:npm\\|git\\):" spec))
-
-(defun pichat-launch-extensions--path (path cwd local)
-  "Return PATH resolved against CWD, without a trailing slash, or nil.
-LOCAL non-nil means PATH is on this host: resolve symbolic links too.  A
-remote PATH is a path on the target (passed to its Pi unchanged), so
-only an absolute or relative path is resolved, never `~'."
-  (cond
-   (local (directory-file-name (file-truename (expand-file-name path cwd))))
-   ((string-prefix-p "~" path) nil)
-   (t (directory-file-name (expand-file-name path cwd)))))
-
 (defun pichat-launch-extensions-duplicate (spec draft)
   "Return how discovery DRAFT shows that Pi already loads SPEC, or nil.
 DRAFT must hold ready results of a probe without added extensions.  A
-package SPEC (`npm:' / `git:') duplicates a discovered package source
-exactly; a path duplicates, after resolution against the probe's
-directory (and, locally, symbolic links), a discovered extension's path
-or base directory.  The result is that source or path.  Only extensions
-that register tools or commands are discovered, and Pi's built-in tools
-are not files."
+package SPEC (see `pichat-tool-picker-package-spec-p') duplicates a
+discovered package source exactly; a path duplicates, after resolution
+against the probe's directory (and, locally, symbolic links), a
+discovered extension's path or base directory.  The result is that
+source or path.  Only extensions that register tools or commands are
+discovered, and Pi's built-in tools are not files."
   (when (eq (pichat-tool-discovery-draft-status draft) 'ready)
     (let* ((context (pichat-tool-discovery-draft-context draft))
            (cwd (or (plist-get context :cwd) default-directory))
            (transport (plist-get context :transport))
            (local (not (and (pichat-transport-p transport)
                             (eq 'ssh (pichat-transport-kind transport)))))
-           (package (pichat-launch-extensions--package-spec-p spec))
-           (wanted (unless package (pichat-launch-extensions--path spec cwd local)))
+           (package (pichat-tool-picker-package-spec-p spec))
+           (wanted (unless package (pichat-tool-picker-resolve-path spec cwd local)))
            (sources (delq nil (mapcar (lambda (item) (plist-get item :source))
                                       (append (pichat-tool-discovery-draft-tools draft)
                                               (pichat-tool-discovery-draft-commands draft))))))
@@ -159,7 +148,7 @@ are not files."
                  (cl-loop for path in (list (plist-get source :path)
                                             (plist-get source :base-dir))
                           thereis (and path
-                                       (equal wanted (pichat-launch-extensions--path
+                                       (equal wanted (pichat-tool-picker-resolve-path
                                                       path cwd local))
                                        path))))))))
 

@@ -114,6 +114,10 @@ activity groups and tool blocks. Their sources and actions remain distinct
 (see `GLOSSARY.md`); none becomes a chat buffer or follows live RPC events.
 Closing a preview never stops its originating runtime.
 
+In the runtime manager preview, `e` toggles between the side pane and an
+expanded regular window (`z e` in Evil Normal state). Toggling back restores
+the saved window layout; `q` restores that layout and closes the preview.
+
 These previews use the shared `pichat-chat-show-thinking`,
 `pichat-chat-activity-group-display`, `pichat-chat-tool-default-display`,
 `pichat-chat-max-tool-args-chars`, `pichat-chat-max-tool-output-chars` and

@@ -53,6 +53,10 @@
                           (if (eq mode 'pichat-session-manager-preview-mode)
                               #'pichat-session-manager-preview-quit
                             #'pichat-view-quit)))
+              (when (eq mode 'pichat-session-manager-preview-mode)
+                (should (eq (key-binding (kbd "z e"))
+                            #'pichat-session-manager-preview-toggle-expand))
+                (should (eq (key-binding (kbd "e")) #'evil-forward-word-end)))
               (goto-char (point-min))
               (search-forward "▶")
               (beginning-of-line)

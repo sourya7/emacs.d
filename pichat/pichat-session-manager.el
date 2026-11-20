@@ -85,7 +85,10 @@ The historical option name is retained for configuration compatibility."
   "Source-token keyed active-branch preview snapshots.")
 
 (defvar-local pichat-session-manager--preview-window nil
-  "Side window currently owned by this manager's preview.")
+  "Window currently owned by this manager's preview.")
+
+(defvar-local pichat-session-manager--preview-window-configuration nil
+  "Window configuration to restore when leaving expanded preview.")
 
 (defvar-local pichat-session-manager--preview-timer nil
   "Pending debounced selected-row preview timer.")
@@ -733,6 +736,7 @@ Construction rejection is presented by the shared view, never a runtime notice."
   (cl-incf pichat-session-manager--preview-generation)
   (pichat-session-manager--cancel-preview-timer)
   (pichat-session-manager--cancel-preview-request)
+  (pichat-session-manager--restore-preview-layout)
   (when (pichat-session-manager--preview-window-live-p)
     (quit-window nil pichat-session-manager--preview-window))
   (setq pichat-session-manager--preview-window nil
@@ -751,6 +755,8 @@ SESSION defaults to the runtime at point."
         (unless (derived-mode-p 'pichat-session-manager-preview-mode)
           (pichat-session-manager-preview-mode))
         (setq pichat-session-manager-preview--manager-buffer manager))
+      ;; A previous expanded layout is stale once its preview window is gone.
+      (setq pichat-session-manager--preview-window-configuration nil)
       (setq pichat-session-manager--preview-window
             (display-buffer-in-side-window
              buffer '((side . right) (slot . 1) (window-width . 0.45))))
@@ -764,6 +770,47 @@ SESSION defaults to the runtime at point."
               (goto-char row))
             (pichat-session-manager--preview-selected nil session))
         (pichat-session-manager--preview-selected)))))
+
+(defun pichat-session-manager--restore-preview-layout ()
+  "Restore this manager's layout from before preview expansion.
+Keep the expanded preview's point.  Discard the saved layout without
+restoring it when the expanded window no longer shows the preview."
+  (when-let* ((configuration
+               pichat-session-manager--preview-window-configuration))
+    (setq pichat-session-manager--preview-window-configuration nil)
+    (when (pichat-session-manager--preview-window-live-p)
+      (let ((point (window-point pichat-session-manager--preview-window)))
+        (set-window-configuration configuration)
+        (setq pichat-session-manager--preview-window
+              (get-buffer-window pichat-session-manager-preview-buffer-name
+                                 (window-configuration-frame configuration)))
+        (when (window-live-p pichat-session-manager--preview-window)
+          (set-window-point pichat-session-manager--preview-window point))))))
+
+(defun pichat-session-manager-preview-toggle-expand ()
+  "Toggle between the side preview and an expanded regular window."
+  (interactive)
+  (let ((manager pichat-session-manager-preview--manager-buffer))
+    (unless (buffer-live-p manager)
+      (user-error "The owning PiChat session manager is gone"))
+    (with-current-buffer manager
+      (unless (pichat-session-manager--preview-window-live-p)
+        (setq pichat-session-manager--preview-window-configuration nil)
+        (user-error "The preview window is gone"))
+      (if pichat-session-manager--preview-window-configuration
+          (pichat-session-manager--restore-preview-layout)
+        (let* ((window pichat-session-manager--preview-window)
+               (buffer (window-buffer window))
+               (point (window-point window))
+               (configuration (current-window-configuration)))
+          (delete-window window)
+          (set-window-buffer (selected-window) buffer)
+          (delete-other-windows)
+          (set-window-point (selected-window) point)
+          (setq pichat-session-manager--preview-window (selected-window)
+                pichat-session-manager--preview-window-configuration
+                configuration)))
+      (select-window pichat-session-manager--preview-window))))
 
 (defun pichat-session-manager-preview-refresh ()
   "Refresh the runtime represented by the current preview."
@@ -787,6 +834,7 @@ SESSION defaults to the runtime at point."
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map pichat-view-mode-map)
     (define-key map (kbd "g") #'pichat-session-manager-preview-refresh)
+    (define-key map (kbd "e") #'pichat-session-manager-preview-toggle-expand)
     (define-key map (kbd "q") #'pichat-session-manager-preview-quit)
     map)
   "Keymap for PiChat runtime previews.")
@@ -795,7 +843,7 @@ SESSION defaults to the runtime at point."
   "PiChat-Runtime-Preview"
   "Display a bounded active-branch preview for one retained runtime.
 
-Press g to refresh the preview or q to return to the manager."
+Press e to toggle expansion, g to refresh, or q to return to the manager."
   (setq-local truncate-lines nil))
 
 (defun pichat-session-manager--handle-runtime-event

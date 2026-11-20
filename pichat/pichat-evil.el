@@ -172,6 +172,7 @@ remain in their original mode maps."
     (kbd "g D") #'pichat-session-manager-diagnostics
     (kbd "r") #'pichat-session-manager-name)
   (evil-define-key* 'normal pichat-session-manager-preview-mode-map
+    (kbd "z e") #'pichat-session-manager-preview-toggle-expand
     (kbd "q") #'pichat-session-manager-preview-quit
     (kbd "g r") #'pichat-session-manager-preview-refresh)
   (evil-define-key* 'normal pichat-transcript-view-mode-map

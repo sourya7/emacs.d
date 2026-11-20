@@ -1081,6 +1081,91 @@
           (with-current-buffer manager
             (should-not pichat-session-manager--preview-window)))))))
 
+(ert-deftest pichat-session-manager-preview-expansion-restores-layout ()
+  (pichat-test-with-clean-state
+    (save-window-excursion
+      (delete-other-windows)
+      (with-temp-buffer
+        (let ((working (current-buffer))
+              (manager (get-buffer-create pichat-session-manager-buffer-name)))
+          (switch-to-buffer working)
+          (let ((work-window (selected-window))
+                (manager-window (split-window-below)))
+            (set-window-buffer manager-window manager)
+            (with-current-buffer manager (pichat-session-manager-mode))
+            (select-window manager-window)
+            (cl-letf (((symbol-function 'pichat-session-manager--preview-selected)
+                       #'ignore))
+              (with-current-buffer manager
+                (pichat-session-manager-toggle-preview)))
+            (let* ((preview (get-buffer pichat-session-manager-preview-buffer-name))
+                   (side-window (get-buffer-window preview)))
+              (select-window side-window)
+              (with-current-buffer preview
+                (should (eq (key-binding (kbd "e"))
+                            #'pichat-session-manager-preview-toggle-expand))
+                (pichat-session-manager-preview-toggle-expand))
+              (should (= 1 (length (window-list))))
+              (should (eq preview (window-buffer (selected-window))))
+              (should-not (window-parameter (selected-window) 'window-side))
+              (with-current-buffer manager
+                (should (pichat-session-manager--preview-window-live-p)))
+              (with-current-buffer preview
+                (pichat-session-manager-preview-toggle-expand))
+              (should (= 3 (length (window-list))))
+              (should (eq (window-buffer work-window) working))
+              (should (eq (window-buffer manager-window) manager))
+              (should (eq (window-parameter (selected-window) 'window-side) 'right))
+              ;; Expand again, then quit directly: restore and close the pane.
+              (with-current-buffer preview
+                (pichat-session-manager-preview-toggle-expand)
+                (pichat-session-manager-preview-quit))
+              (should (= 2 (length (window-list))))
+              (should (eq (window-buffer work-window) working))
+              (should (eq (window-buffer manager-window) manager))
+              (should-not (get-buffer-window preview))
+              (with-current-buffer manager
+                (should-not pichat-session-manager--preview-window)
+                (should-not
+                 pichat-session-manager--preview-window-configuration)))))))))
+
+(ert-deftest pichat-session-manager-preview-expansion-keeps-point-and-drops-stale-layout ()
+  (pichat-test-with-clean-state
+    (save-window-excursion
+      (delete-other-windows)
+      (let ((manager (get-buffer-create pichat-session-manager-buffer-name)))
+        (with-current-buffer manager (pichat-session-manager-mode))
+        (switch-to-buffer manager)
+        (cl-letf (((symbol-function 'pichat-session-manager--preview-selected)
+                   #'ignore))
+          (with-current-buffer manager
+            (pichat-session-manager-toggle-preview))
+          (let ((preview (get-buffer pichat-session-manager-preview-buffer-name)))
+            (with-current-buffer preview
+              (let ((inhibit-read-only t))
+                (dotimes (i 100) (insert (format "line %d\n" i)))))
+            (select-window (get-buffer-window preview))
+            (goto-char (point-min))
+            (with-current-buffer preview
+              (pichat-session-manager-preview-toggle-expand))
+            (forward-line 60)
+            (let ((reading (point)))
+              (with-current-buffer preview
+                (pichat-session-manager-preview-toggle-expand))
+              (should (= reading (window-point (get-buffer-window preview)))))
+            ;; Leaving the expanded window discards its saved layout.
+            (with-current-buffer preview
+              (pichat-session-manager-preview-toggle-expand))
+            (switch-to-buffer manager)
+            (split-window-right)
+            (with-current-buffer manager
+              (pichat-session-manager-toggle-preview))
+            (with-current-buffer manager
+              (should-not pichat-session-manager--preview-window-configuration)
+              (pichat-session-manager-toggle-preview))
+            (should (= 2 (length (window-list))))
+            (should-not (get-buffer-window preview))))))))
+
 (ert-deftest pichat-session-manager-preview-shows-ephemeral-launch-metadata ()
   (let ((session (pichat-session-make
                   :cwd "/tmp/project/" :persistence 'ephemeral)))

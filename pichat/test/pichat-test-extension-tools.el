@@ -234,6 +234,39 @@ EXTRA-TOOLS are appended to the catalogue."
                               when (plist-get tool :eligible) collect (plist-get tool :name))
                      (plist-get (pichat-tool-picker--selection) :extensions))))))
 
+(ert-deftest pichat-extension-tools-picker-labels-sources-and-pages-groups ()
+  ;; Path-loaded sources group by package directory (or file) and are
+  ;; labelled by file name, or by directory name for index files.
+  (dolist (case `(("local" "/ext/pkg/index.ts" "/ext/pkg" "/ext/pkg" "pkg")
+                  ("auto" "/ext/auto-tool.ts" nil "/ext/auto-tool.ts" "auto-tool")
+                  ("cli" "/ext/dir/index.js" nil "/ext/dir/index.js" "dir")
+                  ("sdk" "/ext/sdk-tool.ts" nil "/ext/sdk-tool.ts" "sdk-tool")
+                  ("npm:@scope/name" "/c/index.ts" "/c" "npm:@scope/name" "name")
+                  ("npm:plain@1.0.0" "/c/index.ts" "/c" "npm:plain@1.0.0" "plain")
+                  ("git:https://github.com/owner/repo.git" "/g/index.ts" "/g"
+                   "git:https://github.com/owner/repo.git" "repo")
+                  ("builtin" "builtin:codemode" nil :builtin "Pi built-in")))
+    (pcase-let* ((`(,source ,path ,base-dir ,key ,label) case)
+                 (tool (list :name "t" :source (pichat-test-extension-tools-source source path base-dir))))
+      (should (equal key (pichat-tool-picker--extension-group-key tool)))
+      (should (equal label (pichat-tool-picker--extension-group-label key)))))
+  (should (eq :unattributed (pichat-tool-picker--extension-group-key '(:name "t"))))
+  ;; More groups than one page: the main page pages groups, not tools.
+  (let ((pichat-tool-picker--state
+         (pichat-test-extension-tools-grouped-state
+          (cl-loop for index from 1 to 20
+                   collect (list :name (format "extra_%02d" index) :eligible t :description ""
+                                 :source (pichat-test-extension-tools-source
+                                          "cli" (format "/ext/extra-%02d.ts" index)))))))
+    (should (= 25 (length (pichat-tool-picker--extension-groups))))
+    (should-not (string-match-p "Pi built-in" (pichat-test-extension-tools-render 'pichat-tool-picker)))
+    (cl-letf (((symbol-function 'transient-setup) #'ignore))
+      (pichat-tool-picker--page 1 'pichat-tool-picker))
+    (should (= 1 (plist-get pichat-tool-picker--state :page)))
+    (let ((text (pichat-test-extension-tools-render 'pichat-tool-picker)))
+      (should (string-match-p "e1 extra-18 (0/1) →" text))
+      (should (string-match-p "e5 Pi built-in (0/2) →" text)))))
+
 (ert-deftest pichat-extension-tools-picker-fails-closed-on-stale-or-hidden-selection ()
   (let ((pichat-tool-picker--state
          (list :preset (pichat-presets-resolve 'manual) :baseline '("read")

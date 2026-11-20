@@ -2,6 +2,7 @@
 
 (require 'pichat-test-support)
 (require 'pichat-tool-discovery)
+(require 'pichat-tool-picker)
 
 (defconst pichat-test-tool-control-fixture
   (expand-file-name "fixtures/tool-control-extension.ts" pichat-test-directory))
@@ -359,6 +360,42 @@
                 (should (equal (file-truename (plist-get (plist-get command :source) :path)) fixture))
                 (should-not (cl-find pichat-tool-discovery--command commands
                                      :key (lambda (item) (plist-get item :name)) :test #'equal))))
+          (when-let* ((cancel (pichat-tool-discovery-draft-cancel draft))) (funcall cancel))))))
+
+  (ert-deftest pichat-tool-discovery-real-pi-provenance-groups-tools-picker ()
+    (pichat-test-with-tool-probe (:scenario "normal")
+      (let ((draft (pichat-tool-discovery-draft-create))
+            (fixture (file-truename pichat-test-tool-control-fixture))
+            done)
+        (unwind-protect
+            (progn
+              (pichat-tool-discovery-draft-reset
+               draft (list :transport pichat-transport-local :cwd project-dir
+                           :executable pichat-test-pi-executable :args args
+                           :environment process-environment))
+              (pichat-tool-discovery-draft-refresh draft (lambda (_draft) (setq done t)))
+              (pichat-test-wait-until (lambda () done) 15 "real draft probe completion")
+              (should (eq (pichat-tool-discovery-draft-status draft) 'ready))
+              (let* ((pichat-tool-picker--state (list :discovery draft :servers nil :page 0))
+                     (groups (pichat-tool-picker--extension-groups))
+                     (names (lambda (group) (mapcar (lambda (tool) (plist-get tool :name)) (cddr group))))
+                     (fixture-group (cl-find-if (lambda (group)
+                                                  (and (stringp (car group))
+                                                       (equal (file-truename (car group)) fixture)))
+                                                groups))
+                     (builtin (assq :builtin groups)))
+                ;; Pi reports provenance, so tools are grouped, not listed flat.
+                (should (pichat-tool-picker--grouped-p))
+                (should-not (assq :unattributed groups))
+                (should fixture-group)
+                (should (equal "tool-control-extension" (cadr fixture-group)))
+                (should (member "probe_loader" (funcall names fixture-group)))
+                (should (member "probe_child" (funcall names fixture-group)))
+                ;; Core built-ins stay out; other Pi tools form the last group.
+                (should-not (cl-some (lambda (group) (member "read" (funcall names group))) groups))
+                (when builtin
+                  (should (eq builtin (car (last groups))))
+                  (should (equal "Pi built-in" (cadr builtin))))))
           (when-let* ((cancel (pichat-tool-discovery-draft-cancel draft))) (funcall cancel))))))
 
   (ert-deftest pichat-tool-discovery-real-pi-helper-absence-never-prompts-model ()

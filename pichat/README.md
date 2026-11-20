@@ -779,9 +779,10 @@ inherited tools (`:default` or omission) remain Pi-controlled: they cannot use
 the Tools picker or declare an extension baseline.
 
 In `x Tools`, the preset's built-ins are prechecked and can be deselected.
-**Extension tools** have enabled/disabled checkboxes and descriptions; MCP tools
-remain grouped by server, and **Emacs-defined tools** by their registered group
-(see [Emacs-defined tools](#emacs-defined-tools)). `RET` applies the draft, `q`
+**Extension tools** are grouped by the extension that registered them, with a
+separate **Pi built-in** group (see [Extension tools](#extension-tools)); MCP
+tools remain grouped by server, and **Emacs-defined tools** by their registered
+group (see [Emacs-defined tools](#emacs-defined-tools)). `RET` applies the draft, `q`
 cancels it, `d` resets all choices to the captured preset, and `r` refreshes
 discovery. `a` selects all eligible built-in, extension and MCP tools
 (Emacs-defined tools are chosen per group); `n` deselects all.
@@ -883,6 +884,34 @@ registers `project_search`**:
   :extensions '("project_search"))
 ```
 
+In `x Tools`, **Extension tools** lists one entry per extension that registers
+tools, `e1 pi-guardrails (2/3) →`, with the checked and total counts. The
+entry opens that extension's page: checkboxes with descriptions (`(unavailable)`
+for tools that cannot be enabled), `a` **All in extension** (its current
+eligible tools only; tools registered later are not included), `n` **None in
+extension**, `[` / `]` paging, and `RET` or `q` back to the main page. The
+top-level `a` still checks every eligible extension tool, in all groups.
+Selections remain exact tool names in `:extensions`.
+
+Groups follow the provenance Pi reports for each tool (`sourceInfo`):
+
+- Packages from Pi settings group by their source exactly as configured, for
+  example `npm:@pi-vault/pi-guardrails@1.2.3` or
+  `git:github.com/owner/repo`, labelled by package name (`pi-guardrails`).
+- Extensions loaded from a path (including `-e` paths) group by package
+  directory or file, labelled by that directory or file name (`index` files
+  use their directory name).
+- Tools shipped with Pi other than the core built-ins, such as `codemode` and
+  `tool_search`, form **Pi built-in**, listed last.
+- Tools without provenance go to **Unattributed**, before Pi built-in.
+- Tools Pi attributes to its built-in MCP support stay under MCP servers.
+
+Extensions come in discovery order. When two groups would share a label, both
+show their exact source instead; an extension's page shows its exact source
+under the label. An older Pi that reports no provenance keeps one flat
+checkbox list. Extensions that register only commands or event hooks have no
+tools and do not appear.
+
 Existing shipped explicit presets have an empty extension baseline. Extension
 choices are opt-in; discovering tools never selects them automatically. Hidden
 tools and names that cannot safely be expressed as exact Pi tool selections are
@@ -920,10 +949,10 @@ expand activation groups, or supply extension-specific adapters.
 
 The catalogue is a snapshot of registered tools available under Pi policy, not
 a complete package inventory: tools registered later may require refresh.
-Exact known built-in and MCP choices are separated without guessing provenance
-from name prefixes. The separate shell MCP listing cannot discover
-extension-registered MCP servers; their tools may appear in **Extension tools**
-instead. Neither listing promises universal completeness.
+Exact known built-in and MCP choices are separated using exact names and Pi's
+reported provenance, never by guessing from name prefixes. The separate shell
+MCP listing cannot discover extension-registered MCP servers; their tools may
+appear in **Extension tools** instead, under the registering extension. Neither listing promises universal completeness.
 
 The bundled `bridge/pichat-tool-control.ts` helper is separate from the optional
 Emacs-defined-tool bridge. PiChat explicitly loads it for probes and runtimes

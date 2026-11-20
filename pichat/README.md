@@ -778,7 +778,9 @@ to resolve the current instructions before confirming the restart.
 built-ins. Explicit-tool presets default to no extension tools and disable MCP
 unless a direct MCP tool is selected. `standard` and custom presets with
 inherited tools (`:default` or omission) remain Pi-controlled: they cannot use
-the Tools picker or declare an extension baseline.
+the Tools picker or select extension tools in `:tools`. They can still load
+extensions with `:extensions`, whose tools then follow Pi's own selection.
+All keys and forms are listed under [Preset definitions](#preset-definitions).
 
 In `x Tools`, the preset's built-ins are prechecked and can be deselected.
 **Extension tools** are grouped by the extension that registered them, with a
@@ -805,6 +807,66 @@ conflicting generic Pi tool/prompt flags before runtime creation; use `standard`
 when generic Pi arguments should govern, and leave
 `pichat-append-system-prompt` nil if supplying a generic appended-prompt flag.
 Changes to definitions affect future runtimes only.
+
+### Preset definitions
+
+`pichat-make-preset` takes a name and these keys; a definition saved with
+**Save preset as…** uses the same keys (see [Saving presets from the
+launcher](#saving-presets-from-the-launcher)). Each key appears at most once,
+and an invalid definition is refused with a message when it is made and
+when it is used.
+
+- `:description`: text shown with the preset, or nil.
+- `:tools`: which tools the runtime gets.
+  - Omitted or `:default`: Pi's own selection (a pass-through preset).
+  - `nil`: no built-in tools.
+  - A list of built-in names (`read`, `grep`, `find`, `ls`, `edit`,
+    `write`, `bash`) and extension tool groups:
+    - `(SOURCE "tool" ...)`: these exact tools of the extension SOURCE, at
+      least one;
+    - `(SOURCE . :all)`: **Include future tools**, every tool SOURCE
+      registers, found by a discovery probe before a runtime launched
+      from `pichat-launch` starts (other starts refuse it).
+
+    SOURCE is the extension as Tools groups it: a spec exactly as written
+    in `:extensions`, a settings package's source, or a `builtin:` path.
+    Each SOURCE appears once, each tool in one group only, and built-in
+    names never in a group. See [Extension tools](#extension-tools).
+- `:extensions`: distinct extensions every runtime of the preset loads with
+  `-e`: a path (absolute, `~`, or relative such as `./guard.ts`), `npm:` or
+  a git source. A spec is one line without surrounding spaces, at most 1024
+  characters, and does not start with `-`. A bare word such as
+  `project_search` is refused as an old-style tool name; write a relative
+  directory as `./name`. Works with any `:tools`.
+- `:emacs-tools`: exact Emacs-defined tool names (see [Emacs-defined
+  tools](#emacs-defined-tools)); requires an explicit `:tools` list.
+- `:mcp`: exact `(SERVER . TOOL)` pairs; requires an explicit `:tools` list
+  (see [Preset MCP tools and models](#preset-mcp-tools-and-models)).
+- `:model`: an exact `provider/model`, or `default` (the same as omitting
+  it).
+- `:system-prompt` and `:append-system-prompt`: prompt sources, as above.
+
+A tool name may be selected only once across extension groups,
+`:emacs-tools` and `:mcp`.
+
+**Upgrading old definitions.** `:extensions` used to list extension tool
+names, as in `:extensions '("project_search")`. Such a definition,
+programmatic or saved, is refused when made or used, with an error naming
+the new form; a saved one stays listed under `p`. Move the names into a
+`:tools` group under the extension that registers them, and list that
+extension in `:extensions` only if Pi does not already load it. Here the
+package comes from Pi settings, so `:extensions` is dropped:
+
+```elisp
+(pichat-make-preset 'project-review
+  :tools '("read" "grep" "find" "ls"
+           ("git:github.com/owner/project-search" "project_search")))
+```
+
+Open `x Tools` to see an extension's SOURCE: its page shows the exact source
+under the label. Fix a saved definition with `M-x customize-option RET
+pichat-saved-presets`, or select a valid preset, set it up again and save it
+under the same name with `c`.
 
 ### Preset MCP tools and models
 

@@ -387,5 +387,63 @@
     (should-not (plist-member (pichat-tool-selection-resolve (pichat-presets-resolve 'manual))
                               :all))))
 
+(ert-deftest pichat-presets-old-style-saved-extensions-refuse-launch-and-stay-listed ()
+  ;; A definition saved before :extensions meant extensions to load.
+  (pichat-test-with-clean-state
+    (let ((pichat-saved-presets '((legacy :tools ("read") :extensions ("project_search"))))
+          (pichat-rpc-command nil) (pichat-pi-extra-args nil)
+          (pichat-append-system-prompt nil))
+      ;; It stays listed, so it can be found and edited or replaced.
+      (should (memq 'legacy (pichat-presets-names)))
+      (dolist (start (list (lambda () (pichat-start-session "/tmp/" nil '(:preset legacy)))
+                           (lambda () (pichat--open-launch-profile
+                                       '(:preset legacy :display-function ignore) "/tmp/"))))
+        (should (string-match-p
+                 (concat "\"project_search\" looks like an extension tool name: "
+                         "select tools in :tools as (SOURCE \"project_search\" \\.\\.\\.)")
+                 (cadr (should-error (funcall start) :type 'user-error)))))
+      (should-not (pichat-session-list))
+      ;; The new form of the same choice is accepted.
+      (setq pichat-saved-presets
+            '((legacy :tools ("read" ("git:github.com/owner/project-search" "project_search")))))
+      (should (equal '("project_search")
+                     (plist-get (pichat-presets-resolve 'legacy) :extensions))))))
+
+(ert-deftest pichat-presets-readme-examples-validate-and-resolve ()
+  ;; Every `pichat-make-preset' example in the README is a valid definition.
+  (let ((pichat-presets (copy-tree pichat-presets))
+        (pichat-saved-presets nil)
+        (pichat-append-system-prompt nil)
+        (readme (expand-file-name "README.md" (file-name-directory
+                                               (locate-library "pichat"))))
+        names)
+    (with-temp-buffer
+      (insert-file-contents readme)
+      (while (re-search-forward "^```elisp\n" nil t)
+        (let ((start (point)))
+          (re-search-forward "^```$")
+          (save-restriction
+            (narrow-to-region start (match-beginning 0))
+            (goto-char (point-min))
+            (condition-case nil
+                (while t
+                  (let ((form (read (current-buffer))))
+                    (when (eq (car-safe form) 'pichat-make-preset)
+                      (push (eval form t) names))))
+              (end-of-file nil))
+            (goto-char (point-max))))))
+    (setq names (nreverse names))
+    ;; The documented preset forms are all among them.
+    (dolist (name '(manual web-search project-review manual-guarded manual-guarded-all))
+      (should (memq name names)))
+    (dolist (name names)
+      (should (eq name (plist-get (pichat-presets-resolve name) :name))))
+    (let ((spec (pichat-presets-resolve 'manual-guarded)))
+      (should (equal '("guardrails_status" "guardrails_policy") (plist-get spec :extensions)))
+      (should (equal '("~/pi-ext/protect-secrets.ts" "npm:@pi-vault/pi-guardrails@1.2.3")
+                     (plist-get spec :load-extensions))))
+    (should (equal '("npm:@pi-vault/pi-guardrails@1.2.3")
+                   (pichat-presets-pending-all (pichat-presets-resolve 'manual-guarded-all))))))
+
 (provide 'pichat-test-presets)
 ;;; pichat-test-presets.el ends here

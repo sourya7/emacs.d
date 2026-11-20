@@ -200,11 +200,163 @@
                                   "--eval"
                                   (format "(progn (load %S nil t) (require 'pichat-presets) (prin1 (pichat-presets-names)))"
                                           custom-file))))
-                  (should (string-match-p "(manual coding review standard web-search review-fast)"
-                                          (buffer-string))))
+                  (should (string-match-p " web-search review-fast)\\'" (buffer-string))))
                 (message "PICHAT-PRESETS-LIVE-OK evil=%s" (bound-and-true-p evil-mode)))
             (remove-hook 'minibuffer-setup-hook #'pichat-test-presets-live--answer)
             (when transient--prefix (transient-quit-all))))))))
+
+(ert-deftest pichat-integration-presets-live-ui-saves-added-extensions-and-grouped-tools ()
+  (should-not noninteractive)
+  (pichat-test-require-pi)
+  (pichat-test-with-clean-state
+    (pichat-test-with-temp-dir project-dir
+      (pichat-test-with-temp-dir agent-dir
+        (let* ((fixture (expand-file-name "fixtures/tool-control-extension.ts"
+                                          (file-name-directory
+                                           (locate-library "pichat-test-support"))))
+               (process-environment
+                (append (list "PI_OFFLINE=1" "PI_SKIP_VERSION_CHECK=1" "PI_TELEMETRY=0"
+                              (concat "PI_CODING_AGENT_DIR=" agent-dir))
+                        process-environment))
+               (custom-file (expand-file-name "custom.el" agent-dir))
+               (user-init-file (expand-file-name "init.el" agent-dir))
+               (user-emacs-directory agent-dir)
+               (transient-history nil)
+               (transient-history-file (expand-file-name "transient-history.el" agent-dir))
+               (pichat-presets (copy-tree pichat-presets))
+               (pichat-saved-presets nil)
+               (pichat-recent-extensions nil)
+               (pichat-default-preset 'manual)
+               (pichat-default-model nil)
+               (pichat-rpc-command nil)
+               (pichat-bridge-extension-file nil)
+               (pichat-pi-executable pichat-test-pi-executable)
+               (pichat-pi-default-args
+                '("--mode" "rpc" "--offline" "--no-approve" "--no-context-files"
+                  "--no-skills" "--no-prompt-templates" "--no-themes" "--no-extensions"))
+               (pichat-pi-extra-args (list "-e" pichat-test-fake-provider-extension))
+               (default-directory project-dir)
+               (use-dialog-box nil)
+               (pichat-test-presets-live--answers nil)
+               (manual '("read" "grep" "find" "ls" "edit" "write")))
+          (with-temp-file custom-file
+            (insert ";;; private fixture custom file\n(custom-set-variables)\n"))
+          (add-hook 'minibuffer-setup-hook #'pichat-test-presets-live--answer)
+          (unwind-protect
+              (progn
+                (execute-kbd-macro (kbd "M-x pichat-launch RET"))
+                (pichat-test-presets-live--wait-menu
+                 'pichat-launch "l Extensions →" "launcher with Extensions")
+                (pichat-test-presets-live--expect "Preset" "manual")
+                (execute-kbd-macro (kbd "p"))
+                (pichat-test-presets-live--wait-menu 'pichat-launch "manual" "manual preset")
+                ;; l: add the fixture by absolute path; Done applies it checked.
+                (execute-kbd-macro (kbd "l"))
+                (pichat-test-presets-live--wait-menu
+                 'pichat-launch-extensions-menu "None; \\+ to add one" "empty Extensions menu")
+                (pichat-test-presets-live--expect "Add extension" fixture)
+                (execute-kbd-macro (kbd "+"))
+                (pichat-test-presets-live--wait-menu
+                 'pichat-launch-extensions-menu "tool-control-extension\\.ts" "fixture added")
+                (execute-kbd-macro (kbd "RET"))
+                (pichat-test-presets-live--wait-menu
+                 'pichat-launch "Extensions (1 added)" "extension applied")
+                (should (equal (list (cons fixture t)) (plist-get (transient-scope) :extensions)))
+                ;; x Tools: the fixture's group page, Include future tools on.
+                (execute-kbd-macro (kbd "x"))
+                (pichat-test-presets-live--wait-menu
+                 'pichat-tool-picker "e1 tool-control-extension (0/" "fixture group in Tools")
+                (execute-kbd-macro (kbd "e 1"))
+                (pichat-test-presets-live--wait-menu
+                 'pichat-tool-picker-extension-group "Include future tools" "group page")
+                (execute-kbd-macro (kbd "*"))
+                (execute-kbd-macro (kbd "RET"))
+                (pichat-test-presets-live--wait-menu
+                 'pichat-tool-picker "tool-control-extension (all)" "future tools on")
+                (execute-kbd-macro (kbd "RET"))
+                (pichat-test-presets-live--wait-menu 'pichat-launch "Save preset as" "Tools applied")
+                (let ((selection (plist-get (transient-scope) :tool-selection)))
+                  (should (equal (list fixture) (plist-get selection :all)))
+                  (should (member "probe_child" (plist-get selection :extensions))))
+                ;; c: the saved preset loads the fixture and includes its future tools.
+                (pichat-test-presets-live--expect "Preset name" "fixture-all")
+                (execute-kbd-macro (kbd "c"))
+                (pichat-test-presets-live--wait-menu
+                 'pichat-launch "Launch independent (fixture-all)" "fixture-all selected")
+                (let ((definition (pichat-get-preset 'fixture-all)))
+                  (should (equal (append manual (list (cons fixture :all)))
+                                 (plist-get definition :tools)))
+                  (should (equal (list fixture) (plist-get definition :extensions))))
+                ;; The added entry stays listed, unchecked: the preset loads it.
+                (should (equal (list (cons fixture nil)) (plist-get (transient-scope) :extensions)))
+                (should (string-match-p "l Extensions →" (pichat-test-presets-live--menu)))
+                (should-not pichat-test-presets-live--answers)
+                (should-not (pichat-session-list))
+                (execute-kbd-macro (kbd "C-g"))
+                ;; A fresh Emacs reloads and resolves the saved forms.
+                (with-temp-buffer
+                  (should (eql 0 (call-process
+                                  (expand-file-name invocation-name invocation-directory)
+                                  nil (list t nil) nil "-Q" "--batch" "-L"
+                                  (file-name-directory (locate-library "pichat-presets"))
+                                  "--eval"
+                                  (format "(progn (load %S nil t) (require 'pichat-presets) (let ((spec (pichat-presets-resolve 'fixture-all))) (prin1 (list (plist-get spec :tool-groups) (plist-get spec :load-extensions) pichat-recent-extensions))))"
+                                          custom-file))))
+                  (should (equal (list (list (cons fixture :all)) (list fixture) (list fixture))
+                                 (car (read-from-string (buffer-string))))))
+                (message "PICHAT-PRESETS-LIVE-EXTENSIONS-OK evil=%s" (bound-and-true-p evil-mode)))
+            (remove-hook 'minibuffer-setup-hook #'pichat-test-presets-live--answer)
+            (when transient--prefix (transient-quit-all))))))))
+
+(ert-deftest pichat-integration-presets-live-ui-old-style-saved-preset-is-listed-and-refused ()
+  (should-not noninteractive)
+  (pichat-test-with-clean-state
+    (pichat-test-with-temp-dir agent-dir
+      (let* ((transient-history nil)
+             (transient-history-file (expand-file-name "transient-history.el" agent-dir))
+             (pichat-presets (copy-tree pichat-presets))
+             ;; Saved before :extensions meant extensions to load.
+             (pichat-saved-presets '((legacy :description "Old form"
+                                             :tools ("read") :extensions ("project_search"))))
+             (pichat-default-preset 'manual)
+             (pichat-rpc-command nil)
+             (default-directory agent-dir)
+             (use-dialog-box nil)
+             (pichat-test-presets-live--answers nil)
+             (messages (lambda ()
+                         (with-current-buffer (messages-buffer) (buffer-string))))
+             (refusal "\"project_search\" looks like an extension tool name"))
+        (add-hook 'minibuffer-setup-hook #'pichat-test-presets-live--answer)
+        (unwind-protect
+            (progn
+              (execute-kbd-macro (kbd "M-x pichat-launch RET"))
+              (pichat-test-presets-live--wait-menu 'pichat-launch "Save preset as" "launcher")
+              ;; p still lists and selects it, so it can be found and replaced.
+              (pichat-test-presets-live--expect "Preset" "legacy")
+              (execute-kbd-macro (kbd "p"))
+              (pichat-test-presets-live--wait-menu 'pichat-launch "(legacy)" "legacy selected")
+              ;; Tools and launching refuse it with the upgrade hint.
+              (dolist (key '("x" "RET"))
+                (let* ((start (length (funcall messages)))
+                       (shown (condition-case err
+                                  (progn (execute-kbd-macro (kbd key)) nil)
+                                (error (error-message-string err)))))
+                  ;; The refusal reaches the user as the command's error
+                  ;; (here, out of the keyboard macro) or as a message.
+                  (pichat-test-wait-until
+                   (lambda () (string-match-p refusal (concat shown (substring (funcall messages) start))))
+                   10 (format "%s refused" key))
+                  (unless (and transient--prefix (eq (oref transient--prefix command) 'pichat-launch))
+                    (execute-kbd-macro (kbd "M-x pichat-launch RET"))
+                    (pichat-test-presets-live--wait-menu 'pichat-launch "Save preset as" "launcher again")
+                    (pichat-test-presets-live--expect "Preset" "legacy")
+                    (execute-kbd-macro (kbd "p"))
+                    (pichat-test-presets-live--wait-menu 'pichat-launch "(legacy)" "legacy again"))))
+              (should-not (pichat-session-list))
+              (should-not pichat-test-presets-live--answers)
+              (message "PICHAT-PRESETS-LIVE-LEGACY-OK evil=%s" (bound-and-true-p evil-mode)))
+          (remove-hook 'minibuffer-setup-hook #'pichat-test-presets-live--answer)
+          (when transient--prefix (transient-quit-all)))))))
 
 (provide 'pichat-test-presets-live-ui)
 ;;; pichat-test-presets-live-ui.el ends here

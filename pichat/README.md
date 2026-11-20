@@ -2052,9 +2052,11 @@ An example reviewer preset that reads the work and can restart the worker:
 
 Presets select built-in, extension and Emacs-defined tools. Shell tools that
 are registered as extension tools can be added as `:tools` groups
-`(SOURCE "tool")`. MCP tools
-cannot be named in a preset yet: select them in `x Tools` when composing the
-reviewer job in Jobs (an authored file takes its tools from its preset only).
+`(SOURCE "tool")`, and MCP tools as `:mcp` pairs (see [Preset MCP tools and
+models](#preset-mcp-tools-and-models)). A job captures them with the rest of
+the preset and its runs enable exactly those tools; an authored file takes its
+tools from its preset only, so name MCP tools there. Unlike a launch, saving or
+running a job does not first check the preset's MCP tools with MCP discovery.
 The model is part of the job, not the preset.
 
 ### Scheduled jobs

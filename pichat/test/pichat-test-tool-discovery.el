@@ -319,6 +319,37 @@
         (should-not (member "probe_child" (append (gethash "activeTools" later) nil))))
       (should-not (plist-get (plist-get (pichat-test-rpc-call session "get_messages") :data) :messages))))
 
+  (ert-deftest pichat-tool-control-real-pi-catalogue-reports-provenance-and-commands ()
+    (pichat-test-with-integration-session
+        (session :no-session t :script '(:turns [])
+                 :extensions (list pichat-tool-discovery-helper pichat-test-tool-control-fixture))
+      (let* ((data (pichat-test-tool-control-call session "catalogue"))
+             (tools (append (gethash "tools" data) nil))
+             (commands (append (gethash "commands" data) nil))
+             (fixture (file-truename pichat-test-tool-control-fixture)))
+        (cl-flet ((find-named (name items)
+                    (cl-find name items :key (lambda (item) (gethash "name" item)) :test #'equal)))
+          (let ((read (gethash "sourceInfo" (find-named "read" tools)))
+                (probe (gethash "sourceInfo" (find-named "probe_loader" tools)))
+                (command (find-named "probe-report" commands)))
+            (should (equal (gethash "source" read) "builtin"))
+            (should (equal (gethash "path" read) "builtin:read"))
+            (should (equal (gethash "source" probe) "cli"))
+            (should (equal (file-truename (gethash "path" probe)) fixture))
+            (should command)
+            (should (stringp (gethash "description" command)))
+            (should (equal (file-truename (gethash "path" (gethash "sourceInfo" command))) fixture))
+            ;; The internal transport command is not reported as an extension command.
+            (should-not (find-named "pichat-tool-control-v1" commands))
+            (dolist (item (append tools commands))
+              (let ((info (gethash "sourceInfo" item)))
+                (should (or (eq info :null) (hash-table-p info)))
+                (when (hash-table-p info)
+                  (dolist (field '("path" "source" "scope" "origin"))
+                    (should (stringp (gethash field info)))))))))
+        ;; Extra fields leave today's Emacs-side validation unchanged.
+        (should (pichat-tool-discovery--catalogue data "test")))))
+
   (ert-deftest pichat-tool-control-real-pi-cannot-bypass-startup-allowlist ()
     (dolist (allowlist '("read" "read,probe_loader" "read,probe_loader,probe_child"))
       (pichat-test-with-integration-session

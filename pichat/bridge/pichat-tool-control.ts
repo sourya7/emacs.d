@@ -22,6 +22,26 @@ const COMMAND = "pichat-tool-control-v1";
 const TITLE = "__pichat_tool_control_v1__";
 const LIMIT = 1024 * 1024;
 const NAME = /^[A-Za-z0-9_-]+$/;
+// Provenance values are identities (paths, package specs), so an over-long
+// value is dropped rather than truncated into a wrong match.  Per-field bounds
+// keep ordinary catalogues small; the final LIMIT check still refuses an
+// oversized payload as "Catalogue too large".
+const SOURCE_FIELD_LIMIT = 1024;
+const MAX_COMMANDS = 4096;
+
+// Bounded copy of Pi's sourceInfo; null when absent (older Pi) or unusable.
+function boundedSourceInfo(info: unknown) {
+	if (!info || typeof info !== "object") return null;
+	const record = info as Record<string, unknown>;
+	const result: Record<string, string> = {};
+	for (const field of ["path", "source", "scope", "origin", "baseDir"]) {
+		const value = record[field];
+		if (value === undefined && field === "baseDir") continue;
+		if (typeof value !== "string" || !value.length || value.length > SOURCE_FIELD_LIMIT) return null;
+		result[field] = value;
+	}
+	return result;
+}
 
 export default function (pi: ExtensionAPI) {
 	pi.registerCommand(COMMAND, {
@@ -73,6 +93,12 @@ export default function (pi: ExtensionAPI) {
 				// traversing TRAMP.  Only the explicit probe request opts in.
 				shutdownAfterAck = request.operation === "catalogue" && request.shutdownAfterAck === true;
 				const activeTools = pi.getActiveTools();
+				// Extension commands reveal extensions that register no tools.  This
+				// internal command is PiChat's transport, not a user extension.
+				const commands = (typeof pi.getCommands === "function" ? pi.getCommands() : [])
+					.filter((command) => command.source === "extension" && command.name !== COMMAND
+						&& command.name.length <= 256);
+				if (commands.length > MAX_COMMANDS) throw new Error("Too many extension commands");
 				result = {
 					ok: true,
 					processIdentity: processIdentity(),
@@ -80,8 +106,14 @@ export default function (pi: ExtensionAPI) {
 						name: tool.name,
 						description: tool.description.slice(0, 4096),
 						exposure: tool.exposure ?? "direct",
+						sourceInfo: boundedSourceInfo(tool.sourceInfo),
 					})),
 					activeTools,
+					commands: commands.map((command) => ({
+						name: command.name,
+						description: (command.description ?? "").slice(0, 1024),
+						sourceInfo: boundedSourceInfo(command.sourceInfo),
+					})),
 				};
 			} catch (error) {
 				result = { ok: false, error: (error instanceof Error ? error.message : String(error)).slice(0, 1024) };

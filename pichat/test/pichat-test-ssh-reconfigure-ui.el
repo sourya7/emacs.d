@@ -28,7 +28,8 @@
          (pichat-chat--set-input-text "UI acceptance draft")
          (execute-kbd-macro (kbd "M-x pichat-launch RET"))
          (execute-kbd-macro (kbd "n"))
-         (should (member "--new" (transient-args 'pichat-launch)))
+         ;; Between key commands, inspect the active menu, not saved args.
+         (should (member "--new" (transient-get-value)))
          (execute-kbd-macro (kbd "r"))
          (funcall wait-for-restart-draft "initial SSH restart draft ready")
          (should (window-live-p transient--window))
@@ -40,7 +41,7 @@
          (execute-kbd-macro (kbd "r"))
          (should (eq 'pichat-launch (oref transient--prefix command)))
          (should-not (pichat--launch-reconfigure-scope))
-         (should (member "--new" (transient-args 'pichat-launch)))
+         (should (member "--new" (transient-get-value)))
          (execute-kbd-macro (kbd "r"))
          (funcall wait-for-restart-draft "restored SSH restart draft ready")
          (should (equal "Restart · manual → coding" (pichat--reconfigure-action-description)))

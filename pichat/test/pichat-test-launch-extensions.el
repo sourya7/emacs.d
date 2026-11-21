@@ -860,7 +860,8 @@
 
   (ert-deftest pichat-launch-extensions-real-pi-restart-adds-and-removes-extension ()
     (pichat-test-launch-extensions--with-reconfigurable-session session
-      (let ((fixture pichat-test-launch-extensions--fixture))
+      (let ((fixture pichat-test-launch-extensions--fixture)
+            (runtime-id (pichat-session-runtime-id session)))
         (cl-flet ((has-command ()
                     (let ((response (pichat-test-rpc-call session "get_commands")))
                       (should (plist-get response :success))
@@ -880,8 +881,16 @@
               (pichat-test-wait-until (lambda () result) 15 "extension-only restart")
               (should (equal '(t nil) result))
               (should-not (eq old (pichat-session-process session)))
+              (should (equal runtime-id (pichat-session-runtime-id session)))
               (should (equal extensions (pichat-session-extensions session)))
-              (if extensions (should (has-command)) (should-not (has-command)))))))))
+              (let ((argv (pichat-session-rpc-command session)))
+                (if extensions
+                    (progn
+                      (should (cl-loop for (flag arg) on argv
+                                       thereis (and (equal "-e" flag) (equal fixture arg))))
+                      (should (has-command)))
+                  (should-not (member fixture argv))
+                  (should-not (has-command))))))))))
 
   (ert-deftest pichat-launch-extensions-real-pi-preset-loads-its-extensions-and-grouped-tools ()
     (pichat-test-with-integration-session (session :preset 'manual :script '(:turns []))

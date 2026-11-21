@@ -632,7 +632,7 @@ retains its current-tab display behavior.
 | `x` | Tools | Choose that preset's built-ins, extension tools and direct MCP tools for a new independent runtime |
 | `l` | Extensions | Add extensions for this launch: a path, `npm:` or `git:` spec loaded with `-e` on top of the extensions Pi discovers; checked ones imply independent. See [Added extensions](#added-extensions) |
 | `s` | Conversation | Pick a saved session, or clear the staged selection |
-| `r` | Reconfigure this runtime | From its owning chat, enter a separate captured-runtime menu; never implied by launching |
+| `r` | Reconfigure | From an owning chat, toggle between the launch draft and this runtime's restart draft |
 | `c` | Save preset as… | Save the selected preset, Tools, checked extensions and model under a name; see [Saving presets from the launcher](#saving-presets-from-the-launcher) |
 | `RET` | Open / launch | Open the current chat or launch with the displayed reuse policy and preset |
 
@@ -663,8 +663,8 @@ changing the preferred runtime.
 Choose `default` again to restore normal reuse, unless another switch requires
 an independent runtime. The manager's Preset column and the chat's `P:name`
 mode-line label identify the captured startup choice. Presets belong to Emacs
-runtimes, not saved Pi transcripts. Changing a retained runtime's preset or
-Tools requires an explicit guarded restart, not a change to its live process.
+runtimes, not saved Pi transcripts. Applying startup changes to an existing
+runtime requires an explicit guarded restart.
 
 `s` opens the saved-session picker directly. It stages a transport-qualified
 saved session file without loading it. Press `s` again to clear the selection
@@ -690,16 +690,23 @@ succeeds or fails. This Emacs-local managed-runtime check cannot detect external
 Pi processes. The ordinary saved-session browser still uses its own
 independent-open ownership and actions.
 
-From an owning chat, `r` opens **Reconfigure this runtime**. The menu captures
-that exact runtime, its current conversation, and its resolved preset/Tools
-snapshots and added extensions (loaded again with `-e`), not the present
-registry defaults. `p` explicitly resolves the
-selected current definition; `x` edits Tools against the captured draft. `b`
-returns to the untouched launch draft. `RET` with no effective prompt/tool
-change is a no-op. Otherwise PiChat checks fresh Pi state, asks for confirmation,
-stops the old process (confirming remote exit for supported SSH targets),
-starts the validated replacement with the active
-run-local model, reloads the same saved Pi session, restores supported settings,
+From the chat that owns a runtime, `r` toggles **Reconfigure** in the same
+launcher. The highlighted `r` indicates restart mode; press it again to return
+to launch mode. Each draft is kept as you left it while the launcher is open.
+The restart draft starts from the runtime's captured preset, Tools, model and
+added extensions, not the launch draft or current registry defaults. `p` resolves
+the selected current preset definition, `m` stages or clears a model override,
+`l` edits added extensions, and `x` edits Tools for the proposed replacement.
+Scope (`g`), independent launch (`n`), target (`t`), persistence (`e`),
+conversation (`s`) and **Save preset as…** (`c`) are disabled with reasons.
+The `r` toggle is disabled outside an owning chat and while a job owns the runtime.
+
+With no effective change, `RET` says **No changes · keep runtime** and does
+nothing. With changes, it says **Restart · …**; if preflight blocks the restart,
+the Action heading explains why and `RET` is disabled. Otherwise PiChat asks
+for confirmation, stops the old process (confirming remote exit for supported
+SSH targets), starts the validated replacement with the chosen run-local model,
+reloads the same saved Pi session, restores supported settings,
 and commits the transcript and configuration only after verifying the source,
 active branch, settings and selected extension tools. Extension tools are checked
 again after the initial saved-session reload, since Pi can replace its extension
@@ -714,7 +721,7 @@ another confirmation. A failed post-stop attempt retains the last synchronized
 conversation as a read-only snapshot. Reopen `r` from that chat for **Retry requested**, **Restore previous**,
 or **Leave stopped**. A quit during the restart is handled like an error and
 still propagates: before the snapshot is staged nothing is changed; afterwards
-the attempt fails once, the previous preset, Tools and model stay installed,
+the attempt fails once, the prior startup configuration remains recorded,
 and the snapshot is retained for recovery. If the error or quit comes before
 PiChat asks Pi to stop, the original Pi process keeps running, local or SSH;
 **Retry requested** or **Restore previous** stops it only then. A failure after
@@ -769,7 +776,7 @@ PiChat concatenates the preset's additions followed by these shared instructions
 and sends one `--append-system-prompt` argument. A replacement `:system-prompt`
 remains separate. The resolved text is captured in the runtime snapshot;
 changing the setting or its files does not update existing runtimes. Start a
-new runtime, or explicitly select the preset again in the reconfiguration menu
+new runtime, or explicitly select the preset again with `p` in reconfigure mode
 to resolve the current instructions before confirming the restart.
 
 
@@ -797,7 +804,7 @@ the preset's baseline: built-ins, extension, Emacs-defined and MCP tools
 customization: an empty MCP selection launches with `--no-mcp` rather than
 falling back to the preset.
 The picker configures a new independent runtime, or the captured replacement
-in **Reconfigure this runtime**; it never edits a live process in place.
+in reconfigure mode; it never edits a live process in place.
 
 MCP discovery connects configured servers and reports failures. Non-direct,
 hidden, disabled, unavailable, and normalization-colliding MCP tools cannot be
@@ -899,12 +906,15 @@ startup instead of falling back. `m` overrides it for one launch; pressing `m`
 again clears the override and restores the preset's model. The launcher's
 `default` preset choice keeps Pi's default model so that it can reuse the
 preferred runtime, even when `pichat-default-preset` declares a model.
-Reconfiguring a runtime keeps its active model; selecting a preset there does
-not change models.
+On restart, PiChat uses the `m` override if set, then the model of a preset
+explicitly selected with `p` if it declares one, and otherwise the active model.
+After reloading the saved Pi session, PiChat restores the chosen model before
+the thinking level. This does not change Pi's saved default model.
 
 ### Saving presets from the launcher
 
-To reuse a configuration, set it up in `pichat-launch` and press `c`:
+To reuse a configuration, set it up in launch mode in `pichat-launch` and
+press `c`. Saving is disabled in reconfigure mode:
 
 1. Choose a preset with `p`, adjust `x Tools`, check extensions under
    `l Extensions`, and optionally choose `m Model`.
@@ -994,10 +1004,10 @@ The motivating case, a hook-only secrets guard for manual tools:
 Earlier, `:extensions` listed extension tool names; such a bare word (for
 example `"project_search"`) is now refused with an error naming the `:tools`
 form. Write a relative directory as `./name`. Reconfiguring a runtime to
-another preset loads that preset's extensions instead and keeps the ones
-added in the launcher. A job whose preset loads extensions captures them
-and loads them with `-e` when its run starts; a run in which one fails to
-load stops before the prompt (see [Jobs](#jobs)).
+another preset loads that preset's extensions instead; the added list stays
+as captured unless edited with `l`. A job whose preset loads extensions captures
+them and loads them with `-e` when its run starts; if one fails to load, the run
+stops before the prompt (see [Jobs](#jobs)).
 
 A group `(SOURCE . :all)` (**Include future tools**) selects every tool that
 extension registers, including tools a later version adds:
@@ -1017,9 +1027,10 @@ extension the runtime loads), silently, and starts the runtime with the
 eligible tools found; a failed probe cancels the launch with a message.
 Opening `x Tools` shows those tools checked instead, and Apply uses them.
 The expanded names are recorded with the runtime, so restarts and
-reconfiguration reuse them; selecting the preset again under **Reconfigure
-this runtime** probes anew (the restart waits for it), and so does
-refreshing or reapplying `x Tools`. Pi built-in tools match a `builtin:`
+reconfiguration reuse them. Reselecting the preset in reconfigure mode or
+changing the added extensions of a draft that includes future tools probes anew
+(the restart waits for it). Refreshing or reapplying `x Tools` also updates the
+selection from discovery. Pi built-in tools match a `builtin:`
 path SOURCE. Other ways of starting a runtime, such as
 `pichat-default-preset` starts outside the launcher or jobs, refuse such a
 preset unless its tools were chosen in `x Tools`.
@@ -1167,15 +1178,15 @@ Actions     Action
   register tools or commands: hook-only extensions do not appear here, and
   an added hook-only extension never appears in `x Tools` either, although
   it is loaded. `r` **Refresh** probes again.
-- `RET` **Done** applies the list to the launch draft; `q` **Cancel** (or
+- `RET` **Done** applies the list to the active draft; `q` **Cancel** (or
   quitting) discards the changes.
 
-Checked extensions are loaded at startup, on every restart and in the
-replacement started by **Reconfigure this runtime**, which keeps the
-runtime's added extensions (it cannot change them). Opening `x Tools` probes
-with them, so their tools can be selected; they group under the spec as
-added. Changing the checked list discards that discovery. Their tools are
-opt-in like any extension tool: a hook-only guard needs no tool choice, while
+In reconfigure mode, `l` starts with the runtime's captured added extensions.
+Add or remove specs, or change which are checked. These edits only affect the
+draft until you confirm a restart. The replacement loads the checked specs.
+In either mode, `x Tools` probes with the checked specs and groups their tools
+under the spec as entered. Changing the checked list discards that discovery.
+Their tools are opt-in: a hook-only guard needs no tool choice, while
 a tool-registering extension's tools must be checked in `x Tools` to be
 enabled in an explicit-tool preset (`manual` and others). A complete
 `pichat-rpc-command` wrapper cannot take `-e` arguments and refuses added
@@ -1231,7 +1242,7 @@ refused.
 `/reload` is an interactive (TUI) command that RPC mode, which PiChat uses,
 does not run, so edits to a local added extension, or a newer package
 version, reach a runtime only when Pi starts again: launch a new runtime, or
-restart this one through **Reconfigure this runtime**.
+use reconfigure mode to restart this one with a changed startup configuration.
 
 Added extensions are launch choices of the runtime, not of its Pi session or
 saved session file. **Save preset as…** stores the checked ones in the new
@@ -3330,9 +3341,9 @@ Selections are exact names: tools registered later are listed but never
 selected automatically. If a selected tool isn't loaded, the runtime starts
 without it and says so; the Tools section shows the same note, and also when
 the runtime has no bridge (SSH). Calls to unselected tools
-are refused. Change a live runtime's selection with **Reconfigure this
-runtime**. Pass-through presets (`:tools :default`, such as `standard`) offer
-no Emacs-defined tools.
+are refused. Change a live runtime's selection in reconfigure mode.
+Pass-through presets (`:tools :default`, such as `standard`) offer no
+Emacs-defined tools.
 
 Earlier PiChat versions offered every registered tool to every bridge-enabled
 runtime; now add `:emacs-tools` to your preset or select them in `x Tools`.

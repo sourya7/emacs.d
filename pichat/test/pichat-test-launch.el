@@ -1335,6 +1335,33 @@ checks a saved session's target against its resolved owner scope."
           (pichat-reconfigure-preset))
         (should (equal "Model test/active" (pichat--reconfigure-launch-model-description)))))))
 
+(ert-deftest pichat-launch-reconfigure-key-requires-an-unguarded-owning-chat ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          (chat (pichat-chat-open session)))
+      (unwind-protect
+          (cl-flet ((check (origin reason)
+                      (let* ((context (list :origin-buffer origin :directory default-directory))
+                             (transient--prefix
+                              (transient--init-prefix 'pichat-launch (list :scope context)))
+                             (layout (transient--init-suffixes 'pichat-launch))
+                             (toggle (cl-find 'pichat-launch-reconfigure
+                                              (transient--flatten-suffixes layout)
+                                              :key (lambda (obj) (oref obj command)))))
+                        (should toggle)
+                        (if reason
+                            (progn
+                              (should (transient--inapt-suffix-p toggle))
+                              (should (string-match-p (regexp-quote reason)
+                                                      (pichat--launch-reconfigure-description))))
+                          (should-not (transient--inapt-suffix-p toggle))))))
+            (with-temp-buffer (check (current-buffer) "Requires owning chat"))
+            (check chat nil)
+            (setf (pichat-session-input-guard session) 'job)
+            (check chat pichat-reconfigure--job-blocker))
+        (setf (pichat-session-input-guard session) nil)
+        (kill-buffer chat)))))
+
 (ert-deftest pichat-launch-reconfigure-renders-active-keys-and-blocked-action ()
   (let* ((base (list :preset-spec (pichat-presets-resolve 'manual)))
          (scope (list :base base :draft (pichat-reconfigure-select-preset base 'coding)

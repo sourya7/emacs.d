@@ -99,7 +99,7 @@
          (append (list :conversation (funcall saved "Short" "/tmp/" 'other)) base)
          "RET Blocked · session on another target")))))
 
-(ert-deftest pichat-transient-width-reconfigure-menus-fit-narrow-frame ()
+(ert-deftest pichat-transient-width-launcher-reconfigure-and-recovery-fit-narrow-frame ()
   (let* ((session (pichat-session-create
                    :id "runtime" :name "Refactor the session manager and its tests"
                    :transport pichat-transport-local))
@@ -121,7 +121,11 @@
              "^Blocked: SSH restart requires verified" "RET Restart · manual → coding")
       (check switch '(:empty-unwritten t)
              "^New empty Pi session; keep chat and draft$" "RET Restart · manual → coding")
-      (check tools nil "RET Restart · new tools"))
+      (check tools nil "RET Restart · new tools")
+      (check (pichat-reconfigure-select-extensions base '("./guard.ts")) nil
+             "RET Restart · new extensions")
+      (check (plist-put (copy-tree base t) :model-override "test/alternate") nil
+             "RET Restart · new model"))
     (setf (pichat-session-restart-operation session)
           (list :phase 'failed :empty-unwritten t
                 :failure "Pi exited with code 1 before reporting its state"))

@@ -12,24 +12,38 @@
               (buffer (pichat-session-buffer session))
               (runtime-id (pichat-session-runtime-id session))
               (old (pichat-session-process session))
-              (transient-show-menu t))
+              (transient-show-menu t)
+              (wait-for-restart-draft
+               (lambda (description)
+                 (pichat-test-wait-until
+                  (lambda ()
+                    (and transient--prefix
+                         (eq 'pichat-launch (oref transient--prefix command))
+                         (when-let* ((scope (pichat--launch-reconfigure-scope)))
+                           (null (plist-get scope :blockers)))))
+                  15 description))))
          (pichat-test-chat-send-and-wait session buffer "Persist before UI restart" 30)
          (pichat-test-real-ssh--settled session)
-         (with-current-buffer buffer (pichat-chat--set-input-text "UI acceptance draft"))
-         (call-interactively #'pichat-launch)
+         (switch-to-buffer buffer)
+         (pichat-chat--set-input-text "UI acceptance draft")
+         (execute-kbd-macro (kbd "M-x pichat-launch RET"))
+         (execute-kbd-macro (kbd "n"))
+         (should (member "--new" (transient-args 'pichat-launch)))
          (execute-kbd-macro (kbd "r"))
-         (pichat-test-wait-until
-          (lambda () (and transient--prefix
-                          (eq 'pichat-reconfigure-menu (oref transient--prefix command))
-                          (null (plist-get (transient-scope) :blockers))))
-          15 "SSH reconfiguration menu enabled after fresh state")
+         (funcall wait-for-restart-draft "initial SSH restart draft ready")
          (should (window-live-p transient--window))
+         (should (equal "No changes · keep runtime" (pichat--reconfigure-action-description)))
          (minibuffer-with-setup-hook
              (lambda () (insert "coding") (setq unread-command-events (list ?\r)))
            (execute-kbd-macro (kbd "p")))
-         (pichat-test-wait-until
-          (lambda () (null (plist-get (transient-scope) :blockers)))
-          15 "selected preset preflight")
+         (funcall wait-for-restart-draft "selected preset passed preflight")
+         (execute-kbd-macro (kbd "r"))
+         (should (eq 'pichat-launch (oref transient--prefix command)))
+         (should-not (pichat--launch-reconfigure-scope))
+         (should (member "--new" (transient-args 'pichat-launch)))
+         (execute-kbd-macro (kbd "r"))
+         (funcall wait-for-restart-draft "restored SSH restart draft ready")
+         (should (equal "Restart · manual → coding" (pichat--reconfigure-action-description)))
          (execute-kbd-macro (kbd "x"))
          (pichat-test-wait-until
           (lambda () (and (plist-get pichat-tool-picker--state :loaded)
@@ -56,11 +70,7 @@
            (execute-kbd-macro (kbd "RET"))
            (should (eq 'pichat-tool-picker (oref transient--prefix command))))
          (execute-kbd-macro (kbd "RET"))
-         (pichat-test-wait-until
-          (lambda () (and transient--prefix
-                          (eq 'pichat-reconfigure-menu (oref transient--prefix command))
-                          (null (plist-get (transient-scope) :blockers))))
-          15 "Tools applied to reconfiguration draft")
+         (funcall wait-for-restart-draft "Tools applied to restart draft")
          (should-not (pichat--reconfigure-action-inapt-p))
          (should (string-match-p "\\`Restart · " (pichat--reconfigure-action-description)))
          (pichat-test-real-ssh--write-script
@@ -69,7 +79,7 @@
                                   :expectTool (:name "probe_child") :expectToolAbsent "write")]))
          (minibuffer-with-setup-hook
              (lambda ()
-               (should (string-match-p "Restart this runtime with coding" (minibuffer-prompt)))
+               (should (string-prefix-p "Restart runtime?" (minibuffer-prompt)))
                (insert "yes") (setq unread-command-events (list ?\r)))
            (execute-kbd-macro (kbd "RET")))
          (pichat-test-wait-until
@@ -87,7 +97,7 @@
          (pichat-test-assert-provider-script-consumed (plist-get fixture :status))
          (should (string-match-p "UI-selected tools work"
                                  (prin1-to-string (pichat-test-rpc-call session "get_entries"))))
-         (message "LIVE SSH UI: launcher r, preset p, Tools x, checkboxes, confirmation and restart passed"))))))
+         (message "LIVE SSH UI: launcher toggle, separate drafts, Tools, confirmation and restart passed"))))))
 
 (provide 'pichat-test-ssh-reconfigure-ui)
 ;;; pichat-test-ssh-reconfigure-ui.el ends here

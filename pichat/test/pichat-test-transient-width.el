@@ -116,7 +116,9 @@
                              (append (list :origin origin :base base :draft draft) extras))
                        expected)))
       (check (copy-tree base t) '(:blockers ("Checking current Pi state…"))
-             "r Reconfigure" "Preset manual" "RET No changes · keep runtime")
+             "r Reconfigure" "Preset manual" "RET No changes · keep runtime"
+             "n Independent runtime (--new)$" "s Default conversation$"
+             "c Save preset as…$")
       (check switch '(:blockers ("SSH restart requires verified Linux actual-Pi process identity"))
              "^Blocked: SSH restart requires verified" "RET Restart · manual → coding")
       (check switch '(:empty-unwritten t)

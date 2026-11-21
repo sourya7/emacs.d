@@ -698,7 +698,8 @@ added extensions, not the launch draft or current registry defaults. `p` resolve
 the selected current preset definition, `m` stages or clears a model override,
 `l` edits added extensions, and `x` edits Tools for the proposed replacement.
 Scope (`g`), independent launch (`n`), target (`t`), persistence (`e`),
-conversation (`s`) and **Save preset as…** (`c`) are disabled with reasons.
+conversation (`s`) and **Save preset as…** (`c`) keep their usual labels but
+are greyed out in reconfigure mode.
 The `r` toggle is disabled outside an owning chat and while a job owns the runtime.
 
 With no effective change, `RET` says **No changes · keep runtime** and does

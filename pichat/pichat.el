@@ -1348,10 +1348,6 @@ This is the first implementation check; it does not send an LLM prompt."
   "Return non-nil while the launcher is in reconfigure mode."
   (and (pichat--launch-reconfigure-scope) t))
 
-(defun pichat--launch-fixed-description (label reason)
-  "Describe LABEL, appending fixed-on-restart REASON when applicable."
-  (if (pichat--launch-reconfigure-p) (concat label " · " reason) label))
-
 (defun pichat--launch-origin-runtime (context)
   "Return the runtime owning the chat where CONTEXT started, if any."
   (let* ((buffer (plist-get context :origin-buffer))
@@ -1557,7 +1553,6 @@ model and conversation are shown by their own menu entries."
   "Return a short conversation choice suitable for a Transient column."
   (let ((context (transient-scope)))
     (cond
-     ((pichat--launch-reconfigure-p) "Conversation · kept")
      ((plist-get context :conversation) "Selected saved conversation")
      ((pichat-session-p
        (pichat--launch-current-chat
@@ -2351,19 +2346,13 @@ or a changed runtime ignores the result."
   "Launch a PiChat runtime or reconfigure the runtime owning this chat."
   :init-value #'pichat--launch-transient-init-value
   [["Scope"
-    ("g" (lambda () (pichat--launch-fixed-description "Global" "scope kept"))
-     "--global" :inapt-if pichat--launch-reconfigure-p)]
+    ("g" "Global" "--global" :inapt-if pichat--launch-reconfigure-p)]
    ["Runtime"
-    ("n" (lambda () (if (pichat--launch-reconfigure-p)
-                         "Independent · same runtime"
-                       "Independent runtime"))
-     "--new" :inapt-if pichat--launch-reconfigure-p)
-    ("t" (lambda () (pichat--launch-fixed-description "Target" "kept"))
-     "--target=" :inapt-if pichat--launch-reconfigure-p
+    ("n" "Independent runtime" "--new" :inapt-if pichat--launch-reconfigure-p)
+    ("t" "Target" "--target=" :inapt-if pichat--launch-reconfigure-p
      :choices pichat--launch-target-choices)]
    ["Persistence"
-    ("e" (lambda () (pichat--launch-fixed-description "Ephemeral" "kept"))
-     "--ephemeral" :inapt-if pichat--launch-reconfigure-p)]]
+    ("e" "Ephemeral" "--ephemeral" :inapt-if pichat--launch-reconfigure-p)]]
   [["Conversation"
     ("s" pichat-launch-conversation :inapt-if pichat--launch-reconfigure-p
      :description pichat--launch-conversation-description)
@@ -2388,8 +2377,8 @@ or a changed runtime ignores the result."
     ("l" pichat-reconfigure-extensions :if pichat--launch-reconfigure-p
      :description pichat--launch-extensions-description)]]
   [["Action" :description pichat--launch-reconfigure-action-heading
-    ("c" pichat-launch-save-preset :inapt-if pichat--launch-reconfigure-p
-     :description (lambda () (pichat--launch-fixed-description "Save preset as…" "launch only")))
+    ("c" "Save preset as…" pichat-launch-save-preset
+     :inapt-if pichat--launch-reconfigure-p)
     ("RET" pichat-launch-execute
      :description pichat--launch-reconfigure-action-description
      :inapt-if pichat--launch-reconfigure-action-inapt-p)]]

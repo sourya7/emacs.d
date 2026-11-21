@@ -1383,10 +1383,12 @@ checks a saved session's target against its resolved owner scope."
         (should (transient--inapt-suffix-p suffix))))
     (with-temp-buffer
       (transient--insert-groups)
-      (let ((rendered (buffer-string)))
-        (dolist (text '("scope kept" "same runtime" "Target · kept" "Ephemeral · kept"
-                        "Conversation · kept" "launch only" "Restart · manual → coding"
-                        "Blocked: A prompt submission"))
+      (let ((rendered (buffer-substring-no-properties (point-min) (point-max))))
+        (dolist (row '("g Global (" "n Independent runtime (" "t Target (" "e Ephemeral ("))
+          (should (string-match-p (concat " " (regexp-quote row)) rendered)))
+        (dolist (row '("s Default conversation" "c Save preset as…"))
+          (should (string-match-p (concat " " (regexp-quote row) "\\(?:$\\|  \\)") rendered)))
+        (dolist (text '("Restart · manual → coding" "Blocked: A prompt submission"))
           (should (string-match-p (regexp-quote text) rendered)))
         (should-not (string-match-p "Pi session:\\|Reconfigure ·" rendered))))))
 

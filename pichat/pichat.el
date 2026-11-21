@@ -1985,25 +1985,11 @@ in the launcher (and stay listed under Added)."
                    current-chat))
         (pichat--open-launch-profile profile (plist-get context :directory))))))
 
-(defun pichat--reconfigure-menu-description ()
-  "Describe the captured runtime and conversation in the reconfigure menu."
-  (let* ((origin (plist-get (transient-scope) :origin))
-         (session (plist-get origin :session))
-         (title (or (pichat-session-name session) "Untitled conversation"))
-         (id (or (plist-get origin :session-id) "unknown")))
-    (format "Reconfigure · %s\nPi session: %s"
-            (truncate-string-to-width title 27 nil nil "…")
-            (truncate-string-to-width id 12 nil nil "…"))))
-
-(defun pichat--reconfigure-menu-scope ()
-  "Return the restart state of the launcher or standalone restart menu."
-  (or (pichat--launch-reconfigure-scope) (transient-scope)))
-
 (defun pichat--reconfigure-action-description ()
   "Describe the restart, or no-op, that the current reconfigure draft makes.
 A restart keeps the conversation; `pichat--reconfigure-action-heading'
 says when it does not, and what blocks it."
-  (let* ((scope (pichat--reconfigure-menu-scope))
+  (let* ((scope (pichat--launch-reconfigure-scope))
          (base (plist-get scope :base))
          (draft (plist-get scope :draft)))
     (if (not (pichat-reconfigure-effective-change-p base draft))
@@ -2033,7 +2019,7 @@ says when it does not, and what blocks it."
 
 (defun pichat--reconfigure-action-heading ()
   "Head the action with what blocks the restart or what it starts afresh."
-  (let ((scope (pichat--reconfigure-menu-scope)))
+  (let ((scope (pichat--launch-reconfigure-scope)))
     (pichat-transient-fill
      (cond
       ((pichat--reconfigure-action-inapt-p)
@@ -2056,7 +2042,7 @@ first (see `pichat--reconfigure-expand-draft'), then preflight blockers."
 
 (defun pichat--reconfigure-action-inapt-p ()
   "Return non-nil if a changed draft has preflight blockers."
-  (let ((scope (pichat--reconfigure-menu-scope)))
+  (let ((scope (pichat--launch-reconfigure-scope)))
     (and (pichat--reconfigure-blockers scope)
          (pichat-reconfigure-effective-change-p
           (plist-get scope :base) (plist-get scope :draft)))))
@@ -2095,25 +2081,13 @@ or a changed runtime ignores the result."
                                     :tool-selection (pichat-tool-selection-resolve expanded))))
             (pichat--reconfigure-refresh-visible-menu scope))))))))
 
-(defun pichat--reconfigure-draft-description ()
-  "Describe the exact selected preset and Tools draft."
-  (let* ((scope (transient-scope))
-         (draft (plist-get scope :draft))
-         (name (plist-get (plist-get draft :preset-spec) :name)))
-    (format "Preset: %s%s" name
-            (if (equal (plist-get draft :tool-selection)
-                       (plist-get (plist-get scope :base) :tool-selection))
-                "" " · Tools customized"))))
-
 (defun pichat--reconfigure-refresh-visible-menu (scope)
-  "Redraw only the visible menu that owns reconfigure SCOPE."
-  (when (bound-and-true-p transient--prefix)
-    (let ((prefix (oref transient--prefix command))
-          (context (oref transient--prefix scope)))
-      (when (pcase prefix
-              ('pichat-launch (eq scope (pichat--launch-reconfigure-scope context)))
-              ('pichat-reconfigure-menu (eq scope context)))
-        (transient-setup prefix nil nil :scope context)))))
+  "Redraw only the visible launcher that owns reconfigure SCOPE."
+  (when (and (bound-and-true-p transient--prefix)
+             (eq (oref transient--prefix command) 'pichat-launch))
+    (let ((context (oref transient--prefix scope)))
+      (when (eq scope (pichat--launch-reconfigure-scope context))
+        (transient-setup 'pichat-launch nil nil :scope context)))))
 
 (defun pichat--reconfigure-request-menu-preflight (scope)
   "Refresh bounded preflight blockers for exact menu SCOPE."
@@ -2135,12 +2109,11 @@ or a changed runtime ignores the result."
                          (eq (plist-get result :source-kind) 'unwritten)))
          (pichat--reconfigure-refresh-visible-menu scope))))))
 
-(defun pichat--reconfigure-show (scope &optional context)
-  "Display captured restart SCOPE, in the launcher when given CONTEXT."
+(defun pichat--reconfigure-show (scope context)
+  "Display the launcher's captured restart SCOPE in CONTEXT."
   (plist-put scope :blockers '("Checking current Pi state…"))
-  (plist-put scope :menu-token (make-symbol "pichat-reconfigure-menu"))
-  (transient-setup (if context 'pichat-launch 'pichat-reconfigure-menu)
-                   nil nil :scope (or context scope))
+  (plist-put scope :menu-token (make-symbol "pichat-reconfigure-preflight"))
+  (transient-setup 'pichat-launch nil nil :scope context)
   (pichat--reconfigure-request-menu-preflight scope))
 
 (transient-define-suffix pichat-launch-reconfigure ()
@@ -2178,10 +2151,6 @@ or a changed runtime ignores the result."
           ;; belong to the resolved replacement configuration.
           :extensions (mapcar (lambda (spec) (cons spec t))
                               (plist-get base :extensions)))))
-
-(defun pichat--reconfigure-launch-context ()
-  "Return the launcher context when called in reconfigure mode."
-  (when (pichat--launch-reconfigure-p) (transient-scope)))
 
 (defun pichat--reconfigure-launch-preset-description ()
   "Describe the resolved restart preset without consulting the registry."
@@ -2264,8 +2233,8 @@ or a changed runtime ignores the result."
 (transient-define-suffix pichat-reconfigure-preset ()
   "Select a current preset definition for this runtime restart."
   (interactive)
-  (let* ((context (pichat--reconfigure-launch-context))
-         (scope (pichat--reconfigure-menu-scope))
+  (let* ((context (transient-scope))
+         (scope (pichat--launch-reconfigure-scope context))
          (origin (plist-get scope :origin))
          (draft (plist-get scope :draft))
          (name (intern
@@ -2288,8 +2257,8 @@ or a changed runtime ignores the result."
 (transient-define-suffix pichat-reconfigure-tools ()
   "Choose eligible Tools against this runtime's captured preset draft."
   (interactive)
-  (let* ((context (pichat--reconfigure-launch-context))
-         (scope (pichat--reconfigure-menu-scope))
+  (let* ((context (transient-scope))
+         (scope (pichat--launch-reconfigure-scope context))
          (origin (plist-get scope :origin))
          (session (plist-get origin :session))
          (draft (plist-get scope :draft)))
@@ -2312,20 +2281,6 @@ or a changed runtime ignores the result."
      (plist-get scope :tool-discovery)
      (pichat-presets-load-extensions (plist-get draft :preset-spec)
                                      (plist-get draft :extensions)))))
-
-(transient-define-suffix pichat-reconfigure-back ()
-  "Return to the untouched normal launch draft."
-  (interactive)
-  (let* ((scope (transient-scope))
-         (launch-scope (plist-get scope :launch-scope)))
-    (transient-setup 'pichat-launch nil nil
-                     :scope (plist-put launch-scope :launch-args
-                                       (plist-get scope :launch-args)))))
-
-(transient-define-suffix pichat-reconfigure-execute ()
-  "Confirm and run the captured runtime restart, or do nothing."
-  (interactive)
-  (pichat--reconfigure-execute (pichat--reconfigure-menu-scope)))
 
 (defun pichat--reconfigure-execute (scope)
   "Confirm and run restart for SCOPE, or do nothing."
@@ -2391,25 +2346,6 @@ or a changed runtime ignores the result."
    ("o" "Restore previous" pichat-reconfigure-restore)
    ("q" "Leave stopped" pichat-reconfigure-leave-stopped-action)])
 
-(transient-define-prefix pichat-reconfigure-menu (&optional scope)
-  "Choose a new preset or Tools for this retained runtime."
-  [:description pichat--reconfigure-menu-description
-   ["Configuration"
-    ("p" pichat-reconfigure-preset
-     :description pichat--reconfigure-draft-description)
-    ("x" "Tools" pichat-reconfigure-tools)]
-   ["Navigation"
-    ("b" "Back to launcher" pichat-reconfigure-back)]]
-  [["Action" :description pichat--reconfigure-action-heading
-    ("RET" pichat-reconfigure-execute
-     :description pichat--reconfigure-action-description
-     :inapt-if pichat--reconfigure-action-inapt-p)]]
-  [:hide (lambda () t)
-   ("<return>" pichat-reconfigure-execute
-    :inapt-if pichat--reconfigure-action-inapt-p)]
-  (interactive)
-  (pichat--reconfigure-show scope))
-
 ;;;###autoload (autoload 'pichat-launch "pichat" nil t)
 (transient-define-prefix pichat-launch (&optional context)
   "Launch a PiChat runtime or reconfigure the runtime owning this chat."
@@ -2418,13 +2354,15 @@ or a changed runtime ignores the result."
     ("g" (lambda () (pichat--launch-fixed-description "Global" "scope kept"))
      "--global" :inapt-if pichat--launch-reconfigure-p)]
    ["Runtime"
-    ("n" (lambda () (pichat--launch-fixed-description "Independent runtime" "same runtime"))
+    ("n" (lambda () (if (pichat--launch-reconfigure-p)
+                         "Independent · same runtime"
+                       "Independent runtime"))
      "--new" :inapt-if pichat--launch-reconfigure-p)
     ("t" (lambda () (pichat--launch-fixed-description "Target" "kept"))
      "--target=" :inapt-if pichat--launch-reconfigure-p
      :choices pichat--launch-target-choices)]
    ["Persistence"
-    ("e" (lambda () (pichat--launch-fixed-description "Ephemeral" "persistence kept"))
+    ("e" (lambda () (pichat--launch-fixed-description "Ephemeral" "kept"))
      "--ephemeral" :inapt-if pichat--launch-reconfigure-p)]]
   [["Conversation"
     ("s" pichat-launch-conversation :inapt-if pichat--launch-reconfigure-p

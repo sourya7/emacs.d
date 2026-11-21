@@ -110,24 +110,18 @@
          (tools (copy-tree base t)))
     (plist-put tools :tool-selection
                (pichat-tool-selection-resolve (pichat-presets-resolve 'manual) '("read")))
-    (pichat-test-transient-width--check
-     'pichat-reconfigure-menu
-     (list :origin origin :base base :draft (copy-tree base t)
-           :blockers '("Checking current Pi state…"))
-     "^Reconfigure · Refactor" "^Pi session: 01a16663-ab" "Preset: manual"
-     "RET No changes · keep runtime")
-    (pichat-test-transient-width--check
-     'pichat-reconfigure-menu
-     (list :origin origin :base base :draft switch
-           :blockers '("SSH restart requires verified Linux actual-Pi process identity"))
-     "^Blocked: SSH restart requires verified" "RET Restart · manual → coding")
-    (pichat-test-transient-width--check
-     'pichat-reconfigure-menu
-     (list :origin origin :base base :draft switch :empty-unwritten t)
-     "^New empty Pi session; keep chat and draft$" "RET Restart · manual → coding")
-    (pichat-test-transient-width--check
-     'pichat-reconfigure-menu (list :origin origin :base base :draft tools)
-     "Tools customized" "RET Restart · new tools")
+    (cl-flet ((check (draft extras &rest expected)
+                (apply #'pichat-test-transient-width--check 'pichat-launch
+                       (list :mode 'reconfigure :reconfigure
+                             (append (list :origin origin :base base :draft draft) extras))
+                       expected)))
+      (check (copy-tree base t) '(:blockers ("Checking current Pi state…"))
+             "r Reconfigure" "Preset manual" "RET No changes · keep runtime")
+      (check switch '(:blockers ("SSH restart requires verified Linux actual-Pi process identity"))
+             "^Blocked: SSH restart requires verified" "RET Restart · manual → coding")
+      (check switch '(:empty-unwritten t)
+             "^New empty Pi session; keep chat and draft$" "RET Restart · manual → coding")
+      (check tools nil "RET Restart · new tools"))
     (setf (pichat-session-restart-operation session)
           (list :phase 'failed :empty-unwritten t
                 :failure "Pi exited with code 1 before reporting its state"))

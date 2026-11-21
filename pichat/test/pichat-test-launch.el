@@ -1032,15 +1032,6 @@ checks a saved session's target against its resolved owner scope."
       (should (equal "exact-id" (plist-get chosen :session-id)))
       (should (equal "/saved/cwd" (plist-get chosen :cwd))))))
 
-(ert-deftest pichat-reconfigure-transient-heading-identifies-conversation-concisely ()
-  (let* ((session (pichat-session-create :id "runtime" :name "Conversation"
-                                          :transport pichat-transport-local))
-         (scope (list :origin (list :session session :session-id "session-123456")
-                      :empty-unwritten t)))
-    (cl-letf (((symbol-function 'transient-scope) (lambda (&rest _) scope)))
-      (should (equal "Reconfigure · Conversation\nPi session: session-123…"
-                     (pichat--reconfigure-menu-description))))))
-
 (ert-deftest pichat-reconfigure-transient-renders-blocked-restart ()
   (let* ((base (list :preset-spec (pichat-presets-resolve 'manual)))
          (draft (pichat-reconfigure-select-preset base 'coding))
@@ -1048,10 +1039,9 @@ checks a saved session's target against its resolved owner scope."
                                          :transport pichat-transport-local))
          (scope (list :origin (list :session session)
                       :base base :draft draft :blockers '("Pi is busy")))
-         (prefix (transient--init-prefix 'pichat-reconfigure-menu)))
-    (oset prefix scope scope)
-    (let* ((transient--prefix prefix)
-           (transient--layout (transient--init-suffixes 'pichat-reconfigure-menu))
+         (context (list :mode 'reconfigure :reconfigure scope)))
+    (let* ((transient--prefix (transient--init-prefix 'pichat-launch (list :scope context)))
+           (transient--layout (transient--init-suffixes 'pichat-launch))
            (transient--suffixes (transient--flatten-suffixes transient--layout)))
       (should (string-match-p "Blocked.*Pi is busy"
                               (pichat--reconfigure-action-heading)))
@@ -1064,11 +1054,12 @@ checks a saved session's target against its resolved owner scope."
                 (list :preset-spec (pichat-presets-resolve 'standard)) 'manual))
          (tools (copy-tree base t))
          (definition (copy-tree base t))
-         (scope (list :base base :draft tools)))
+         (scope (list :base base :draft tools))
+         (context (list :mode 'reconfigure :reconfigure scope)))
     (plist-put tools :tool-selection
                (pichat-tool-selection-resolve
                 (pichat-presets-resolve 'manual) '("read")))
-    (cl-letf (((symbol-function 'transient-scope) (lambda (&rest _) scope)))
+    (cl-letf (((symbol-function 'transient-scope) (lambda (&rest _) context)))
       (should (string-match-p "new tools"
                               (pichat--reconfigure-action-description)))
       (plist-put (plist-get definition :preset-spec)
@@ -1081,8 +1072,9 @@ checks a saved session's target against its resolved owner scope."
   (let* ((base (pichat-reconfigure-select-preset
                 (list :preset-spec (pichat-presets-resolve 'standard)) 'manual))
          (draft (pichat-reconfigure-select-preset base 'coding))
-         (scope (list :base base :draft draft :empty-unwritten t)))
-    (cl-letf (((symbol-function 'transient-scope) (lambda (&rest _) scope)))
+         (scope (list :base base :draft draft :empty-unwritten t))
+         (context (list :mode 'reconfigure :reconfigure scope)))
+    (cl-letf (((symbol-function 'transient-scope) (lambda (&rest _) context)))
       (should (string-match-p "New empty Pi session; keep chat and draft"
                               (pichat--reconfigure-action-heading))))))
 
@@ -1100,14 +1092,13 @@ checks a saved session's target against its resolved owner scope."
                                 :base base
                                 :draft (pichat-reconfigure-select-preset
                                         base 'coding)
-                                :empty-unwritten t)))
-              (cl-letf (((symbol-function 'transient-scope)
-                         (lambda (&rest _) scope))
-                        ((symbol-function 'yes-or-no-p)
+                                :empty-unwritten t))
+                   (context (list :mode 'reconfigure :reconfigure scope)))
+              (cl-letf (((symbol-function 'yes-or-no-p)
                          (lambda (question) (setq prompt question) nil))
                         ((symbol-function 'pichat-reconfigure-restart)
                          (lambda (&rest _) (ert-fail "Confirmation declined"))))
-                (call-interactively #'pichat-reconfigure-execute)
+                (pichat-launch-execute nil context)
                 (should (equal "Restart runtime? " prompt))
                 (should (process-live-p proc)))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
@@ -1132,7 +1123,7 @@ checks a saved session's target against its resolved owner scope."
                        (lambda (question) (setq prompt question) nil))
                       ((symbol-function 'pichat-reconfigure-restart)
                        (lambda (&rest _) (ert-fail "Confirmation declined"))))
-              (call-interactively #'pichat-reconfigure-execute)
+              (pichat-launch-execute nil (list :mode 'reconfigure :reconfigure scope))
               (should (equal "Restart runtime? " prompt))
               (setq scope (list :session session))
               (dolist (empty '(nil t))
@@ -1167,13 +1158,11 @@ checks a saved session's target against its resolved owner scope."
                    (scope (list :origin (pichat-reconfigure-capture-origin session)
                                 :base base :draft (copy-tree base t)
                                 :blockers '("Busy"))))
-              (cl-letf (((symbol-function 'transient-scope)
-                         (lambda (&rest _) scope))
-                        ((symbol-function 'yes-or-no-p)
+              (cl-letf (((symbol-function 'yes-or-no-p)
                          (lambda (&rest _) (ert-fail "No-op prompted to restart")))
                         ((symbol-function 'pichat-reconfigure-restart)
                          (lambda (&rest _) (ert-fail "No-op restarted"))))
-                (call-interactively #'pichat-reconfigure-execute)
+                (pichat-launch-execute nil (list :mode 'reconfigure :reconfigure scope))
                 (should (process-live-p proc)))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
@@ -1186,12 +1175,12 @@ checks a saved session's target against its resolved owner scope."
                                               :transport pichat-transport-local))
                       :base base :draft (copy-tree base t)
                       :blockers nil))
-         (transient--prefix (transient--init-prefix 'pichat-reconfigure-menu))
-         (transient--layout (transient--init-suffixes 'pichat-reconfigure-menu))
+         (context (list :mode 'reconfigure :reconfigure scope))
+         (transient--prefix (transient--init-prefix 'pichat-launch (list :scope context)))
+         (transient--layout (transient--init-suffixes 'pichat-launch))
          (transient--suffixes (transient--flatten-suffixes transient--layout)))
-    (oset transient--prefix scope scope)
     (dolist (key '("RET" "<return>"))
-      (should (eq 'pichat-reconfigure-execute
+      (should (eq 'pichat-launch-execute
                   (lookup-key (transient--make-transient-map) (kbd key)))))
     (with-temp-buffer
       (transient--insert-groups)
@@ -1216,6 +1205,25 @@ checks a saved session's target against its resolved owner scope."
                          (lambda (&rest _) (setq started t))))
                 (call-interactively #'pichat-launch-reconfigure)
                 (should-not started))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest pichat-launch-reconfigure-routes-failed-and-left-stopped-runtimes-to-recovery ()
+  (pichat-test-with-unit-session (session proc)
+    (let ((pichat-chat-stop-session-on-kill nil)
+          opened buffer)
+      (unwind-protect
+          (progn
+            (setq buffer (pichat-chat-open session))
+            (let ((context (list :origin-buffer buffer :directory default-directory)))
+              (cl-letf (((symbol-function 'transient-scope) (lambda (&rest _) context))
+                        ((symbol-function 'transient-setup)
+                         (lambda (prefix &rest args)
+                           (push (cons prefix (plist-get args :scope)) opened))))
+                (dolist (phase '(failed left-stopped))
+                  (setf (pichat-session-restart-operation session) (list :phase phase))
+                  (call-interactively #'pichat-launch-reconfigure)
+                  (should (eq 'pichat-reconfigure-recovery (caar opened)))
+                  (should (eq session (plist-get (cdar opened) :session)))))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
 (ert-deftest pichat-launch-reconfigure-keeps-drafts-separate ()
@@ -1349,7 +1357,7 @@ checks a saved session's target against its resolved owner scope."
     (with-temp-buffer
       (transient--insert-groups)
       (let ((rendered (buffer-string)))
-        (dolist (text '("scope kept" "same runtime" "Target · kept" "persistence kept"
+        (dolist (text '("scope kept" "same runtime" "Target · kept" "Ephemeral · kept"
                         "Conversation · kept" "launch only" "Restart · manual → coding"
                         "Blocked: A prompt submission"))
           (should (string-match-p (regexp-quote text) rendered)))

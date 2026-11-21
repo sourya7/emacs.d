@@ -2011,7 +2011,13 @@ says when it does not, and what blocks it."
       (format "Restart · %s"
               (if (equal (plist-get base :preset-spec)
                          (plist-get draft :preset-spec))
-                  "new tools"
+                  (if (equal (plist-get base :extensions)
+                             (plist-get draft :extensions))
+                      "new tools"
+                    (if (equal (plist-get base :tool-selection)
+                               (plist-get draft :tool-selection))
+                        "new extensions"
+                      "new tools and extensions"))
                 (let ((previous (plist-get (plist-get base :preset-spec) :name))
                       (selected (plist-get (plist-get draft :preset-spec) :name)))
                   (if (eq previous selected)
@@ -2071,7 +2077,7 @@ or a changed runtime ignores the result."
         (let ((model (pichat-session-model session)))
           (when (and (plist-get model :provider) (plist-get model :id))
             (concat (plist-get model :provider) "/" (plist-get model :id))))
-        (pichat-presets-load-extensions spec (pichat-session-extensions session))
+        (pichat-presets-load-extensions spec (plist-get draft :extensions))
         (lambda (expanded error)
           (when (and (eq draft (plist-get scope :draft))
                      (pichat-reconfigure-origin-current-p origin))
@@ -2080,8 +2086,8 @@ or a changed runtime ignores the result."
                 (plist-put scope :expansion (format "Included future tools: %s" error))
               (plist-put scope :expansion nil)
               (plist-put scope :draft
-                         (list :preset-spec expanded
-                               :tool-selection (pichat-tool-selection-resolve expanded))))
+                         (plist-put (plist-put (copy-sequence draft) :preset-spec expanded)
+                                    :tool-selection (pichat-tool-selection-resolve expanded))))
             (pichat--reconfigure-refresh-visible-menu scope))))))))
 
 (defun pichat--reconfigure-draft-description ()
@@ -2163,8 +2169,10 @@ or a changed runtime ignores the result."
   (let ((base (pichat-reconfigure-captured-configuration session)))
     (list :origin (pichat-reconfigure-capture-origin session)
           :base base :draft (copy-tree base t)
+          ;; The picker also retains unchecked specs; only checked specs
+          ;; belong to the resolved replacement configuration.
           :extensions (mapcar (lambda (spec) (cons spec t))
-                              (pichat-session-extensions session))
+                              (plist-get base :extensions))
           :active-model (pichat--reconfigure-runtime-model session)
           :model nil)))
 
@@ -2238,7 +2246,13 @@ or a changed runtime ignores the result."
      (lambda (result)
        (when (pichat-reconfigure-origin-current-p origin)
          (unless (eq result :cancel)
-           (plist-put scope :extensions result))
+           (let* ((current (plist-get scope :draft))
+                  (checked (pichat-launch-extensions-checked result)))
+             (unless (equal checked (plist-get current :extensions))
+               (plist-put scope :draft
+                          (pichat-reconfigure-select-extensions current checked))
+               (pichat--reconfigure-expand-draft scope))
+             (plist-put scope :extensions result)))
          (pichat--reconfigure-show scope context))))))
 
 (transient-define-suffix pichat-reconfigure-preset ()
@@ -2290,10 +2304,8 @@ or a changed runtime ignores the result."
          (pichat--reconfigure-show scope context)))
      (pichat--reconfigure-runtime-model session)
      (plist-get scope :tool-discovery)
-     ;; The replacement keeps the runtime's added extensions and loads
-     ;; those of the drafted preset.
      (pichat-presets-load-extensions (plist-get draft :preset-spec)
-                                     (pichat-session-extensions session)))))
+                                     (plist-get draft :extensions)))))
 
 (transient-define-suffix pichat-reconfigure-back ()
   "Return to the untouched normal launch draft."

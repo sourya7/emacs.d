@@ -217,6 +217,13 @@ Those of its preset snapshot come first, then its added extensions."
   (pichat-presets-load-extensions (pichat-session-preset-spec session)
                                   (pichat-session-extensions session)))
 
+(defun pichat-rpc-process-extensions (session process)
+  "Return the extensions started in PROCESS, not SESSION's restart baseline."
+  (if-let* ((process process)
+            (entry (plist-member (process-plist process) 'pichat-loaded-extensions)))
+      (cadr entry)
+    (pichat-rpc-session-extensions session)))
+
 (defun pichat-rpc-extension-args (extensions)
   "Return Pi arguments loading added EXTENSIONS, a list of specs, in order."
   (mapcan (lambda (spec) (list "-e" spec)) extensions))
@@ -421,12 +428,15 @@ Do not dispatch callbacks into a replacement process."
 (declare-function pichat-bridge-transport-dispatch "pichat-bridge-transport"
                   (session raw &optional definitions-only))
 
-(cl-defun pichat-rpc-start (session &optional validated-command (startup-tools nil tools-p))
+(cl-defun pichat-rpc-start (session &optional validated-command (startup-tools nil tools-p)
+                                    (startup-extensions nil extensions-p))
   "Start the Pi RPC process for SESSION and return SESSION.
 VALIDATED-COMMAND is an optional detached argv prepared before a restart;
 ordinary launches continue to build the command from SESSION.  STARTUP-TOOLS,
 when supplied, is the replacement's resolved Tools snapshot (not the previous
-committed configuration).  A local startup failure retains a diagnostic."
+committed configuration).  STARTUP-EXTENSIONS, when supplied, is the full
+list of extensions in the replacement argv, including preset extensions.
+A local startup failure retains a diagnostic."
   (when (and (pichat-session-process session)
              (process-live-p (pichat-session-process session)))
     (user-error "Cannot start another Pi process in a live runtime"))
@@ -446,6 +456,8 @@ committed configuration).  A local startup failure retains a diagnostic."
                            (or (pichat-session-tool-selection session)
                                (when (pichat-session-preset-spec session)
                                  (pichat-tool-selection-resolve (pichat-session-preset-spec session))))))
+         (extensions (if extensions-p startup-extensions
+                       (pichat-rpc-session-extensions session)))
          (runtime-cwd (or (pichat-session-runtime-cwd session)
                           (pichat-session-cwd session)
                           default-directory))
@@ -472,7 +484,7 @@ committed configuration).  A local startup failure retains a diagnostic."
           ;; Added extensions also use the startup barrier: it holds input
           ;; until Pi's stderr shows they loaded (see `pichat-tool-runtime').
           (when (or (plist-get tool-selection :extensions)
-                    (pichat-rpc-session-extensions session)
+                    extensions
                     (eq (pichat-transport-kind transport) 'ssh))
             (require 'pichat-tool-runtime)
             (let ((path (if skill
@@ -516,6 +528,7 @@ committed configuration).  A local startup failure retains a diagnostic."
               (set-process-sentinel stderr-process #'ignore))
             (process-put proc 'pichat-session session)
             (process-put proc 'pichat-stderr-buffer stderr-buffer)
+            (process-put proc 'pichat-loaded-extensions extensions)
             (let ((generation (1+ (or (pichat-session-process-generation session) 0))))
               (process-put proc 'pichat-process-generation generation)
               (setf (pichat-session-process-generation session) generation))
@@ -593,7 +606,8 @@ When LIMIT is non-nil, copy at most LIMIT leading characters."
               (pichat-session-rpc-ready-timer session) nil
               (pichat-session-rpc-send-queue session) nil)
         (let* ((intentional (pichat-session-stop-requested-p session))
-               (_ (when-let* (((pichat-rpc-session-extensions session))
+               (extensions (pichat-rpc-process-extensions session process))
+               (_ (when-let* ((extensions extensions)
                               (buffer (process-get process 'pichat-stderr-buffer))
                               ((buffer-live-p buffer))
                               (stderr (get-buffer-process buffer))
@@ -607,7 +621,7 @@ When LIMIT is non-nil, copy at most LIMIT leading characters."
                (exit-status (process-exit-status process))
                ;; For example a missing added path: Pi exits after saying so.
                (failure (pichat-rpc-extension-failure
-                         stderr (pichat-rpc-session-extensions session)))
+                         stderr extensions))
                (diagnostic
                 (unless intentional
                   (pichat-chat-diagnostics-record

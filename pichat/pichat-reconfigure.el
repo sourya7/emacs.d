@@ -31,14 +31,15 @@
   :group 'pichat)
 
 (defun pichat-reconfigure-captured-configuration (session)
-  "Return detached resolved preset and Tools configuration of SESSION.
+  "Return detached resolved preset, Tools and added extensions of SESSION.
 Never re-resolve an unchanged named preset against the current registry."
   (let ((spec (pichat-session-preset-spec session)))
     (unless (and (listp spec) (symbolp (plist-get spec :name)))
       (user-error "This runtime has no captured resolved preset"))
     (list :preset-spec (pichat-presets--copy spec)
           :tool-selection
-          (pichat-presets--copy (pichat-session-tool-selection session)))))
+          (pichat-presets--copy (pichat-session-tool-selection session))
+          :extensions (pichat-presets--copy (pichat-session-extensions session)))))
 
 (defun pichat-reconfigure-select-preset (configuration name)
   "Select current registry preset NAME for CONFIGURATION, resetting Tools.
@@ -48,7 +49,8 @@ a missing registry preset can only be retained, never selected anew."
     (user-error "No captured PiChat preset configuration"))
   (let* ((spec (pichat-presets-resolve name))
          (tools (pichat-tool-selection-resolve spec)))
-    (list :preset-spec spec :tool-selection tools)))
+    (plist-put (plist-put (pichat-presets--copy configuration) :preset-spec spec)
+               :tool-selection tools)))
 
 (defun pichat-reconfigure-select-tools (configuration selection)
   "Return CONFIGURATION with validated raw Tools SELECTION.
@@ -57,11 +59,30 @@ accepted by the launch Tools picker.  Reuse the captured preset
 specification rather than looking up a mutable registry definition."
   (let ((spec (plist-get configuration :preset-spec)))
     (unless spec (user-error "No captured PiChat preset configuration"))
-    (list :preset-spec (pichat-presets--copy spec)
-          :tool-selection (pichat-tool-selection-resolve spec selection))))
+    (plist-put (pichat-presets--copy configuration) :tool-selection
+               (pichat-tool-selection-resolve spec selection))))
+
+(defun pichat-reconfigure-select-extensions (configuration extensions)
+  "Return CONFIGURATION with validated added EXTENSIONS.
+Reprobe a preset's expanded :all baseline when the added list changes.
+Explicit Tools selections remain exact; startup still verifies them."
+  (let* ((extensions (pichat-rpc--validate-extensions extensions))
+         (next (pichat-presets--copy configuration))
+         (spec (plist-get next :preset-spec)))
+    (when (and (not (equal extensions (plist-get next :extensions)))
+               (plist-member spec :expanded-all)
+               (equal (plist-get next :tool-selection)
+                      (pichat-tool-selection-resolve spec)))
+      (setq spec (cl-loop for (key value) on spec by #'cddr
+                          unless (eq key :expanded-all) append (list key value)))
+      (plist-put spec :extensions
+                 (pichat-presets-group-names (plist-get spec :tool-groups)))
+      (plist-put next :preset-spec spec)
+      (plist-put next :tool-selection (pichat-tool-selection-resolve spec)))
+    (plist-put next :extensions (pichat-presets--copy extensions))))
 
 (defun pichat-reconfigure-effective-change-p (previous requested)
-  "Return non-nil if REQUESTED changes effective prompt or tool configuration.
+  "Return non-nil if REQUESTED changes prompts, Tools or added extensions.
 PREVIOUS and REQUESTED are detached resolved configurations.  Changing only a
 preset name or description is not a reason to restart the process."
   (let ((before (plist-get previous :preset-spec))
@@ -80,6 +101,8 @@ preset name or description is not a reason to restart the process."
                       (plist-get after :append-system-prompt)))
           (not (equal (pichat-presets-load-extensions before)
                       (pichat-presets-load-extensions after)))
+          (not (equal (plist-get previous :extensions)
+                      (plist-get requested :extensions)))
           (not (equal (pichat-tool-selection-args tools-before)
                       (pichat-tool-selection-args tools-after)))
           (not (equal (plist-get tools-before :emacs)
@@ -472,7 +495,7 @@ late callbacks.  Never start a replacement while the old process is live."
 
 (defun pichat-reconfigure-validated-command (session configuration state)
   "Resolve replacement argv without changing SESSION's committed configuration.
-CONFIGURATION is a captured/selected resolved preset and Tools snapshot;
+CONFIGURATION contains a resolved preset, Tools and added extensions;
 STATE is fresh, validated Pi get_state data for the active run-local model.
 Recheck all settings and the command before stopping the original process."
   (let* ((preset (plist-get configuration :preset-spec))
@@ -490,8 +513,9 @@ Recheck all settings and the command before stopping the original process."
             (pichat-session-tool-selection snapshot)
             (pichat-tool-selection-check-expanded
              (pichat-tool-selection-resolve preset tools) (plist-get preset :name))
-            (pichat-session-startup-model snapshot)
-            (concat provider "/" id))
+            (pichat-session-startup-model snapshot) (concat provider "/" id)
+            (pichat-session-extensions snapshot)
+            (pichat-rpc--validate-extensions (plist-get configuration :extensions)))
       (let ((argv (pichat-rpc-build-command snapshot)))
         (unless (and (consp argv) (cl-every #'stringp argv))
           (user-error "Replacement Pi command is invalid"))
@@ -825,6 +849,7 @@ CONTINUATION receives the authoritative response data on success."
             (old-name (pichat-session-preset-name session))
             (old-tools (pichat-session-tool-selection session))
             (old-model (pichat-session-startup-model session))
+            (old-extensions (pichat-session-extensions session))
             (committed nil))
        ;; Provisional until the chat projection commits.  Roll back on any
        ;; non-local exit, including quit, before the attempt is retired.
@@ -835,7 +860,9 @@ CONTINUATION receives the authoritative response data on success."
               (pichat-presets--copy (plist-get requested :preset-spec))
               (pichat-presets--copy (plist-get requested :tool-selection)))
              (setf (pichat-session-startup-model session)
-                   (plist-get operation :active-model))
+                   (plist-get operation :active-model)
+                   (pichat-session-extensions session)
+                   (pichat-presets--copy (plist-get requested :extensions)))
              (with-current-buffer buffer
                (if (plist-get operation :empty-unwritten)
                    (pichat-chat-commit-staged-empty-restart session cache)
@@ -845,7 +872,8 @@ CONTINUATION receives the authoritative response data on success."
            (setf (pichat-session-preset-spec session) old-spec
                  (pichat-session-preset-name session) old-name
                  (pichat-session-tool-selection session) old-tools
-                 (pichat-session-startup-model session) old-model)))
+                 (pichat-session-startup-model session) old-model
+                 (pichat-session-extensions session) old-extensions)))
        (pichat-reconfigure--finish operation t nil)))))
 
 (defun pichat-reconfigure--restore-settings (operation state)
@@ -897,8 +925,12 @@ CONTINUATION receives the authoritative response data on success."
               (not (pichat-reconfigure--shutdown-safe-p operation)))
       (user-error "Old Pi shutdown is unconfirmed; replacement was not started"))
     (plist-put operation :phase 'starting)
-    (pichat-rpc-start session (plist-get operation :command)
-                      (plist-get (plist-get operation :active-configuration) :tool-selection))
+    (let ((configuration (plist-get operation :active-configuration)))
+      (pichat-rpc-start session (plist-get operation :command)
+                        (plist-get configuration :tool-selection)
+                        (pichat-presets-load-extensions
+                         (plist-get configuration :preset-spec)
+                         (plist-get configuration :extensions))))
     (unless (pichat-session-alive-p session)
       (user-error "Replacement Pi process could not start"))
     (plist-put operation :replacement-process (pichat-session-process session))
@@ -1018,7 +1050,7 @@ Only recovery may pass ALLOW-STOPPED for an already-confirmed stopped runtime."
           (pichat-reconfigure--prepare-shutdown operation nil #'begin))))))
 
 (defun pichat-reconfigure-restart (origin requested callback)
-  "Restart ORIGIN with resolved REQUESTED preset/Tools, reporting to CALLBACK.
+  "Restart ORIGIN with REQUESTED preset, Tools and extensions; call CALLBACK.
 CALLBACK receives (SUCCESS REASON).  Post-stop failures retain the canonical
 snapshot and both captured configuration choices for recovery.  An unwritten,
 verified conversation-free source starts a new Pi session with a new ID.

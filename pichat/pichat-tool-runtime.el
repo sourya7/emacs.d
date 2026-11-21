@@ -56,7 +56,8 @@ Return the helper path.  Only actual startup stages resources, not preflight."
   "Return Pi's stderr line refusing SESSION's added extensions, or nil.
 Pi reports install and load failures on stderr before it answers RPC
 requests; read what is already pending before deciding."
-  (when-let* ((extensions (pichat-rpc-session-extensions session))
+  (when-let* ((extensions (pichat-rpc-process-extensions
+                           session (pichat-session-process session)))
               (buffer (pichat-session-stderr-buffer session))
               ((buffer-live-p buffer)))
     (when-let* ((stderr (get-buffer-process buffer))

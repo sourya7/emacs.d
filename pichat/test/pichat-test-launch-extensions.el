@@ -651,6 +651,16 @@
                                            text))
                          messages))))))
 
+(ert-deftest pichat-launch-extensions-reconfigure-refuses-duplicate-added-specs ()
+  (let* ((session (pichat-prepare-session "/tmp/" nil '(:preset manual)))
+         (base (pichat-reconfigure-captured-configuration session)))
+    (should-error (pichat-reconfigure-select-extensions base '("a.ts" "a.ts"))
+                  :type 'user-error)
+    (should-error (pichat-reconfigure-validated-command
+                   session (plist-put base :extensions '("a.ts" "a.ts"))
+                   '(:model (:provider "p" :id "m")))
+                  :type 'user-error)))
+
 (ert-deftest pichat-launch-extensions-reconfigure-expands-a-reselected-preset ()
   (let* ((pichat-rpc-command nil) (pichat-pi-extra-args nil)
          (pichat-pi-default-args '("--mode" "rpc")) (pichat-default-model nil)
@@ -666,7 +676,9 @@
     (let* ((session (pichat-prepare-session "/tmp/" nil '(:preset manual :extensions ("x.ts"))))
            (base (pichat-reconfigure-captured-configuration session))
            (scope (list :origin (pichat-reconfigure-capture-origin session) :base base
-                        :draft (pichat-reconfigure-select-preset base 'future))))
+                        :draft (pichat-reconfigure-select-preset
+                                (pichat-reconfigure-select-extensions base '("y.ts"))
+                                'future))))
       (cl-letf (((symbol-function 'run-at-time)
                  (lambda (_time _repeat function &rest args) (apply function args) nil))
                 ((symbol-function 'pichat-tool-discovery-draft-refresh)
@@ -675,7 +687,7 @@
         (pichat--reconfigure-expand-draft scope)
         (should (equal '("Discovering included future tools…")
                        (pichat--reconfigure-blockers scope)))
-        (should (equal '("npm:pkg@1" "x.ts")
+        (should (equal '("npm:pkg@1" "y.ts")
                        (plist-get (pichat-tool-discovery-draft-context (car refresh))
                                   :extensions)))
         ;; A failure keeps it blocked with the reason.
@@ -693,6 +705,10 @@
           (funcall callback draft))
         (should-not (pichat--reconfigure-blockers scope))
         (let ((draft (plist-get scope :draft)))
+          (should (equal '("y.ts") (plist-get draft :extensions)))
+          (should (plist-get (plist-get (pichat-reconfigure-select-extensions draft nil)
+                                        :tool-selection)
+                             :unexpanded))
           (should (equal '(("npm:pkg@1" "pkg_a"))
                          (plist-get (plist-get draft :preset-spec) :expanded-all)))
           (should (equal '("--tools" "read,pkg_a")
@@ -719,6 +735,19 @@
   "Secrets guard with only a `tool_call' hook: no tools, no commands.")
 
 (declare-function pichat-test-extension-tools-active "pichat-test-extension-tools" (session))
+
+(defmacro pichat-test-launch-extensions--with-reconfigurable-session (session &rest body)
+  "Run BODY with a persistent real-Pi SESSION and a disposable owning chat."
+  (declare (indent 1))
+  `(pichat-test-with-integration-session (,session :preset 'manual :script '(:turns []))
+     (let ((pichat-chat-stop-session-on-kill nil)
+           (chat (pichat-chat-open ,session t)))
+       (unwind-protect
+           (progn
+             (pichat-test-wait-until (lambda () (pichat-chat-canonical-entry-cache ,session))
+                                     5 "initial empty cache")
+             ,@body)
+         (when (buffer-live-p chat) (kill-buffer chat))))))
 
 (when pichat-test-include-integration
   (ert-deftest pichat-launch-extensions-real-pi-discovery-loads-added-extensions ()
@@ -828,6 +857,31 @@
           (when (pichat-session-p added)
             (pichat-rpc-stop added)
             (pichat-forget-session added))))))
+
+  (ert-deftest pichat-launch-extensions-real-pi-restart-adds-and-removes-extension ()
+    (pichat-test-launch-extensions--with-reconfigurable-session session
+      (let ((fixture pichat-test-launch-extensions--fixture))
+        (cl-flet ((has-command ()
+                    (let ((response (pichat-test-rpc-call session "get_commands")))
+                      (should (plist-get response :success))
+                      (seq-some (lambda (command)
+                                  (equal "probe-report" (plist-get command :name)))
+                                (plist-get (plist-get response :data) :commands)))))
+          (should-not (has-command))
+          (dolist (extensions (list (list fixture) nil))
+            (let* ((base (pichat-reconfigure-captured-configuration session))
+                   (draft (pichat-reconfigure-select-extensions base extensions))
+                   (old (pichat-session-process session))
+                   result)
+              (should (pichat-reconfigure-effective-change-p base draft))
+              (pichat-reconfigure-restart
+               (pichat-reconfigure-capture-origin session) draft
+               (lambda (success reason) (setq result (list success reason))))
+              (pichat-test-wait-until (lambda () result) 15 "extension-only restart")
+              (should (equal '(t nil) result))
+              (should-not (eq old (pichat-session-process session)))
+              (should (equal extensions (pichat-session-extensions session)))
+              (if extensions (should (has-command)) (should-not (has-command)))))))))
 
   (ert-deftest pichat-launch-extensions-real-pi-preset-loads-its-extensions-and-grouped-tools ()
     (pichat-test-with-integration-session (session :preset 'manual :script '(:turns []))
@@ -1039,7 +1093,7 @@
             (pichat-forget-session added))))))
 
   (ert-deftest pichat-launch-extensions-real-pi-refuses-failed-installs-and-missing-paths ()
-    (pichat-test-with-integration-session (session :preset 'manual :script '(:turns []))
+    (pichat-test-launch-extensions--with-reconfigurable-session session
       ;; A missing local path makes Pi exit; a package that fails to install
       ;; (a missing local tarball: npm needs no network) lets Pi start
       ;; without it.  Installs need Pi online, so drop the offline setting.
@@ -1086,7 +1140,26 @@
                         (should (string-match-p "\\`Added extension failed" summary))
                         (should (string-search (truncate-string-to-width reported 40) summary))))
                   (pichat-rpc-stop added)
-                  (pichat-forget-session added))))))))))
+                  (pichat-forget-session added)))
+              ;; Replacement readiness must check the new process's list,
+              ;; even while the runtime's committed list is still empty.
+              (let ((base (pichat-reconfigure-captured-configuration session)) result)
+                (pichat-reconfigure-restart
+                 (pichat-reconfigure-capture-origin session)
+                 (pichat-reconfigure-select-extensions base (list spec))
+                 (lambda (success reason) (setq result (list success reason))))
+                (pichat-test-wait-until (lambda () result) 60 "refused replacement")
+                (should-not (car result))
+                (should-not (pichat-session-extensions session))
+                (should (eq 'failed (plist-get (pichat-session-restart-operation session) :phase)))
+                (should (string-search (truncate-string-to-width reported 40)
+                                       (pichat-chat-diagnostics-latest-summary session)))
+                (setq result nil)
+                (pichat-reconfigure-recover
+                 session 'restore (lambda (success reason) (setq result (list success reason))))
+                (pichat-test-wait-until (lambda () result) 15 "restore previous extensions")
+                (should (equal '(t nil) result))
+                (should-not (pichat-session-extensions session))))))))))
 
 (provide 'pichat-test-launch-extensions)
 ;;; pichat-test-launch-extensions.el ends here

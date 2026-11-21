@@ -117,6 +117,10 @@ preset name or description is not a reason to restart the process."
                        (buffer-local-value 'pichat-chat--source-generation
                                            buffer)))))))
 
+(defconst pichat-reconfigure--job-blocker
+  "This runtime is owned by a job; use its job actions"
+  "Reason a job-owned runtime cannot be reconfigured.")
+
 (defun pichat-reconfigure--chat-blockers (session)
   "Return blockers for unresolved work in SESSION's existing chat."
   (let ((buffer (pichat-session-buffer session)))
@@ -126,7 +130,7 @@ preset name or description is not a reason to restart the process."
         (let ((cache (pichat-chat-canonical-entry-cache session))
               blockers)
           (when (pichat-session-input-guard session)
-            (push "This runtime is owned by a job; use its job actions" blockers))
+            (push pichat-reconfigure--job-blocker blockers))
           (unless (and (derived-mode-p 'pichat-chat-mode)
                        (eq pichat-chat-session session))
             (push "The chat buffer is not owned by this runtime" blockers))

@@ -9,6 +9,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'seq)
 (require 'subr-x)
 (require 'pichat-session)
 (require 'pichat-backend)
@@ -30,8 +31,22 @@
   :type 'positive-integer
   :group 'pichat)
 
+(defun pichat-reconfigure--model-reference (model)
+  "Return an exact provider/model reference from Pi MODEL, if known."
+  (let ((provider (and (listp model) (plist-get model :provider)))
+        (id (and (listp model) (plist-get model :id))))
+    (when (and (stringp provider) (not (string-blank-p provider))
+               (stringp id) (not (string-blank-p id)))
+      (concat provider "/" id))))
+
+(defun pichat-reconfigure-effective-model (configuration)
+  "Return CONFIGURATION's override, explicitly selected preset model or active model."
+  (or (plist-get configuration :model-override)
+      (plist-get configuration :preset-model)
+      (plist-get configuration :model)))
+
 (defun pichat-reconfigure-captured-configuration (session)
-  "Return detached resolved preset, Tools and added extensions of SESSION.
+  "Return detached resolved preset, Tools, added extensions and model of SESSION.
 Never re-resolve an unchanged named preset against the current registry."
   (let ((spec (pichat-session-preset-spec session)))
     (unless (and (listp spec) (symbolp (plist-get spec :name)))
@@ -39,7 +54,8 @@ Never re-resolve an unchanged named preset against the current registry."
     (list :preset-spec (pichat-presets--copy spec)
           :tool-selection
           (pichat-presets--copy (pichat-session-tool-selection session))
-          :extensions (pichat-presets--copy (pichat-session-extensions session)))))
+          :extensions (pichat-presets--copy (pichat-session-extensions session))
+          :model (pichat-reconfigure--model-reference (pichat-session-model session)))))
 
 (defun pichat-reconfigure-select-preset (configuration name)
   "Select current registry preset NAME for CONFIGURATION, resetting Tools.
@@ -48,9 +64,12 @@ a missing registry preset can only be retained, never selected anew."
   (unless (plist-get configuration :preset-spec)
     (user-error "No captured PiChat preset configuration"))
   (let* ((spec (pichat-presets-resolve name))
-         (tools (pichat-tool-selection-resolve spec)))
-    (plist-put (plist-put (pichat-presets--copy configuration) :preset-spec spec)
-               :tool-selection tools)))
+         (next (pichat-presets--copy configuration))
+         (model (plist-get spec :model)))
+    (setf (plist-get next :preset-spec) spec
+          (plist-get next :tool-selection) (pichat-tool-selection-resolve spec)
+          (plist-get next :preset-model) (and (stringp model) model))
+    next))
 
 (defun pichat-reconfigure-select-tools (configuration selection)
   "Return CONFIGURATION with validated raw Tools SELECTION.
@@ -81,10 +100,11 @@ Explicit Tools selections remain exact; startup still verifies them."
       (plist-put next :tool-selection (pichat-tool-selection-resolve spec)))
     (plist-put next :extensions (pichat-presets--copy extensions))))
 
-(defun pichat-reconfigure-effective-change-p (previous requested)
-  "Return non-nil if REQUESTED changes prompts, Tools or added extensions.
+(defun pichat-reconfigure-effective-change-p (previous requested &optional ignore-model)
+  "Return non-nil if REQUESTED changes prompts, Tools, added extensions or model.
 PREVIOUS and REQUESTED are detached resolved configurations.  Changing only a
-preset name or description is not a reason to restart the process."
+preset name or description is not a reason to restart the process.  IGNORE-MODEL
+omits the model comparison when describing other changes."
   (let ((before (plist-get previous :preset-spec))
         (after (plist-get requested :preset-spec)))
     (unless (and before after)
@@ -95,6 +115,9 @@ preset name or description is not a reason to restart the process."
                         after (plist-get requested :tool-selection))))
       (or ;; Future tools still to be discovered may add any tool.
           (plist-get tools-after :unexpanded)
+          (and (not ignore-model)
+               (not (equal (pichat-reconfigure-effective-model previous)
+                           (pichat-reconfigure-effective-model requested))))
           (not (equal (plist-get before :system-prompt)
                       (plist-get after :system-prompt)))
           (not (equal (plist-get before :append-system-prompt)
@@ -495,31 +518,37 @@ late callbacks.  Never start a replacement while the old process is live."
 
 (defun pichat-reconfigure-validated-command (session configuration state)
   "Resolve replacement argv without changing SESSION's committed configuration.
-CONFIGURATION contains a resolved preset, Tools and added extensions;
-STATE is fresh, validated Pi get_state data for the active run-local model.
-Recheck all settings and the command before stopping the original process."
+CONFIGURATION contains a resolved preset, Tools, added extensions and model.
+Fall back to the active model from STATE when CONFIGURATION lacks one."
   (let* ((preset (plist-get configuration :preset-spec))
          (tools (plist-get configuration :tool-selection))
-         (model (plist-get state :model))
-         (provider (and (listp model) (plist-get model :provider)))
-         (id (and (listp model) (plist-get model :id))))
+         (model (or (pichat-reconfigure-effective-model configuration)
+                    (pichat-reconfigure--model-reference (plist-get state :model)))))
     (unless (and (pichat-session-p session)
                  (listp preset) (symbolp (plist-get preset :name))
-                 (stringp provider) (not (string-blank-p provider))
-                 (stringp id) (not (string-blank-p id)))
-      (user-error "Replacement command lacks a resolved preset or active model"))
+                 (stringp model) (string-match-p "\\`[^/[:space:]]+/[^[:space:]]+\\'" model))
+      (user-error "Replacement command lacks a resolved preset or exact provider/model"))
     (let ((snapshot (copy-pichat-session session)))
       (setf (pichat-session-preset-spec snapshot) (pichat-presets--copy preset)
             (pichat-session-tool-selection snapshot)
             (pichat-tool-selection-check-expanded
              (pichat-tool-selection-resolve preset tools) (plist-get preset :name))
-            (pichat-session-startup-model snapshot) (concat provider "/" id)
+            (pichat-session-startup-model snapshot) model
             (pichat-session-extensions snapshot)
             (pichat-rpc--validate-extensions (plist-get configuration :extensions)))
       (let ((argv (pichat-rpc-build-command snapshot)))
         (unless (and (consp argv) (cl-every #'stringp argv))
           (user-error "Replacement Pi command is invalid"))
         (copy-sequence argv)))))
+
+(defun pichat-reconfigure--expected-state (state configuration)
+  "Copy STATE with CONFIGURATION's effective model, retaining other settings."
+  (let ((expected (copy-tree state t))
+        (model (pichat-reconfigure-effective-model configuration)))
+    (if (and model (string-match "/" model))
+        (plist-put expected :model (list :provider (substring model 0 (match-beginning 0))
+                                         :id (substring model (match-end 0))))
+      expected)))
 
 (defun pichat-reconfigure-settings-mismatches (expected actual)
   "List settings that differ between captured EXPECTED and fresh ACTUAL state.
@@ -542,13 +571,50 @@ including fields whose valid value may be nil."
         (push key mismatches)))
     (nreverse mismatches)))
 
-(defun pichat-reconfigure-validate-reload (origin retained state entries)
+(defun pichat-reconfigure--restored-entry-tail-p (retained cache writes)
+  "Check CACHE preserves RETAINED and only appends entries authorized by WRITES.
+Each guarded settings RPC can write its metadata once, in issue order; it
+may also fail or write nothing.  No new branch or conversation is allowed."
+  (let* ((before (pichat-entry-cache-append-order retained))
+         (after (pichat-entry-cache-append-order cache))
+         (table (pichat-entry-cache-entries-by-id cache))
+         (parent (pichat-entry-cache-leaf-id retained))
+         (model-written nil))
+    (and (equal before (seq-take after (length before)))
+         (cl-every (lambda (id)
+                     (equal (gethash id table)
+                            (gethash id (pichat-entry-cache-entries-by-id retained))))
+                   before)
+         (cl-loop for id in (nthcdr (length before) after)
+                  for entry = (gethash id table)
+                  always
+                  (and (equal parent (plist-get entry :parentId))
+                       (progn
+                         (setq parent id)
+                         (if (and model-written
+                                  (equal (plist-get entry :type) "thinking_level_change")
+                                  (member (plist-get entry :thinkingLevel)
+                                          '("off" "minimal" "low" "medium" "high" "xhigh")))
+                             ;; set_model may append one recalculated thinking
+                             ;; level immediately after its model entry.
+                             (progn (setq model-written nil) t)
+                           (setq writes (cl-member-if
+                                         (lambda (write)
+                                           (cl-loop for (key value) on write by #'cddr
+                                                    always (equal value (plist-get entry key))))
+                                         writes)
+                                 model-written (equal (plist-get entry :type) "model_change"))
+                           (when writes (pop writes) t)))))
+         (equal parent (pichat-entry-cache-leaf-id cache)))))
+
+(defun pichat-reconfigure-validate-reload (origin retained state entries &optional writes)
   "Build a verified replacement cache without mutating RETAINED or the chat.
 ORIGIN identifies the saved source; RETAINED is the preflight baseline read
 from the original process; STATE is fresh get_state data and ENTRIES
 is full get_entries data from the replacement process.  Reject source, branch,
 or entry changes rather than committing an unexpected conversation.  The
-caller must separately verify the replacement process generation."
+caller must separately verify the replacement process generation.  WRITES
+permits only the metadata tail from guarded settings RPCs."
   (let ((id (plist-get origin :session-id))
         (file (plist-get origin :session-file)))
     (unless (and (stringp id) (not (string-blank-p id))
@@ -568,17 +634,7 @@ caller must separately verify the replacement process generation."
     (let ((cache (pichat-pi-entry-cache-full
                   id file (plist-get entries :entries)
                   (plist-get entries :leafId))))
-      (unless (and (equal (pichat-entry-cache-leaf-id retained)
-                          (pichat-entry-cache-leaf-id cache))
-                   (equal (pichat-entry-cache-append-order retained)
-                          (pichat-entry-cache-append-order cache))
-                   (cl-every
-                    (lambda (entry-id)
-                      (equal (gethash entry-id
-                                      (pichat-entry-cache-entries-by-id retained))
-                             (gethash entry-id
-                                      (pichat-entry-cache-entries-by-id cache))))
-                    (pichat-entry-cache-append-order retained)))
+      (unless (pichat-reconfigure--restored-entry-tail-p retained cache writes)
         (user-error "Reloaded conversation changed; retained snapshot was not replaced"))
       cache)))
 
@@ -841,7 +897,8 @@ CONTINUATION receives the authoritative response data on success."
                         (plist-get operation :origin) state entries)
                      (pichat-reconfigure-validate-reload
                       (plist-get operation :origin)
-                      (plist-get operation :retained) state entries)))
+                      (plist-get operation :retained) state entries
+                      (plist-get operation :settings-writes))))
             (requested (plist-get operation :active-configuration))
             ;; The exact installed objects, not a copy: a failed commit must
             ;; leave the runtime's configuration as it found it.
@@ -860,7 +917,7 @@ CONTINUATION receives the authoritative response data on success."
               (pichat-presets--copy (plist-get requested :preset-spec))
               (pichat-presets--copy (plist-get requested :tool-selection)))
              (setf (pichat-session-startup-model session)
-                   (plist-get operation :active-model)
+                   (pichat-reconfigure--model-reference (plist-get state :model))
                    (pichat-session-extensions session)
                    (pichat-presets--copy (plist-get requested :extensions)))
              (with-current-buffer buffer
@@ -882,7 +939,9 @@ CONTINUATION receives the authoritative response data on success."
   (let* ((expected (plist-get operation :expected-state))
          (mismatches (pichat-reconfigure-settings-mismatches expected state))
          (key (car mismatches))
+         (model (plist-get expected :model))
          (command (pcase key
+                    (:model "set_model")
                     (:thinkingLevel "set_thinking_level")
                     (:steeringMode "set_steering_mode")
                     (:followUpMode "set_follow_up_mode")
@@ -896,14 +955,23 @@ CONTINUATION receives the authoritative response data on success."
            (pichat-reconfigure--retiring operation nil
              (if success (pichat-reconfigure--synchronize operation state)
                (pichat-reconfigure--finish operation nil reason)))))))
-     ((null command)
-      ;; set_model changes Pi's persistent preference.  It is not a run-local
-      ;; restoration mechanism and must not be used for this transaction.
-      (user-error "Active model was not preserved by Pi session reload"))
      (t
+      ;; RPC set_model is run-local; it writes Pi session metadata, not the
+      ;; saved default.  Set it first because it may reset the thinking level.
+      (when-let* ((write (pcase key
+                          (:model (list :type "model_change"
+                                        :provider (plist-get model :provider)
+                                        :modelId (plist-get model :id)))
+                          (:thinkingLevel (list :type "thinking_level_change"
+                                                :thinkingLevel (plist-get expected key))))))
+        ;; Retain even an unacknowledged write for subsequent recovery.
+        (plist-put operation :settings-writes
+                   (append (plist-get operation :settings-writes) (list write))))
       (pichat-reconfigure--send
        operation 'loading command
        (pcase key
+         (:model (list :provider (plist-get model :provider)
+                       :modelId (plist-get model :id)))
          (:thinkingLevel (list :level (plist-get expected key)))
          ((or :steeringMode :followUpMode)
           (list :mode (plist-get expected key)))
@@ -913,7 +981,7 @@ CONTINUATION receives the authoritative response data on success."
          (pichat-reconfigure--send
           operation 'loading "get_state" nil
           (lambda (next)
-            (when (equal (plist-get next key) (plist-get state key))
+            (when (memq key (pichat-reconfigure-settings-mismatches expected next))
               (user-error "Pi did not restore %s" key))
             (pichat-reconfigure--restore-settings operation next)))))))))
 
@@ -998,7 +1066,12 @@ Only recovery may pass ALLOW-STOPPED for an already-confirmed stopped runtime."
     (when-let* ((blockers (pichat-reconfigure-preflight-blockers
                            origin state (plist-get result :source-kind))))
       (user-error "%s" (string-join blockers "; ")))
-    (let* ((previous (pichat-reconfigure-captured-configuration session))
+    (let* ((active-model (pichat-reconfigure--model-reference (plist-get state :model)))
+           (previous (plist-put (pichat-reconfigure-captured-configuration session)
+                                :model active-model))
+           ;; A passive draft keeps the authoritative preflight model, even
+           ;; if Pi's cached model was stale when the launcher opened.
+           (requested (plist-put (pichat-presets--copy requested) :model active-model))
            (command (pichat-reconfigure-validated-command
                      session requested state))
            (retained (plist-get result :baseline)))
@@ -1011,13 +1084,12 @@ Only recovery may pass ALLOW-STOPPED for an already-confirmed stopped runtime."
         (plist-put operation :requested (pichat-presets--copy requested))
         (plist-put operation :active-configuration
                    (pichat-presets--copy requested))
-        (plist-put operation :expected-state (copy-tree state t))
+        (plist-put operation :expected-state
+                   (pichat-reconfigure--expected-state state requested))
         (plist-put operation :empty-unwritten unwritten)
         (plist-put operation :retained retained)
         (plist-put operation :command command)
-        (plist-put operation :active-model
-                   (concat (plist-get (plist-get state :model) :provider)
-                           "/" (plist-get (plist-get state :model) :id)))
+        (plist-put operation :settings-writes nil)
         (cl-labels
             ((begin ()
                (when (pichat-reconfigure--owned-p operation 'preflight)
@@ -1050,7 +1122,7 @@ Only recovery may pass ALLOW-STOPPED for an already-confirmed stopped runtime."
           (pichat-reconfigure--prepare-shutdown operation nil #'begin))))))
 
 (defun pichat-reconfigure-restart (origin requested callback)
-  "Restart ORIGIN with REQUESTED preset, Tools and extensions; call CALLBACK.
+  "Restart ORIGIN with REQUESTED preset, Tools, extensions and model; call CALLBACK.
 CALLBACK receives (SUCCESS REASON).  Post-stop failures retain the canonical
 snapshot and both captured configuration choices for recovery.  An unwritten,
 verified conversation-free source starts a new Pi session with a new ID.
@@ -1112,6 +1184,9 @@ Copying retires any late callbacks owned by the previous attempt."
     (plist-put operation :active-configuration
                (pichat-presets--copy configuration))
     (plist-put operation :command command)
+    (plist-put operation :expected-state
+               (pichat-reconfigure--expected-state
+                (plist-get failed :expected-state) configuration))
     (plist-put operation :replacement-generation nil)
     (plist-put operation :replacement-process nil)
     (plist-put operation :stop-requested nil)

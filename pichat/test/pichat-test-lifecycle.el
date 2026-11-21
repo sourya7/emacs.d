@@ -614,6 +614,37 @@ error) or Retry (after a quit) then stops the original and restarts."
                    origin retained state (list :entries entries))
                   :type 'user-error)))
 
+(ert-deftest pichat-reconfigure-reload-accepts-only-guarded-settings-tail ()
+  (let* ((fixture (pichat-test-read-json-fixture "canonical-session.json"))
+         (id (plist-get fixture :sessionId))
+         (file (plist-get fixture :sessionFile))
+         (entries (plist-get fixture :entries))
+         (leaf (car (last (mapcar (lambda (entry) (plist-get entry :id)) entries))))
+         (retained (pichat-pi-entry-cache-full id file entries leaf))
+         (origin (list :session-id id :session-file file))
+         (state (list :sessionId id :sessionFile file))
+         (writes '((:type "model_change" :provider "fake" :modelId "reasoning")))
+         (model (list :type "model_change" :id "new-model" :parentId leaf
+                      :provider "fake" :modelId "reasoning"))
+         (thinking '(:type "thinking_level_change" :id "new-thinking"
+                     :parentId "new-model" :thinkingLevel "high"))
+         (response (list :entries (append entries (list model thinking))
+                         :leafId "new-thinking")))
+    (should (pichat-reconfigure-validate-reload origin retained state response writes))
+    (should-error (pichat-reconfigure-validate-reload origin retained state response)
+                  :type 'user-error)
+    (dolist (bad (list (list (plist-put (copy-sequence model) :modelId "other") thinking)
+                       (list (plist-put (copy-sequence model) :parentId nil) thinking)
+                       (list model (plist-put (copy-sequence thinking) :type "message"))
+                       (list model thinking '(:type "thinking_level_change" :id "extra"
+                                              :parentId "new-thinking" :thinkingLevel "off"))))
+      (should-error (pichat-reconfigure-validate-reload
+                     origin retained state
+                     (list :entries (append entries bad)
+                           :leafId (plist-get (car (last bad)) :id))
+                     writes)
+                    :type 'user-error))))
+
 (ert-deftest pichat-reconfigure-preflight-request-rechecks-origin-after-state ()
   (pichat-test-with-unit-session (session proc)
     (let ((origin (pichat-reconfigure-capture-origin session))

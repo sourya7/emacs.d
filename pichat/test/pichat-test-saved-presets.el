@@ -797,24 +797,29 @@ Reopening the launcher records its (ARGS . SCOPE) in `staged'."
               (should-error (pichat--open-launch-profile profile directory)
                             :type 'user-error))))))))
 
-(ert-deftest pichat-saved-presets-reconfiguration-keeps-active-model ()
+(ert-deftest pichat-saved-presets-reconfiguration-only-applies-explicit-preset-model ()
   (pichat-test-with-presets
     (pichat-make-preset 'pinned :tools '("read") :model "preset/model")
-    (let* ((session (pichat-session-make :startup-model "first/model"
+    (pichat-make-preset 'unpinned :tools '("read") :model 'default)
+    (let* ((state '(:model (:provider "active" :id "nested/model")))
+           (session (pichat-session-make :startup-model "first/model"
+                                         :model (plist-get state :model)
+                                         :preset-spec (pichat-presets-resolve 'pinned)
                                          :transport pichat-transport-local
                                          :persistence 'persistent))
-           (draft (pichat-reconfigure-select-preset
-                   (list :preset-spec (pichat-presets-resolve 'manual)) 'pinned))
-           (argv (pichat-reconfigure-validated-command
-                  session draft '(:model (:provider "active" :id "model"))))
-           (models (cl-loop for (arg value) on argv
-                            when (equal arg "--model") collect value)))
-      (should (equal '("active/model") (last models)))
-      (should-not (member "preset/model" argv))
-      (should-not (pichat-reconfigure-effective-change-p
-                   draft (list :preset-spec (plist-put (copy-tree (plist-get draft :preset-spec))
-                                                       :model "other/model")
-                               :tool-selection (plist-get draft :tool-selection)))))))
+           (base (pichat-reconfigure-captured-configuration session))
+           (draft (pichat-reconfigure-select-preset base 'pinned))
+           (override (plist-put (copy-sequence draft) :model-override "override/model"))
+           (unpinned (pichat-reconfigure-select-preset draft 'unpinned)))
+      (should (pichat-reconfigure-effective-change-p base draft))
+      (should-not (pichat-reconfigure-effective-change-p base unpinned))
+      (dolist (entry `((,base . "active/nested/model") (,draft . "preset/model")
+                       (,override . "override/model") (,unpinned . "active/nested/model")))
+        (let ((argv (pichat-reconfigure-validated-command session (car entry) state)))
+          (should (equal (list (cdr entry))
+                         (cl-loop for (arg value) on argv
+                                  when (equal arg "--model") collect value)))))
+      (should (equal "first/model" (pichat-session-startup-model session))))))
 
 (ert-deftest pichat-saved-presets-captured-jobs-replay-without-registry ()
   (pichat-test-with-clean-state

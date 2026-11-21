@@ -2008,21 +2008,28 @@ says when it does not, and what blocks it."
          (draft (plist-get scope :draft)))
     (if (not (pichat-reconfigure-effective-change-p base draft))
         "No changes · keep runtime"
-      (format "Restart · %s"
-              (if (equal (plist-get base :preset-spec)
-                         (plist-get draft :preset-spec))
-                  (if (equal (plist-get base :extensions)
-                             (plist-get draft :extensions))
-                      "new tools"
-                    (if (equal (plist-get base :tool-selection)
-                               (plist-get draft :tool-selection))
-                        "new extensions"
-                      "new tools and extensions"))
-                (let ((previous (plist-get (plist-get base :preset-spec) :name))
-                      (selected (plist-get (plist-get draft :preset-spec) :name)))
-                  (if (eq previous selected)
-                      (format "new %s definition" selected)
-                    (format "%s → %s" previous selected))))))))
+      (let ((model-change (not (equal (pichat-reconfigure-effective-model base)
+                                      (pichat-reconfigure-effective-model draft)))))
+        (if (and model-change
+                 (not (pichat-reconfigure-effective-change-p base draft t)))
+            "Restart · new model"
+          (concat (pichat--reconfigure-startup-change-description base draft)
+                  (when model-change " + model")))))))
+
+(defun pichat--reconfigure-startup-change-description (base draft)
+  "Describe changes to BASE's preset, Tools or extensions in DRAFT."
+  (format "Restart · %s"
+          (if (equal (plist-get base :preset-spec) (plist-get draft :preset-spec))
+              (if (equal (plist-get base :extensions) (plist-get draft :extensions))
+                  "new tools"
+                (if (equal (plist-get base :tool-selection) (plist-get draft :tool-selection))
+                    "new extensions"
+                  "new tools and extensions"))
+            (let ((previous (plist-get (plist-get base :preset-spec) :name))
+                  (selected (plist-get (plist-get draft :preset-spec) :name)))
+              (if (eq previous selected)
+                  (format "new %s definition" selected)
+                (format "%s → %s" previous selected))))))
 
 (defun pichat--reconfigure-action-heading ()
   "Head the action with what blocks the restart or what it starts afresh."
@@ -2074,9 +2081,7 @@ or a changed runtime ignores the result."
        scope :expansion-cancel
        (pichat--expand-preset-all
         spec (pichat-session-emacs-cwd session) (pichat-session-transport session)
-        (let ((model (pichat-session-model session)))
-          (when (and (plist-get model :provider) (plist-get model :id))
-            (concat (plist-get model :provider) "/" (plist-get model :id))))
+        (pichat-reconfigure-effective-model draft)
         (pichat-presets-load-extensions spec (plist-get draft :extensions))
         (lambda (expanded error)
           (when (and (eq draft (plist-get scope :draft))
@@ -2118,6 +2123,12 @@ or a changed runtime ignores the result."
      origin
      (lambda (blockers result)
        (when (eq token (plist-get scope :menu-token))
+         (when-let* ((model (pichat-reconfigure--model-reference
+                             (plist-get (plist-get result :state) :model))))
+           ;; Refresh the passive fallback without discarding explicit
+           ;; choices or invalidating an in-flight Tools expansion.
+           (setf (plist-get (plist-get scope :base) :model) model
+                 (plist-get (plist-get scope :draft) :model) model))
          (plist-put scope :blockers blockers)
          (plist-put scope :empty-unwritten
                     (and (null blockers)
@@ -2131,12 +2142,6 @@ or a changed runtime ignores the result."
   (transient-setup (if context 'pichat-launch 'pichat-reconfigure-menu)
                    nil nil :scope (or context scope))
   (pichat--reconfigure-request-menu-preflight scope))
-
-(defun pichat--reconfigure-runtime-model (session)
-  "Return SESSION's active model as a provider/model ID, if known."
-  (let ((model (pichat-session-model session)))
-    (when (and (plist-get model :provider) (plist-get model :id))
-      (concat (plist-get model :provider) "/" (plist-get model :id)))))
 
 (transient-define-suffix pichat-launch-reconfigure ()
   "Toggle the launcher between its launch and restart drafts."
@@ -2172,9 +2177,7 @@ or a changed runtime ignores the result."
           ;; The picker also retains unchecked specs; only checked specs
           ;; belong to the resolved replacement configuration.
           :extensions (mapcar (lambda (spec) (cons spec t))
-                              (plist-get base :extensions))
-          :active-model (pichat--reconfigure-runtime-model session)
-          :model nil)))
+                              (plist-get base :extensions)))))
 
 (defun pichat--reconfigure-launch-context ()
   "Return the launcher context when called in reconfigure mode."
@@ -2195,12 +2198,13 @@ or a changed runtime ignores the result."
       (propertize "Tools" 'face 'transient-value))))
 
 (defun pichat--reconfigure-launch-model-description ()
-  "Show the active model or the staged restart model override."
-  (let* ((scope (pichat--launch-reconfigure-scope))
-         (model (plist-get scope :model)))
+  "Show the effective restart model, highlighting an explicit choice."
+  (let ((draft (plist-get (pichat--launch-reconfigure-scope) :draft)))
     (concat "Model "
-            (propertize (or model (plist-get scope :active-model) "current")
-                        'face (if model 'transient-value 'transient-inactive-value)))))
+            (propertize (or (pichat-reconfigure-effective-model draft) "current")
+                        'face (if (or (plist-get draft :model-override)
+                                      (plist-get draft :preset-model))
+                                  'transient-value 'transient-inactive-value)))))
 
 (transient-define-suffix pichat-reconfigure-model ()
   "Stage or clear a model override in the reconfigure draft."
@@ -2211,16 +2215,18 @@ or a changed runtime ignores the result."
          (session (plist-get origin :session)))
     (unless (pichat-reconfigure-origin-current-p origin)
       (user-error "Runtime changed; reopen reconfiguration"))
-    (if (plist-get scope :model)
-        (progn (plist-put scope :model nil)
-               (pichat--reconfigure-show scope context))
-      (pichat--launch-read-model-async
-       (pichat-session-emacs-cwd session) (pichat-session-transport session)
-       "Model for this restart (select or enter provider/model): "
-       (lambda (model)
-         (when (pichat-reconfigure-origin-current-p origin)
-           (plist-put scope :model model)
-           (pichat--reconfigure-show scope context)))))))
+    (cl-labels ((stage (model)
+                  (when (pichat-reconfigure-origin-current-p origin)
+                    (plist-put scope :draft
+                               (plist-put (copy-sequence (plist-get scope :draft))
+                                          :model-override model))
+                    (pichat--reconfigure-expand-draft scope)
+                    (pichat--reconfigure-show scope context))))
+      (if (plist-get (plist-get scope :draft) :model-override)
+          (stage nil)
+        (pichat--launch-read-model-async
+         (pichat-session-emacs-cwd session) (pichat-session-transport session)
+         "Model for this restart (select or enter provider/model): " #'stage)))))
 
 (transient-define-suffix pichat-reconfigure-extensions ()
   "Edit the reconfigure draft's added extensions."
@@ -2242,7 +2248,7 @@ or a changed runtime ignores the result."
          (user-error "Discovery cannot use a complete Pi command wrapper"))
        (cdr (pichat-tool-picker-discovery-context
              (plist-get draft :preset-spec) (pichat-session-emacs-cwd session)
-             transport pichat-pi-executable (plist-get scope :active-model))))
+             transport pichat-pi-executable (pichat-reconfigure-effective-model draft))))
      (lambda (result)
        (when (pichat-reconfigure-origin-current-p origin)
          (unless (eq result :cancel)
@@ -2302,7 +2308,7 @@ or a changed runtime ignores the result."
            (plist-put scope :draft
                       (pichat-reconfigure-select-tools draft selection)))
          (pichat--reconfigure-show scope context)))
-     (pichat--reconfigure-runtime-model session)
+     (pichat-reconfigure-effective-model draft)
      (plist-get scope :tool-discovery)
      (pichat-presets-load-extensions (plist-get draft :preset-spec)
                                      (plist-get draft :extensions)))))

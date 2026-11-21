@@ -3130,7 +3130,124 @@ entry does not make the reloaded conversation look changed."
                                           (buffer-string))))
                 ;; The replacement fake provider resets its script counter.
                 (pichat-test-prompt-and-wait session "after model restart")))
-          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+          (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+  (defun pichat-test-reconfigure-model (&optional force-mismatch recovery-choice)
+    "Exercise a real model-only restart, optionally recovering via RECOVERY-CHOICE.
+FORCE-MISMATCH exercises a Pi reload that does not retain the startup model."
+    (pichat-test-with-integration-session
+        (session :script '(:turns [(:text "answer retained across model change")])
+                 :settings '(:defaultProvider "pichat-fake" :defaultModel "pichat-fake"
+                             :defaultThinkingLevel "high"))
+      (let ((pichat-chat-render-markdown nil)
+            (pichat-chat-stop-session-on-kill nil)
+            buffer result writes)
+        (unwind-protect
+            (progn
+              (setq buffer (pichat-chat-open session))
+              (pichat-test-chat-send-and-wait session buffer "question before model change")
+              (pichat-test-wait-until
+               (lambda () (pichat-chat-canonical-entry-cache session)) 4 "canonical snapshot")
+              (let* ((old-command (pichat-session-rpc-command session))
+                     (old-process (pichat-session-process session))
+                     (id (pichat-session-id session))
+                     (file (pichat-session-session-file session))
+                     (pichat-pi-executable (car old-command))
+                     (pichat-pi-default-args
+                      (cl-remove "--no-builtin-tools" (butlast (cdr old-command) 2)
+                                 :test #'equal))
+                     (pichat-pi-extra-args nil)
+                     (pichat-rpc-command nil)
+                     (base (pichat-reconfigure-captured-configuration session))
+                     (target "pichat-fake/pichat-fake-reasoning")
+                     (requested (plist-put (copy-sequence base) :model-override target))
+                     (real-send (symbol-function 'pichat-rpc-send))
+                     (real-start (symbol-function 'pichat-rpc-start))
+                     (simulate-reload-mismatch force-mismatch)
+                     (inject-failure recovery-choice)
+                     (recovering nil)
+                     (before (plist-get (pichat-test-rpc-call session "get_state") :data)))
+                (should (equal "pichat-fake/pichat-fake" (pichat-reconfigure-effective-model base)))
+                (should (pichat-reconfigure-effective-change-p base requested))
+                (cl-letf (((symbol-function 'pichat-rpc-start)
+                           (lambda (runtime argv &rest args)
+                             (let ((expected (if (and recovering (eq recovery-choice 'restore))
+                                                 (pichat-reconfigure-effective-model base)
+                                               target)))
+                               (should (equal (list "--model" expected) (last argv 2))))
+                             (if (not simulate-reload-mismatch)
+                                 (apply real-start runtime argv args)
+                               (setq simulate-reload-mismatch nil)
+                               ;; Pi 1.5.1 honors the startup pin at reload.
+                               ;; Start with the old model to exercise a real
+                               ;; post-reload mismatch and the real set_model.
+                               (apply real-start runtime
+                                      (append (butlast argv)
+                                              (list (pichat-reconfigure-effective-model base)))
+                                      args))))
+                          ((symbol-function 'pichat-rpc-send)
+                           (lambda (session type payload callback &optional failed)
+                             (when (member type '("set_model" "set_thinking_level"))
+                               (push type writes))
+                             (if (and inject-failure (equal type "set_model"))
+                                 (progn
+                                   (setq inject-failure nil)
+                                   ;; Pi writes the model entry but the transaction
+                                   ;; does not receive a successful acknowledgement.
+                                   (funcall real-send session type payload
+                                            (lambda (_response session)
+                                              (funcall failed '(:error "injected after model write") session))
+                                            failed))
+                               (funcall real-send session type payload callback failed)))))
+                  (pichat-reconfigure-restart
+                   (pichat-reconfigure-capture-origin session) requested
+                   (lambda (success reason) (setq result (list success reason))))
+                  (pichat-test-wait-until (lambda () result) 20 "model restart")
+                  (when recovery-choice
+                    (should-not (car result))
+                    (should (string-match-p "injected after model write" (cadr result)))
+                    (should-not (equal target (pichat-session-startup-model session)))
+                    (setq result nil recovering t)
+                    (pichat-reconfigure-recover
+                     session recovery-choice
+                     (lambda (success reason) (setq result (list success reason))))
+                    (pichat-test-wait-until (lambda () result) 20 "model recovery")))
+                (should (equal '(t nil) result))
+                (should-not (process-live-p old-process))
+                (should (equal id (pichat-session-id session)))
+                (should (equal file (pichat-session-session-file session)))
+                (when force-mismatch
+                  (should (equal "set_model" (car (last writes))))
+                  (unless recovery-choice
+                    (should (equal '("set_model" "set_thinking_level") (reverse writes)))))
+                (let* ((wanted (if (eq recovery-choice 'restore)
+                                   (pichat-reconfigure-effective-model base) target))
+                       (state (plist-get (pichat-test-rpc-call session "get_state") :data)))
+                  (should (equal wanted (pichat-session-startup-model session)))
+                  (should (equal wanted (pichat-reconfigure--model-reference (plist-get state :model))))
+                  (should (equal (plist-get before :thinkingLevel) (plist-get state :thinkingLevel))))
+                (with-temp-buffer
+                  (insert-file-contents (expand-file-name "settings.json" agent-dir))
+                  (let ((settings (json-parse-buffer :object-type 'plist)))
+                    (should (equal "pichat-fake" (plist-get settings :defaultProvider)))
+                    (should (equal "pichat-fake" (plist-get settings :defaultModel)))))
+                (with-current-buffer buffer
+                  (should-not pichat-chat--restart-staging)
+                  (should (string-match-p "answer retained across model change" (buffer-string))))
+                (pichat-test-prompt-and-wait session "after model restart")))
+          (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+  (ert-deftest pichat-integration-reconfigure-model-only ()
+    (pichat-test-reconfigure-model))
+
+  (ert-deftest pichat-integration-reconfigure-model-before-thinking ()
+    (pichat-test-reconfigure-model t))
+
+  (ert-deftest pichat-integration-reconfigure-model-retry-after-write ()
+    (pichat-test-reconfigure-model t 'retry))
+
+  (ert-deftest pichat-integration-reconfigure-model-restore-after-write ()
+    (pichat-test-reconfigure-model t 'restore)))
 
 (provide 'pichat-test-integration)
 ;;; pichat-test-integration.el ends here

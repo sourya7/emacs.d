@@ -69,7 +69,8 @@ Reject probe errors rather than mistaking them for successful shutdown."
                    (concat "PICHAT_FAKE_PROVIDER_SCRIPT=" runtime-script)
                    (concat "PICHAT_FAKE_PROVIDER_STATUS=" runtime-status))
              process-environment))
-           session selected)
+           (fixture (list :project remote-project))
+           session selected starter)
       (unwind-protect
           (progn
             (make-directory remote-project t)
@@ -99,6 +100,7 @@ Reject probe errors rather than mistaking them for successful shutdown."
               ;; on its absence as evidence that the remote child exited.
               (should (file-remote-p default-directory))
               (should (pichat-test-ssh--matching-process-p process-pattern))
+              (setq starter (pichat-session-process session))
               (pichat-rpc-stop session)
               (pichat-test-wait-until
                (lambda () (not (pichat-session-alive-p session)))
@@ -161,17 +163,14 @@ Reject probe errors rather than mistaking them for successful shutdown."
                 (should (eq selected switched))
                 (should (eq endpoint (pichat-session-process switched)))
                 (should (equal "pichat-ssh-other" (pichat-session-id switched))))))
-        (when (and selected (pichat-session-alive-p selected))
-          (pichat-rpc-stop selected)
-          (let ((default-directory remote-project))
-            (pichat-test-wait-until
-             (lambda () (not (pichat-test-ssh--matching-process-p process-pattern)))
-             10 "selected runtime child disappearance before fixture cleanup")))
+        (dolist (runtime (list selected session))
+          (when-let* ((process (and runtime (or (pichat-session-process runtime)
+                                                (and (eq runtime session) starter)))))
+            (when (pichat-session-alive-p runtime) (pichat-rpc-stop runtime))
+            (pichat-test-real-ssh--await-exit-and-cleanup fixture process)))
         (when-let* ((buffer (and selected (pichat-session-buffer selected))))
           (when (buffer-live-p buffer)
             (let ((pichat-chat-stop-session-on-kill nil)) (kill-buffer buffer))))
-        (when (and session (pichat-session-alive-p session))
-          (ignore-errors (pichat-rpc-stop session)))
         (ignore-errors (delete-directory remote-root t))))))
 
 (ert-deftest pichat-integration-ssh-consult-archive-process-streams-remotely ()

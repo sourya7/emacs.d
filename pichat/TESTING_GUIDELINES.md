@@ -101,10 +101,25 @@ Run the isolated real-SSH transport test with a writable TRAMP parent and the
 remote Pi executable:
 
 ```sh
-PICHAT_TEST_SSH_DIRECTORY=/ssh:lima-devbox:/tmp/ \
-PICHAT_TEST_SSH_PI=/etc/profiles/per-user/dev/bin/pi \
-  pichat/test/run-ssh-tests.sh
+PICHAT_TEST_SSH_DIRECTORY=/ssh:test-host:/tmp/ \
+PICHAT_TEST_SSH_PI=/path/on/target/to/pi \
+  timeout -s USR2 -k 10s 240s pichat/test/run-ssh-tests.sh
 ```
+
+Use a disposable SSH target or a private loopback sshd with temporary keys,
+private fixture directories and normal TRAMP lockfiles. Set
+`PICHAT_TEST_SSH_PEER_DIRECTORY` to a writable TRAMP directory on a **different
+SSH connection** (a second loopback port works) to enable the independent-
+connection test; without it that test explicitly skips. A second port does not
+verify a distinct host or filesystem.
+
+The GNU `timeout` command bounds wall-clock runtime even during synchronous
+TRAMP setup, where Lisp `with-timeout` can be suspended. On expiry `SIGUSR2`
+asks Emacs for a diagnostic backtrace; `-k` provides a hard stop if it cannot
+exit. Capture the command output (or terminal transcript for a live frame)
+and treat any watchdog exit as failure. After a hard stop, check the private
+fixture for leftover processes and files before removing it; do not delete
+helpers for a writer whose exit is unverified.
 
 The RPC test creates and removes a unique remote directory, copies only the
 fake provider fixture, uses isolated agent/session state, streams one prompt,
@@ -121,25 +136,33 @@ and included in the draft, and check timeout/temporary-script cleanup.
 They remove their own remote output files. No test reads normal remote Pi
 settings, credentials, extensions, or sessions.
 
-For live UI acceptance, start a **separate non-batch Emacs instance**, not
-`emacsclient` against an instance containing your conversations:
+For live UI acceptance, use a **separate non-batch Emacs**, never `emacsclient`
+against an instance containing your conversations. This example runs in a
+terminal; use `script` to provide a private pseudo-terminal when needed.
+Choose a private scratch directory for the history and logs:
 
 ```sh
-PICHAT_TEST_SSH_DIRECTORY=/ssh:lima-devbox:/tmp/ \
-PICHAT_TEST_SSH_PI=/etc/profiles/per-user/dev/bin/pi \
-  emacs -Q -L pichat -L pichat/test \
-  -l pichat-test-ssh-reconfigure-ui \
-  --eval '(setq use-dialog-box nil)' \
-  --eval '(ert-run-tests-batch-and-exit "^pichat-integration-ssh-reconfigure-live-ui$")'
+private=$(mktemp -d)
+PICHAT_TEST_SSH_DIRECTORY=/ssh:test-host:/tmp/ \
+PICHAT_TEST_SSH_PI=/path/on/target/to/pi \
+PICHAT_UI_PRIVATE="$private/" \
+  timeout -s USR2 -k 10s 240s emacs -Q -nw \
+  -L pichat -L pichat/test -l pichat-test-ssh-reconfigure-ui \
+  --eval '(setq user-emacs-directory (getenv "PICHAT_UI_PRIVATE") use-dialog-box nil)' \
+  --eval '(let ((stats (ert-run-tests-batch "^pichat-integration-ssh-reconfigure-live-ui$")))
+    (with-temp-file (expand-file-name "result.log" user-emacs-directory)
+      (insert (with-current-buffer "*Messages*" (buffer-string))))
+    (kill-emacs (if (and (= 1 (ert-stats-completed-expected stats))
+                        (= 0 (ert-stats-completed-unexpected stats))) 0 1)))'
 ```
 
-This opens a live frame, drives the real launcher/reconfiguration/Tools keys,
-answers only its fixture's preset/confirmation prompts, checks a model turn
-with the selected tools, cleans up its remote state, and exits. It is deliberately
-not loaded by the batch SSH runner. Shared setup/cleanup lives in
-`pichat-test-real-ssh-support.el`; the suites contain the behavior assertions.
-No test disrupts shared SSH connections to simulate network failure; protocol
-loss, timeout and stale-delivery matrices are tested offline.
+The test drives Tools Open/Refresh in ordinary launch, Jobs Tools and a
+confirmed reconfiguration in a live frame with an offline provider. It verifies
+observable UI and runtime state programmatically; it is not human visual
+review. It is not loaded by the batch SSH runner. Shared setup/cleanup lives
+in `pichat-test-real-ssh-support.el`. No test disrupts shared SSH connections
+to simulate network failure; protocol loss, timeout and stale deliveries are
+tested offline.
 
 ## Jobs verification
 

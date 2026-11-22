@@ -1,9 +1,24 @@
 ;;; pichat-test-ssh-reconfigure-ui.el --- Opt-in live SSH UI acceptance -*- lexical-binding: t; -*-
 
 (require 'pichat-test-real-ssh-support)
+(require 'pichat-jobs)
+
+(defun pichat-test-ssh-ui--wait-for-tools (description)
+  (pichat-test-wait-until
+   (lambda ()
+     (and (plist-get pichat-tool-picker--state :loaded)
+          (not (plist-get pichat-tool-picker--state :cancel-extension-start))
+          (eq 'ready (pichat-tool-discovery-draft-status
+                      (plist-get pichat-tool-picker--state :discovery)))))
+   30 description)
+  (should (eq 'ssh (pichat-transport-kind
+                    (plist-get pichat-tool-picker--state :transport))))
+  (should (cl-some (lambda (tool) (equal "probe_child" (plist-get tool :name)))
+                   (pichat-tool-picker--extension-tools)))
+  (should (window-live-p transient--window)))
 
 (ert-deftest pichat-integration-ssh-reconfigure-live-ui ()
-  "Drive the real launcher, preset chooser, Tools picker and restart keys."
+  "Drive real SSH Tools discovery from ordinary launch, Jobs and restart."
   (when noninteractive (ert-skip "Run in a separate non-batch Emacs frame"))
   (with-timeout (100 (ert-fail "Live SSH UI acceptance exceeded its deadline"))
     (pichat-test-real-ssh--run
@@ -27,6 +42,45 @@
          (switch-to-buffer buffer)
          (pichat-chat--set-input-text "UI acceptance draft")
          (execute-kbd-macro (kbd "M-x pichat-launch RET"))
+         (minibuffer-with-setup-hook
+             (lambda () (insert "coding") (setq unread-command-events (list ?\r)))
+           (execute-kbd-macro (kbd "p")))
+         (execute-kbd-macro (kbd "x"))
+         (pichat-test-ssh-ui--wait-for-tools "ordinary launcher SSH Tools Open")
+         (let* ((draft (plist-get pichat-tool-picker--state :discovery))
+                (token (pichat-tool-discovery-draft-token draft)))
+           (execute-kbd-macro (kbd "r"))
+           (pichat-test-ssh-ui--wait-for-tools "ordinary launcher SSH Tools Refresh")
+           (should-not (eq token (pichat-tool-discovery-draft-token draft))))
+         (execute-kbd-macro (kbd "q"))
+         (should (eq 'pichat-launch (oref transient--prefix command)))
+         (execute-kbd-macro (kbd "C-g"))
+         (let ((pichat-jobs-file (expand-file-name "ssh-ui-jobs.json" user-emacs-directory))
+               (pichat-jobs--owned-store nil)
+               (pichat-jobs--executor nil)
+               (default-directory (plist-get fixture :project)))
+           (unwind-protect
+               (progn
+                 (execute-kbd-macro (kbd "M-x pichat-job-new RET"))
+                 (minibuffer-with-setup-hook
+                     (lambda () (insert "coding") (setq unread-command-events (list ?\r)))
+                   (execute-kbd-macro (kbd "p")))
+                 (minibuffer-with-setup-hook
+                     (lambda () (insert "real-ssh") (setq unread-command-events (list ?\r)))
+                   (execute-kbd-macro (kbd "t")))
+                 (execute-kbd-macro (kbd "x"))
+                 (pichat-test-ssh-ui--wait-for-tools "Jobs SSH Tools Open")
+                 (execute-kbd-macro (kbd "RET"))
+                 (should (eq 'pichat-job-edit-menu (oref transient--prefix command)))
+                 (execute-kbd-macro (kbd "q"))
+                 (should (equal [] (pichat-job-records pichat-jobs--owned-store 'runs)))
+                 (should (equal [] (pichat-job-records pichat-jobs--owned-store 'jobs))))
+             (when transient--prefix (transient-quit-all))
+             (when pichat-jobs--executor
+               (pichat-job-executor-schedule-stop pichat-jobs--executor))))
+         (should (eq old (pichat-session-process session)))
+         (should (= 1 (plist-get fixture :spawn-checks)))
+         (execute-kbd-macro (kbd "M-x pichat-launch RET"))
          (execute-kbd-macro (kbd "n"))
          ;; Between key commands, inspect the active menu, not saved args.
          (should (member "--new" (transient-get-value)))
@@ -46,12 +100,7 @@
          (funcall wait-for-restart-draft "restored SSH restart draft ready")
          (should (equal "Restart · manual → coding" (pichat--reconfigure-action-description)))
          (execute-kbd-macro (kbd "x"))
-         (pichat-test-wait-until
-          (lambda () (and (plist-get pichat-tool-picker--state :loaded)
-                          (eq 'ready (pichat-tool-discovery-draft-status
-                                      (plist-get pichat-tool-picker--state :discovery)))))
-          30 "live SSH extension and MCP catalogue discovery")
-         (should (window-live-p transient--window))
+         (pichat-test-ssh-ui--wait-for-tools "reconfiguration SSH Tools Open")
          ;; Locate the displayed keys by tool name, not catalogue ordering.
          ;; Pi reports provenance, so probe_child sits in its extension's group.
          (let* ((index (cl-position "write" (plist-get pichat-tool-picker--state :baseline)
@@ -98,7 +147,7 @@
          (pichat-test-assert-provider-script-consumed (plist-get fixture :status))
          (should (string-match-p "UI-selected tools work"
                                  (prin1-to-string (pichat-test-rpc-call session "get_entries"))))
-         (message "LIVE SSH UI: launcher toggle, separate drafts, Tools, confirmation and restart passed"))))))
+         (message "LIVE SSH UI: launch Open/Refresh, Jobs Tools and confirmed restart passed"))))))
 
 (provide 'pichat-test-ssh-reconfigure-ui)
 ;;; pichat-test-ssh-reconfigure-ui.el ends here

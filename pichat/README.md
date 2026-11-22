@@ -734,7 +734,7 @@ extension-modified session is not treated as safely disposable. SSH restart
 requires verified Linux actual-Pi identity and an exit observer established
 before stopping Pi; ending the transport alone is never confirmation. SSH
 saved-session launch and restart use the captured target and path mappings.
-See “SSH reconfiguration guarantees and limits” below for shutdown evidence,
+See “SSH discovery and reconfiguration guarantees and limits” below for shutdown evidence,
 recovery, and verification boundaries.
 
 The built-in `manual` preset retains Pi's base prompt and selects
@@ -2459,7 +2459,9 @@ Standalone setup commands may launch a process or open editable configuration:
   environment, and executable search context match. A mismatch opens another
   terminal without stopping the existing process. Local wrappers/containers
   require explicit `pichat-diagnostics-interactive-command`; PiChat does not
-  guess how to remove RPC arguments from arbitrary commands.
+  guess how to remove RPC arguments from arbitrary commands. For an SSH target,
+  this command refuses to open a local terminal; run interactive Pi setup
+  directly on the target instead.
 - **Open settings file** (`pichat-diagnostics-open-settings`) visits the owning
   local or SSH target's settings file, not `auth.json`.
 - **Customize PiChat** (`pichat-diagnostics-customize`) opens the `pichat` group.
@@ -3188,7 +3190,13 @@ Use `M-x pichat-path-validate-mappings` from a chat to inspect its mappings,
 `M-x pichat-diagnostics-probe-pi` to check executable/version availability
 through the transport, not RPC, authentication, model, or wrapper health.
 
-### SSH reconfiguration guarantees and limits
+### SSH discovery and reconfiguration guarantees and limits
+
+When opening or refreshing Tools on SSH, PiChat waits for MCP discovery and
+its transport teardown before starting the extension catalogue probe. Deferred
+work waits on the captured connection, not a global SSH queue; local discovery
+can still run concurrently. A discovery timeout does not bound synchronous
+TRAMP connection or file setup.
 
 Guarded reconfiguration is supported on **Linux targets with readable procfs**.
 The bundled helper must have reported the actual Pi process's PID, procfs start
@@ -3232,17 +3240,18 @@ session ID. Reconfiguration is not a Pi session switch or clone (see
 remote process. Source claims are Emacs-local: there is no distributed lock or
 guarantee against unrelated external Pi writers.
 
-Isolated real-SSH tests on Pi 1.4.0, Emacs 31.1 and TRAMP 2.8.2.31.1 cover saved
+Isolated real-SSH tests on Pi 1.5.1, Emacs 31.1 and TRAMP 2.8.2.31.1 cover saved
 and unwritten restart, actual preset/Tools declarations, old-process absence
 before each replacement, and injected post-reload failure/restore. Background-job
 checks additionally cover captured-target completion, manual continuation into a
 fresh Pi session with transferred previous run context, and an interval-triggered
 worker followed by an ordinary captured review job. They independently verify
 actual-Pi absence before each new process and after completion; they do not certify
-modifying descendants or workspace safety. A separate live graphical Emacs check
-drives the launcher, preset chooser, SSH Tools picker and confirmed restart. The
-SSH target used for this verification is the same host reached through real
-SSH/TRAMP, not a cross-host/network-failure lab.
+modifying descendants or workspace safety. A separate live terminal Emacs check
+drives Tools from ordinary launch, Jobs and confirmed reconfiguration. It checks
+behavior programmatically, not visual layout. The SSH targets used for this
+verification are separate loopback connections on the same host and filesystem,
+not a cross-host or network-failure test.
 Malformed evidence, lost probes, timeouts, cancellation and stale callbacks
 are covered deterministically offline; shared network connections are not
 interrupted by tests. See `TESTING_GUIDELINES.md` for reproduction commands.

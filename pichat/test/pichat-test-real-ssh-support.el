@@ -41,16 +41,21 @@ use the production observer, its parser, or its confirmed-exit property."
           (equal (nth 19 (split-string (match-string 1 stat)))
                  (plist-get identity :start)))))))
 
+(defun pichat-test-real-ssh--await-exit-and-cleanup (fixture process)
+  "Confirm exact PROCESS absence before cleaning up its private helper."
+  (pichat-test-wait-until
+   (lambda () (not (pichat-test-real-ssh--alive-p fixture process)))
+   15 (format "fixture Pi exit before cleanup: %s" (plist-get fixture :project)))
+  (pichat-process-lifetime-confirm process)
+  (pichat-process-lifetime-cleanup process)
+  (should-not (process-get process 'pichat-helper-cleanup)))
+
 (defun pichat-test-real-ssh--stop-starter (fixture)
   "Stop FIXTURE's starter before independently owned job execution."
   (let* ((session (plist-get fixture :session))
          (process (pichat-session-process session)))
     (pichat-rpc-stop session)
-    (pichat-test-wait-until
-     (lambda () (not (pichat-test-real-ssh--alive-p fixture process)))
-     15 "starter runtime exit before independent job")
-    (pichat-process-lifetime-confirm process)
-    (pichat-process-lifetime-cleanup process)))
+    (pichat-test-real-ssh--await-exit-and-cleanup fixture process)))
 
 (defun pichat-test-real-ssh--write-script (fixture script)
   "Write fake-provider SCRIPT for the next Pi process in FIXTURE."
@@ -165,11 +170,7 @@ creation unchanged and checks old actual-Pi lifetimes before each replacement."
           ;; Never delete target files while a fixture writer may still use them.
           (dolist (process (plist-get fixture :processes))
             (when (process-live-p process) (delete-process process))
-            (pichat-test-wait-until
-             (lambda () (not (pichat-test-real-ssh--alive-p fixture process)))
-             15 (format "fixture Pi exit before cleanup: %s" root))
-            (pichat-process-lifetime-confirm process)
-            (pichat-process-lifetime-cleanup process))
+            (pichat-test-real-ssh--await-exit-and-cleanup fixture process))
           (when (buffer-live-p buffer) (kill-buffer buffer))
           (delete-directory root t))))))
 

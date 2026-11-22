@@ -174,12 +174,19 @@ Only abnormal values are highlighted; descriptive words are dimmed."
                                       (pichat-diagnostics-report--path runtime))))
            (list (and translated (concat (dim "Emacs ")
                                          (pichat-diagnostics-report--path emacs))))))
-        (pichat-diagnostics-report--row
-         "Config"
-         (list (need "model" (unless (equal (pichat-session-model-label session) "—")
-                               (pichat-session-model-label session)))
-               (need "thinking level" (pichat-session-thinking-level session) "thinking ")
-               (need "preset" (pichat-session-preset-name session) "preset ")))
+        (let ((spec (pichat-session-preset-spec session)))
+          (pichat-diagnostics-report--row
+           "Config"
+           (list (need "model" (unless (equal (pichat-session-model-label session) "—")
+                                 (pichat-session-model-label session)))
+                 (need "thinking level" (pichat-session-thinking-level session) "thinking ")
+                 (need "preset" (pichat-session-preset-name session) "preset "))
+           (list (pichat-diagnostics-report--text (plist-get spec :description)))
+           (list (when spec
+                   (concat (dim "system prompt: ")
+                           (if (plist-get spec :system-prompt) "replaced" "Pi default")
+                           (if (plist-get spec :append-system-prompt)
+                               " with additions" " without additions"))))))
         (let* ((label (and transport (pichat-transport-label transport)))
                (kind (and transport (pichat-transport-kind transport)))
                (target (need "target" label))
@@ -264,8 +271,25 @@ Only abnormal values are highlighted; descriptive words are dimmed."
                            (count "mcp" (plist-get selection :mcp) "disabled")
                            (count "emacs" (plist-get selection :emacs) "none"))
                      " · "))
-       (spec (count "builtins" (plist-get spec :tools) "none"))
+       (spec (let ((tools (plist-get spec :tools)))
+               (if (eq tools :default) "Pi defaults" (count "builtins" tools "none"))))
        (t "unavailable")))))
+
+(defun pichat-diagnostics-report--launch-argv (argv)
+  "Return a display copy of ARGV with system-prompt arguments omitted."
+  (let (display)
+    (while argv
+      (let ((arg (pop argv)))
+        (cond
+         ((member arg '("--system-prompt" "--append-system-prompt"))
+          (push arg display)
+          (when argv
+            (pop argv)
+            (push "[omitted]" display)))
+         ((string-match "\\`--\\(?:append-\\)?system-prompt=" arg)
+          (push (concat (match-string 0 arg) "[omitted]") display))
+         (t (push arg display)))))
+    (nreverse display)))
 
 (defun pichat-diagnostics-report--title (title &optional summary)
   "Return evidence heading TITLE with optional parenthesized SUMMARY."
@@ -326,7 +350,9 @@ Only abnormal values are highlighted; descriptive words are dimmed."
                      "unavailable"))
                   (if (and pi-p inspect-p)
                       (if (pichat-session-rpc-command session)
-                          (pichat-chat-diagnostics--print-value (pichat-session-rpc-command session))
+                          (pichat-chat-diagnostics--print-value
+                           (pichat-diagnostics-report--launch-argv
+                            (pichat-session-rpc-command session)))
                         "unavailable (no captured launch argv)\n")
                     "unavailable for this backend\n"))
             (list 'tools

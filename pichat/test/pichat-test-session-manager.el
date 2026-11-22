@@ -411,16 +411,20 @@
 
 (ert-deftest pichat-session-manager-identifies-captured-preset ()
   (let* ((session (pichat-session-make
-                   :preset-name 'manual :preset-spec (pichat-presets-resolve 'manual)))
+                   :preset-spec (pichat-presets-resolve 'manual)))
          (entry (pichat-session-manager--entry session)))
     (should (equal "manual" (pichat-session-manager--sort-value entry "Preset")))
     (with-temp-buffer
       (pichat-session-manager-mode)
-      (pichat-session-manager--render-preview session nil)
+      (cl-letf (((symbol-function 'pichat-session-default-p) (lambda (_) t)))
+        (pichat-session-manager--render-preview session nil))
       (unwind-protect
           (with-current-buffer pichat-session-manager-preview-buffer-name
-            (should (string-match-p "Preset: manual" (buffer-string)))
-            (should (string-match-p "Built-in tools: read" (buffer-string))))
+            (should (string-prefix-p
+                     (concat (pichat-session-manager--sort-value entry "Name") "\n")
+                     (buffer-string)))
+            (should (string-match-p " · manual · — · preferred$" (buffer-string)))
+            (should-not (string-match-p "Built-in tools:" (buffer-string))))
         (when-let* ((buffer (get-buffer pichat-session-manager-preview-buffer-name)))
           (kill-buffer buffer))))))
 
@@ -940,8 +944,11 @@
     (save-window-excursion
       (let* ((session (pichat-session-make
                        :id "pi-source" :name "parser work"
-                       :state 'idle :cwd "/tmp/project/"
-                       :session-file "/tmp/pi-source.jsonl"))
+                       :state 'idle :cwd (expand-file-name "~/project/")
+                       :session-file "/tmp/pi-source.jsonl"
+                       :preset-spec '(:name coding :description "Parser work preset"
+                                      :tools ("test-tool"))
+                       :model '(:provider "fake" :id "offline")))
              (response (pichat-test-session-manager--tree-response
                         "Fix the parser" "Working on the parser now."))
              requested buffer)
@@ -969,19 +976,18 @@
           (should (eq session requested))
           (with-current-buffer pichat-session-manager-preview-buffer-name
             (let ((text (buffer-string)))
-              (should (string-match-p "Runtime Preview" text))
-              (should (string-match-p "Runtime: pichat-runtime-" text))
-              (should (string-match-p "Preferred: no" text))
-              (should (string-match-p "Pi ID: pi-source" text))
-              (should (string-match-p "Persistence: persisted source file" text))
-              (should-not (string-match-p "q close ·" text))
-              (should (string-match-p "Source: /tmp/pi-source.jsonl" text))
+              (should (string-prefix-p
+                       "parser work\nidle · coding · fake/offline\nCWD: ~/project/\n\nRecent active branch\n\n"
+                       text))
+              (should (eq 'bold (get-text-property (point-min) 'face)))
+              (dolist (detail '("pichat-runtime-" "pi-source" "test-tool" "Parser work preset"))
+                (should-not (string-match-p detail text)))
               (should (string-match-p "Fix the parser" text))
               (should (string-match-p "Working on the parser now" text)))))))))
 
 (ert-deftest pichat-session-manager-preview-bounds-nodes-not-tool-results ()
   (pichat-test-with-clean-state
-    (let* ((session (pichat-session-make :id "bounded" :state 'stopped))
+    (let* ((session (pichat-session-make :id "bounded" :name "Bounded transcript" :state 'stopped))
            (entries
             '((:id "u" :type "message"
                :message (:role "user" :content "Earlier task"))
@@ -1005,7 +1011,7 @@
         (with-current-buffer pichat-session-manager-preview-buffer-name
           (should buffer-read-only)
           (should (derived-mode-p 'pichat-session-manager-preview-mode))
-          (should (string-match-p "Runtime Preview" (buffer-string)))
+          (should (string-prefix-p "Bounded transcript\n" (buffer-string)))
           (should (string-match-p "Cached source" (buffer-string)))
           (should (string-match-p "1 earlier entries omitted" (buffer-string)))
           (should-not (string-match-p "Earlier task" (buffer-string)))
@@ -1026,7 +1032,6 @@
                   (should (string-match-p "retained result" (buffer-string)))))
             (when-let* ((details (get-buffer "*PiChat Transcript Tool Details*")))
               (kill-buffer details)))
-          (should (string-match-p "Runtime Preview" (buffer-string)))
           (should (string-match-p "Cached source" (buffer-string)))
           (should (eq #'pichat-session-manager-preview-refresh
                       (key-binding (kbd "g")))))
@@ -1039,7 +1044,7 @@
 
 (ert-deftest pichat-session-manager-preview-rejection-and-empty-release-view ()
   (pichat-test-with-clean-state
-    (let ((session (pichat-session-make :id "invalid" :state 'stopped))
+    (let ((session (pichat-session-make :id "invalid" :name "Invalid transcript" :state 'stopped))
           (entries
            '((:id "a" :type "message"
               :message (:role "assistant"
@@ -1049,7 +1054,7 @@
         (pichat-session-manager-mode)
         (pichat-session-manager--render-preview session (list :entries entries))
         (with-current-buffer pichat-session-manager-preview-buffer-name
-          (should (string-match-p "Runtime Preview" (buffer-string)))
+          (should (string-prefix-p "Invalid transcript\n" (buffer-string)))
           (should (string-match-p "Transcript unavailable:" (buffer-string))))
         (pichat-session-manager--render-preview session (list :entries nil))
         (with-current-buffer pichat-session-manager-preview-buffer-name
@@ -1174,8 +1179,7 @@
           (pichat-session-manager-mode)
           (pichat-session-manager--render-preview session nil)
           (with-current-buffer pichat-session-manager-preview-buffer-name
-            (should (string-match-p "Persistence: none (--no-session)"
-                                    (buffer-string)))))
+            (should (string-match-p " · ephemeral$" (buffer-string)))))
       (when-let* ((buffer
                   (get-buffer pichat-session-manager-preview-buffer-name)))
         (kill-buffer buffer)))))

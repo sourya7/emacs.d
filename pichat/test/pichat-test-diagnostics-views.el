@@ -387,6 +387,40 @@
           (mapc (lambda (buffer) (when (buffer-live-p buffer) (kill-buffer buffer)))
                 (list report origin)))))))
 
+(ert-deftest pichat-diagnostics-report-shows-preset-prompt-mode-not-prompt-text ()
+  (pichat-test-with-clean-state
+    (let* ((argv '("pi" "--system-prompt" "private base instructions"
+                   "--append-system-prompt=private additions" "--model" "fake/offline"))
+           (session (pichat-register-session (pichat-session-make)))
+           report)
+      (unwind-protect
+          (cl-letf (((symbol-function 'pichat-view-display) #'ignore))
+            (dolist (fixture '((nil nil "Pi default without additions")
+                               (nil "private additions" "Pi default with additions")
+                               ("private base instructions" nil "replaced without additions")
+                               ("private base instructions" "private additions" "replaced with additions")))
+              (pcase-let ((`(,base ,append ,mode) fixture))
+                (pichat-session-set-configuration
+                 session (list :name 'fixture :description "Fixture description\nSecond line"
+                               :tools :default :system-prompt base :append-system-prompt append)
+                 nil)
+                (setq report (pichat-show-diagnostics session))
+                (with-current-buffer report
+                  (should (string-match-p "Fixture description Second line" (buffer-string)))
+                  (should (string-match-p (concat "system prompt: " mode "$") (buffer-string)))
+                  (should (string-match-p "Startup tool selections (Pi defaults)" (buffer-string)))
+                  (should-not (string-match-p "private " (buffer-string))))))
+            (setf (pichat-session-rpc-command session) argv)
+            (with-current-buffer report
+              (pichat-diagnostics-refresh)
+              (pichat-test-diagnostics-toggle "Captured launch command")
+              (should (string-match-p (regexp-quote "--system-prompt\" \"[omitted]") (buffer-string)))
+              (should (string-match-p (regexp-quote "--append-system-prompt=[omitted]") (buffer-string)))
+              (should (string-match-p (regexp-quote "--model") (buffer-string)))
+              (should-not (string-match-p "private " (buffer-string))))
+            (should (equal (pichat-session-rpc-command session) argv)))
+        (when (buffer-live-p report) (kill-buffer report))))))
+
 (ert-deftest pichat-diagnostics-report-provider-sections-keep-stable-independent-folds ()
   (pichat-test-with-clean-state
     (let* ((session (pichat-register-session (pichat-session-make)))

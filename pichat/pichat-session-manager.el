@@ -124,17 +124,6 @@ The historical option name is retained for configuration compatibility."
       (pichat-session-scope-label session)
       "global"))
 
-(defun pichat-session-manager--session-label (session)
-  "Return cached human-readable source label for SESSION."
-  (let ((name (pichat-session-name session))
-        (id (pichat-session-id session)))
-    (pichat-session-manager--shorten
-     (cond
-      ((and (stringp name) (not (string-blank-p name))) name)
-      (id (pichat-session-manager--short-id id))
-      (t (pichat-session-runtime-id session)))
-     32)))
-
 (defun pichat-session-manager--project-label (session)
   "Return the full user-facing owner project for SESSION."
   (let ((directory (pichat-session-owner-directory session))
@@ -509,89 +498,27 @@ Construction rejection is presented by the shared view, never a runtime notice."
             (entries (plist-get snapshot :entries)))
         (pichat-transcript-view-clear)
         (erase-buffer)
-        (insert (propertize "Runtime Preview" 'face 'bold) "\n")
-        (insert (format "Session: %s\n"
-                        (pichat-session-manager--session-label session)))
-        (insert (format "State: %s    Runtime: %s\n"
+        (insert (propertize
+                 (pichat-session-manager--shorten
+                  (pichat-session-manager-runtime-label session) 40)
+                 'face 'bold)
+                "\n")
+        (insert (format "%s · %s · %s%s%s\n"
                         (or (pichat-session-state session) 'unknown)
-                        (pichat-session-runtime-id session)))
-        (insert (format "Preferred: %s\n"
-                        (if (pichat-session-default-p session) "yes" "no")))
-        (insert (format "%s ID: %s\n"
-                        (if (eq (pichat-session-backend-id session) 'pi)
-                            "Pi" "Memory")
-                        (or (pichat-session-id session) "—")))
-        (insert (format "Backend: %s\n"
-                        (pichat-session-backend-id session)))
-        (let ((spec (pichat-session-preset-spec session)))
-          (insert (format "Preset: %s\n"
-                          (or (pichat-session-preset-name session) "legacy")))
-          (when spec
-            (when-let* ((description (plist-get spec :description)))
-              (insert (format "Description: %s\n"
-                              (truncate-string-to-width description 120 nil nil "…"))))
-            (let ((selection (pichat-session-tool-selection session)))
-              (insert (format "Built-in tools: %s\n"
-                              (if selection
-                                  (if-let* ((names (plist-get selection :builtins)))
-                                      (string-join names ", ")
-                                    "none")
-                                (pcase (plist-get spec :tools)
-                                  (:default "Pi defaults")
-                                  ('nil "none")
-                                  (names (string-join names ", "))))))
-              (insert (format "Extension tools: %s\n"
-                              (if selection
-                                  (if-let* ((names (plist-get selection :extensions)))
-                                      (string-join names ", ") "none")
-                                "Pi configuration (availability not checked)")))
-              (insert (format "MCP tools: %s\n"
-                              (if selection
-                                  (if-let* ((pairs (plist-get selection :mcp)))
-                                      (string-join
-                                       (mapcar (lambda (pair)
-                                                 (format "%s/%s" (car pair) (cdr pair)))
-                                               pairs)
-                                       ", ")
-                                    "disabled")
-                                "Pi configuration (availability not checked)")))
-              (insert (format "Emacs-defined tools: %s\n"
-                              (if-let* ((names (plist-get selection :emacs)))
-                                  (string-join names ", ") "none"))))
-            (insert (format "System prompt: %s%s\n"
-                            (if (plist-get spec :system-prompt)
-                                "replaced" "Pi default")
-                            (if (plist-get spec :append-system-prompt)
-                                ", appended instructions" "")))
-            (insert "Tools shown are startup selections, not connection status.\n")))
-        (insert (format "Model: %s\n"
-                        (pichat-session-model-label session)))
-        (insert (format "Scope: %s\n"
-                        (pichat-session-manager--owner-label session)))
-        (insert (format "Target: %s (%s)\n"
-                        (pichat-transport-label
-                         (pichat-session-transport session))
-                        (pichat-transport-kind
-                         (pichat-session-transport session))))
-        (insert (format "Emacs CWD: %s\n"
-                        (abbreviate-file-name
-                         (or (pichat-session-emacs-cwd session) "—"))))
-        (unless (equal (pichat-session-emacs-cwd session)
-                       (pichat-session-runtime-cwd session))
-          (insert (format "Runtime CWD: %s\n"
-                          (or (pichat-session-runtime-cwd session) "—"))))
-        (insert
-         (format "Persistence: %s\n"
-                 (pcase (pichat-session-persistence session)
-                   ('memory "memory (no resumable file)")
-                   ('ephemeral "none (--no-session)")
-                   (_ "persisted source file"))))
-        (insert (format "Runtime source: %s\n"
-                        (or (pichat-session-session-file session) "—")))
-        (when-let* ((emacs-source (pichat-session-emacs-session-file session)))
-          (unless (equal emacs-source (pichat-session-session-file session))
-            (insert (format "Emacs source: %s\n"
-                            (abbreviate-file-name emacs-source)))))
+                        (or (pichat-session-preset-name session) "legacy")
+                        (pichat-session-model-label session)
+                        (if (pichat-session-default-p session) " · preferred" "")
+                        (if (eq (pichat-session-persistence session) 'ephemeral)
+                            " · ephemeral" "")))
+        (let ((transport (pichat-session-transport session)))
+          (if (and transport (eq (pichat-transport-kind transport) 'ssh))
+              (insert (format "CWD: %s (SSH: %s)\n"
+                              (or (pichat-session-runtime-cwd session) "—")
+                              (pichat-transport-label transport)))
+            (insert (format "CWD: %s\n"
+                            (if-let* ((cwd (pichat-session-emacs-cwd session)))
+                                (abbreviate-file-name cwd)
+                              "—")))))
         (when note
           (insert (propertize (concat "\n" note "\n") 'face 'shadow)))
         (insert "\n" (propertize "Recent active branch" 'face 'bold) "\n\n")

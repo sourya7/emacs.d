@@ -441,7 +441,7 @@
                                               :tramp-prefix "/ssh:archive.invalid:"))
          (capability (list :transport transport
                            :runtime-cwd "/runtime/project"))
-         captured-transport captured-cwd events commands
+         captured-transport captured-cwd events commands fail capture-buffer
          (pichat-transport--active-connections
           (list (pichat-transport--connection transport))))
     (should node)
@@ -450,12 +450,14 @@
                  (should-not (pichat-transport-busy-p actual-transport))
                  (push (plist-get args :command) commands)
                  (setq captured-transport actual-transport
-                       captured-cwd actual-cwd)
+                       captured-cwd actual-cwd
+                       capture-buffer (plist-get args :stderr))
+                 (when fail (signal 'file-error '("Injected archive SSH acquisition failure")))
                  (apply #'make-process args))))
       (let* ((builder
-              (lambda (_input)
-                (list node "-e"
-                      "console.log(JSON.stringify({sessionId:'fixture'}))")))
+              (lambda (input)
+                (list node "-e" "console.log(JSON.stringify({sessionId:process.argv[1]}))"
+                      input)))
              (stage (funcall (pichat-consult--async-archive-process
                               builder capability)
                              (lambda (action) (push action events)))))
@@ -471,17 +473,29 @@
               (accept-process-output nil 0.06)
               (should-not commands)
               (should-not (member [indicator finished] events))
-              ;; The next query resumes exactly once on the captured target.
-              (setq pichat-transport--active-connections
+              ;; A deferred query can fail before acquiring an endpoint.
+              (setq fail t
+                    pichat-transport--active-connections
                     (list (pichat-transport--connection transport)))
               (funcall stage "query")
               (accept-process-output nil 0.06)
               (should-not commands)
               (setq pichat-transport--active-connections nil)
+              (pichat-test-wait-until (lambda () (member [indicator failed] events))
+                                      2 "archive Consult acquisition failure")
+              (should (= 1 (cl-count [indicator failed] events :test #'equal)))
+              (should (= 1 (length commands)))
+              (should (bufferp capture-buffer))
+              (should-not (buffer-live-p capture-buffer))
+              ;; A later query still starts exactly once and can publish results.
+              (setq fail nil events nil)
+              (funcall stage "next query")
               (pichat-test-wait-until
                (lambda () (member [indicator finished] events))
                2 "archive Consult transport process")
-              (should (= 1 (length commands)))
+              (should-not (member [indicator failed] events))
+              (should (member '("{\"sessionId\":\"next query\"}") events))
+              (should (= 2 (length commands)))
               (should (eq transport captured-transport))
               (should (equal "/runtime/project" captured-cwd)))
           (funcall stage 'destroy))))))

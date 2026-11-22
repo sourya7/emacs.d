@@ -214,68 +214,133 @@ Keep the real transport entry point so any ownership it provides is exercised."
         (should (eq process (pichat-session-process session)))
         (should (process-live-p process))))))
 
-(ert-deftest pichat-ssh-boundary-deferred-preflight-rejects-rebound-source ()
-  (pichat-test-with-unit-session (session process)
-    (let* ((transport (pichat-test-ssh-boundary--target))
-           (file "/project/source.jsonl") reply completions)
-      (setf (pichat-session-transport session) transport
-            (pichat-session-id session) "source"
-            (pichat-session-session-file session) file)
-      (cl-letf (((symbol-function 'pichat-rpc-get-state)
-                 (lambda (_session callback _failure)
-                   (setq reply callback) "fixture-state"))
-                ((symbol-function 'file-regular-p)
-                 (lambda (path)
-                   (ert-fail (format "Stale preflight checked file %s" path)))))
-        (pichat-reconfigure-request-preflight
-         (pichat-reconfigure-capture-origin session)
-         (lambda (blockers _result) (push blockers completions)))
-        (pichat-test-ssh-boundary--during-setup
-         transport process
-         (lambda ()
-           (let ((response (list :data (list :sessionId "source" :sessionFile file))))
-             (funcall reply response session)
-             (should-not completions)
-             (setf (pichat-session-id session) "rebound"))))
-        (pichat-test-wait-until (lambda () completions) 1 "reject stale preflight reply")
-        (funcall reply (list :data (list :sessionId "source" :sessionFile file)) session)
-        (should (equal completions
-                       '(("The originating runtime, process, or conversation changed"))))))))
+(ert-deftest pichat-ssh-boundary-preflight-rechecks-origin-and-file-on-deferred-replies ()
+  (dolist (change '(source target process file))
+    (ert-info ((format "Changed before deferred validation: %s" change))
+      (pichat-test-with-unit-session (session process)
+        (let* ((transport (pichat-test-ssh-boundary--target))
+               (other (pichat-transport--create :kind 'ssh :tramp-prefix "/ssh:other.invalid:"))
+               (file "/project/source.jsonl")
+               (state (list :sessionId "source" :sessionFile file :pendingMessageCount 0
+                            :model '(:provider "fake" :id "model") :thinkingLevel "off"
+                            :steeringMode "all" :followUpMode "all" :autoCompactionEnabled nil))
+               (entries '(:entries ((:type "model_change" :id "model" :parentId nil
+                                          :provider "fake" :modelId "model")) :leafId "model"))
+               (regular-p (symbol-function 'file-regular-p))
+               (readable-p (symbol-function 'file-readable-p))
+               (accessible t)
+               (checks 0)
+               state-reply entries-reply completions replacement)
+          (setf (pichat-session-transport session) transport
+                (pichat-session-state session) 'idle
+                (pichat-session-persistence session) 'persistent
+                (pichat-session-id session) "source"
+                (pichat-session-session-file session) file)
+          (process-put process 'pichat-lifetime 'fixture)
+          (cl-letf (((symbol-function 'pichat-rpc-get-state)
+                     (lambda (_session callback _failure)
+                       (setq state-reply callback) "fixture-state"))
+                    ((symbol-function 'pichat-rpc-get-entries)
+                     (lambda (_session _since callback _failure)
+                       (setq entries-reply callback) "fixture-entries"))
+                    ((symbol-function 'pichat-reconfigure--chat-blockers) #'ignore)
+                    ((symbol-function 'file-regular-p)
+                     (lambda (path)
+                       (if (string-suffix-p file path)
+                           (progn
+                             (should (equal path (concat "/ssh:fixture.invalid:" file)))
+                             (should-not (pichat-transport-busy-p transport))
+                             (cl-incf checks)
+                             accessible)
+                         (funcall regular-p path))))
+                    ((symbol-function 'file-readable-p)
+                     (lambda (path)
+                       (or (equal path (concat "/ssh:fixture.invalid:" file))
+                           (funcall readable-p path)))))
+            (unwind-protect
+                (progn
+                  (pichat-reconfigure-request-preflight
+                   (pichat-reconfigure-capture-origin session)
+                   (lambda (blockers result) (push (list blockers result) completions)))
+                  (unless (eq change 'source)
+                    (funcall state-reply (list :data state) session)
+                    (should entries-reply)
+                    (should (= checks 1)))
+                  (let ((reply (or entries-reply state-reply))
+                        (response (list :data (if entries-reply entries state))))
+                    (pichat-test-ssh-boundary--during-setup
+                     transport process
+                     (lambda ()
+                       (when (eq change 'target)
+                         (setf (pichat-session-transport session) other))
+                       (funcall reply response session)
+                       (pcase change
+                         ('source (setf (pichat-session-id session) "rebound"))
+                         ('process
+                          (setq replacement (make-pipe-process :name "pichat-replacement-fixture"
+                                                               :noquery t))
+                          (setf (pichat-session-process session) replacement))
+                         ('file (setq accessible nil)))
+                       (accept-process-output nil 0.06)
+                       (should-not completions)))
+                    (pichat-test-wait-until (lambda () completions) 1 "settle deferred preflight")
+                    (funcall reply response session))
+                  (should (= 1 (length completions)))
+                  (pcase-let ((`((,blockers ,result)) completions))
+                    (if (eq change 'file)
+                        (progn
+                          (should (= checks 2))
+                          (should (plist-get result :baseline))
+                          (should (equal blockers
+                                         '("The saved conversation file is inaccessible on the runtime target"))))
+                      (should (= checks (if (eq change 'source) 0 1)))
+                      (should-not result)
+                      (should (equal blockers
+                                     '("The originating runtime, process, or conversation changed")))))
+                  (should (process-live-p process))
+                  (when replacement (should (process-live-p replacement))))
+              (setf (pichat-session-process session) process)
+              (when (and replacement (process-live-p replacement)) (delete-process replacement)))))))))
 
 (ert-deftest pichat-ssh-boundary-confirmed-helper-cleanup-waits-for-target ()
-  (pichat-test-with-unit-session (session process)
-    (let* ((transport (pichat-test-ssh-boundary--target))
-           (chat (generate-new-buffer " *pichat-fixture-chat*"))
-           (operation (list :session session :transport transport :chat chat
-                            :phase 'preflight :shutdown-obligations (list process)))
-           (target-busy nil)
-           cleaned)
-      (setf (pichat-session-transport session) transport
-            (pichat-session-buffer session) chat
-            (pichat-session-restart-operation session) operation)
-      (with-current-buffer chat (setq-local pichat-chat-session session))
-      (pichat-process-lifetime-confirm process)
-      (process-put process 'pichat-helper-cleanup
-                   (lambda () (push (if target-busy 'busy 'free) cleaned)))
-      (unwind-protect
-          (progn
-            (pichat-reconfigure--finish operation t nil)
-            (pichat-test-ssh-boundary--during-setup
-             transport process
-             (lambda ()
-               (let (yielded)
-                 (setq target-busy t)
-                 (unwind-protect
-                     (progn
-                       (run-at-time 0 nil (lambda () (setq yielded t)))
-                       (pichat-test-wait-until (lambda () yielded) 1
-                                               "event loop inside same-target setup"))
-                   (setq target-busy nil)))))
-            (should-not (memq 'busy cleaned))
-            (pichat-test-wait-until (lambda () cleaned) 1 "safe helper cleanup")
-            (should (equal cleaned '(free)))
-            (should-not (process-get process 'pichat-helper-cleanup)))
-        (kill-buffer chat)))))
+  (dolist (fail '(nil t))
+    (pichat-test-with-unit-session (session process)
+      (pichat-test-with-temp-dir directory
+        (let* ((transport (pichat-test-ssh-boundary--target))
+               (chat (generate-new-buffer " *pichat-fixture-chat*"))
+               (operation (list :session session :transport transport :chat chat
+                                :phase 'preflight :shutdown-obligations (list process)))
+               (helper (expand-file-name "helper.ts" directory))
+               attempts
+               (cleanup (lambda ()
+                          (push (pichat-transport-busy-p transport) attempts)
+                          (when fail (signal 'file-error '("Injected helper deletion failure")))
+                          (delete-file helper))))
+          (unwind-protect
+              (progn
+                (write-region "fixture" nil helper nil 'silent)
+                (setf (pichat-session-transport session) transport
+                      (pichat-session-buffer session) chat
+                      (pichat-session-restart-operation session) operation)
+                (with-current-buffer chat (setq-local pichat-chat-session session))
+                (pichat-process-lifetime-confirm process)
+                (process-put process 'pichat-helper-cleanup cleanup)
+                (pichat-reconfigure--finish operation t nil)
+                (pichat-test-ssh-boundary--during-setup
+                 transport process (lambda () (accept-process-output nil 0.06)))
+                (should-not attempts)
+                (pichat-test-wait-until (lambda () attempts) 1 "safe helper cleanup")
+                (should (equal attempts '(nil)))
+                (should (pichat-process-lifetime-confirmed-p process))
+                (should (eq (file-exists-p helper) fail))
+                (if fail
+                    (progn
+                      (should (eq cleanup (process-get process 'pichat-helper-cleanup)))
+                      (should (equal '(file-error "Injected helper deletion failure")
+                                     (process-get process 'pichat-helper-cleanup-error))))
+                  (should-not (process-get process 'pichat-helper-cleanup))
+                  (should-not (process-get process 'pichat-helper-cleanup-error))))
+            (kill-buffer chat)))))))
 
 (ert-deftest pichat-ssh-boundary-deferral-is-connection-qualified-and-cancellable ()
   (pichat-test-with-unit-session (_session process)

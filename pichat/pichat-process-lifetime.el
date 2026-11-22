@@ -104,7 +104,7 @@ exit, never transport EOF alone.  The caller owns deciding whether evidence is
 still current before recording it or starting a replacement."
   (let* ((identity (copy-sequence (process-get process 'pichat-lifetime)))
          (token (substring (secure-hash 'sha256 (format "%s:%s:%s" (random) (float-time) (make-symbol "observer"))) 0 32))
-         (remainder "") (bytes 0) observer timer dispatch-timer
+         (remainder "") (bytes 0) observer timer cancel-dispatch
          baseline gone finished early-exit early-error)
     (unless (and (eq (pichat-transport-kind transport) 'ssh) identity)
       (user-error "SSH runtime has no verified Linux actual-Pi identity"))
@@ -112,14 +112,16 @@ still current before recording it or starting a replacement."
         ((cancel ()
            (setq finished t)
            (when (timerp timer) (cancel-timer timer))
-           (when (timerp dispatch-timer) (cancel-timer dispatch-timer))
-           (when (and observer (process-live-p observer)) (delete-process observer)))
+           (when cancel-dispatch (funcall cancel-dispatch) (setq cancel-dispatch nil))
+           (when (and observer (process-live-p observer))
+             (pichat-transport-run-when-idle
+              transport (lambda () (when (process-live-p observer) (delete-process observer))))))
          (finish (success reason)
            (unless finished
              (cancel)
              (funcall callback success reason)))
          (dispatch ()
-           (setq dispatch-timer nil)
+           (setq cancel-dispatch nil)
            (unless finished
              (condition-case err
                  (let (end)
@@ -142,8 +144,8 @@ still current before recording it or starting a replacement."
                        (finish nil "SSH exit observer disconnected or could not confirm old Pi exit"))))
                (error (finish nil (error-message-string err))))))
          (schedule ()
-           (unless (or finished dispatch-timer)
-             (setq dispatch-timer (run-at-time 0 nil #'dispatch))))
+           (unless (or finished cancel-dispatch)
+             (setq cancel-dispatch (pichat-transport-defer transport #'dispatch))))
          (filter (_proc chunk)
            (unless finished
              (cl-incf bytes (string-bytes chunk))

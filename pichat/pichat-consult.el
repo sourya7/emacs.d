@@ -162,18 +162,23 @@ owns its endpoints and timers, including cancellation and stale callbacks."
                        (stdout-limit pichat-archive-output-limit)
                        (stderr-limit pichat-archive-stderr-limit)
                        (flush t) process stderr-process stderr-buffer
+                       (transport (or (plist-get capability :transport)
+                                      pichat-transport-local))
                        process-timer overflow-timer abort-timer failure done)
                    (cl-labels
                        ((current-p () (and (not done) (= token generation)))
                         (cleanup ()
                           (dolist (timer (list process-timer overflow-timer))
                             (when (timerp timer) (cancel-timer timer)))
-                          (dolist (owner (list process stderr-process
-                                              (and (buffer-live-p stderr-buffer)
-                                                   (get-buffer-process stderr-buffer))))
-                            (when (process-live-p owner) (delete-process owner)))
-                          (when (buffer-live-p stderr-buffer)
-                            (kill-buffer stderr-buffer)))
+                          (pichat-transport-run-when-idle
+                           transport
+                           (lambda ()
+                             (dolist (owner (list process stderr-process
+                                                 (and (buffer-live-p stderr-buffer)
+                                                      (get-buffer-process stderr-buffer))))
+                               (when (process-live-p owner) (delete-process owner)))
+                             (when (buffer-live-p stderr-buffer)
+                               (kill-buffer stderr-buffer)))))
                         (cancel ()
                           (setq done t)
                           (when (timerp abort-timer) (cancel-timer abort-timer))
@@ -263,8 +268,7 @@ owns its endpoints and timers, including cancellation and stale callbacks."
                            (let ((inhibit-modification-hooks nil))
                              (setq process
                                    (pichat-transport-make-process
-                                    (or (plist-get capability :transport)
-                                        pichat-transport-local)
+                                    transport
                                     (or (plist-get capability :runtime-cwd)
                                         default-directory)
                                     :name "pichat-archive-consult" :buffer nil
@@ -791,7 +795,7 @@ and SUBJECT describe a relation-picker target when present."
         ('preview
          (cl-incf sequence)
          (dolist (process processes)
-           (when (process-live-p process) (delete-process process)))
+           (pichat-transport-delete-process process))
          (setq processes nil)
          (let* ((target (pichat-consult--target candidate))
                 (record (pichat-consult--candidate-record target))
@@ -869,7 +873,7 @@ and SUBJECT describe a relation-picker target when present."
         ((or 'return 'exit)
          (cl-incf sequence)
          (dolist (process processes)
-           (when (process-live-p process) (delete-process process)))
+           (pichat-transport-delete-process process))
          (setq processes nil)
          (funcall display-state action candidate)
          (when (and (eq action 'exit) (buffer-live-p buffer))
@@ -1093,7 +1097,9 @@ entry-loadability claim."
 (defun pichat-consult--schedule-resume (context)
   "Schedule resumption of browser CONTEXT outside the current minibuffer."
   (when context
-    (run-at-time 0 nil #'pichat-consult--resume-context context)))
+    (pichat-transport-defer
+     (plist-get (plist-get context :capability) :transport)
+     (lambda () (pichat-consult--resume-context context)))))
 
 (defun pichat-consult--resume-context (context)
   "Resume the archive or relation browser represented by CONTEXT."
@@ -1185,8 +1191,8 @@ entry-loadability claim."
   (let ((record (copy-sequence subject)))
     (setq record (plist-put record :archive-capability capability)
           record (plist-put record :browse-context nil))
-    (run-at-time
-     0 nil
+    (pichat-transport-defer
+     (plist-get capability :transport)
      (lambda ()
        (when (= token pichat-consult--relations-sequence)
          (if (pichat-archive-capability-current-p capability)
@@ -1208,8 +1214,7 @@ picker receives the same normalized subject record as archive search actions."
       (user-error "PiChat archive capability is unavailable or stale"))
     (unless (hash-table-p cache)
       (user-error "PiChat archive capability has no session-info cache"))
-    (when (process-live-p pichat-consult--relations-process)
-      (delete-process pichat-consult--relations-process))
+    (pichat-transport-delete-process pichat-consult--relations-process)
     (setq pichat-consult--relations-process nil)
     (if cached-p
         (pichat-consult--schedule-current-relations capability cached token)
@@ -1254,8 +1259,7 @@ picker receives the same normalized subject record as archive search actions."
       (user-error "PiChat archive capability is unavailable or stale"))
     (unless (hash-table-p cache)
       (user-error "PiChat archive capability has no relation cache"))
-    (when (process-live-p pichat-consult--relations-process)
-      (delete-process pichat-consult--relations-process))
+    (pichat-transport-delete-process pichat-consult--relations-process)
     (setq pichat-consult--relations-process nil)
     (if cached-p
         (pichat-consult--read-relations
@@ -1270,8 +1274,13 @@ picker receives the same normalized subject record as archive search actions."
           (when (= token pichat-consult--relations-sequence)
             (setq pichat-consult--relations-process nil)
             (puthash key relations cache)
-            (run-at-time 0 nil #'pichat-consult--read-relations
-                         capability record relations parent-context)))
+            (pichat-transport-defer
+             (plist-get capability :transport)
+             (lambda ()
+               (when (and (= token pichat-consult--relations-sequence)
+                          (pichat-archive-capability-current-p capability))
+                 (pichat-consult--read-relations
+                  capability record relations parent-context))))))
         (lambda (failure)
           (when (= token pichat-consult--relations-sequence)
             (setq pichat-consult--relations-process nil)

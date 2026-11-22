@@ -418,25 +418,12 @@
                      :remote-path '("/remote/bin")))
          (session (pichat-session-make :transport transport :cwd "/tmp/"
                                        :runtime-cwd "/remote/project/"))
-         (pichat-pi-extra-env '(("PICHAT_TEST_SETUP_ENV" . "remote")))
-         captured buffers)
-    (unwind-protect
-        (cl-letf (((symbol-function 'make-term)
-                   (lambda (name program _startfile &rest args)
-                     (push (list default-directory tramp-remote-path program args
-                                 (getenv "PICHAT_TEST_SETUP_ENV")) captured)
-                     (let ((buffer (generate-new-buffer (format "*%s*" name))))
-                       (push buffer buffers)
-                       ;; Test only launch context, not SSH connectivity.
-                       (with-current-buffer buffer (term-mode))
-                       buffer)))
-                  ((symbol-function 'term-char-mode) #'ignore)
-                  ((symbol-function 'pop-to-buffer) (lambda (buffer &rest _) buffer)))
-          (pichat-diagnostics-open-interactive-pi session)
-          (should (equal (car captured)
-                         '("/ssh:setup.invalid:/remote/project/"
-                           ("/remote/bin") "/remote/bin/pi" nil "remote"))))
-      (mapc #'kill-buffer buffers))))
+         (pichat-diagnostics-interactive-command '("pi")))
+    (cl-letf (((symbol-function 'make-term)
+               (lambda (&rest _) (ert-fail "SSH setup entered the local launcher"))))
+      (should-error (pichat-diagnostics-open-interactive-pi session) :type 'user-error)
+      (let ((default-directory "/ssh:setup.invalid:/remote/project/"))
+        (should-error (pichat-diagnostics-open-interactive-pi) :type 'user-error)))))
 
 (ert-deftest pichat-diagnostics-setup-honors-target-executable-and-explicit-wrapper-policy ()
   (let* ((session (pichat-session-make

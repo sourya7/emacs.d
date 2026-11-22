@@ -195,10 +195,22 @@ it need not represent a live RPC process.")
   (when (timerp pichat-artifact-runner--timer)
     (cancel-timer pichat-artifact-runner--timer))
   (setq pichat-artifact-runner--timer nil)
-  (if-let* ((stop (plist-get pichat-artifact-runner--plan :stop)))
-      (funcall stop)
-    (when (process-live-p pichat-artifact-runner--process)
-      (delete-process pichat-artifact-runner--process)))
+  (let ((process pichat-artifact-runner--process)
+        (file pichat-artifact-runner--file)
+        (transport pichat-artifact-runner--transport))
+    (setq pichat-artifact-runner--process nil
+          pichat-artifact-runner--file nil)
+    (if-let* ((stop (plist-get pichat-artifact-runner--plan :stop)))
+        (funcall stop)
+      ;; Otherwise `kill-buffer' can delete the process implicitly before
+      ;; deferred cleanup gets a turn.  The closure owns only these resources.
+      (when (and (process-live-p process) (eq (process-buffer process) (current-buffer)))
+        (set-process-buffer process nil))
+      (pichat-transport-run-when-idle
+       transport
+       (lambda ()
+         (when (process-live-p process) (delete-process process))
+         (when file (ignore-errors (delete-file file)))))))
   (when-let* ((cleanup (plist-get pichat-artifact-runner--plan :cleanup)))
     (setq pichat-artifact-runner--plan
           (plist-put pichat-artifact-runner--plan :cleanup nil))
@@ -207,9 +219,6 @@ it need not represent a live RPC process.")
       (error (setq pichat-artifact-runner--result-error
                    (format "Cleanup failed: %s" (error-message-string err)))
              (message "PiChat runner: %s" pichat-artifact-runner--result-error))))
-  (when pichat-artifact-runner--file
-    (ignore-errors (delete-file pichat-artifact-runner--file))
-    (setq pichat-artifact-runner--file nil))
   ;; An explicitly reported failed staging file remains available for manual
   ;; inspection; successful published files outlive the result view.
   (when (and pichat-artifact-runner--staging
@@ -404,7 +413,12 @@ it need not represent a live RPC process.")
         (let ((inhibit-read-only t))
           (goto-char (point-max))
           (insert "\n[Timed out]\n"))))
-    (delete-process process)))
+    (let ((transport (when (buffer-live-p (process-buffer process))
+                       (buffer-local-value 'pichat-artifact-runner--transport
+                                           (process-buffer process)))))
+      (pichat-transport-run-when-idle
+       transport (lambda () (when (process-live-p process)
+                              (delete-process process)))))))
 
 (defun pichat-artifact-runner--context (directory session)
   "Return (TRANSPORT RUNTIME-CWD EMACS-CWD) for DIRECTORY and SESSION."
@@ -563,10 +577,13 @@ responsibility for executable checks, resource limits, and cancellation."
                                        pichat-artifact-runner--process))))
           (pichat-view-display buffer nil 'kill)
           buffer)
-      (error
-       (when file (ignore-errors (delete-file file)))
-       (when (buffer-live-p buffer) (kill-buffer buffer))
-       (when (and plan (not (buffer-live-p buffer)))
+      ((error quit)
+       (if (and (buffer-live-p buffer)
+                (memq #'pichat-artifact-runner--cleanup
+                      (buffer-local-value 'kill-buffer-hook buffer)))
+           (kill-buffer buffer)
+         (when file (ignore-errors (delete-file file)))
+         (when (buffer-live-p buffer) (kill-buffer buffer))
          (when-let* ((cleanup (plist-get plan :cleanup)))
            (ignore-errors (funcall cleanup))))
        (signal (car error-data) (cdr error-data))))))

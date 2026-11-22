@@ -1,12 +1,44 @@
 ;;; pichat-test-ssh-boundaries.el --- SSH callback ordering regressions -*- lexical-binding: t; -*-
 
-;; Load explicitly while these regressions are red.  There is no SSH server,
-;; TRAMP implementation advice, real Pi process, or remote fixture state.
+;; These scheduling fixtures use no SSH server, TRAMP implementation advice,
+;; real Pi process, or remote fixture state.
 
 (require 'pichat-test-support)
 (require 'pichat-tool-picker)
 (require 'pichat-reconfigure)
 (require 'pichat-tool-runtime)
+(require 'pichat-artifact-runner)
+(require 'pichat-job-executor)
+(require 'pichat-archive)
+
+(ert-deftest pichat-ssh-boundary-archive-reset-keeps-busy-endpoint-owned ()
+  "Reset retires remote endpoints on their own connection, not the UI target."
+  (let* ((transport (pichat-test-ssh-boundary--target))
+         (connection (pichat-transport--connection transport))
+         (remote (make-pipe-process :name "archive-remote-fixture" :noquery t))
+         (local (make-pipe-process :name "archive-local-fixture" :noquery t))
+         (pichat-archive--processes (list remote local))
+         (pichat-archive--capability-cache (make-hash-table :test #'equal)))
+    (unwind-protect
+        (progn
+          ;; Use the real acquisition wrapper to capture endpoint provenance.
+          (should (eq remote
+                      (pichat-test-ssh-boundary--during-setup
+                       transport remote #'ignore)))
+          (let ((pichat-transport--active-connections (list connection)))
+            (pichat-archive-reset)
+            (should-not pichat-archive--processes)
+            (should-not (process-live-p local))
+            (should (process-live-p remote))
+            ;; Service timers while still busy; a plain zero-delay timer is
+            ;; insufficient, and repeated reset must not lose endpoint ownership.
+            (pichat-archive-reset)
+            (accept-process-output nil 0.07)
+            (should (process-live-p remote)))
+          (pichat-test-wait-until
+           (lambda () (not (process-live-p remote))) 1 "idle archive reset"))
+      (dolist (process (list remote local))
+        (when (process-live-p process) (delete-process process))))))
 
 (defun pichat-test-ssh-boundary--target ()
   "Return an inert fixture identity, never to be contacted."
@@ -84,6 +116,13 @@ Keep the real transport entry point so any ownership it provides is exercised."
                 (progn
                   (open-picker)
                   (complete)
+                  (when (eq action 'reopen)
+                    ;; Close after MCP completion but before owned staging.
+                    (pichat-tool-picker--abandoned)
+                    (open-picker)
+                    (accept-process-output nil 0.02)
+                    (should (= staged 0))
+                    (complete))
                   (pichat-test-wait-until (lambda () (= 1 staged)) 1 "Tools staging")
                   (should (plist-get pichat-tool-picker--state :loaded))
                   (when (eq action 'refresh)
@@ -100,6 +139,9 @@ Keep the real transport entry point so any ownership it provides is exercised."
 
 (ert-deftest pichat-ssh-boundary-picker-refresh-excludes-mcp-stderr-teardown ()
   (pichat-test-ssh-boundary--picker 'refresh))
+
+(ert-deftest pichat-ssh-boundary-picker-reopen-retires-deferred-staging ()
+  (pichat-test-ssh-boundary--picker 'reopen))
 
 (ert-deftest pichat-ssh-boundary-rpc-start-retains-output-before-process-return ()
   (pichat-test-with-unit-session (session)
@@ -172,6 +214,34 @@ Keep the real transport entry point so any ownership it provides is exercised."
         (should (eq process (pichat-session-process session)))
         (should (process-live-p process))))))
 
+(ert-deftest pichat-ssh-boundary-deferred-preflight-rejects-rebound-source ()
+  (pichat-test-with-unit-session (session process)
+    (let* ((transport (pichat-test-ssh-boundary--target))
+           (file "/project/source.jsonl") reply completions)
+      (setf (pichat-session-transport session) transport
+            (pichat-session-id session) "source"
+            (pichat-session-session-file session) file)
+      (cl-letf (((symbol-function 'pichat-rpc-get-state)
+                 (lambda (_session callback _failure)
+                   (setq reply callback) "fixture-state"))
+                ((symbol-function 'file-regular-p)
+                 (lambda (path)
+                   (ert-fail (format "Stale preflight checked file %s" path)))))
+        (pichat-reconfigure-request-preflight
+         (pichat-reconfigure-capture-origin session)
+         (lambda (blockers _result) (push blockers completions)))
+        (pichat-test-ssh-boundary--during-setup
+         transport process
+         (lambda ()
+           (let ((response (list :data (list :sessionId "source" :sessionFile file))))
+             (funcall reply response session)
+             (should-not completions)
+             (setf (pichat-session-id session) "rebound"))))
+        (pichat-test-wait-until (lambda () completions) 1 "reject stale preflight reply")
+        (funcall reply (list :data (list :sessionId "source" :sessionFile file)) session)
+        (should (equal completions
+                       '(("The originating runtime, process, or conversation changed"))))))))
+
 (ert-deftest pichat-ssh-boundary-confirmed-helper-cleanup-waits-for-target ()
   (pichat-test-with-unit-session (session process)
     (let* ((transport (pichat-test-ssh-boundary--target))
@@ -206,6 +276,154 @@ Keep the real transport entry point so any ownership it provides is exercised."
             (should (equal cleaned '(free)))
             (should-not (process-get process 'pichat-helper-cleanup)))
         (kill-buffer chat)))))
+
+(ert-deftest pichat-ssh-boundary-deferral-is-connection-qualified-and-cancellable ()
+  (pichat-test-with-unit-session (_session process)
+    (let* ((target (pichat-test-ssh-boundary--target))
+           (other (pichat-transport--create :id 'other :kind 'ssh
+                                            :tramp-prefix "/ssh:other.invalid:"))
+           (alias (copy-pichat-transport target))
+           seen cancel-same cancel-other cancel-stale)
+      (setf (pichat-transport-id alias) 'different-configured-id)
+      (unwind-protect
+          (pichat-test-ssh-boundary--during-setup
+           target process
+           (lambda ()
+             (setq cancel-same (pichat-transport-defer alias (lambda () (push 'same seen)))
+                   cancel-other (pichat-transport-defer other (lambda () (push 'other seen)))
+                   cancel-stale (pichat-transport-defer target (lambda () (push 'stale seen))))
+             (pichat-test-wait-until (lambda () (memq 'other seen)) 1 "other target progress")
+             (should (equal seen '(other)))
+             (funcall cancel-stale)))
+        (unwind-protect
+            (progn
+              (pichat-test-wait-until (lambda () (memq 'same seen)) 1 "same target resumed")
+              (should (equal seen '(same other))))
+          (dolist (cancel (list cancel-same cancel-other cancel-stale))
+            (when cancel (funcall cancel))))))))
+
+(ert-deftest pichat-ssh-boundary-transport-defers-composed-stderr-sentinel ()
+  (let ((target (pichat-test-ssh-boundary--target))
+        (child (make-pipe-process :name "pichat-boundary-sentinel" :noquery t))
+        (make (symbol-function 'make-process))
+        seen)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'make-process)
+                     (lambda (&rest args)
+                       (if (equal (plist-get args :name) "pichat-fake-fifo")
+                           (progn
+                             (set-process-sentinel child (lambda (&rest _) (push 'consumer seen)))
+                             (add-function :after (process-sentinel child)
+                                           (lambda (&rest _) (push 'stderr-tail seen)))
+                             child)
+                         (apply make args)))))
+            (pichat-transport-make-process target "/project/" :name "pichat-fake-fifo"
+                                           :command '("unused")))
+          ;; Reuse the same composed sentinel for PiChat acquisition and both
+          ;; installed TRAMP busy signals.  The latter have no PiChat operation
+          ;; on stack, as in MCP exit during an unrelated TRAMP helper copy.
+          (dolist (busy '(acquisition current-connection locked))
+            (ert-info ((format "Busy signal: %s" busy))
+              (let* ((connection (pichat-transport--connection target))
+                     (get-process (symbol-function 'tramp-get-process))
+                     cancel resumed)
+                (setq seen nil)
+                (unwind-protect
+                    (cl-letf (((symbol-function 'tramp-get-process)
+                               (lambda (vec)
+                                 (if (tramp-file-name-equal-p vec connection)
+                                     child
+                                   (funcall get-process vec)))))
+                      (cl-labels
+                          ((deliver ()
+                             (funcall (process-sentinel child) child "fixture exit")
+                             (setq cancel (pichat-transport-defer
+                                           target (lambda () (setq resumed t))))
+                             ;; Service initial dispatch and a busy retry.
+                             (accept-process-output nil 0.12)
+                             (should-not seen)
+                             (should-not resumed)))
+                        (pcase busy
+                          ('acquisition
+                           (pichat-test-ssh-boundary--during-setup target child #'deliver))
+                          ('current-connection
+                           (let ((tramp-current-connection (list connection)))
+                             (deliver)))
+                          ('locked
+                           (tramp-set-connection-property child "locked" t)
+                           (unwind-protect (deliver)
+                             (tramp-set-connection-property child "locked" nil))))
+                        (pichat-test-wait-until
+                         (lambda () (and resumed (= (length seen) 2)))
+                         1 "idle composed teardown and deferred consumer")
+                        (should (equal seen '(stderr-tail consumer)))))
+                  (when cancel (funcall cancel)))))))
+      (set-process-sentinel child #'ignore)
+      (delete-process child))))
+
+(ert-deftest pichat-ssh-boundary-artifact-quit-detaches-and-retires-owned-resources ()
+  (let* ((target (pichat-test-ssh-boundary--target))
+         (buffer (generate-new-buffer " *pichat-runner-boundary*"))
+         (process (make-pipe-process :name "pichat-runner-boundary" :buffer buffer
+                                     :sentinel #'ignore :noquery t))
+         (file (make-temp-file "pichat-runner-boundary")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (setq-local pichat-artifact-runner--transport target
+                        pichat-artifact-runner--process process
+                        pichat-artifact-runner--file file)
+            (add-hook 'kill-buffer-hook #'pichat-artifact-runner--cleanup nil t))
+          (pichat-test-ssh-boundary--during-setup
+           target process
+           (lambda ()
+             (kill-buffer buffer)
+             (should-not (process-buffer process))
+             (should (process-live-p process))
+             (should (file-exists-p file))))
+          (pichat-test-wait-until (lambda () (not (file-exists-p file)))
+                                  1 "detached artifact cleanup")
+          (should-not (process-live-p process)))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (when (process-live-p process) (delete-process process))
+      (when (file-exists-p file) (delete-file file)))))
+
+(ert-deftest pichat-ssh-boundary-job-pump-waits-before-claim-and-rechecks-queue ()
+  (pichat-test-with-unit-session (_session process)
+    (let* ((target (pichat-test-ssh-boundary--target))
+           (executor (pichat-job-executor--create))
+           (configuration (list :transport (pichat-job-launch--transport target)))
+           (first (list :id "cancelled" :state "queued" :spec
+                        (list :configuration configuration)))
+           (second (list :id "remote" :state "queued" :spec
+                         (list :configuration configuration)))
+           (local (list :id "local" :state "queued"))
+           (runs (list first second local)) claimed started)
+      (unwind-protect
+          (cl-letf (((symbol-function 'pichat-job-records) (lambda (&rest _) runs))
+                    ((symbol-function 'pichat-job-admission) (lambda (&rest _) '(:ready t)))
+                    ((symbol-function 'pichat-job-claim)
+                     (lambda (_store id _limit)
+                       (push id claimed)
+                       (prog1 (seq-find (lambda (run) (equal (plist-get run :id) id)) runs)
+                         (setq runs (seq-remove (lambda (run) (equal (plist-get run :id) id)) runs)))))
+                    ((symbol-function 'pichat-job-executor--start)
+                     (lambda (_ run) (push (plist-get run :id) started))))
+            (pichat-test-ssh-boundary--during-setup
+             target process
+             (lambda ()
+               (pichat-job-executor-pump executor)
+               (should (equal claimed '("local")))
+               (setq runs (delq first runs))
+               (pichat-job-executor--cancel-launch-wait executor "cancelled")))
+            (pichat-test-wait-until (lambda () (member "remote" started))
+                                    1 "queued run starts after target is free")
+            (should (equal claimed started))
+            (should (equal started '("remote" "local")))
+            (should (= (hash-table-count (pichat-job-executor-launch-waits executor)) 0)))
+        (dolist (id '("remote" "cancelled"))
+          (pichat-job-executor--cancel-launch-wait executor id))))))
 
 (provide 'pichat-test-ssh-boundaries)
 ;;; pichat-test-ssh-boundaries.el ends here

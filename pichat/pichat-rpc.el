@@ -461,7 +461,8 @@ A local startup failure retains a diagnostic."
          (runtime-cwd (or (pichat-session-runtime-cwd session)
                           (pichat-session-cwd session)
                           default-directory))
-         buffer stderr-buffer)
+         buffer stderr-buffer process early-output early-exit
+         (early-size 0) (acquiring (eq (pichat-transport-kind transport) 'ssh)))
     (setf (pichat-session-stop-requested-p session) nil
           (pichat-session-rpc-command session) argv
           (pichat-session-rpc-ready-p session)
@@ -503,14 +504,28 @@ A local startup failure retains a diagnostic."
           (setq buffer (generate-new-buffer " *pichat-rpc*")
                 stderr-buffer (generate-new-buffer " *pichat-rpc-stderr*"))
           (let* ((process-environment (pichat-pi-process-environment))
-                 (proc (pichat-transport-make-process
-                        transport runtime-cwd
-                        :name "pichat-rpc"
-                        :buffer buffer
-                        :stderr stderr-buffer
-                        :command argv
-                        :filter #'pichat-rpc--process-filter
-                        :sentinel #'pichat-rpc--process-sentinel)))
+                 (proc (setq process
+                             (pichat-transport-make-process
+                              transport runtime-cwd
+                              :name "pichat-rpc"
+                              :buffer buffer
+                              :stderr stderr-buffer
+                              :command argv
+                              :filter (if acquiring
+                                          (lambda (child chunk)
+                                            (if acquiring
+                                                (when (<= (cl-incf early-size (string-bytes chunk))
+                                                          (* 1024 1024))
+                                                  (push (cons child chunk) early-output))
+                                              (pichat-rpc--process-filter child chunk)))
+                                        #'pichat-rpc--process-filter)
+                              :sentinel (if acquiring
+                                            (lambda (child event)
+                                              (if acquiring
+                                                  (unless (process-live-p child)
+                                                    (setq early-exit (cons child event)))
+                                                (pichat-rpc--process-sentinel child event)))
+                                          #'pichat-rpc--process-sentinel)))))
             ;; Register immediately: even a replacement that fails readiness
             ;; leaves a shutdown obligation.  Local endpoint death cannot
             ;; silently authorize another SSH writer during recovery.
@@ -534,6 +549,8 @@ A local startup failure retains a diagnostic."
               (setf (pichat-session-process-generation session) generation))
             (setf (pichat-session-process session) proc
                   (pichat-session-stderr-buffer session) stderr-buffer)
+            (when (> early-size (* 1024 1024))
+              (error "Pi RPC output exceeded the startup buffer limit"))
             (when (eq (pichat-transport-kind transport) 'ssh)
               (setf (pichat-session-rpc-ready-timer session)
                     (run-at-time pichat-rpc-remote-startup-delay nil
@@ -542,8 +559,30 @@ A local startup failure retains a diagnostic."
             (when (pichat-session-rpc-startup-control session)
               (pichat-tool-runtime-begin session))
             (pichat-emit session 'session-started
-                         :command argv :program program :args args)))
-      (error
+                         :command argv :program program :args args)
+            ;; Keep queuing during replay: a consumer can yield and deliver
+            ;; more stdout, which must follow the already received chunks.
+            (while early-output
+              (let ((batch (prog1 (nreverse early-output) (setq early-output nil))))
+                (dolist (delivery batch)
+                  (when (eq (car delivery) proc)
+                    (pichat-rpc--process-filter proc (cdr delivery)))))
+              (when (> early-size (* 1024 1024))
+                (error "Pi RPC output exceeded the startup buffer limit")))
+            (setq acquiring nil)
+            (when (eq (car early-exit) proc)
+              (let ((event (prog1 (cdr early-exit) (setq early-exit nil))))
+                (pichat-rpc--process-sentinel proc event)))))
+      ((error quit)
+       ;; Detach before deletion: the sentinel must not publish a second
+       ;; outcome for this failed acquisition.
+       (when (eq process (pichat-session-process session))
+         (setf (pichat-session-process session) nil))
+       (when (timerp (pichat-session-rpc-ready-timer session))
+         (cancel-timer (pichat-session-rpc-ready-timer session))
+         (setf (pichat-session-rpc-ready-timer session) nil))
+       (when (and (processp process) (process-live-p process)) (delete-process process))
+       (setq acquiring nil early-output nil early-exit nil)
        (when (pichat-session-rpc-startup-control session)
          (pichat-tool-runtime-dispose session))
        (dolist (transport-buffer (list buffer stderr-buffer))
@@ -560,7 +599,8 @@ A local startup failure retains a diagnostic."
                       :message (plist-get diagnostic :summary)
                       :diagnostic diagnostic)
          (pichat-emit session 'session-ended
-                      :reason 'error :diagnostic diagnostic))))
+                      :reason 'error :diagnostic diagnostic))
+       (when (eq (car condition) 'quit) (signal (car condition) (cdr condition)))))
     session))
 
 (defun pichat-rpc-stop (session)
@@ -573,8 +613,11 @@ A local startup failure retains a diagnostic."
         (pichat-session-rpc-send-queue session) nil)
   (if-let* ((proc (pichat-session-process session)))
       (if (process-live-p proc)
-          ;; The process sentinel emits `session-ended'.
-          (delete-process proc)
+          ;; The process sentinel emits `session-ended'.  Retire only the
+          ;; exact captured process, even if delivery must wait for TRAMP.
+          (pichat-transport-run-when-idle
+           (pichat-session-transport session)
+           (lambda () (when (process-live-p proc) (delete-process proc))))
         (unless (eq (pichat-session-state session) 'error)
           (setf (pichat-session-state session) 'stopped)
           (pichat-emit session 'session-ended :reason 'stopped)))

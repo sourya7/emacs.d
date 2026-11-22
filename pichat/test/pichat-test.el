@@ -23,6 +23,7 @@
 (require 'pichat-test-process-lifetime)
 (require 'pichat-test-process-lifetime-protocol)
 (require 'pichat-test-reconfigure-ssh)
+(require 'pichat-test-ssh-boundaries)
 (require 'pichat-test-launch)
 (require 'pichat-test-launch-extensions)
 (require 'pichat-test-presets)

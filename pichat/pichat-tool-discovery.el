@@ -227,6 +227,12 @@ teardown.  Forced SSH teardown reports uncertain remote cleanup."
              (when timer (cancel-timer timer))
              (when shutdown-timer (cancel-timer shutdown-timer))
              (when startup-timer (cancel-timer startup-timer))
+             (pichat-transport-run-when-idle transport #'dispose-now)))
+         (dispose-now ()
+           (let ((retain-helper
+                  (and helper process (eq (pichat-transport-kind transport) 'ssh)
+                       (not (and (eq (process-status process) 'exit)
+                                 (zerop (process-exit-status process)))))))
              (when (and process (process-live-p process)) (delete-process process))
              (when (and extensions stderr-process (process-live-p stderr-process))
                ;; Collect what Pi wrote before it stopped.
@@ -241,9 +247,14 @@ teardown.  Forced SSH teardown reports uncertain remote cleanup."
                (when-let* ((stderr (get-buffer-process stderr-buffer)))
                  (when (process-live-p stderr) (delete-process stderr)))
                (kill-buffer stderr-buffer))
-             (when helper
+             (cond
+              (retain-helper
+               (setq result-error
+                     (concat "Remote tool probe exit is uncertain; private helper retained. "
+                             result-error)))
+              (helper
                (condition-case err (funcall (plist-get helper :cleanup))
-                 (error (setq result-error (format "Helper cleanup failed: %s" (error-message-string err))))))
+                 (error (setq result-error (format "Helper cleanup failed: %s" (error-message-string err)))))))
              (when result-error
                (setq result-tools nil result-commands nil
                      result-error (truncate-string-to-width result-error 600 nil nil "…")))

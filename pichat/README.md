@@ -2680,8 +2680,10 @@ startup returns; synchronous TRAMP setup is not timed. Direct callers of the
 helper runner can disable its timer with nil or a nonpositive timeout; this does
 not change the separate RPC command-discovery deadline. Discovery owns
 cancellation of its status helper;
-request callers may cancel the returned process, and `pichat-archive-reset`
-cancels archive-boundary helpers. Capture buffers, pipe endpoints and timers
+request callers may cancel the returned process with
+`pichat-transport-delete-process`, and `pichat-archive-reset` cancels
+archive-boundary helpers. SSH endpoint disposal waits for its captured
+connection to be idle; cancellation is not remote-exit evidence. Capture buffers, pipe endpoints and timers
 are released before terminal callbacks. Endpoint cleanup does not certify remote
 or descendant shutdown. Consult's separate streaming search stage captures the
 same independent stdout/stderr limits per query and uses the query timeout.
@@ -3145,8 +3147,9 @@ read-only host mirror is recommended.
 ## SSH/TRAMP runtime
 
 SSH runtimes are structured targets. PiChat uses TRAMP file handlers for RPC,
-model listing, setup, session files, and archive helpers; it does not construct
-an `ssh` shell command. A TRAMP project infers its remote target. A locally
+model listing, session files, and archive helpers; it does not construct an
+`ssh` shell command. PiChat's interactive setup terminal is local-only: for
+an SSH runtime, run interactive Pi setup directly on the target. A TRAMP project infers its remote target. A locally
 visited mounted project uses the longest matching
 `pichat-project-target-alist` entry.
 

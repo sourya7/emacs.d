@@ -437,7 +437,8 @@
 
 (ert-deftest pichat-consult-archive-process-uses-capability-transport-and-cwd ()
   (let* ((node (executable-find "node"))
-         (transport (make-symbol "remote-transport"))
+         (transport (pichat-transport--create :kind 'ssh
+                                              :tramp-prefix "/ssh:archive.invalid:"))
          (capability (list :transport transport
                            :runtime-cwd "/runtime/project"))
          captured-transport captured-cwd events)
@@ -821,6 +822,47 @@
                           (ensure-list (get-text-property
                                         (1- (point)) 'face))))))
       (kill-buffer buffer))))
+
+(ert-deftest pichat-consult-preview-cancel-waits-for-captured-ssh-connection ()
+  (let* ((transport (pichat-transport--create
+                     :id 'preview-fixture :kind 'ssh
+                     :tramp-prefix "/ssh:fixture.invalid:"))
+         (connection (pichat-transport--connection transport))
+         (capability (list :transport transport
+                           :preview-cache (make-hash-table :test #'equal)
+                           :session-info-cache (make-hash-table :test #'equal)))
+         processes callbacks state)
+    (unwind-protect
+        (cl-letf (((symbol-function 'consult--buffer-preview)
+                   (lambda () #'ignore))
+                  ((symbol-function 'pichat-archive-request)
+                   (lambda (_cap _operation _options callback _failure)
+                     (let ((process (make-pipe-process
+                                     :name "preview-fixture" :noquery t)))
+                       (process-put process 'pichat-transport transport)
+                       (push process processes)
+                       (push callback callbacks)
+                       process))))
+          (setq state (pichat-consult--preview-state))
+          (funcall state 'preview
+                   (list :session-id "fixture" :title "Fixture"
+                         :archive-capability capability))
+          (should (= 2 (length processes)))
+          (let ((pichat-transport--active-connections (list connection)))
+            (funcall state 'exit nil)
+            (accept-process-output nil 0.07)
+            (should (cl-every #'process-live-p processes))
+            ;; Late data after exit must not recreate or mutate the view/cache.
+            (dolist (callback callbacks) (funcall callback nil))
+            (should-not (get-buffer "*PiChat Saved Session Preview*"))
+            (should (= 0 (hash-table-count (plist-get capability :preview-cache)))))
+          (pichat-test-wait-until
+           (lambda () (not (cl-some #'process-live-p processes)))
+           1 "retired preview endpoints"))
+      (dolist (process processes)
+        (when (process-live-p process) (delete-process process)))
+      (when (get-buffer "*PiChat Saved Session Preview*")
+        (kill-buffer "*PiChat Saved Session Preview*")))))
 
 (ert-deftest pichat-consult-preview-state-uses-standard-consult-window-lifecycle ()
   (let ((context-cache (make-hash-table :test #'equal))

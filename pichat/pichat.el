@@ -1052,7 +1052,13 @@ provider represented in MODELS."
                                    (buffer-substring-no-properties
                                     (point-min) (point-max))))))
                            (if models
-                               (funcall callback models)
+                               (if (eq (pichat-transport-kind transport) 'ssh)
+                                   ;; A consumer can start a runtime.  Run it
+                                   ;; after the full stderr teardown, even if
+                                   ;; the connection was otherwise idle.
+                                   (pichat-transport-defer
+                                    transport (lambda () (funcall callback models)))
+                                 (funcall callback models))
                              (message "Pi returned no matching available models")))
                        (if (with-current-buffer stderr
                              (string-blank-p
@@ -1234,16 +1240,19 @@ in `pichat-launch' when the selection must apply only to a new runtime."
     (when (and pichat-rpc-command
                (eq (pichat-transport-kind transport) 'local))
       (user-error
-       "Run-local PiChat models are not supported with a local `pichat-rpc-command'")))
-  (let ((pichat--model-list-directory (or directory default-directory))
-        (pichat--model-list-target
-         (let ((target (plist-get profile :target)))
-           (unless (eq target 'inferred) target))))
-    (pichat--list-models-async
-     nil
-     (lambda (models)
-       (run-at-time 0 nil #'pichat--prompt-and-open-selected-model
-                    models profile directory)))))
+       "Run-local PiChat models are not supported with a local `pichat-rpc-command'"))
+    (let* ((origin-directory (or directory default-directory))
+           (pichat--model-list-directory origin-directory)
+           (pichat--model-list-target transport))
+      (pichat--list-models-async
+       nil
+       (lambda (models)
+         (if (eq (pichat-transport-kind transport) 'ssh)
+             ;; SSH delivery has already crossed the idle boundary.  Another
+             ;; zero-delay timer could run inside unrelated connection work.
+             (pichat--prompt-and-open-selected-model models profile origin-directory)
+           (run-at-time 0 nil #'pichat--prompt-and-open-selected-model
+                        models profile directory)))))))
 
 (defun pichat--state-model-reference (response)
   "Return provider/model from a successful get-state RESPONSE, or nil."

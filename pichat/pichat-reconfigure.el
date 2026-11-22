@@ -137,6 +137,7 @@ omits the model comparison when describing other changes."
     (list :session session
           :process (pichat-session-process session)
           :generation (pichat-session-process-generation session)
+          :transport (pichat-session-transport session)
           :session-id (pichat-session-id session)
           :session-file (pichat-session-session-file session)
           :chat buffer
@@ -150,6 +151,7 @@ omits the model comparison when describing other changes."
          (buffer (plist-get origin :chat)))
     (and (pichat-session-p session)
          (eq (plist-get origin :process) (pichat-session-process session))
+         (eq (plist-get origin :transport) (pichat-session-transport session))
          (eql (plist-get origin :generation)
               (pichat-session-process-generation session))
          (equal (plist-get origin :session-id) (pichat-session-id session))
@@ -683,13 +685,36 @@ An operation must recheck the origin and state before stopping the process."
   (let ((session (plist-get origin :session))
         (timer nil)
         (request-id nil)
+        (deferred nil)
         (finished nil))
     (cl-labels
         ((finish (blockers &optional state)
            (unless finished
              (setq finished t)
              (when (timerp timer) (cancel-timer timer))
+             (when deferred (funcall deferred) (setq deferred nil))
              (funcall callback blockers state)))
+         (resume (continuation)
+           (unless finished
+             (let* ((transport (plist-get origin :transport))
+                    (connection (pichat-transport--connection transport)))
+               (if (and connection
+                        (or pichat-rpc--dispatch-process
+                            (pichat-transport--busy-p connection)))
+                   (progn
+                     (when deferred (funcall deferred))
+                     (setq deferred
+                           (pichat-transport-defer
+                            transport
+                            (lambda ()
+                              (setq deferred nil)
+                              (unless finished
+                                (condition-case err (funcall continuation)
+                                  ((error quit)
+                                   (finish (list (error-message-string err)))
+                                   (when (eq (car err) 'quit)
+                                     (signal (car err) (cdr err))))))))))
+                 (funcall continuation)))))
          (expired ()
            (when (and request-id (not finished))
              (pichat-rpc-cancel-request session request-id))
@@ -698,12 +723,13 @@ An operation must recheck the origin and state before stopping the process."
            (finish (list (format "Pi state request failed: %s"
                                  (or (plist-get response :error) "unknown error")))))
          (succeeded (response _session)
+           (resume (lambda () (check-state response))))
+         (check-state (response)
            (if (pichat-reconfigure-origin-current-p origin)
                (let* ((state (plist-get response :data))
                       (kind (if (pichat-reconfigure--empty-unwritten-source-p origin)
                                 'unwritten 'saved))
-                      (blockers (pichat-reconfigure-preflight-blockers
-                                 origin state kind))
+                      (blockers (pichat-reconfigure-preflight-blockers origin state kind))
                       (result (list :state state :source-kind kind)))
                  (if blockers
                      (finish blockers result)
@@ -713,24 +739,24 @@ An operation must recheck the origin and state before stopping the process."
                            (pichat-rpc-get-entries
                             session nil
                             (lambda (response _session)
-                              (let* ((entries (plist-get response :data))
-                                     (baseline (pichat-reconfigure--fresh-baseline
-                                                origin entries)))
-                                (cond
-                                 ((not (pichat-reconfigure-origin-current-p origin))
-                                  (finish '("The originating runtime, process, or conversation changed")))
-                                 ((and (eq kind 'unwritten)
-                                       (not (and (pichat-reconfigure--empty-unwritten-source-p origin)
-                                                 (pichat-reconfigure--empty-entries-p entries))))
-                                  (finish '("The unwritten Pi session is not empty or changed during preflight")))
-                                 ((not baseline)
-                                  (finish '("Pi returned no restorable entries or active leaf")))
-                                 (t
-                                  (finish (pichat-reconfigure-preflight-blockers
-                                           origin state kind)
-                                          (plist-put result :baseline baseline))))))
+                              (resume (lambda () (check-entries response kind state result))))
                             #'failed)))))
-             (finish '("The originating runtime, process, or conversation changed")))))
+             (finish '("The originating runtime, process, or conversation changed"))))
+         (check-entries (response kind state result)
+           (if (not (pichat-reconfigure-origin-current-p origin))
+               (finish '("The originating runtime, process, or conversation changed"))
+             (let* ((entries (plist-get response :data))
+                    (baseline (pichat-reconfigure--fresh-baseline origin entries)))
+               (cond
+                ((and (eq kind 'unwritten)
+                      (not (and (pichat-reconfigure--empty-unwritten-source-p origin)
+                                (pichat-reconfigure--empty-entries-p entries))))
+                 (finish '("The unwritten Pi session is not empty or changed during preflight")))
+                ((not baseline)
+                 (finish '("Pi returned no restorable entries or active leaf")))
+                (t
+                 (finish (pichat-reconfigure-preflight-blockers origin state kind)
+                         (plist-put result :baseline baseline))))))))
       (cond
        ((not (pichat-reconfigure-origin-current-p origin))
         (finish '("The originating runtime, process, or conversation changed")))
@@ -793,7 +819,9 @@ process generation to check."
       (dolist (process (plist-get operation :shutdown-obligations))
         (when (and (pichat-process-lifetime-confirmed-p process)
                    (process-get process 'pichat-helper-cleanup))
-          (run-at-time 0 nil #'pichat-process-lifetime-cleanup process)))
+          (pichat-transport-defer
+           (plist-get operation :transport)
+           (lambda () (pichat-process-lifetime-cleanup process)))))
       (cond
        ((and success (eq (plist-get operation :phase) 'preflight))
         ;; A no-op does not change the preferred designation or registry.

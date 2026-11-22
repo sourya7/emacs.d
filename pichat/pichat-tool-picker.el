@@ -844,41 +844,62 @@ Emacs-defined tools remain explicit per-group or per-tool choices."
     (setf (pichat-tool-discovery-draft-cancel draft) nil)
     (when (eq 'loading (pichat-tool-discovery-draft-status draft))
       (setf (pichat-tool-discovery-draft-status draft) nil)))
+  (when-let* ((cancel (plist-get pichat-tool-picker--state :cancel-extension-start)))
+    (funcall cancel))
+  (setf (plist-get pichat-tool-picker--state :cancel-extension-start) nil)
   (when-let* ((cancel (plist-get pichat-tool-picker--state :cancel))) (funcall cancel))
   (setf (plist-get pichat-tool-picker--state :cancel) nil))
 
 (defun pichat-tool-picker--discover-extensions (&optional force)
   "Discover extension tools, reusing the draft unless FORCE."
   (let* ((state pichat-tool-picker--state) (draft (plist-get state :discovery)))
-    (unless (and (not force) (eq 'ready (pichat-tool-discovery-draft-status draft)))
+    (when (and draft (or force (not (eq 'ready (pichat-tool-discovery-draft-status draft)))))
       (pichat-tool-discovery-draft-refresh
        draft (lambda (_draft) (when (eq state pichat-tool-picker--state)
                                 (pichat-tool-picker--materialize-all)
                                 (pichat-tool-picker--refresh-children)))))))
 
-(defun pichat-tool-picker--discover ()
+(defun pichat-tool-picker--discover (&optional force-extensions)
   "Refresh the MCP listing for the captured target."
   (pichat-tool-picker--stop-discovery)
   (let* ((state pichat-tool-picker--state)
          (version (1+ (or (plist-get state :version) 0)))
-         (transport (plist-get state :transport)))
+         (transport (plist-get state :transport))
+         (ssh (eq (pichat-transport-kind transport) 'ssh)))
     (setf (plist-get state :version) version
-          (plist-get state :loaded) nil (plist-get state :error) "Discovering MCP servers…")
+          (plist-get state :servers) (plist-get state :servers)
+          (plist-get state :loaded) nil
+          (plist-get state :error) "Discovering MCP servers…")
     (setq pichat-tool-picker--state state)
     (pichat-tool-picker--refresh-display)
-    (setf (plist-get state :cancel)
-          (pichat-mcp-discovery-start
-           transport (plist-get state :runtime-cwd)
-           (or (pichat-transport-pi-executable transport) (plist-get state :executable))
-           (lambda (servers errors)
-             (when (and (eq state pichat-tool-picker--state) (= version (plist-get state :version)))
-               (setf (plist-get state :servers) servers
-                     (plist-get state :loaded) (or (not (null servers)) (not errors))
-                     (plist-get state :error) (if errors (format "%s" errors)
-                                               (unless servers "No MCP servers configured")))
-               (setq pichat-tool-picker--state state)
-               (pichat-tool-picker--refresh-children)))))
-    (setq pichat-tool-picker--state state)))
+    (cl-labels ((current-p ()
+                  (and (eq state pichat-tool-picker--state)
+                       (= version (plist-get state :version))))
+                (complete (servers errors)
+                  (when (current-p)
+                    (setf (plist-get state :servers) servers
+                          (plist-get state :loaded) (or servers (not errors))
+                          (plist-get state :error) (if errors (format "%s" errors)
+                                                    (unless servers "No MCP servers configured")))
+                    (when ssh
+                      ;; Completion can precede TRAMP's stderr teardown tail.
+                      (setf (plist-get state :cancel-extension-start)
+                            (pichat-transport-defer
+                             transport
+                             (lambda ()
+                               (when (current-p)
+                                 (setf (plist-get state :cancel-extension-start) nil)
+                                 (pichat-tool-picker--discover-extensions force-extensions))))))
+                    (pichat-tool-picker--refresh-children))))
+      (let ((cancel (pichat-mcp-discovery-start
+                     transport (plist-get state :runtime-cwd)
+                     (or (pichat-transport-pi-executable transport) (plist-get state :executable))
+                     #'complete)))
+        (if (current-p)
+            (progn
+              (setf (plist-get state :cancel) cancel)
+              (unless ssh (pichat-tool-picker--discover-extensions force-extensions)))
+          (when cancel (funcall cancel)))))))
 
 (defun pichat-tool-picker--status-description ()
   "Describe MCP discovery."
@@ -905,7 +926,7 @@ Emacs-defined tools remain explicit per-group or per-tool choices."
   (interactive)
   ;; Newly registered Emacs tools become listed, never selected.
   (setf (plist-get pichat-tool-picker--state :emacs-catalogue) (pichat-tools-catalogue))
-  (pichat-tool-picker--discover) (pichat-tool-picker--discover-extensions t))
+  (pichat-tool-picker--discover t))
 
 (defun pichat-tool-picker--return (selection)
   "Return SELECTION or :cancel to the owner."
@@ -1025,6 +1046,7 @@ EXTENSIONS the runtime will load; no unrelated runtime is queried."
                 (pichat-tool-picker-discovery-context
                  preset directory transport executable model extensions))
                (discovery (or discovery (pichat-tool-discovery-draft-create))))
+    (when pichat-tool-picker--state (pichat-tool-picker--stop-discovery))
     (pichat-tool-discovery-draft-reset discovery probe-context)
     (setq pichat-tool-picker--state
           (list :preset preset :baseline (copy-sequence (plist-get preset :tools))
@@ -1033,12 +1055,12 @@ EXTENSIONS the runtime will load; no unrelated runtime is queried."
                 :emacs-catalogue (pichat-tools-catalogue) :emacs-group nil
                 :extension-group nil
                 :executable executable :callback callback :page 0 :cancel nil
+                :cancel-extension-start nil
                 :servers nil :loaded nil :error nil :version 0))
     ;; A reused ready cache shows included future tools checked at once.
     (pichat-tool-picker--materialize-all)
     (transient-setup 'pichat-tool-picker)
-    (pichat-tool-picker--discover)
-    (pichat-tool-picker--discover-extensions)))
+    (pichat-tool-picker--discover)))
 
 (defun pichat-tool-picker--abandoned ()
   "Release probes when the user quits the entire Transient stack."

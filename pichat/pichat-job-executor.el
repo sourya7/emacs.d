@@ -56,6 +56,7 @@ Running work and user interaction have no implicit timeout."
 
 (cl-defstruct (pichat-job-executor (:constructor pichat-job-executor--create))
   store contexts pumping schedules schedule-error schedules-closed
+  (launch-waits (make-hash-table :test #'equal))
   (conversations (make-hash-table :test #'equal))
   ;; Run chains started from a chat, keyed by root run ID; memory only.
   (chains (make-hash-table :test #'equal))
@@ -1040,6 +1041,32 @@ error only reaches FAILURE as a report; a quit propagates."
                                                       (error-message-string err)))))))
     execution))
 
+(defun pichat-job-executor--cancel-launch-wait (executor id)
+  "Retire the connection wait for queued run ID in EXECUTOR."
+  (let ((waits (pichat-job-executor-launch-waits executor)))
+    (when-let* ((cancel (gethash id waits)))
+      (remhash id waits)
+      (funcall cancel))))
+
+(defun pichat-job-executor--launch-wait-p (executor run)
+  "Return non-nil and arrange a fresh pump if RUN's target is busy."
+  (unless (pichat-job-conversation-p run)
+    (let* ((id (plist-get run :id))
+           (data (plist-get (plist-get (plist-get run :spec) :configuration)
+                            :transport))
+           ;; Invalid captures still go through normal startup failure handling.
+           (transport (and data (ignore-errors (pichat-job-launch--untransport data))))
+           (waits (pichat-job-executor-launch-waits executor)))
+      (if (pichat-transport-busy-p transport)
+          (or (gethash id waits)
+              (puthash id (pichat-transport-defer
+                           transport (lambda ()
+                                       (remhash id waits)
+                                       (pichat-job-executor-pump executor)))
+                       waits))
+        (pichat-job-executor--cancel-launch-wait executor id)
+        nil))))
+
 (defun pichat-job-executor-pump (executor)
   "Dispatch eligible queued work from EXECUTOR through the shared admission path."
   (unless (pichat-job-executor-pumping executor)
@@ -1063,7 +1090,8 @@ error only reaches FAILURE as a report; a quit propagates."
                 (let* ((store (pichat-job-executor-store executor))
                        (id (plist-get run :id))
                        (admission (pichat-job-admission store id pichat-jobs-max-concurrency)))
-                  (when (eq (plist-get admission :ready) t)
+                  (when (and (eq (plist-get admission :ready) t)
+                             (not (pichat-job-executor--launch-wait-p executor run)))
                     (setq progress t)
                     (if (pichat-job-conversation-p run)
                         (pichat-job-executor--conversation-start
@@ -1128,6 +1156,7 @@ Retire the runs' executions only after the store commits."
     (cond
      ((member (plist-get run :state) '("scheduled" "queued"))
       (pichat-job-cancel-queued (pichat-job-executor-store executor) id pichat-jobs-queue-limit)
+      (pichat-job-executor--cancel-launch-wait executor id)
       (pichat-job-executor--conversation-forget executor id)
       (pichat-job-executor-schedule-refresh executor)
       (pichat-job-executor--changed executor)

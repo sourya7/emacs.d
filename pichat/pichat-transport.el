@@ -195,6 +195,73 @@ FALLBACK-MAPPINGS are used only for the implicit local transport."
   (format "%s (%s)" (pichat-transport-label transport)
           (pichat-transport-kind transport)))
 
+(defvar pichat-transport--active-connections nil
+  "TRAMP connections with PiChat acquisition or composed teardown on stack.")
+
+(defun pichat-transport--connection (transport)
+  "Return TRANSPORT's TRAMP identity without connecting."
+  (when-let* ((transport)
+              ((eq (pichat-transport-kind transport) 'ssh))
+              (prefix (pichat-transport-tramp-prefix transport)))
+    (tramp-dissect-file-name prefix)))
+
+(defun pichat-transport--busy-p (connection)
+  "Whether CONNECTION is currently in PiChat or TRAMP synchronous work."
+  (or (cl-some (apply-partially #'tramp-file-name-equal-p connection)
+               pichat-transport--active-connections)
+      (tramp-file-name-equal-p connection (car tramp-current-connection))
+      ;; The lock also covers direct TRAMP I/O outside the filename handler.
+      (let ((process (tramp-get-process connection)))
+        (and (processp process)
+             (tramp-get-connection-property process "locked")))))
+
+(defun pichat-transport-defer (transport function)
+  "Run FUNCTION on a later turn when TRANSPORT is free; return a canceller.
+Callers must still validate ownership when FUNCTION runs.  Do not use this
+for a callback that a synchronous operation on the same connection awaits."
+  (let ((connection (pichat-transport--connection transport)) timer)
+    (cl-labels ((dispatch ()
+                  (if (and connection (pichat-transport--busy-p connection))
+                      (setq timer (run-at-time 0.05 nil #'dispatch))
+                    (setq timer nil)
+                    (funcall function))))
+      (setq timer (run-at-time 0 nil #'dispatch))
+      (lambda ()
+        (when timer (cancel-timer timer) (setq timer nil))))))
+
+(defun pichat-transport-busy-p (transport)
+  "Return non-nil if TRANSPORT's connection is in synchronous use."
+  (when-let* ((connection (pichat-transport--connection transport)))
+    (pichat-transport--busy-p connection)))
+
+(defun pichat-transport-run-when-idle (transport function)
+  "Run FUNCTION now or defer it if TRANSPORT is busy.
+Use for detached work that need not finish before the caller returns."
+  (if (pichat-transport-busy-p transport)
+      (pichat-transport-defer transport function)
+    (funcall function)))
+
+(defun pichat-transport-delete-process (process)
+  "Delete owned PROCESS when its captured transport is idle.
+The endpoint, not the current UI target, determines teardown placement.  This
+only retires the endpoint; it is not evidence of remote child shutdown."
+  (when (processp process)
+    (pichat-transport-run-when-idle
+     (process-get process 'pichat-transport)
+     (lambda ()
+       (when (process-live-p process)
+         (delete-process process))))))
+
+(defun pichat-transport--sentinel (transport connection sentinel process event)
+  "Run the complete SSH SENTINEL (including TRAMP's tail) when safe."
+  (let ((run (lambda ()
+               (let ((pichat-transport--active-connections
+                      (cons connection pichat-transport--active-connections)))
+                 (funcall sentinel process event)))))
+    (if (pichat-transport--busy-p connection)
+        (pichat-transport-defer transport run)
+      (funcall run))))
+
 (defun pichat-transport-make-process (transport runtime-cwd &rest process-args)
   "Start a pipe process through TRANSPORT in RUNTIME-CWD.
 PROCESS-ARGS are ordinary `make-process' keyword arguments."
@@ -211,9 +278,21 @@ PROCESS-ARGS are ordinary `make-process' keyword arguments."
          (args (copy-sequence process-args)))
     (setq args (plist-put args :connection-type 'pipe)
           args (plist-put args :noquery t))
-    (when remote-p
-      (setq args (plist-put args :file-handler t)))
-    (apply #'make-process args)))
+    (if (not remote-p)
+        (apply #'make-process args)
+      (let* ((connection (pichat-transport--connection transport))
+             (pichat-transport--active-connections
+              (cons connection pichat-transport--active-connections))
+             (proc (apply #'make-process (plist-put args :file-handler t))))
+        (when (processp proc)
+          (process-put proc 'pichat-transport transport))
+        ;; TRAMP installs stderr FIFO cleanup after our sentinel during
+        ;; acquisition.  Wrap the installed sentinel, not just our callback.
+        (when (and connection (processp proc) (process-sentinel proc))
+          (add-function :around (process-sentinel proc)
+                        (apply-partially #'pichat-transport--sentinel
+                                         transport connection)))
+        proc))))
 
 (provide 'pichat-transport)
 ;;; pichat-transport.el ends here

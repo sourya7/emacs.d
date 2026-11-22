@@ -72,10 +72,13 @@ as a successful empty catalogue."
                   (unless finished
                     (setq finished t)
                     (when timer (cancel-timer timer))
-                    (when (and process (process-live-p process)) (delete-process process))
-                    (when (buffer-live-p stdout) (kill-buffer stdout))
-                    (when (buffer-live-p stderr) (kill-buffer stderr))
-                    (when callback (funcall callback servers errors)))))
+                    (pichat-transport-run-when-idle
+                     transport
+                     (lambda ()
+                       (when (and process (process-live-p process)) (delete-process process))
+                       (when (buffer-live-p stdout) (kill-buffer stdout))
+                       (when (buffer-live-p stderr) (kill-buffer stderr))
+                       (when callback (funcall callback servers errors)))))))
       (condition-case err
           (let ((process-environment (pichat-pi-process-environment)))
             (setq process
@@ -84,7 +87,7 @@ as a successful empty catalogue."
                    :buffer stdout :stderr stderr
                    :command (list executable "mcp" "list" "--json")
                    :filter (lambda (_proc chunk)
-                             (when (buffer-live-p stdout)
+                             (when (and (not finished) (buffer-live-p stdout))
                                (with-current-buffer stdout
                                  (if (> (+ (buffer-size) (length chunk))
                                         pichat-mcp-discovery--output-limit)
@@ -113,9 +116,10 @@ as a successful empty catalogue."
                              (finish (car result) (append errors (and diagnostic (list diagnostic)))))
                          (error (finish nil (format "Pi MCP discovery failed: %s"
                                                     (error-message-string parse-error)))))))))
-            (setq timer
-                  (run-at-time pichat-mcp-discovery-timeout nil
-                               (lambda () (finish nil "Pi MCP discovery timed out")))))
+            (unless finished
+              (setq timer
+                    (run-at-time pichat-mcp-discovery-timeout nil
+                                 (lambda () (finish nil "Pi MCP discovery timed out"))))))
         (error (finish nil (error-message-string err))))
       (lambda () (setq callback nil) (finish nil nil)))))
 

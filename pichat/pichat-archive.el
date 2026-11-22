@@ -86,7 +86,7 @@ the helper as a process failure, never a truncated helper diagnostic."
   (interactive)
   (pichat-archive-cancel-discovery)
   (dolist (process (copy-sequence pichat-archive--processes))
-    (when (process-live-p process) (delete-process process)))
+    (pichat-transport-delete-process process))
   (setq pichat-archive--processes nil)
   (clrhash pichat-archive--capability-cache))
 
@@ -291,7 +291,7 @@ helper remain directly readable."
 (defun pichat-archive-run
     (command callback error-callback &optional timeout transport runtime-cwd)
   "Run helper COMMAND through optional TRANSPORT in RUNTIME-CWD.
-Return the owned process, which callers may cancel with `delete-process'.
+Return the owned process; cancel with `pichat-transport-delete-process'.
 CALLBACK receives complete stdout; ERROR-CALLBACK receives a structured error.
 Exactly one terminal callback runs, after capture buffers, processes and timers
 are released.  TIMEOUT bounds the helper after transport startup returns;
@@ -315,11 +315,15 @@ a single delivered chunk and transport/OS buffers are not allocation limits."
                (when (timerp owned-timer) (cancel-timer owned-timer)))
              (setq pichat-archive--processes
                    (delq process pichat-archive--processes))
-             (dolist (owner (list process (get-buffer-process stderr)))
-               (when (process-live-p owner) (delete-process owner)))
-             (dolist (buffer (list stdout stderr))
-               (when (buffer-live-p buffer) (kill-buffer buffer)))
-             (funcall (if ok callback error-callback) value)))
+             (pichat-transport-run-when-idle
+              transport
+              (lambda ()
+                (dolist (owner (list process (and (buffer-live-p stderr)
+                                                 (get-buffer-process stderr))))
+                  (when (process-live-p owner) (delete-process owner)))
+                (dolist (buffer (list stdout stderr))
+                  (when (buffer-live-p buffer) (kill-buffer buffer)))
+                (funcall (if ok callback error-callback) value)))))
          (sentinel (_proc _event)
            ;; Transport setup may accept output before returning the process.
            ;; Defer settlement until its resources can be retired together.
@@ -827,8 +831,7 @@ CALLBACK receives normalized data.  ERROR-CALLBACK receives a structured error."
          (cancel-owned ()
            (unless finished
              (setq finished t)
-             (when (process-live-p status-process)
-               (delete-process status-process))
+             (pichat-transport-delete-process status-process)
              (release)))
          (finish (ok value)
            (when (current-p)
@@ -931,8 +934,7 @@ reason.  Exactly one callback runs while this request remains current."
                  (setq finished t)
                  (when rpc-id
                    (pichat-backend-cancel-owned-request session rpc-id))
-                 (when (process-live-p status-process)
-                   (delete-process status-process))
+                 (pichat-transport-delete-process status-process)
                  (release)))
              (finish (ok value)
                (when (current-p)

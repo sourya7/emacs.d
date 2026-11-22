@@ -454,8 +454,12 @@ Use SESSION's target and working directory when available.  Reuse a live
 setup terminal only when its transport, directory, argv, environment and
 executable search context match; otherwise open a separate terminal without
 stopping an existing process.  Arbitrary RPC wrappers are never rewritten;
-configure `pichat-diagnostics-interactive-command' for them."
+configure `pichat-diagnostics-interactive-command' for them.
+SSH setup is unsupported; run setup directly on the target."
   (interactive)
+  ;; Do not resolve a project through TRAMP just to reject this command.
+  (when (and (not session) (file-remote-p default-directory))
+    (user-error "PiChat cannot open an SSH setup terminal; run setup on the target"))
   (let* ((session (pichat-chat-diagnostics--session session))
          (_capability
           (when session
@@ -463,6 +467,11 @@ configure `pichat-diagnostics-interactive-command' for them."
              session 'diagnostics "Interactive Pi setup")))
          (argv (pichat-chat-diagnostics-interactive-argv session))
          (transport (and session (pichat-session-transport session))))
+    ;; `make-term' uses `start-process', not a remote file handler.
+    (when (or (eq (pichat-transport-kind (or transport pichat-transport-local)) 'ssh)
+              (file-remote-p (if session (pichat-session-emacs-cwd session)
+                               default-directory)))
+      (user-error "PiChat cannot open an SSH setup terminal; run setup on the target"))
     (unless (and (consp argv)
                  (cl-every (lambda (arg)
                              (and (stringp arg) (not (string-empty-p arg))))
@@ -472,18 +481,8 @@ configure `pichat-diagnostics-interactive-command' for them."
     (let* ((default-directory
             (file-name-as-directory
              (expand-file-name
-              (or (and session
-                       (if (eq (pichat-transport-kind transport) 'ssh)
-                           (pichat-transport-runtime-file-name
-                            transport (pichat-session-runtime-cwd session))
-                         (pichat-session-emacs-cwd session)))
+              (or (and session (pichat-session-emacs-cwd session))
                   default-directory))))
-           (tramp-remote-path
-            (if (and transport
-                     (eq (pichat-transport-kind transport) 'ssh)
-                     (pichat-transport-remote-path transport))
-                (pichat-transport-remote-path transport)
-              tramp-remote-path))
            (process-environment (pichat-pi-process-environment))
            ;; Include effective environment and executable search context: a
            ;; matching target/cwd/argv with different credentials or PATH is

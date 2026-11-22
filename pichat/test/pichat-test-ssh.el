@@ -2,6 +2,7 @@
 
 (require 'pichat-test-support)
 (require 'pichat-artifact-runner)
+(require 'pichat-consult)
 (require 'pichat-test-ssh-reconfigure)
 
 (defun pichat-test-ssh--matching-process-p (pattern)
@@ -43,7 +44,7 @@ Reject probe errors rather than mistaking them for successful shutdown."
            (remote-extension (expand-file-name "fake-provider.ts" remote-root))
            (runtime-extension (expand-file-name "fake-provider.ts" runtime-root))
            (remote-script (expand-file-name "script.json" remote-root))
-           (remote-saved (expand-file-name "selected.jsonl" remote-root))
+           (remote-saved (expand-file-name ".pi/agent/sessions/selected.jsonl" remote-root))
            (runtime-script (expand-file-name "script.json" runtime-root))
            (remote-status (expand-file-name "status.json" remote-root))
            (runtime-status (expand-file-name "status.json" runtime-root))
@@ -109,27 +110,32 @@ Reject probe errors rather than mistaking them for successful shutdown."
               ;; Launch a saved conversation on the same captured SSH target
               ;; after the original writer has stopped.  No fallback to local
               ;; paths or a different target is permitted.
+              (make-directory (file-name-directory remote-saved) t)
               (with-temp-file remote-saved
                 (insert (json-serialize
                          (list :type "session" :version 3
                                :id "pichat-ssh-selected"
                                :timestamp "2026-07-25T16:00:00.000Z"
                                :cwd runtime-project)) "\n"))
-              (setq selected
-                    (pichat--open-launch-profile
-                     (list :scope 'current :target 'pichat-test-ssh
-                           :reuse 'new :persistence 'persistent
-                           :preset 'standard :model 'default
-                           :display-function #'pichat-chat-open
-                           :conversation
-                           (list :kind 'saved
-                                 :selection
-                                 (list :file remote-saved :cwd runtime-project
-                                       :session-id "pichat-ssh-selected"
-                                       :transport (pichat-session-transport session)
-                                       :transport-id 'pichat-test-ssh
-                                       :source-session session)))
-                     remote-project))
+              (let ((pichat-sessions-hide-job-sessions nil) selection)
+                (cl-letf (((symbol-function 'completing-read)
+                           (lambda (_prompt table &rest _args)
+                             (let ((choices (all-completions "" table)))
+                               (should (= (length choices) 1))
+                               (car choices)))))
+                  (pichat-sessions-select-file
+                   (lambda (value) (setq selection value)) :session session :basic t))
+                (should (equal (plist-get selection :file) remote-saved))
+                (should (equal (plist-get selection :cwd) runtime-project))
+                (should (equal (plist-get selection :session-id) "pichat-ssh-selected"))
+                (setq selected
+                      (pichat--open-launch-profile
+                       (list :scope 'current :target 'pichat-test-ssh
+                             :reuse 'new :persistence 'persistent
+                             :preset 'standard :model 'default
+                             :display-function #'pichat-chat-open
+                             :conversation (list :kind 'saved :selection selection))
+                       remote-project)))
               (pichat-test-wait-until
                (lambda () (and (pichat-session-p selected)
                                (equal "pichat-ssh-selected"
@@ -139,9 +145,28 @@ Reject probe errors rather than mistaking them for successful shutdown."
               (should (eq 'ssh (pichat-transport-kind
                                 (pichat-session-transport selected))))
               (should (equal (file-local-name remote-saved)
-                             (pichat-session-session-file selected)))))
+                             (pichat-session-session-file selected)))
+              (let ((other (expand-file-name "other.jsonl" (file-name-directory remote-saved)))
+                    (endpoint (pichat-session-process selected))
+                    switched)
+                (with-temp-file other
+                  (insert (json-serialize
+                           (list :type "session" :version 3 :id "pichat-ssh-other"
+                                 :timestamp "2026-07-25T16:00:00.000Z"
+                                 :cwd runtime-project)) "\n"))
+                (pichat-sessions-switch-file other runtime-project
+                                            (lambda (runtime) (setq switched runtime))
+                                            nil selected)
+                (pichat-test-wait-until (lambda () switched) 15 "SSH saved-file switch")
+                (should (eq selected switched))
+                (should (eq endpoint (pichat-session-process switched)))
+                (should (equal "pichat-ssh-other" (pichat-session-id switched))))))
         (when (and selected (pichat-session-alive-p selected))
-          (ignore-errors (pichat-rpc-stop selected)))
+          (pichat-rpc-stop selected)
+          (let ((default-directory remote-project))
+            (pichat-test-wait-until
+             (lambda () (not (pichat-test-ssh--matching-process-p process-pattern)))
+             10 "selected runtime child disappearance before fixture cleanup")))
         (when-let* ((buffer (and selected (pichat-session-buffer selected))))
           (when (buffer-live-p buffer)
             (let ((pichat-chat-stop-session-on-kill nil)) (kill-buffer buffer))))
@@ -178,14 +203,19 @@ Reject probe errors rather than mistaking them for successful shutdown."
           (progn
             (make-directory remote-root t)
             (with-temp-file remote-helper
-              (insert "console.log(JSON.stringify({sessionId:'remote-consult'}));\n"))
+              (insert "console.log(JSON.stringify({sessionId:process.argv[2]}));\n"))
             (setq stage
                   (funcall
                    (pichat-consult--async-archive-process
-                    (lambda (_input) (list "node" runtime-helper)) capability)
+                    (lambda (input) (list "node" runtime-helper input)) capability)
                    (lambda (action) (push action events))))
             (with-temp-buffer (funcall stage 'setup))
-            (funcall stage "query")
+            (pichat-test-real-ssh--during-command
+             remote-root
+             (lambda ()
+               (funcall stage "superseded")
+               (funcall stage "query")
+               (should-not (member [indicator running] events))))
             (pichat-test-wait-until
              (lambda ()
                (cl-find-if
@@ -200,11 +230,85 @@ Reject probe errors rather than mistaking them for successful shutdown."
                      (cl-some
                       (lambda (line)
                         (and (stringp line)
-                             (string-match-p "remote-consult" line)))
+                             (string-match-p "\"query\"" line)))
                       event)))
-              events)))
+              events))
+            (should (= 1 (cl-count [indicator running] events :test #'equal)))
+            (should (= 1 (cl-count [indicator finished] events :test #'equal)))
+            (should-not (string-match-p "superseded"
+                                        (prin1-to-string (cl-remove-if-not #'consp events)))))
         (when stage (ignore-errors (funcall stage 'destroy)))
         (ignore-errors (delete-directory remote-root t))))))
+
+(ert-deftest pichat-integration-ssh-independent-connection-progresses-during-wait ()
+  (let ((base (getenv "PICHAT_TEST_SSH_DIRECTORY"))
+        (peer (getenv "PICHAT_TEST_SSH_PEER_DIRECTORY")))
+    (unless (and base (file-remote-p base))
+      (ert-fail "PICHAT_TEST_SSH_DIRECTORY must be a TRAMP directory"))
+    (when (or (null peer) (string-empty-p peer))
+      (ert-skip "Set PICHAT_TEST_SSH_PEER_DIRECTORY to test independent SSH connection progress"))
+    (unless (file-remote-p peer)
+      (ert-fail "PICHAT_TEST_SSH_PEER_DIRECTORY must be a TRAMP directory"))
+    (should-not (tramp-file-name-equal-p (tramp-dissect-file-name base)
+                                        (tramp-dissect-file-name peer)))
+    ;; Warm the peer so the overlap checks command progress, not its handshake.
+    (let ((default-directory (file-name-as-directory peer)))
+      (should (zerop (process-file "true"))))
+    (pichat-test-real-ssh--during-command
+     (file-name-as-directory base)
+     (lambda ()
+       (let ((default-directory (file-name-as-directory peer)))
+         (with-temp-buffer
+           (should (zerop (process-file "pwd" nil t)))
+           (should (equal (string-trim (buffer-string))
+                          (directory-file-name (file-local-name peer))))))))))
+
+(ert-deftest pichat-integration-ssh-model-list-hands-off-to-diagnostics ()
+  (pichat-test-real-ssh--run
+   (lambda (fixture)
+     (let* ((session (plist-get fixture :session))
+            (project (plist-get fixture :project))
+            (transport (pichat-session-transport session))
+            (config (expand-file-name "agent/models.json" (plist-get fixture :root)))
+            (original (pichat-session-process session))
+            (calls 0) busy models list-endpoint probe)
+       (with-temp-file config
+         (insert (json-serialize
+                  '(:providers
+                    (:pichat-list-only
+                     (:baseUrl "http://127.0.0.1:1/v1" :apiKey "not-a-secret"
+                      :api "openai-completions"
+                      :models [(:id "pichat-list-fixture" :name "Fixture")]))))))
+       (unwind-protect
+           (progn
+             (setq list-endpoint
+                   (pichat--list-models-async
+                    "pichat-list-fixture"
+                    (lambda (result)
+                      (cl-incf calls)
+                      (setq busy (pichat-transport-busy-p transport) models result)
+                      (unless busy (setq probe (pichat-diagnostics-probe-pi session))))
+                    project transport))
+             (cl-letf (((symbol-function 'make-term)
+                        (lambda (&rest _) (ert-fail "SSH setup tried a local terminal"))))
+               (let ((failure (should-error (pichat-diagnostics-open-interactive-pi session)
+                                            :type 'user-error)))
+                 (should (string-match-p "run setup on the target"
+                                         (error-message-string failure)))))
+             (pichat-test-wait-until
+              (lambda () (and probe (not (process-live-p probe))
+                              (not (buffer-live-p (process-buffer probe)))))
+              15 "SSH model listing and diagnostic version probe")
+             (should (= calls 1))
+             (should-not busy)
+             (should (equal models '(("pichat-list-only" . "pichat-list-fixture"))))
+             (should (zerop (process-exit-status list-endpoint)))
+             (should (zerop (process-exit-status probe)))
+             (should (eq (process-get probe 'pichat-transport) transport))
+             (should (eq original (pichat-session-process session)))
+             (should (pichat-test-real-ssh--alive-p fixture original)))
+         (dolist (process (list list-endpoint probe))
+           (when (process-live-p process) (pichat-transport-delete-process process))))))))
 
 (ert-deftest pichat-integration-ssh-reference-creates-readable-remote-temp-file ()
   (let ((base (getenv "PICHAT_TEST_SSH_DIRECTORY")))
@@ -275,7 +379,8 @@ Reject probe errors rather than mistaking them for successful shutdown."
               (should (string-prefix-p "/tmp/pichat-output-" output))
               (should (string-match-p (regexp-quote output)
                                       (pichat-artifact-runner--report))))
-            (should-not (file-exists-p script))
+            (pichat-test-wait-until (lambda () (not (file-exists-p script)))
+                                    5 "deferred SSH script cleanup")
             (should (= #o600 (file-modes (concat prefix output))))
             (with-temp-buffer
               (insert-file-contents (concat prefix output))
@@ -313,9 +418,19 @@ Reject probe errors rather than mistaking them for successful shutdown."
               (setq-local pichat-chat-session session)
               (pichat-chat--set-input-text "draft")
               (setq view (pichat-artifact-runner-run
-                          "printf '%010000d' 0; exit 7\n" "sh"
+                          "sleep 1.5; printf '%010000d' 0; exit 7\n" "sh"
                           "/mounted/project/" session)))
             (with-current-buffer view (setq script pichat-artifact-runner--file))
+            (let ((endpoint (buffer-local-value 'pichat-artifact-runner--process view)))
+              (pichat-test-real-ssh--during-command
+               project
+               (lambda ()
+                 (pichat-test-wait-until
+                  (lambda () (not (process-live-p endpoint)))
+                  4 "artifact endpoint exit during SSH work")
+                 (with-current-buffer view
+                   (should (eq 'running pichat-artifact-runner--status))
+                   (should-not pichat-artifact-runner--output-file)))))
             (pichat-test-wait-until
              (lambda () (with-current-buffer view
                           (not (memq pichat-artifact-runner--status
@@ -332,7 +447,8 @@ Reject probe errors rather than mistaking them for successful shutdown."
                                       (pichat-artifact-runner--report)))
               (pichat-artifact-result-share))
             (should-not (buffer-live-p view))
-            (should-not (file-exists-p script))
+            (pichat-test-wait-until (lambda () (not (file-exists-p script)))
+                                    5 "deferred SSH script cleanup")
             (should (= #o600 (file-modes (concat prefix output))))
             (with-current-buffer chat
               (should (string-match-p (regexp-quote output)
@@ -447,7 +563,8 @@ Reject probe errors rather than mistaking them for successful shutdown."
               (should (eq 'timeout pichat-artifact-runner--status))
               (setq output pichat-artifact-runner--output-file)
               (should (string-prefix-p "/tmp/pichat-output-" output)))
-            (should-not (file-exists-p script))
+            (pichat-test-wait-until (lambda () (not (file-exists-p script)))
+                                    5 "deferred SSH script cleanup")
             (pichat-test-wait-until
              (lambda ()
                (let ((default-directory project))

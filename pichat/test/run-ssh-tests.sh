@@ -6,6 +6,12 @@ if [[ -z "${PICHAT_TEST_SSH_DIRECTORY:-}" ]]; then
   exit 2
 fi
 
+if [[ -z "${PICHAT_TEST_SSH_PEER_DIRECTORY:-}" ]]; then
+  printf '%s\n' \
+    'Optional PICHAT_TEST_SSH_PEER_DIRECTORY: set to an isolated TRAMP directory on a separate SSH connection' \
+    'to enable the independent-connection progress test. Without it, ERT reports that test as skipped.' >&2
+fi
+
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$ROOT"
 

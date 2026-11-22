@@ -173,5 +173,29 @@ creation unchanged and checks old actual-Pi lifetimes before each replacement."
           (when (buffer-live-p buffer) (kill-buffer buffer))
           (delete-directory root t))))))
 
+(defun pichat-test-real-ssh--during-command (directory callback)
+  "Invoke CALLBACK at the output wait of a real synchronous SSH command.
+Use one deterministic delivery point in the batch event loop.  Do not
+stub connection locks, process endpoints, or the command's actual result."
+  (let* ((default-directory directory)
+         (connection (tramp-dissect-file-name directory))
+         (delivered nil)
+         (hook (lambda (wait process &rest args)
+                 (when (and (not delivered)
+                            (eq process (tramp-get-process connection)))
+                   (setq delivered t)
+                   (should (tramp-file-name-equal-p
+                            connection (car tramp-current-connection)))
+                   (funcall callback))
+                 (apply wait process args))))
+    ;; Ensure the next wait is for the command, not a connection handshake.
+    (should (zerop (process-file "true")))
+    (advice-add 'tramp-wait-for-output :around hook)
+    (unwind-protect
+        (progn
+          (should (zerop (process-file "true")))
+          (should delivered))
+      (advice-remove 'tramp-wait-for-output hook))))
+
 (provide 'pichat-test-real-ssh-support)
 ;;; pichat-test-real-ssh-support.el ends here

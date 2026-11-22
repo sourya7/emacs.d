@@ -83,9 +83,19 @@
               (start (+ (float-time) 1)))
          (unwind-protect
              (progn
-               (pichat-job-executor-schedule-change
-                executor job (list :kind "interval" :start start :seconds 3600))
-               (pichat-job-executor-schedule-enable executor job t)
+               (pichat-test-real-ssh--during-command
+                (plist-get fixture :project)
+                (lambda ()
+                  (pichat-job-executor-schedule-change
+                   executor job (list :kind "interval" :start start :seconds 3600))
+                  (pichat-job-executor-schedule-enable executor job t)
+                  (pichat-test-wait-until
+                   (lambda () (= 1 (length (pichat-job-records store 'runs))))
+                   4 "SSH interval admission during unrelated transport work")
+                  (should (equal "queued" (plist-get
+                                           (aref (pichat-job-records store 'runs) 0)
+                                           :state)))
+                  (should (= 1 (plist-get fixture :spawn-checks)))))
                (pichat-test-wait-until
                 (lambda () (= (length (pichat-job-records store 'runs)) 2))
                 35 "SSH scheduled worker and follow-up")

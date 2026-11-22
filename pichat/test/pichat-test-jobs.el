@@ -620,12 +620,18 @@
 
 
 (ert-deftest pichat-job-ssh-stop-awaits-observer-baseline-and-exit-not-endpoint ()
-  (dolist (success '(nil t))
+  (dolist (outcome '(uncertain confirmed cancelled))
     (pichat-test-with-owned-job
       (setf (pichat-session-transport session)
             (pichat-transport--create :id "test" :kind 'ssh :label "test"
                                       :tramp-prefix "/ssh:invalid.example:"))
-      (let (ready receipt stopped)
+      (let* ((transport (pichat-session-transport session))
+             (connection (pichat-transport--connection transport))
+             (other (pichat-transport--create :kind 'ssh
+                                             :tramp-prefix "/ssh:other.invalid:"))
+             (success (eq outcome 'confirmed))
+             ready receipt stopped cleaned independent cancel-other)
+        (process-put process 'pichat-helper-cleanup (lambda () (setq cleaned t)))
         (cl-letf (((symbol-function 'pichat-process-lifetime-supported-p) (lambda (_) t))
                   ((symbol-function 'pichat-process-lifetime-watch)
                    (lambda (transport _cwd exact-process _seconds _require-live r cb)
@@ -637,18 +643,48 @@
                    (lambda (exact-session)
                      (should (eq exact-session session))
                      (setq stopped t))))
-          (pichat-job-executor--stop-before-prompt execution "cancelled" "Cancelled before prompt")
-          (should-not stopped)
-          (should (equal (pichat-jobs--state executor (pichat-job-record store 'runs id)) "Cancelling"))
-          (should (equal (plist-get (pichat-job-record store 'runs id) :state) "starting"))
-          (funcall ready)
-          (should stopped)
-          ;; Local teardown / requested stop cannot release the claim.
-          (should-not (equal (plist-get (pichat-job-record store 'runs id) :state) "finished"))
-          (funcall receipt success (unless success "Lost observer"))
-          (should (equal (plist-get (pichat-job-record store 'runs id) :state)
-                         (if success "finished" "uncertain")))
-          (should (eq (not (null (pichat-process-lifetime-confirmed-p process))) success)))))))
+          (unwind-protect
+              (let ((pichat-transport--active-connections (list connection)))
+                (pichat-job-executor--stop-before-prompt
+                 execution "cancelled" "Cancelled before prompt")
+                (setq cancel-other
+                      (pichat-transport-defer other (lambda () (setq independent t))))
+                (pichat-test-wait-until (lambda () independent) 1 "independent stop target")
+                (should-not ready)
+                (should-not stopped)
+                (when (eq outcome 'cancelled)
+                  (pichat-job-executor--retire execution)
+                  (should-not (pichat-job-execution-watch execution))))
+            (when cancel-other (funcall cancel-other)))
+          (if (eq outcome 'cancelled)
+              (progn
+                (accept-process-output nil 0.1)
+                (should-not ready)
+                (should-not stopped)
+                (should (process-get process 'pichat-helper-cleanup)))
+            (pichat-test-wait-until (lambda () ready) 1 "idle stop observer"))
+          (unless (eq outcome 'cancelled)
+            (should-not stopped)
+            (should (equal (pichat-jobs--state executor (pichat-job-record store 'runs id)) "Cancelling"))
+            (should (equal (plist-get (pichat-job-record store 'runs id) :state) "starting"))
+            (funcall ready)
+            (should stopped)
+            ;; Local teardown / requested stop cannot release the claim.
+            (should-not (equal (plist-get (pichat-job-record store 'runs id) :state) "finished"))
+            ;; Completion can arrive while unrelated same-target work is active.
+            (let ((pichat-transport--active-connections (list connection)))
+              (funcall receipt success (unless success "Lost observer"))
+              (accept-process-output nil 0.07)
+              (should-not cleaned)
+              (should (process-get process 'pichat-helper-cleanup)))
+            (should (equal (plist-get (pichat-job-record store 'runs id) :state)
+                           (if success "finished" "uncertain")))
+            (should (eq (not (null (pichat-process-lifetime-confirmed-p process))) success))
+            (if success
+                (pichat-test-wait-until (lambda () cleaned) 1 "idle retained helper cleanup")
+              (accept-process-output nil 0.1)
+              (should-not cleaned)
+              (should (process-get process 'pichat-helper-cleanup)))))))))
 
 (ert-deftest pichat-job-stale-process-and-source-events-cannot-complete-or-submit ()
   (pichat-test-with-owned-job

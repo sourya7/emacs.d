@@ -485,7 +485,8 @@ SSH reuses the verified-lifetime observer, never the local endpoint's sentinel."
        execution "finished" (append (list :result (if captured result "cancelled")
                                           :safe-to-release t :reason reason) captured))
     (let* ((session (pichat-job-execution-session execution))
-           (process (pichat-session-process session)))
+           (process (pichat-session-process session))
+           (transport (pichat-session-transport session)))
     ;; Suppress sentinel/control failure handling while the stop barrier owns it.
     (setf (pichat-job-execution-cancelling execution) t
           (pichat-job-execution-cleanup execution) (and captured t))
@@ -505,23 +506,40 @@ SSH reuses the verified-lifetime observer, never the local endpoint's sentinel."
                 (ignore-errors (pichat-backend-stop-session session))
                 (pichat-job-executor--uncertain execution
                                                 "SSH stop lacks verified Pi identity"))
-            (condition-case err
-                (setf (pichat-job-execution-watch execution)
-                      (pichat-process-lifetime-watch
-                       (pichat-session-transport session) (pichat-session-runtime-cwd session)
-                       process pichat-jobs-control-timeout nil
-                       (lambda ()
-                         (when (pichat-job-executor--owned-p execution)
-                           (pichat-backend-stop-session session)))
-                       (lambda (success failure)
-                         (when (pichat-job-executor--owned-p execution)
-                           (if success
-                               (progn (pichat-process-lifetime-confirm process)
-                                      (finish)
-                                      (pichat-process-lifetime-cleanup process)
-                                      (pichat-job-executor--forget-runtime execution))
-                             (pichat-job-executor--uncertain execution failure))))))
-              (error (pichat-job-executor--uncertain execution (error-message-string err)))))
+            (cl-labels
+                ((start-watch ()
+                   (setf (pichat-job-execution-watch execution) nil)
+                   (when (pichat-job-executor--owned-p execution)
+                     (condition-case err
+                         (setf (pichat-job-execution-watch execution)
+                               (pichat-process-lifetime-watch
+                                transport (pichat-session-runtime-cwd session)
+                                process pichat-jobs-control-timeout nil
+                                (lambda ()
+                                  (when (pichat-job-executor--owned-p execution)
+                                    (pichat-backend-stop-session session)))
+                                (lambda (success failure)
+                                  (when (pichat-job-executor--owned-p execution)
+                                    (if success
+                                        (progn
+                                          (pichat-process-lifetime-confirm process)
+                                          (finish)
+                                          ;; Completion can pump another same-target
+                                          ;; launch. Cleanup owns the captured process
+                                          ;; and survives execution retirement.
+                                          (pichat-transport-run-when-idle
+                                           transport
+                                           (lambda ()
+                                             (pichat-process-lifetime-cleanup process)))
+                                          (pichat-job-executor--forget-runtime execution))
+                                      (pichat-job-executor--uncertain execution failure))))))
+                       (error (pichat-job-executor--uncertain
+                               execution (error-message-string err)))))))
+              (if (pichat-transport-busy-p transport)
+                  ;; Retirement cancels the wait just as it cancels an observer.
+                  (setf (pichat-job-execution-watch execution)
+                        (pichat-transport-defer transport #'start-watch))
+                (start-watch))))
         (pichat-backend-stop-session session)
         (if (pichat-session-alive-p session)
             (pichat-job-executor--uncertain execution "Local process did not stop")

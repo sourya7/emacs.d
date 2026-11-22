@@ -840,7 +840,7 @@ Point stays on ID's row.  The filter is shown in the mode line."
         (format "%s (buffer %s)" (pichat-session-runtime-id session) (buffer-name buffer))
       (format "%s" (pichat-session-runtime-id session)))))
 
-(defun pichat-jobs--open-saved (owner id)
+(cl-defun pichat-jobs--open-saved (owner id)
   "Explicitly open finished run ID's saved Pi session independently.
 Use the run's captured transport/path context, preset and tools, not job
 instructions; Pi restores the saved session's model (no default `--model').
@@ -855,6 +855,16 @@ managed duplicate writers and concurrent opens."
          (file (plist-get run :session-file)))
     (unless (and (equal (plist-get run :state) "finished") file)
       (user-error "Resolve this execution before opening its saved session independently"))
+    (when (pichat-transport-busy-p transport)
+      (let ((captured (copy-tree run)))
+        (cl-return-from pichat-jobs--open-saved
+          (pichat-transport-defer
+           transport
+           (lambda ()
+             (if (equal captured
+                        (pichat-job-record (pichat-job-executor-store owner) 'runs id))
+                 (pichat-jobs--open-saved owner id)
+               (message "PiChat saved-session open cancelled: run changed")))))))
     (let* ((host-file (pichat-transport-runtime-file-name transport file))
            (key (pichat--selected-file-key transport file))
            (conflict (pichat--selected-file-conflict key))

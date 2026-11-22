@@ -1615,7 +1615,7 @@ runtime instead of resolving one from the current buffer."
     (user-error "Loaded Pi session identity or selected model differs")))
 
 (cl-defun pichat-sessions-open-file-independently
-    (file &key cwd owner-directory owner-scope source-session ready error-callback
+    (file &rest options &key cwd owner-directory owner-scope source-session ready error-callback
           launch-options (readiness 'state-ready) expected-session-id
           (display-function #'pichat-chat-open))
   "Open saved session FILE in a newly created independent runtime.
@@ -1636,6 +1636,35 @@ runtime."
   (when source-session
     (pichat-backend-require-capability
      source-session 'saved-sessions "Saved-session browsing"))
+  ;; An archive completion or delayed browser action can arrive while another
+  ;; operation owns this connection.  Hold the entire startup, not just RPC.
+  (when (and source-session
+             (pichat-transport-busy-p (pichat-session-transport source-session)))
+    (let ((transport (pichat-session-transport source-session))
+          (process (pichat-session-process source-session))
+          (directory default-directory)
+          (epoch (pichat-session-diagnostic-source-generation source-session)))
+      (cl-return-from pichat-sessions-open-file-independently
+        (pichat-transport-defer
+         transport
+         (lambda ()
+           (if (and (eq transport (pichat-session-transport source-session))
+                    (eq process (pichat-session-process source-session))
+                    (= epoch (pichat-session-diagnostic-source-generation source-session)))
+               (let ((default-directory directory))
+                 (condition-case condition
+                     (apply #'pichat-sessions-open-file-independently file options)
+                   (error
+                    (if error-callback
+                        (funcall error-callback
+                                 (list :success nil :error (error-message-string condition))
+                                 nil)
+                      (message "PiChat saved-session open failed: %s"
+                               (error-message-string condition))))))
+             (when error-callback
+               (funcall error-callback
+                        (list :success nil :error "Saved-session origin changed")
+                        nil))))))))
   (let* ((runtime-file (pichat-sessions--runtime-file file source-session))
          (cwd-resolution (pichat-sessions--host-cwd-resolution cwd source-session))
          (session-cwd

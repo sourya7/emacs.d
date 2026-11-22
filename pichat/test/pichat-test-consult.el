@@ -441,10 +441,14 @@
                                               :tramp-prefix "/ssh:archive.invalid:"))
          (capability (list :transport transport
                            :runtime-cwd "/runtime/project"))
-         captured-transport captured-cwd events)
+         captured-transport captured-cwd events commands
+         (pichat-transport--active-connections
+          (list (pichat-transport--connection transport))))
     (should node)
     (cl-letf (((symbol-function 'pichat-transport-make-process)
                (lambda (actual-transport actual-cwd &rest args)
+                 (should-not (pichat-transport-busy-p actual-transport))
+                 (push (plist-get args :command) commands)
                  (setq captured-transport actual-transport
                        captured-cwd actual-cwd)
                  (apply #'make-process args))))
@@ -456,16 +460,31 @@
                               builder capability)
                              (lambda (action) (push action events)))))
         (with-temp-buffer (funcall stage 'setup))
-        (funcall stage "query")
-        (pichat-test-wait-until
-         (lambda ()
-           (cl-find-if
-            (lambda (event)
-              (and (vectorp event) (eq (aref event 1) 'finished)))
-            events))
-         2 "archive Consult transport process")
-        (should (eq transport captured-transport))
-        (should (equal "/runtime/project" captured-cwd))))))
+        (unwind-protect
+            (progn
+              (funcall stage "query")
+              (accept-process-output nil 0.06)
+              (should-not commands)
+              ;; A cancelled query must never acquire its deferred endpoint.
+              (funcall stage 'cancel)
+              (setq pichat-transport--active-connections nil)
+              (accept-process-output nil 0.06)
+              (should-not commands)
+              (should-not (member [indicator finished] events))
+              ;; The next query resumes exactly once on the captured target.
+              (setq pichat-transport--active-connections
+                    (list (pichat-transport--connection transport)))
+              (funcall stage "query")
+              (accept-process-output nil 0.06)
+              (should-not commands)
+              (setq pichat-transport--active-connections nil)
+              (pichat-test-wait-until
+               (lambda () (member [indicator finished] events))
+               2 "archive Consult transport process")
+              (should (= 1 (length commands)))
+              (should (eq transport captured-transport))
+              (should (equal "/runtime/project" captured-cwd)))
+          (funcall stage 'destroy))))))
 
 (ert-deftest pichat-consult-archive-process-classifies-caller-and-availability-failures ()
   (let ((node (executable-find "node"))

@@ -164,10 +164,15 @@ owns its endpoints and timers, including cancellation and stale callbacks."
                        (flush t) process stderr-process stderr-buffer
                        (transport (or (plist-get capability :transport)
                                       pichat-transport-local))
-                       process-timer overflow-timer abort-timer failure done)
+                       (runtime-cwd (or (plist-get capability :runtime-cwd)
+                                        default-directory))
+                       startup-cancel process-timer overflow-timer abort-timer failure done)
                    (cl-labels
                        ((current-p () (and (not done) (= token generation)))
                         (cleanup ()
+                          (when startup-cancel
+                            (funcall startup-cancel)
+                            (setq startup-cancel nil))
                           (dolist (timer (list process-timer overflow-timer))
                             (when (timerp timer) (cancel-timer timer)))
                           (pichat-transport-run-when-idle
@@ -244,78 +249,84 @@ owns its endpoints and timers, including cancellation and stale callbacks."
                                 (goto-char (point-max))
                                 (insert output))))))
                      (setq stop #'cancel)
-                     (setq stderr-buffer
-                           (generate-new-buffer " *pichat-archive-consult-error*"))
-                     ;; Install before transport startup: TRAMP may insert into
-                     ;; this buffer while make-process is still running.
-                     (with-current-buffer stderr-buffer
-                       (setq buffer-undo-list t)
-                       (add-hook
-                        'after-change-functions
-                        (lambda (beg end _old)
-                          (when (current-p)
-                            (cl-incf stderr-bytes
-                                     (string-bytes
-                                      (buffer-substring-no-properties beg end)))
-                            (when (or failure (> stderr-bytes stderr-limit))
-                              (overflow "stderr was too large")
-                              (let ((inhibit-modification-hooks t))
-                                (erase-buffer)))))
-                        nil t))
-                     (funcall sink [indicator running])
-                     (condition-case condition
-                         (when (current-p)
-                           (let ((inhibit-modification-hooks nil))
-                             (setq process
-                                   (pichat-transport-make-process
-                                    transport
-                                    (or (plist-get capability :runtime-cwd)
-                                        default-directory)
-                                    :name "pichat-archive-consult" :buffer nil
-                                    :stderr stderr-buffer :command command
-                                    :coding 'utf-8-unix
-                                    :filter
-                                    (lambda (_owner output)
-                                      (when (and (current-p) (not failure))
-                                        (cl-incf bytes (string-bytes output))
-                                        (if (> bytes stdout-limit)
-                                            (progn
-                                              (overflow "output was too large")
-                                              (when process (finish failure)))
-                                          (when flush
-                                            (setq flush nil)
-                                            (funcall sink 'flush))
-                                          (when (current-p)
-                                            (let ((lines (split-string output "[\r\n]+")))
-                                              (if (null (cdr lines))
-                                                  (setq rest (concat rest (car lines)))
-                                                (setcar lines (concat rest (car lines)))
-                                                (setq rest (car (last lines))
-                                                      lines (butlast lines))
-                                                (when lines (funcall sink lines))))))))
-                                    :sentinel #'settle))))
-                       ((error quit)
-                        (setq failure (error-message-string condition))
-                        (when (eq (car condition) 'quit)
-                          (cancel)
-                          (signal (car condition) (cdr condition)))))
-                     (setq stderr-process
-                           (and (buffer-live-p stderr-buffer)
-                                (get-buffer-process stderr-buffer)))
-                     (when stderr-process
-                       (set-process-sentinel stderr-process #'settle)
-                       (set-process-filter stderr-process #'capture-stderr))
-                     (when (and (current-p) pichat-archive-query-timeout
-                                (> pichat-archive-query-timeout 0))
-                       (setq process-timer
-                             (run-at-time
-                              pichat-archive-query-timeout nil
-                              (lambda () (finish (or failure "timed out"))))))
-                     (cond
-                      ((not (current-p)) (cancel))
-                      ((or failure (not process))
-                       (finish (or failure "helper did not start")))
-                      (t (settle process "startup")))))))
+                     (let ((start
+                            (lambda ()
+                              (when (current-p)
+                                (setq stderr-buffer
+                                      (generate-new-buffer " *pichat-archive-consult-error*"))
+                                ;; Install before transport startup: TRAMP may insert into
+                                ;; this buffer while make-process is still running.
+                                (with-current-buffer stderr-buffer
+                                  (setq buffer-undo-list t)
+                                  (add-hook
+                                   'after-change-functions
+                                   (lambda (beg end _old)
+                                     (when (current-p)
+                                       (cl-incf stderr-bytes
+                                                (string-bytes
+                                                 (buffer-substring-no-properties beg end)))
+                                       (when (or failure (> stderr-bytes stderr-limit))
+                                         (overflow "stderr was too large")
+                                         (let ((inhibit-modification-hooks t))
+                                           (erase-buffer)))))
+                                   nil t))
+                                (funcall sink [indicator running])
+                                (condition-case condition
+                                    (when (current-p)
+                                      (let ((inhibit-modification-hooks nil))
+                                        (setq process
+                                              (pichat-transport-make-process
+                                               transport
+                                               runtime-cwd
+                                               :name "pichat-archive-consult" :buffer nil
+                                               :stderr stderr-buffer :command command
+                                               :coding 'utf-8-unix
+                                               :filter
+                                               (lambda (_owner output)
+                                                 (when (and (current-p) (not failure))
+                                                   (cl-incf bytes (string-bytes output))
+                                                   (if (> bytes stdout-limit)
+                                                       (progn
+                                                         (overflow "output was too large")
+                                                         (when process (finish failure)))
+                                                     (when flush
+                                                       (setq flush nil)
+                                                       (funcall sink 'flush))
+                                                     (when (current-p)
+                                                       (let ((lines (split-string output "[\r\n]+")))
+                                                         (if (null (cdr lines))
+                                                             (setq rest (concat rest (car lines)))
+                                                           (setcar lines (concat rest (car lines)))
+                                                           (setq rest (car (last lines))
+                                                                 lines (butlast lines))
+                                                           (when lines (funcall sink lines))))))))
+                                               :sentinel #'settle))))
+                                  ((error quit)
+                                   (setq failure (error-message-string condition))
+                                   (when (eq (car condition) 'quit)
+                                     (cancel)
+                                     (signal (car condition) (cdr condition)))))
+                                (setq stderr-process
+                                      (and (buffer-live-p stderr-buffer)
+                                           (get-buffer-process stderr-buffer)))
+                                (when stderr-process
+                                  (set-process-sentinel stderr-process #'settle)
+                                  (set-process-filter stderr-process #'capture-stderr))
+                                (when (and (current-p) pichat-archive-query-timeout
+                                           (> pichat-archive-query-timeout 0))
+                                  (setq process-timer
+                                        (run-at-time
+                                         pichat-archive-query-timeout nil
+                                         (lambda () (finish (or failure "timed out"))))))
+                                (cond
+                                 ((not (current-p)) (cancel))
+                                 ((or failure (not process))
+                                  (finish (or failure "helper did not start")))
+                                 (t (settle process "startup")))))))
+                       (if (pichat-transport-busy-p transport)
+                           (setq startup-cancel
+                                 (pichat-transport-defer transport start))
+                         (funcall start)))))))
            nil))
           ((memq action '(cancel destroy))
            (cl-incf generation)

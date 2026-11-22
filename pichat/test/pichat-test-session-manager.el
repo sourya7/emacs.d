@@ -1343,6 +1343,53 @@
                      (pichat-session-owner-scope-key independent)))
       (should (equal "/loaded/" (pichat-session-cwd independent))))))
 
+(ert-deftest pichat-independent-source-open-waits-for-ssh-and-rejects-rebound-origin ()
+  (dolist (stale '(nil t invalid-path))
+    (let* ((transport (pichat-transport--create
+                       :kind 'ssh :tramp-prefix "/ssh:saved.invalid:"
+                       :mappings '(("/ssh:saved.invalid:/" . "/"))))
+           (origin (pichat-session-make :id "origin" :transport transport))
+           (opened (pichat-session-make))
+           (pichat-transport--active-connections
+            (list (pichat-transport--connection transport)))
+           started ready failed cancel)
+      (cl-letf (((symbol-function 'pichat-start-session)
+                 (lambda (directory &rest _)
+                   (should-not (pichat-transport-busy-p transport))
+                   (should (equal directory "/owner/"))
+                   (cl-incf started) opened))
+                ((symbol-function 'pichat-session-alive-p) (lambda (_) t))
+                ((symbol-function 'pichat-rpc-switch-session)
+                 (lambda (session _file callback &rest _)
+                   (funcall callback '(:success t) session)))
+                ((symbol-function 'pichat-rpc-get-state)
+                 (lambda (session callback &rest _)
+                   (funcall callback '(:success t) session))))
+        (setq started 0)
+        (unwind-protect
+            (progn
+              (let ((default-directory "/owner/"))
+                (setq cancel
+                      (pichat-sessions-open-file-independently
+                       (if (eq stale 'invalid-path) "/ssh:other.invalid:/saved/session.jsonl"
+                         "/ssh:saved.invalid:/saved/session.jsonl")
+                       :source-session origin :display-function nil
+                       :ready (lambda (_) (setq ready t))
+                       :error-callback (lambda (&rest _) (setq failed t)))))
+              (accept-process-output nil 0.06)
+              (should (= 0 started))
+              (when (eq stale t)
+                ;; Even an away-and-back source rebind invalidates this intent.
+                (pichat-session-apply-rpc-state origin '(:sessionId "other"))
+                (pichat-session-apply-rpc-state origin '(:sessionId "origin")))
+              (setq pichat-transport--active-connections nil)
+              (pichat-test-wait-until (lambda () (or ready failed))
+                                      2 "saved-session idle consumer")
+              (should (= (if stale 0 1) started))
+              (should (eq (not (null stale)) failed))
+              (should (eq (not stale) ready)))
+          (when (functionp cancel) (funcall cancel)))))))
+
 (ert-deftest pichat-independent-source-open-rejects-unknown-readiness-before-start ()
   (let (started)
     (cl-letf (((symbol-function 'pichat-start-session)

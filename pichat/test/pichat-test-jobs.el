@@ -2891,7 +2891,49 @@
                            (pop prompts)))
             (should-not (pichat-session-alive-p own))
             (should (= 1 (length opened)))
-            (should (= 0 (hash-table-count pichat--source-reservations))))
+            (should (= 0 (hash-table-count pichat--source-reservations)))
+            ;; Continue in chat must defer canonicalization and file validation,
+            ;; then re-read the run rather than acting on a deleted record.
+            (let* ((transport (pichat-transport--create
+                               :kind 'ssh :tramp-prefix "/ssh:jobs.invalid:"))
+                   (source (car captured))
+                   (record (symbol-function 'pichat-job-record))
+                   stale checked stale-observed)
+              (setf (pichat-session-transport source) transport)
+              (cl-letf (((symbol-function 'pichat-job-launch-prepare)
+                         (lambda (_) (list source)))
+                        ((symbol-function 'file-truename) #'identity)
+                        ((symbol-function 'file-regular-p)
+                         (lambda (_)
+                           (should-not (pichat-transport-busy-p transport))
+                           (setq checked t)))
+                        ((symbol-function 'file-readable-p) (lambda (_) t))
+                        ((symbol-function 'pichat-job-record)
+                         (lambda (store kind key)
+                           (if stale (progn (setq stale-observed t) nil)
+                             (funcall record store kind key)))))
+                (dolist (deleted '(nil t))
+                  (let ((pichat-transport--active-connections
+                         (list (pichat-transport--connection transport)))
+                        cancel)
+                    (setq opened nil checked nil stale nil stale-observed nil)
+                    (unwind-protect
+                        (progn
+                          (setq cancel (pichat-jobs--open-saved executor id))
+                          (accept-process-output nil 0.06)
+                          (should-not (or opened checked))
+                          (setq stale deleted
+                                pichat-transport--active-connections nil)
+                          (if deleted
+                              (progn
+                                (pichat-test-wait-until (lambda () stale-observed)
+                                                       2 "stale Continue in chat recheck")
+                                (should-not (or opened checked)))
+                            (pichat-test-wait-until (lambda () opened)
+                                                   2 "Continue in chat idle")
+                            (should checked)
+                            (should (= 1 (length opened)))))
+                      (when (functionp cancel) (funcall cancel))))))))
         (dolist (process processes)
           (when (process-live-p process) (delete-process process))
           (when (buffer-live-p (process-buffer process)) (kill-buffer (process-buffer process))))))))

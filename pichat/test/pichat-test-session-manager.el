@@ -985,6 +985,28 @@
               (should (string-match-p "Fix the parser" text))
               (should (string-match-p "Working on the parser now" text)))))))))
 
+(ert-deftest pichat-session-manager-preview-shows-ssh-runtime-directory ()
+  (pichat-test-with-clean-state
+    (let* ((transport (pichat-transport--create
+                       :kind 'ssh :label "build"
+                       :tramp-prefix "/ssh:build.invalid:"
+                       :mappings '(("/ssh:build.invalid:/checkout/" . "/work/"))))
+           (session (pichat-session-make
+                     :name "Remote parser" :state 'stopped
+                     :transport transport
+                     :emacs-cwd "/ssh:build.invalid:/checkout/parser/"
+                     :runtime-cwd "/work/parser/"
+                     :session-file "/var/lib/pi/saved.jsonl")))
+      (with-temp-buffer
+        (pichat-session-manager-mode)
+        (pichat-session-manager--preview-selected nil session)
+        (with-current-buffer pichat-session-manager-preview-buffer-name
+          (let ((text (buffer-string)))
+            (should (string-match-p (regexp-quote "CWD: /work/parser/ (SSH: build)\n")
+                                    text))
+            (should (string-match-p "Runtime is stopped and has no cached transcript" text))
+            (should-not (string-match-p "build\\.invalid\\|/checkout/\\|saved\\.jsonl" text))))))))
+
 (ert-deftest pichat-session-manager-preview-bounds-nodes-not-tool-results ()
   (pichat-test-with-clean-state
     (let* ((session (pichat-session-make :id "bounded" :name "Bounded transcript" :state 'stopped))

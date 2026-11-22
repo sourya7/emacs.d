@@ -1327,8 +1327,8 @@ Full cell values are available as help text. Project sorting is the default;
 a chosen sort and its direction remain effective even while the column is hidden.
 A warning-faced `!` appended to Status, such as `running!`, means that the
 runtime is waiting for user input; it disappears when the final queued request
-is answered or cancelled. Full runtime identity, source path, scope, working
-directory, and recent branch context remain available in the `C-o` preview.
+is answered or cancelled. Use `C-o` for recent branch context and `D` for
+cached details such as runtime identity, saved session file path, and owner scope.
 
 Unnamed rows receive a stable two-word runtime alias, such as `calm fox`.
 Aliases survive manager closure and source rebinding for this Emacs uptime;
@@ -1398,9 +1398,12 @@ omitted. Opening or closing Actions sends no RPC. The groups stack in a frame
 narrower than `pichat-transient-single-column-width` (default 80 columns); set it
 to `0` to keep the side-by-side layout.
 
-The runtime preview reports persistence from immutable launch metadata as
-`persisted source file` or `none (--no-session)`; it does not infer persistence
-from whether state synchronization has produced a source path yet.
+The runtime preview opens with the session label, then the runtime state,
+captured preset name and model, and the working directory above **Recent active
+branch**. Local paths abbreviate the home directory; SSH previews show the
+runtime working directory and SSH target. The status line adds `preferred` and
+`ephemeral` only when applicable. For IDs, saved session file paths, and startup
+configuration (including tools), use `D` on the manager row.
 
 The runtime preview reuses the owning chat's settled canonical entry cache when
 available, including after a runtime stops. Otherwise a live runtime is queried
@@ -2349,7 +2352,10 @@ This is a **cached snapshot, not a live health check**. The header line names
 the runtime (it is not part of copied buffer text). The overview is one compact
 row per area: runtime, process, RPC, Pi session (ID, persistence and cached
 saved-session path), configuration and execution context, even when no problems
-were recorded. Runtime and Pi session IDs are distinct. Values that repeat
+were recorded. When a preset snapshot is available, Configuration shows its
+name, description if set, and whether the preset kept or replaced Pi's default
+system prompt, with or without additions. It reports the mode, not the prompt
+text. Runtime and Pi session IDs are distinct. Values that repeat
 another (transport equal to target, owner directory or host working directory
 equal to the runtime working directory, translated Emacs paths) appear only when
 different. Cached paths do not prove a file exists or was written; the

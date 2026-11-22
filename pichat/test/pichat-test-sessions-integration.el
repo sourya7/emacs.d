@@ -94,6 +94,77 @@ SESSION-ID defaults to a stable Phase 11 fixture identity."
    (format "chat source %s containing %s" file needle)))
 
 (when pichat-test-include-integration
+  (ert-deftest pichat-integration-source-start-entries-arrive-once ()
+    (pichat-test-with-integration-session
+        (session :script '(:turns [])
+                 :extensions (list pichat-test-rpc-extension)
+                 :before-start (push "PICHAT_TEST_START_MARKERS=1" process-environment))
+      (let* ((fixture (expand-file-name "startup-source.jsonl" session-dir))
+             (startup (pichat-test-wait-for-raw-event session "entry_appended" 5)))
+        (should (equal "pichat-test-start-marker"
+                       (plist-get (plist-get startup :entry) :customType)))
+        (should (= 1 (pichat-test-count-raw-events session "entry_appended")))
+        (pichat-test-sessions-integration--write-fixture fixture project-dir)
+        (dolist (operation `(("switch_session" (:sessionPath ,fixture))
+                             ("fork" (:entryId "phase11-active-user"))
+                             ("clone" nil)
+                             ("new_session" nil)))
+          (ert-info ((format "source replacement: %s" (car operation)))
+            (let ((before (pichat-test-count-raw-events session "entry_appended")))
+              (pichat-test-rpc-call session (car operation) (cadr operation))
+              (let* ((event (pichat-test-wait-for-raw-event
+                             session "entry_appended" 5 before))
+                     (entry (plist-get event :entry))
+                     (entries (plist-get
+                               (plist-get (pichat-test-rpc-call session "get_entries") :data)
+                               :entries)))
+                (should (= (1+ before)
+                           (pichat-test-count-raw-events session "entry_appended")))
+                (should (equal "pichat-test-start-marker" (plist-get entry :customType)))
+                (should (cl-find (plist-get entry :id) entries
+                                 :key (lambda (item) (plist-get item :id))
+                                 :test #'equal)))))))))
+
+  (ert-deftest pichat-integration-source-replacement-warnings-stay-on-stderr ()
+    (pichat-test-with-integration-session
+        (session :script '(:turns []))
+      (let ((warning "No models match pattern \"pichat-fake/missing-model\""))
+        (with-temp-file (expand-file-name "settings.json" agent-dir)
+          (insert (json-serialize
+                   '(:enabledModels ["pichat-fake/pichat-fake" "pichat-fake/missing-model"]))))
+        (dotimes (_ 2)
+          (should (plist-get (pichat-test-rpc-call session "new_session") :success)))
+        (pichat-test-wait-until
+         (lambda ()
+           (string-match-p (regexp-quote warning)
+                           (pichat-test-buffer-text (pichat-session-stderr-buffer session))))
+         5 "replacement warning on stderr")
+        (should (= 1 (pichat-test-count-substring
+                      warning (pichat-test-buffer-text
+                               (pichat-session-stderr-buffer session)))))
+        (should-not (string-match-p
+                     (regexp-quote warning)
+                     (format "%S" (pichat-test-recent-rpc-events session)))))))
+
+  (ert-deftest pichat-integration-extension-shutdown-flushes-response-and-exits-idle ()
+    (dolist (command '("/pichat-test-shutdown" "/pichat-test-shutdown-when-idle"))
+      (ert-info ((format "extension shutdown: %s" command))
+        (pichat-test-with-integration-session
+            (session :script '(:turns [])
+                     :extensions (list pichat-test-rpc-extension))
+          (let ((process (pichat-session-process session))
+                (response (pichat-test-rpc-call session "prompt" (list :message command))))
+            (should (plist-get response :success))
+            (when (equal command "/pichat-test-shutdown-when-idle")
+              (let ((request (pichat-test-wait-for-raw-event session "extension_ui_request" 5)))
+                (should (equal "confirm" (plist-get request :method)))
+                (should (process-live-p process))
+                (pichat-rpc-extension-ui-confirm session (plist-get request :id) t)))
+            ;; No get_state poke or client-side stop: Pi must exit on its own.
+            (pichat-test-wait-until (lambda () (not (process-live-p process)))
+                                    5 "extension-requested RPC exit")
+            (should (= 0 (process-exit-status process))))))))
+
   (ert-deftest pichat-integration-history-forks-abandoned-branch-and-navigates-sources ()
     (pichat-test-with-integration-session
         (session :script '(:turns []))

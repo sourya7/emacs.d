@@ -3,12 +3,19 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 /**
  * Deterministic extension fixture for PiChat RPC integration tests.
  *
- * This fixture intentionally contains no behavior unless invoked through slash
- * commands.  Tests can load it alongside the fake provider to exercise real Pi
- * extension UI request/response paths without network, user config, or model
- * APIs.
+ * This fixture is inert unless invoked through slash commands or the explicit
+ * PICHAT_TEST_START_MARKERS opt-in. Tests can load it alongside the fake provider
+ * to exercise real Pi extension UI request/response paths without network,
+ * user config, or model APIs.
  */
 export default function (pi: ExtensionAPI) {
+  // Opt-in startup evidence, including after RPC source replacement.
+  pi.on("session_start", () => {
+    if (process.env.PICHAT_TEST_START_MARKERS === "1") {
+      pi.appendEntry("pichat-test-start-marker", { started: true });
+    }
+  });
+
   pi.on("input", (event) => {
     if (event.source === "rpc" && event.text === "pichat-test-consumed-input") {
       return { action: "handled" };
@@ -89,6 +96,14 @@ export default function (pi: ExtensionAPI) {
         signal.addEventListener("abort", () => resolve(), { once: true });
       });
       ctx.ui.notify("block:aborted", "info");
+    },
+  });
+
+  pi.registerCommand("pichat-test-shutdown-when-idle", {
+    description: "Request shutdown after an already completed command's dialog",
+    handler: async (_args, ctx) => {
+      // Do not await: the prompt response must precede the test's answer.
+      void ctx.ui.confirm("PiChat idle shutdown", "Shut down?").then(() => ctx.shutdown());
     },
   });
 

@@ -1,11 +1,11 @@
 ---
 schema_version: 1
-last_verified_pi: 1.3.0
-last_verified_pi_commit: 71023aec1546d6d677a65669c5665c0927ce0dd0
-last_verified_rpc_doc_blob: a39cc8da25c17e8d41af35bd32ac0bef5604b1b4
-last_reviewed_pi: 1.3.0
-last_reviewed_pi_commit: 71023aec1546d6d677a65669c5665c0927ce0dd0
-last_reviewed_rpc_doc_blob: a39cc8da25c17e8d41af35bd32ac0bef5604b1b4
+last_verified_pi: 1.6.0
+last_verified_pi_commit: faac585884ae2c013a6b1400f3e9e77f10b34bac
+last_verified_rpc_doc_blob: 211bfb81c742d3a6293a0736e6c2d8d6874da77f
+last_reviewed_pi: 1.6.0
+last_reviewed_pi_commit: faac585884ae2c013a6b1400f3e9e77f10b34bac
+last_reviewed_rpc_doc_blob: 211bfb81c742d3a6293a0736e6c2d8d6874da77f
 ---
 
 # Pi compatibility record
@@ -27,15 +27,23 @@ a version alone cannot distinguish a moved tag or an unchanged RPC document.
 
 ## Current status
 
-- Pi 1.3.0 is the latest release with both complete-suite verification and a
-  reviewed RPC contract watermark. The complete suite also passed on Pi 1.4.0,
-  but its RPC/session-format documentation review and historical backfill are
-  pending, so the watermarks remain at 1.3.0.
+- Pi 1.6.0 is the latest release with both complete-suite verification and a
+  reviewed RPC/session-format/compaction contract. The dependency-enabled full
+  suite passed with 1723 expected results, zero unexpected results, and only
+  two explicitly opted-in Docker skips (1725 total). No production changes
+  were required.
 - The persisted-session fixture baseline is Pi 0.80.6; this is fixture provenance,
   not proof that the current complete suite passed on that release.
-- RPC overview, command, and event documentation changes through Pi 1.3.0
-  have been reviewed. Session-format and compaction documentation was not part
-  of that review watermark; the expanded audit needs a historical backfill.
+- RPC overview, command, and event documentation changes through Pi 1.6.0
+  have been reviewed. The expanded session-format/compaction audit includes the
+  0.87.0 canonical-context baseline and every intervening documentation commit;
+  its historical backfill is complete. Linked message types and relevant RPC,
+  session-manager, tool-schema, and shutdown implementation diffs were also
+  inspected. RPC command/response types and the JSON event adapter are unchanged
+  between 1.3.0 and 1.6.0.
+- Upgrade verification uses the isolated offline fake provider and installed
+  optional Emacs dependencies. Separate real-SSH, live-UI, Docker, and real
+  provider/OAuth checks were not run for 1.6.0.
 - Earlier failed verification attempts remain in the history independently of
   later successful runs.
 
@@ -64,11 +72,23 @@ here. Use one of these dispositions:
 | [`bea67d90d`](https://github.com/earendil-works/pi/commit/bea67d90d1a74dde8852c63cac72d476013d3879) abort cancels compaction/branch summary and waits for idle | 0.85.0 | compatible-no-change | PiChat retains event-based settlement; `pichat-test-lifecycle.el` covers aborted compaction and the real-Pi abort tests wait for `agent_settled`. |
 | [`9e05370b`](https://github.com/earendil-works/pi/commit/9e05370b298d0a6b8d9bc2c02e4bfae189ef1616) transcript-carried system prompt and tool declarations | 0.86.0 | implemented | The bridge mutates per-turn structured tool selection, and the fake provider replays `toolsAdded`/`toolsRemoved` while retaining the legacy top-level tool fallback. Bridge schema and deactivation integration tests cover both transitions. |
 | [`faa9863c`](https://github.com/earendil-works/pi/commit/faa9863cb8b54689f1d0c2df9dbab1ee1fa9de19) RPC queued messages pass through input handlers | 0.86.0 | compatible-no-change | PiChat uses ordinary `steer` and `follow_up` RPC commands; the real-Pi queue-mode integration test covers their delivery and settlement. |
-| [Pi 0.87.0](https://pi.dev/changelog/releases/0.87.0) `ContextEditEntry` | 0.87.0 | implemented | `context_edit` changes future model context, not raw transcript display. `pichat/pichat-pi.el` retains the entry in the cache without rendering it or diagnosing it; Session History exposes a safe summary under `all` only. Covered by `pichat-test-transcript.el` and `pichat-test-sessions-visibility.el`. The session-format backfill remains pending. |
-| [`25cc5c7bf`](https://github.com/earendil-works/pi/commit/25cc5c7bf4cbc76b2e134c729eb8d57d521ed749) RPC documentation refresh and reference split | 0.87.1 | compatible-no-change | The command, response, and event wire types and RPC implementation are unchanged from 0.86.1. PiChat already uses LF-delimited JSON records, correlates responses by ID, treats prompt success as acceptance rather than completion, and waits for `agent_settled`; the complete 0.87.1 suite exercises these contracts. |
+| [`466db0fec`](https://github.com/earendil-works/pi/commit/466db0fecdc20996a553116984d18c0d362b035a) canonical context boundaries and `ContextEditEntry` | 0.87.0 | implemented | Historical session-format/compaction baseline reviewed: edits and retain-none compaction affect Pi's future model context, not raw history. `pichat/pichat-pi.el` retains edits without rendering or diagnosing them; Session History exposes a safe summary under `all` only. Covered by `pichat-test-transcript.el`, `pichat-test-sessions-visibility.el`, and real-Pi overflow/compaction integration tests. |
+| [`25cc5c7bf`](https://github.com/earendil-works/pi/commit/25cc5c7bf4cbc76b2e134c729eb8d57d521ed749) RPC documentation refresh and reference split | 0.87.1 | compatible-no-change | The command, response, and event wire types and RPC implementation are unchanged from 0.86.1. PiChat already uses LF-delimited JSON records, correlates responses by ID, treats prompt success as acceptance rather than completion, and waits for `agent_settled`; the complete 0.87.1 suite exercises these contracts. Historical backfill also reviewed the extracted message/SDK references, ISO entry timestamps, nullable parents, summary formats, and Pi-owned file tracking; PiChat does not parse summary headings or generate compaction context. |
 | [`e473b5cd`](https://github.com/earendil-works/pi/commit/e473b5cd8b6f2e82f1295aeee81cb697ffde2ed5) prompt, steer, and follow-up response dispositions | 0.99.0 | implemented | `pichat/pichat-chat-input.el` restores a prompt consumed by an input handler without waiting for a settlement, while retaining the older extension-command fallback. `pichat-test-chat-input.el` and `pichat-test-integration.el` cover `started`, `queued`, and `handled` against real Pi, including handled steer/follow-up. |
 | [`36a686ee`](https://github.com/earendil-works/pi/commit/36a686ee8dd73afe8242011db387040890e24093) tool execution `durationMs` | 1.1.0 | compatible-no-change | Additive tool-end field is ignored by PiChat's live reducer; the real-Pi nested-tool integration test checks that it is delivered and rendering still completes. |
 | [`503c6055`](https://github.com/earendil-works/pi/commit/503c605528f9af993c0e37ede468cf884fb0ff5b) `agent_settled.aborted` | 1.1.0 | compatible-no-change | PiChat uses settlement as the idle/synchronization boundary regardless of the abort cause. The real-Pi abort integration test checks `aborted: true` and idle state. |
+| [`540e174c7`](https://github.com/earendil-works/pi/commit/540e174c72cd793170b73db8160c6d5f6c5a2236) virtual-model session metadata (historical backfill) | 0.99.0 | compatible-no-change | Additive assistant `thinkingLevel` and `pi.virtual-model-state` custom entries do not change existing entry shapes. PiChat's generic entry cache/transcript handling preserves source records; routing remains Pi-owned. No dedicated virtual-router UI or real-router integration verification is claimed. |
+| [`15e7bdc14`](https://github.com/earendil-works/pi/commit/15e7bdc14cae38786c4cde24870ffce888e062cd) omit thinking from summary requests (historical backfill) | 1.2.0 | compatible-no-change | Only Pi's model-context serialization changes; raw thinking and summary entry shapes remain intact. PiChat delegates summarization to Pi. Existing real-Pi compaction and transcript tests cover the client boundary. |
+| [`6fcb48670`](https://github.com/earendil-works/pi/commit/6fcb48670fc0e6672a644f3b2691010321734426) remove fixed summary output limits | 1.4.0 | compatible-no-change | `reserveTokens` now controls only the compaction trigger; Pi sizes summary output. PiChat does not construct summary request budgets. Real-Pi manual/automatic compaction, context-usage, and failure/recovery tests pass without client changes. |
+| [`14c811841`](https://github.com/earendil-works/pi/commit/14c8118412bffc8f8df7a088fde51d2ffa74fd8f) provider-reported `responseModel` (linked message-types audit) | 1.5.0 | compatible-no-change | The optional field can now equal the requested model; existing assistant entry shapes are unchanged. PiChat does not infer source identity from this field. No dedicated physical-model display is added. |
+| [`6536f8012`](https://github.com/earendil-works/pi/commit/6536f80129a266c3619c044f8487c0279fc39cd9) JSON Schema tool validation via pi-schema (implementation audit) | 1.5.0 | compatible-no-change | Reviewed tool types and extension loader: arbitrary JSON Schema objects are accepted and extension TypeBox compatibility remains. PiChat's bridge still imports `typebox` directly; real-Pi bridge schema, tool execution, and approval tests exercise the existing fixture and bridge against 1.6.0. |
+| [`7c22a93d0`](https://github.com/earendil-works/pi/commit/7c22a93d0ed02092142fa63823e63d76aa4e2406), [`cae8d69e5`](https://github.com/earendil-works/pi/commit/cae8d69e572e038d584c881efd1818e40571fb7c) provider-reported cost totals (implementation audit) | 1.5.0 | compatible-no-change | Additive `cost.totalFromProvider`; `cost.total` may be billed cost rather than the sum of catalog component estimates. PiChat delegates session accounting to Pi and does not reconstruct billed cost from those components. Real provider billing is outside the offline suite. |
+| [`1708b4788`](https://github.com/earendil-works/pi/commit/1708b47889664ec9838f6734ff57df58b079a50a) idle extension shutdown | 1.5.1 | compatible-no-change | `pichat-integration-extension-shutdown-flushes-response-and-exits-idle` checks both command-requested shutdown with a successful prompt response and shutdown after an already completed command's dialog, without a client stop or extra RPC poke. Existing discovery shutdown workaround is retained for older Pi. |
+| [`ace560c30`](https://github.com/earendil-works/pi/commit/ace560c302068be9fe84b18ad6d460fa55c58a14) orderly shutdown survives EOF plus one signal | 1.5.1 | compatible-no-change | Reviewed `rpc-mode.ts`: EOF/SIGTERM/SIGHUP start one disposal; repeated signals can force exit. PiChat's bounded process-lifetime/reconfiguration barriers still require observed exit rather than assuming a signal completed shutdown. Covered by existing lifecycle tests; the exact EOF/signal interleaving is source-reviewed, not newly fault-injected. |
+| [`b2cb62923`](https://github.com/earendil-works/pi/commit/b2cb629237496524e745ff668ec5bd5d47130164) await credential writes during disposal | 1.5.1 | compatible-no-change | Reviewed `AgentSessionRuntime.dispose()` and credential-settlement changes. No RPC schema changes. PiChat retains bounded shutdown/escalation; the isolated offline suite does not verify real OAuth refresh durability or guarantee preservation after forced termination. |
+| [`ede360e4d`](https://github.com/earendil-works/pi/commit/ede360e4d6548531c008dfd508d7e37f9bd47529) skip answerless turns in `get_last_assistant_text` | 1.6.0 | not-applicable | PiChat does not issue this command; its RPC inspection classification is not a call site. Response views, Jobs response copying, and Markdown export read canonical or captured transcript data instead. |
+| [`beffcde92`](https://github.com/earendil-works/pi/commit/beffcde92dea5253fecefc052320e8c8e97082fb) deliver startup entries and bind once on replacement (implementation audit) | 1.6.0 | compatible-no-change | `pichat-integration-source-start-entries-arrive-once` checks one streamed startup marker at launch and after switch, fork, clone, and new session, with matching authoritative `get_entries` records. Existing chat/source-rebinding tests check transcript synchronization. |
+| [`c47ad0432`](https://github.com/earendil-works/pi/commit/c47ad0432bb8877e8f46afdc3f197cf5595b8a77) replacement diagnostics on stderr (implementation audit) | 1.6.0 | compatible-no-change | `pichat-integration-source-replacement-warnings-stay-on-stderr` checks successful replacement, warning capture/deduplication, and clean RPC stdout. PiChat retains stderr separately; proactive successful-switch warning presentation is not implemented by this compatibility update. |
 
 Do not delete rows after implementation. Change their disposition and add the
 implementation and test locations so later upgrades do not rediscover the same
@@ -79,7 +99,7 @@ feature.
 Behavior checked in a shipped release rather than documented upstream. Recheck
 it when upgrading.
 
-- **RPC `ui.editor` ignores dialog options (Pi 1.5.1).** In RPC mode,
+- **RPC `ui.editor` ignores dialog options (Pi 1.5.1; rechecked on 1.6.0).** In RPC mode,
   `select`, `confirm` and `input` resolve with their default value when
   `opts.signal` aborts, but `editor(title, prefill)` takes no options and waits
   for an `extension_ui_response` indefinitely. Pi sends the client no notice
@@ -111,6 +131,8 @@ it when upgrading.
 | 2026-10-24 | 1.4.0 | [`4a080252`](https://github.com/earendil-works/pi/commit/4a080252f06caf63a525d7873c5d94d3c23887e0) | `pichat/test/run-tests.sh --full` (test tool, Pi `--version`: 1.4.0) | **Passed:** 832 passed, 0 unexpected, 4 optional-dependency skips. Includes `context_edit` transcript and Session History unit regressions; the fake-provider integration suite does not generate a real context edit. Contract review and historical backfill still pending; watermarks unchanged. |
 | 2026-10-30 | 1.4.0 | [`4a080252`](https://github.com/earendil-works/pi/commit/4a080252f06caf63a525d7873c5d94d3c23887e0) | `pichat/test/run-tests.sh --full` (SSH reconfiguration final acceptance) | **Passed:** 975 passed, 0 unexpected, 8 skips. Separate real-SSH suite 12/12 and graphical SSH reconfiguration UI 1/1 passed. Contract review/backfill still pending; watermarks unchanged. |
 | 2026-10-30 | 1.4.0 | [`4a080252`](https://github.com/earendil-works/pi/commit/4a080252f06caf63a525d7873c5d94d3c23887e0) | `pichat/test/run-tests.sh --full --with-optional` (SSH reconfiguration final acceptance) | **Passed:** 981 passed, 0 unexpected, only 2 explicitly opted-in Docker tests skipped. Contract review/backfill still pending; watermarks unchanged. |
+| 2026-11-22 | 1.6.0 | [`faac5858`](https://github.com/earendil-works/pi/commit/faac585884ae2c013a6b1400f3e9e77f10b34bac) | `pichat/test/run-tests.sh --full --with-optional` (initial upgrade baseline, before adding three contract regressions; pinned 1.6.0 binary directory on PATH) | **Passed:** 1720 passed, 0 unexpected, only 2 opted-in Docker tests skipped (1722 total). |
+| 2026-11-22 | 1.6.0 | [`faac5858`](https://github.com/earendil-works/pi/commit/faac585884ae2c013a6b1400f3e9e77f10b34bac) | `pichat/test/run-tests.sh --full --with-optional` (final upgrade verification; pinned 1.6.0 binary directory on PATH) | **Passed:** 1723 passed, 0 unexpected, only 2 opted-in Docker tests skipped (1725 total; 257.94 seconds). Includes new startup-entry/rebinding, stderr-warning, and extension-shutdown regressions. RPC review and session-format/compaction historical backfill completed; both watermarks advanced to 1.6.0. |
 
 A failed attempt is retained because it records what was actually tested, but it
 must never update the `last_verified_*` fields.
@@ -121,9 +143,9 @@ must never update the `last_verified_*` fields.
    With no refs, it compares `last_reviewed_pi` to the installed `pi --version`.
    The report scans `rpc.md`, `rpc-commands.md`, `json.md`,
    `session-format.md`, and `compaction.md`; the watermark blob records
-   `rpc.md` only. Backfill session-format/compaction changes since 0.87.0
-   before declaring the expanded contract review complete. Review relevant
-   implementation changes too.
+   `rpc.md` only. The session-format/compaction backfill from the 0.87.0
+   baseline through 1.6.0 is recorded above. If extending the scanned paths,
+   backfill their earlier changes too. Review relevant implementation changes.
 2. Review each reported upstream commit and add it to the RPC change ledger with
    a disposition. Inspect the corresponding implementation diff when the docs
    are ambiguous.

@@ -24,6 +24,7 @@
   (read-buffer-completion-ignore-case t)
   (completion-ignore-case t)
   :init
+  (setenv "JJ_PAGER" "cat")
   ;; Add prompt indicator to `completing-read-multiple'.
   ;; We display [CRM<separator>], e.g., [CRM,] if the separator is a comma.
   (defun crm-indicator (args)
@@ -150,7 +151,7 @@
 
   (with-eval-after-load 'compile
     (remove-hook 'compilation-mode-hook #'tramp-compile-disable-ssh-controlmaster-options))
-
+  (add-to-list 'tramp-remote-process-environment "JJ_PAGER=cat")
   (setq magit-tramp-pipe-stty-settings 'pty)
   (setq tramp-persistency-file-name (my/emacs-local-dir "tramp")
         remote-file-name-inhibit-locks t

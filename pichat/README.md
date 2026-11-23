@@ -77,8 +77,8 @@ retains tool activity grouping and controls.
 activity groups, including the live tail. Set it to `latest` to keep current
 live tail activity open while folding older or settled groups, or `expanded`
 to open all groups. An explicit group choice overrides any policy.
-Assistant prose and tool rows share a shallow visual gutter without adding
-spaces to copied or exported transcript text.
+Assistant prose is flush left; thinking and tool activity retain their visual
+indentation without adding spaces to copied or exported transcript text.
 
 Running tools show their available arguments and output; completed, errored,
 orphaned, and settled-incomplete tools use the configured completed display

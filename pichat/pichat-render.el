@@ -307,10 +307,9 @@ ACTIVITY-MEMBER-P is non-nil, apply the activity member/body visual levels."
        '(pichat-content-kind thinking
          font-lock-face pichat-thinking-face))))
     ('prose
-     (pichat-render--assistant-indent
-      (pichat-render--text-fragment
-       (pichat-render--content-text content)
-       '(pichat-content-kind prose pichat-prose t))))
+     (pichat-render--text-fragment
+      (pichat-render--content-text content)
+      '(pichat-content-kind prose pichat-prose t)))
     ('image
      (pichat-render--text-fragment
       (pichat-render--content-text content)

@@ -130,7 +130,8 @@ Native controls on rendered transcript text:
 
 - `RET` / `TAB` or mouse-1 on an activity, tool, skill or history-summary
   header — toggle its disclosure
-- `C-c C-;` — toggle the disclosure at point
+- `C-c C-;` or `C-c ;` — toggle the disclosure at point (use plain `;`
+  after `C-c` in terminals that cannot send `C-;`)
 - `C-c C-z` — cycle the tool at point between header and arguments
 - `C-c C-d` — show full retained tool arguments/output in a details view
 - `w` on a skill header — copy the original full Pi message
@@ -2867,7 +2868,8 @@ Additional chat keys:
   canonical assistant response when point does not identify one
 - `RET`, `TAB`, or mouse-1 on an activity header — expand or collapse that
   source-ordered tool group
-- `C-c C-;` — expand or collapse the activity group header at point
+- `C-c C-;` or `C-c ;` — expand or collapse the activity group header
+  at point (use plain `;` after `C-c` in terminals that cannot send `C-;`)
 - `C-c C-l a` / `C-c C-l A` — next/previous visible activity group header
 - `C-c C-z` — cycle a visible child tool block between header and arguments;
   the selected child view survives parent-group folding

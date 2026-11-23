@@ -189,12 +189,12 @@ STOP-REASON, when non-nil, is attached to the assistant message."
                 (cl-letf (((symbol-function 'pichat-rpc-get-entries)
                            (lambda (&rest _args)
                              (error "group toggle fetched source"))))
-                  (pichat-chat-toggle-activity-at-point)))
+                  (call-interactively (key-binding (kbd "C-c ;")))))
               (should-not (gethash "choice" pichat-chat--tool-blocks))
               (let ((group (car (pichat-test-chat-activity--ordered-blocks))))
                 (should (eq 'collapsed (plist-get group :display-state)))
                 (goto-char (marker-position (plist-get group :start)))
-                (pichat-chat-toggle-activity-at-point))
+                (call-interactively (key-binding (kbd "C-c C-;"))))
               (should (eq 'args
                           (plist-get (gethash "choice"
                                              pichat-chat--tool-blocks)

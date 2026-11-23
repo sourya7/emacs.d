@@ -410,6 +410,7 @@ Markup characters remain visible; this is fontification only."
     (define-key map (kbd "C-c C-b") #'pichat-sessions-switch-files)
     (define-key map (kbd "C-c C-z") #'pichat-chat-toggle-tool-at-point)
     (define-key map (kbd "C-c C-;") #'pichat-chat-toggle-activity-at-point)
+    (define-key map (kbd "C-c ;") #'pichat-chat-toggle-activity-at-point)
     (define-key map (kbd "C-c C-d") #'pichat-chat-show-tool-details)
     (define-key map (kbd "C-c C-g") #'pichat-chat-visit-tool-location)
     (define-key map (kbd "C-c C-w") #'pichat-chat-copy-tool-location)

@@ -28,6 +28,7 @@
                     (pichat-chat-toggle-thinking-display . pichat-transcript-view-toggle-thinking)))
       (define-key map (vector 'remap (car pair)) (cdr pair)))
     (define-key map (kbd "C-c C-;") #'pichat-transcript-view-toggle)
+    (define-key map (kbd "C-c ;") #'pichat-transcript-view-toggle)
     (define-key map (kbd "C-c C-z") #'pichat-transcript-view-toggle-tool)
     (define-key map (kbd "C-c C-d") #'pichat-transcript-view-tool-details)
     map)

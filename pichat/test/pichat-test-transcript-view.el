@@ -376,8 +376,9 @@
         (should-not (string-match-p "Private reasoning" (buffer-string))))
       (goto-char (plist-get (car (hash-table-values
                                  pichat-transcript-view--activity-blocks)) :start))
-      (pichat-transcript-view-toggle)
-      (pichat-transcript-view-toggle)
+      (call-interactively (key-binding (kbd "C-c ;")))
+      (should-not (gethash "tool" pichat-transcript-view--tool-blocks))
+      (call-interactively (key-binding (kbd "C-c C-;")))
       (should (eq (plist-get (gethash "tool" pichat-transcript-view--tool-blocks)
                             :display-state) 'args))
       (should (string-prefix-p "Header\n" (buffer-string)))

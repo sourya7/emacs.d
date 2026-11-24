@@ -1,7 +1,9 @@
 ;;; pichat-test-startup-cache.el --- Startup cache filesystem fixtures -*- lexical-binding: t; -*-
 
 (require 'ert)
+(require 'pichat-test-support)
 (require 'pichat-startup-cache)
+(require 'pichat-tool-runtime)
 
 (defmacro pichat-test-startup-cache--with-fixture (&rest body)
   "Run BODY with real filesystem operations, but no SSH connection."
@@ -72,7 +74,7 @@
           (should-not (equal new old))
           (should (equal (plist-get updated :skill) old-skill))
           (should (equal (pichat-test-startup-cache--bytes new) (unibyte-string 0 255 13 10)))
-          (funcall (plist-get cold :cleanup))
+          (should-not (plist-get cold :cleanup))
           (should (equal (pichat-test-startup-cache--bytes old) "helper bytes\n"))
           (should-not (pichat-test-startup-cache--staging root)))))))
 
@@ -194,6 +196,100 @@
           (should (string-match-p "staging name already exists" (error-message-string failure)))))
       (should (equal (pichat-test-startup-cache--bytes peer-asset) "peer bytes"))
       (should-not uploads))))
+
+(ert-deftest pichat-startup-cache-runtime-stop-retains-helper-and-skill ()
+  (dolist (confirmed '(nil t))
+    (pichat-test-startup-cache--with-fixture
+      (pichat-test-with-unit-session (session process)
+        (setf (pichat-session-transport session) transport)
+        (let* ((pichat-tool-discovery-helper helper)
+               (path (pichat-tool-runtime-prepare session nil skill))
+               (control (pichat-session-rpc-startup-control session))
+               (skill-path (plist-get (plist-get control :helper) :skill)))
+          (setf (plist-get control :process) process)
+          (when confirmed (pichat-process-lifetime-confirm process))
+          (pichat-rpc-stop session)
+          ;; The unit process has no RPC sentinel; explicitly deliver its exit.
+          (process-put process 'pichat-session session)
+          (process-put process 'pichat-process-generation
+                       (pichat-session-process-generation session))
+          (pichat-rpc--process-sentinel process "finished")
+          (should-not (pichat-session-rpc-startup-control session))
+          (should-not (process-get process 'pichat-helper-cleanup))
+          (should (eq confirmed (pichat-process-lifetime-confirmed-p process)))
+          (unless confirmed
+            (should (string-match-p
+                     "actual Pi exit is unverified"
+                     (plist-get (pichat-chat-diagnostics-latest session) :message))))
+          (should (equal "helper bytes\n" (pichat-test-startup-cache--bytes path)))
+          (should (equal "skill bytes\n" (pichat-test-startup-cache--bytes skill-path)))
+          (should-not (pichat-test-startup-cache--staging root)))))))
+
+(ert-deftest pichat-startup-cache-probe-reuses-runtime-path-and-preserves-it-on-failure ()
+  (pichat-test-startup-cache--with-fixture
+    (let* ((pichat-tool-discovery-helper helper)
+           (session (pichat-session-make :transport transport))
+           (path (pichat-tool-runtime-prepare session nil skill))
+           result child)
+      (setq uploads nil operations nil)
+      (unwind-protect
+          (cl-letf (((symbol-function 'pichat-transport-make-process)
+                     (lambda (target _cwd &rest args)
+                       (should (eq target transport))
+                       (should (equal path (cadr (member "--extension" (plist-get args :command)))))
+                       (should-not (member "--skill" (plist-get args :command)))
+                       (setq child (make-process :name "pichat-cache-probe" :noquery t
+                                                 :command '("sh" "-c" "exit 1")
+                                                 :sentinel (plist-get args :sentinel))))))
+            (pichat-tool-discovery-start transport "/fixture/" "pi"
+                                         (lambda (&rest value) (setq result value)) :args nil)
+            (pichat-test-wait-until (lambda () result) 2 "cache probe failure")
+            (should-not (car result))
+            (should (string-match-p "Remote tool probe exit is uncertain" (cadr result)))
+            (should-not uploads)
+            (should (equal (mapcar #'cdr operations) '("probe")))
+            (should (equal "helper bytes\n" (pichat-test-startup-cache--bytes path))))
+        (when (process-live-p child) (delete-process child))
+        (pichat-tool-runtime-dispose session)))))
+
+(ert-deftest pichat-startup-cache-probe-cancellation-suppresses-spawn-and-callback ()
+  (dolist (timing '(queued in-copy))
+    (pichat-test-startup-cache--with-fixture
+      (let ((pichat-tool-discovery-helper helper) cancel copied spawned replied)
+        (setq before-copy (lambda (&rest _)
+                            (setq copied t)
+                            (funcall cancel)))
+        (cl-letf (((symbol-function 'pichat-transport-make-process)
+                   (lambda (&rest _) (setq spawned t) (error "Unexpected probe spawn"))))
+          (unwind-protect
+              (progn
+                (setq cancel (pichat-tool-discovery-start
+                              transport "/fixture/" "pi"
+                              (lambda (&rest _) (setq replied t)) :args nil))
+                (if (eq timing 'queued)
+                    (progn (funcall cancel) (accept-process-output nil 0.1)
+                           (should-not operations))
+                  (pichat-test-wait-until (lambda () copied) 2 "cancellation inside cache copy")
+                  (should-not (pichat-test-startup-cache--staging root))
+                  (should (equal (mapcar #'cdr operations) '("clean" "publish" "probe"))))
+                (should-not spawned)
+                (should-not replied))
+            (when cancel (funcall cancel))))))))
+
+(ert-deftest pichat-startup-cache-runtime-stop-during-acquisition-prevents-spawn ()
+  (pichat-test-startup-cache--with-fixture
+    (pichat-test-with-unit-session (session)
+      (setf (pichat-session-transport session) transport)
+      (let ((pichat-tool-discovery-helper helper) spawned)
+        (setq before-copy (lambda (&rest _) (pichat-rpc-stop session)))
+        (cl-letf (((symbol-function 'pichat-transport-make-process)
+                   (lambda (&rest _) (setq spawned t) (error "Unexpected RPC spawn"))))
+          (should (eq session (pichat-rpc-start session '("pi" "--no-skills"))))
+          (should-not spawned)
+          (should (eq 'stopped (pichat-session-state session)))
+          (should-not (pichat-session-rpc-startup-control session))
+          (should (equal (mapcar #'cdr uploads) (list helper)))
+          (should-not (pichat-test-startup-cache--staging root)))))))
 
 (provide 'pichat-test-startup-cache)
 ;;; pichat-test-startup-cache.el ends here

@@ -1125,11 +1125,12 @@ The bundled `bridge/pichat-tool-control.ts` helper is separate from the optional
 Emacs-defined-tool bridge. PiChat explicitly loads it for probes and runtimes
 with selected extension tools, and for every SSH runtime so actual-Pi identity
 can be captured; no global extension installation is needed. Local startup uses
-its package-relative path. SSH stages a private helper on the target rather
-than passing a host-only path. Forced SSH teardown cannot prove the remote
-child stopped, so runtime cleanup retains that helper and reports uncertain
-shutdown. Successful SSH catalogue probes explicitly request helper-owned
-shutdown rather than relying on stdin EOF through TRAMP. Local and real-SSH
+its package-relative path. SSH uses a verified helper from the target's
+startup asset cache rather than passing a host-only path. Forced SSH teardown
+cannot prove the remote child stopped, so PiChat reports uncertain shutdown
+independently of cache retention. Successful SSH catalogue probes explicitly
+request helper-owned shutdown rather than relying on stdin EOF through TRAMP.
+Local and real-SSH
 discovery/activation are covered by isolated Pi 1.4.0 tests, including activation
 after reloading a saved Pi session.
 
@@ -3187,8 +3188,8 @@ can coexist and later customization changes do not reinterpret settled links.
 
 Remote Pi loads its own settings, credentials, extensions, skills, and session
 store. PiChat does not inject host extension paths into SSH startup; the bundled
-tool-control helper is explicitly copied to private target storage when needed,
-not passed as an inaccessible host path. [Added extensions](#added-extensions)
+tool-control helper is acquired from a private cache on the target.
+[Added extensions](#added-extensions)
 are passed unchanged, as specs for the remote Pi. An explicit SSH target never falls
 back to local Pi. Automatic reconnect, host/guest
 session synchronization, and remote compilation reruns are not provided.
@@ -3197,6 +3198,29 @@ Use `M-x pichat-path-validate-mappings` from a chat to inspect its mappings,
 `M-x pichat-diagnostics-open-settings` for the owning settings file, and
 `M-x pichat-diagnostics-probe-pi` to check executable/version availability
 through the transport, not RPC, authentication, model, or wrapper health.
+
+### SSH startup asset cache
+
+SSH runtimes and extension catalogue probes share the bundled tool-control
+helper under `<runtime-home>/.pichat-assets`. Runtime startup also caches the
+bundled job-authoring skill there unless `--no-skills` or `-ns` suppresses its
+injection. Override the location per target with `:startup-cache-root`, an
+absolute remote-native path (not a TRAMP name) whose parents already exist.
+Local startup is unchanged.
+
+PiChat verifies SHA-256, ownership, permissions and path safety before reuse.
+A warm acquisition does not upload unchanged bytes, but still performs remote
+checks. The target needs a POSIX shell, GNU coreutils and a filesystem that
+supports hard links. Cache directories are private; symlinks, unsafe directory
+ancestors or invalid entries cause acquisition to fail rather than load an
+unverified helper. These checks assume the remote account, root and filesystem
+are trustworthy.
+
+Changed bytes get a new path so existing processes keep their old versions.
+Cached versions persist across stop, cancellation and restart, without automatic
+pruning. PiChat removes only its own publication staging; interruption or
+connection loss can leave private staging behind. Do not delete cache versions
+while any runtime or probe may still use them.
 
 ### SSH discovery and reconfiguration guarantees and limits
 
@@ -3235,9 +3259,10 @@ verified local stopped-runtime behavior is unchanged. This does not extend the
 duplicate-writer policy of other saved-session open/switch entry points.
 A replacement must acquire its own verified identity before a saved source can
 load or an unwritten source can commit.
-Private helpers can remain on the target while shutdown is uncertain; their
-housekeeping is separate from exit confirmation. These actions never delete the
-saved session file.
+Exit confirmation is independent of asset retention: shared cache entries persist
+regardless of the outcome. Legacy runtimes with private startup files may
+retain them until exit is confirmed. These actions never delete the saved
+session file.
 
 Runtime identity, owner scope, chat/draft, run-local model and captured target
 remain stable. An existing saved Pi session is reloaded and verified, retaining

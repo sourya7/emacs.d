@@ -1063,9 +1063,14 @@ CONTINUATION receives the authoritative response data on success."
 Only recovery may pass ALLOW-STOPPED for an already-confirmed stopped runtime."
   (when (pichat-reconfigure--owned-p operation 'stopping)
     (cl-labels ((start ()
-                  (when (pichat-reconfigure--owned-p operation 'stopping)
-                    (pichat-reconfigure--retiring operation nil
-                      (pichat-reconfigure--start-replacement operation)))))
+                  ;; Exit evidence can arrive during a wrapped TRAMP sentinel.
+                  ;; Recheck ownership outside its connection-scoped teardown.
+                  (pichat-transport-run-when-idle
+                   (plist-get operation :transport)
+                   (lambda ()
+                     (when (pichat-reconfigure--owned-p operation 'stopping)
+                       (pichat-reconfigure--retiring operation nil
+                         (pichat-reconfigure--start-replacement operation)))))))
       (if (or (pichat-session-alive-p (plist-get operation :session))
               (and allow-stopped (plist-get operation :shutdown-ready)))
           (pichat-reconfigure--retiring operation nil

@@ -440,6 +440,10 @@ A local startup failure retains a diagnostic."
   (when (and (pichat-session-process session)
              (process-live-p (pichat-session-process session)))
     (user-error "Cannot start another Pi process in a live runtime"))
+  ;; Startup is synchronous; callers such as Jobs and restart defer rather
+  ;; than waiting inside another acquisition on the same SSH connection.
+  (when (pichat-transport-busy-p (pichat-session-transport session))
+    (user-error "SSH connection is busy; defer Pi startup"))
   (when (pichat-session-rpc-startup-control session)
     (pichat-tool-runtime-dispose session))
   (pichat-rpc--retire-process-state session)
@@ -447,6 +451,7 @@ A local startup failure retains a diagnostic."
          (program (car argv))
          (args (cdr argv))
          (transport (pichat-session-transport session))
+         (startup-operation (pichat-session-restart-operation session))
          (skill (when (and (or validated-command
                               (not pichat-rpc-command)
                               (eq (pichat-transport-kind transport) 'ssh))
@@ -491,10 +496,18 @@ A local startup failure retains a diagnostic."
             (let ((path (if skill
                             (pichat-tool-runtime-prepare session (plist-get tool-selection :extensions) skill)
                           (pichat-tool-runtime-prepare session (plist-get tool-selection :extensions)))))
+              ;; Stop or restart cancellation can run while TRAMP acquires
+              ;; the assets.  A retired attempt must not spawn a writer.
+              (when (and acquiring
+                         (or (pichat-session-stop-requested-p session)
+                             (not (eq startup-operation
+                                      (pichat-session-restart-operation session)))))
+                (pichat-tool-runtime-dispose session)
+                (cl-return-from pichat-rpc-start session))
               (when skill
                 (setq skill (plist-get (plist-get (pichat-session-rpc-startup-control session) :helper) :skill))
                 (unless (and (stringp skill) (not (string-empty-p skill)))
-                  (error "Startup staging did not supply a job-authoring skill path")))
+                  (error "Startup asset acquisition did not supply a job-authoring skill path")))
               (setq argv (append argv (list "--extension" path))
                     args (cdr argv))
               (setf (pichat-session-rpc-command session) argv)))

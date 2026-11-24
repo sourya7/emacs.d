@@ -14,9 +14,9 @@
 (require 'pichat-process-lifetime)
 
 (defun pichat-tool-runtime-prepare (session names &optional skill-file)
-  "Stage the helper for SESSION and capture exact selected NAMES.
-Optional SKILL-FILE shares its owned storage, cleanup and uncertain-exit policy.
-Return the helper path.  Only actual startup stages resources, not preflight."
+  "Acquire the helper for SESSION and capture exact selected NAMES.
+Acquire optional SKILL-FILE with it.  On SSH both paths are shared cache
+entries.  Return the helper path; preflight does not acquire assets."
   (let ((helper (if skill-file
                     (pichat-tool-discovery-prepare-helper (pichat-session-transport session) skill-file)
                   (pichat-tool-discovery-prepare-helper (pichat-session-transport session)))))
@@ -31,26 +31,29 @@ Return the helper path.  Only actual startup stages resources, not preflight."
     (setf (pichat-session-rpc-startup-control session) nil)
     (when-let* ((timer (plist-get control :timer))) (cancel-timer timer))
     (dolist (id (plist-get control :requests)) (pichat-rpc-cancel-request session id))
-    (let ((process (plist-get control :process)))
-      (if (and process
-               (eq 'ssh (pichat-transport-kind (pichat-session-transport session)))
-               (not (pichat-process-lifetime-confirmed-p process)))
-          (progn
-            (process-put process 'pichat-helper-cleanup
-                         (plist-get (plist-get control :helper) :cleanup))
-            ;; An active restart observer, not the local sentinel, decides
-            ;; whether this is uncertain.  Avoid a spurious failure record
-            ;; while its ordinary shutdown confirmation is still pending.
-            (unless (eq (plist-get (pichat-session-restart-operation session) :phase)
-                        'stopping)
-              (pichat-chat-diagnostics-record
-               session :origin 'tool-control
-               :message "Remote shutdown is uncertain; private startup resources retained on target")))
-        (condition-case err
-            (funcall (plist-get (plist-get control :helper) :cleanup))
+    (let* ((process (plist-get control :process))
+           (cleanup (plist-get (plist-get control :helper) :cleanup)))
+      (cond
+       ((and process
+             (eq 'ssh (pichat-transport-kind (pichat-session-transport session)))
+             (not (pichat-process-lifetime-confirmed-p process)))
+        ;; A runtime from before the cache was introduced may still own
+        ;; private startup files.  Cached assets never have a cleanup.
+        (when cleanup (process-put process 'pichat-helper-cleanup cleanup))
+        ;; The active restart observer, not the local sentinel, decides
+        ;; whether shutdown is uncertain while confirmation is pending.
+        (unless (eq (plist-get (pichat-session-restart-operation session) :phase)
+                    'stopping)
+          (pichat-chat-diagnostics-record
+           session :origin 'tool-control
+           :message (if cleanup
+                        "Remote shutdown is uncertain; private startup files retained on target"
+                      "Remote shutdown is uncertain; actual Pi exit is unverified"))))
+       (cleanup
+        (condition-case err (funcall cleanup)
           (error (pichat-chat-diagnostics-record
                   session :origin 'tool-control
-                  :message "Tool-control helper cleanup failed" :condition err)))))))
+                  :message "Private tool-control startup file cleanup failed" :condition err))))))))
 
 (defun pichat-tool-runtime--extension-failure (session)
   "Return Pi's stderr line refusing SESSION's added extensions, or nil.

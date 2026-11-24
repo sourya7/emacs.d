@@ -188,8 +188,8 @@ esac")
 
 (defun pichat-startup-cache-acquire (transport helper &optional skill)
   "Return verified native :path and optional :skill for SSH TRANSPORT.
-HELPER and SKILL are local asset files.  The returned :cleanup is a no-op:
-only this acquisition's private staging gets removed, before returning.
+HELPER and SKILL are local asset files.  No cleanup is transferred to
+consumers: only this acquisition's private staging is removed, before returning.
 TRANSPORT must be idle.  Fail closed on unsupported or unsafe storage."
   (let ((connection (pichat-transport--connection transport)))
     (unless connection (error "Startup cache requires a captured SSH transport"))
@@ -207,8 +207,7 @@ TRANSPORT must be idle.  Fail closed on unsupported or unsafe storage."
                          transport root "v1-helper" helper "pichat-tool-control.ts")
                   :skill (when skill
                            (pichat-startup-cache--asset
-                            transport root "v1-skill" skill "pichat-jobs/SKILL.md"))
-                  :cleanup #'ignore))
+                            transport root "v1-skill" skill "pichat-jobs/SKILL.md"))))
         (error (error "Startup assets for %s: %s"
                       (pichat-transport-description transport)
                       (error-message-string err)))))))

@@ -12,6 +12,7 @@
 (require 'pichat-rpc)
 (require 'pichat-pi-environment)
 (require 'pichat-transport)
+(require 'pichat-startup-cache)
 (require 'pichat-bridge-transport)
 
 (defcustom pichat-tool-discovery-timeout 25
@@ -27,34 +28,12 @@
 (defconst pichat-tool-discovery--limit (* 1024 1024))
 
 (defun pichat-tool-discovery-prepare-helper (transport &optional skill-file)
-  "Return helper paths and owned cleanup for TRANSPORT.
-Optional SKILL-FILE shares the helper's private SSH storage and lifetime.
-The caller must clean up only after Pi has stopped using these resources."
+  "Return helper and optional SKILL-FILE paths for TRANSPORT.
+SSH requires an idle captured connection and returns verified shared assets,
+not resources owned by the probe or runtime."
   (if (eq (pichat-transport-kind transport) 'local)
-      (list :path pichat-tool-discovery-helper :skill skill-file :cleanup #'ignore)
-    (let* ((prefix (pichat-transport-runtime-file-name
-                    transport "/tmp/pichat-tool-control-"))
-           (directory (make-temp-file prefix t))
-           (file (expand-file-name "pichat-tool-control.ts" directory)))
-      (condition-case err
-          (progn
-            (set-file-modes directory #o700)
-            ;; Elpaca builds may symlink these assets.  Resolve locally so
-            ;; TRAMP copies their contents, not a host-only symlink target.
-            (copy-file (file-truename pichat-tool-discovery-helper) file)
-            (set-file-modes file #o600)
-            (let ((skill (when skill-file
-                           (expand-file-name "pichat-jobs/SKILL.md" directory))))
-              (when skill
-                (make-directory (file-name-directory skill))
-                (set-file-modes (file-name-directory skill) #o700)
-                (copy-file (file-truename skill-file) skill)
-                (set-file-modes skill #o600))
-              (list :path (file-local-name file)
-                    :skill (and skill (file-local-name skill))
-                    :cleanup (lambda () (delete-directory directory t)))))
-        ((error quit) (ignore-errors (delete-directory directory t))
-                      (signal (car err) (cdr err)))))))
+      (list :path pichat-tool-discovery-helper :skill skill-file)
+    (pichat-startup-cache-acquire transport pichat-tool-discovery-helper skill-file)))
 
 (defun pichat-tool-discovery--args (transport model)
   "Capture ordinary resource/model arguments for TRANSPORT and MODEL.
@@ -215,7 +194,7 @@ teardown.  Forced SSH teardown reports uncertain remote cleanup."
         (request-id (format "pichat-%s" (gensym)))
         (remainder "") (early-output "") early-error
         (bytes 0) (stderr-bytes 0) (stderr-chunks nil)
-        process stderr-process stderr-buffer timer shutdown-timer startup-timer helper
+        process stderr-process stderr-buffer timer shutdown-timer startup-timer helper cancel-start
         phase done closing result-tools result-commands result-error
         payload-received prompt-handled)
     (cl-labels
@@ -224,13 +203,14 @@ teardown.  Forced SSH teardown reports uncertain remote cleanup."
          (dispose ()
            (unless done
              (setq done t)
+             (when cancel-start (funcall cancel-start))
              (when timer (cancel-timer timer))
              (when shutdown-timer (cancel-timer shutdown-timer))
              (when startup-timer (cancel-timer startup-timer))
              (pichat-transport-run-when-idle transport #'dispose-now)))
          (dispose-now ()
-           (let ((retain-helper
-                  (and helper process (eq (pichat-transport-kind transport) 'ssh)
+           (let ((uncertain-exit
+                  (and process (eq (pichat-transport-kind transport) 'ssh)
                        (not (and (eq (process-status process) 'exit)
                                  (zerop (process-exit-status process)))))))
              (when (and process (process-live-p process)) (delete-process process))
@@ -247,14 +227,9 @@ teardown.  Forced SSH teardown reports uncertain remote cleanup."
                (when-let* ((stderr (get-buffer-process stderr-buffer)))
                  (when (process-live-p stderr) (delete-process stderr)))
                (kill-buffer stderr-buffer))
-             (cond
-              (retain-helper
+             (when uncertain-exit
                (setq result-error
-                     (concat "Remote tool probe exit is uncertain; private helper retained. "
-                             result-error)))
-              (helper
-               (condition-case err (funcall (plist-get helper :cleanup))
-                 (error (setq result-error (format "Helper cleanup failed: %s" (error-message-string err)))))))
+                     (concat "Remote tool probe exit is uncertain. " result-error)))
              (when result-error
                (setq result-tools nil result-commands nil
                      result-error (truncate-string-to-width result-error 600 nil nil "…")))
@@ -390,11 +365,18 @@ teardown.  Forced SSH teardown reports uncertain remote cleanup."
                          (let ((line (string-remove-suffix "\r" (substring remainder 0 end))))
                            (setq remainder (substring remainder (1+ end)))
                            (record (json-parse-string line :array-type 'array))))))
-                 (error (finish nil (error-message-string err))))))))
-      (condition-case err
-          (let ((process-environment (copy-sequence environment)))
-            (pichat-tool-discovery--validate-args args)
-            (setq helper (pichat-tool-discovery-prepare-helper transport))
+                 (error (finish nil (error-message-string err)))))))
+         (start ()
+           (setq cancel-start nil)
+           (unless done
+             (condition-case err
+                 (let ((process-environment (copy-sequence environment)))
+                   (pichat-tool-discovery--validate-args args)
+                   (setq helper (pichat-tool-discovery-prepare-helper transport))
+                   ;; Cancellation can reenter while TRAMP checks or copies.
+                   (unless done (spawn)))
+               ((error quit) (finish nil (error-message-string err))))))
+         (spawn ()
             ;; TRAMP's make-process handler accepts a buffer for :stderr,
             ;; unlike local make-process which also accepts a pipe process.
             (if (eq (pichat-transport-kind transport) 'ssh)
@@ -419,6 +401,8 @@ teardown.  Forced SSH teardown reports uncertain remote cleanup."
                                                (or result-error "Pi tool probe exited unsuccessfully")))
                                        (dispose))
                                    (finish nil "Pi tool probe exited before discovery completed"))))))
+            (unless done (begin-probe)))
+         (begin-probe ()
             (when stderr-buffer
               (setq stderr-process (get-buffer-process stderr-buffer))
               (when stderr-process
@@ -446,8 +430,10 @@ teardown.  Forced SSH teardown reports uncertain remote cleanup."
                                                 (condition-case err
                                                     (send '(:id "state" :type "get_state"))
                                                   (error (finish nil (error-message-string err))))))))
-                (send '(:id "state" :type "get_state")))))
-        ((error quit) (finish nil (error-message-string err))))
+                (send '(:id "state" :type "get_state"))))))
+      (if (eq (pichat-transport-kind transport) 'ssh)
+          (setq cancel-start (pichat-transport-defer transport #'start))
+        (start))
       (lambda () (setq callback nil) (finish nil "Cancelled")))))
 
 (cl-defstruct (pichat-tool-discovery-draft

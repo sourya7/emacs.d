@@ -51,6 +51,34 @@
          (should (string-match-p "Final persisted answer" (buffer-string)))
          (should-not pichat-chat--restart-staging))))))
 
+(ert-deftest pichat-reconfigure-ssh-defers-replacement-and-rechecks-ownership ()
+  (dolist (cancel '(nil t))
+    (pichat-test-ssh-restart--run
+     (lambda (fixture)
+       (let* ((session (plist-get fixture :session))
+              (transport (pichat-session-transport session))
+              (connection (pichat-transport--connection transport))
+              (defer (symbol-function 'pichat-transport-defer))
+              queued)
+         (pichat-test-ssh-restart--begin fixture)
+         (pichat-test-ssh-restart--watch fixture 0 'ready)
+         (let ((pichat-transport--active-connections (list connection)))
+           (cl-letf (((symbol-function 'pichat-transport-defer)
+                      (lambda (target fn)
+                        (when (eq target transport) (setq queued t))
+                        (funcall defer target fn))))
+             (pichat-test-ssh-restart--watch fixture 0 'done t)
+             (pichat-test-wait-until (lambda () queued) 2 "deferred replacement")
+             (should-not (plist-get fixture :starts))
+             (when cancel
+               (pichat-reconfigure-cancel-operation session "Cancelled while waiting for SSH"))))
+         (if cancel
+             (progn (accept-process-output nil 0.15)
+                    (should-not (plist-get fixture :starts)))
+           (pichat-test-wait-until (lambda () (plist-get fixture :results)) 2 "replacement after teardown")
+           (should (equal '((t nil)) (plist-get fixture :results)))
+           (should (= 1 (length (plist-get fixture :starts))))))))))
+
 (ert-deftest pichat-reconfigure-ssh-preflight-failure-does-not-stop-or-stage ()
   (dolist (failure '(missing-identity setup probe ephemeral busy pending missing-file))
     (pichat-test-ssh-restart--run
@@ -303,14 +331,13 @@
 (ert-deftest pichat-reconfigure-ssh-startup-helper-failure-retains-unknown-writer ()
   (pichat-test-ssh-restart--run
    (lambda (fixture)
-     (let ((session (plist-get fixture :session)) cleaned)
+     (let ((session (plist-get fixture :session)))
        (plist-put fixture :unknown-replacement t)
        (cl-letf (((symbol-function 'pichat-tool-runtime-prepare)
                   (lambda (_session _names &optional skill-file)
                     (setf (pichat-session-rpc-startup-control session)
                           (list :process nil :helper
-                                (list :skill (and skill-file "/fixture/pichat-jobs/SKILL.md")
-                                      :cleanup (lambda () (setq cleaned t)))))
+                                (list :skill (and skill-file "/fixture/pichat-jobs/SKILL.md"))))
                     "/fixture-helper.ts"))
                  ((symbol-function 'pichat-tool-runtime-begin)
                   (lambda (&rest _) (error "Identity helper failed before readiness"))))
@@ -324,10 +351,8 @@
          (should-not (pichat-session-process session))
          (should (memq replacement (plist-get failed :shutdown-obligations)))
          (should-not (pichat-process-lifetime-supported-p replacement))
-         (should (process-get replacement 'pichat-helper-cleanup))
-         (should-not cleaned)
+         (should-not (process-get replacement 'pichat-helper-cleanup))
          (pichat-test-ssh-restart--recover fixture 'restore)
-         (should-not cleaned)
          (should (= 1 (length (plist-get fixture :starts))))
          (should-not (car (cadr (plist-get fixture :results)))))))))
 

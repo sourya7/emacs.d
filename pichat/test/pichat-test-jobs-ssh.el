@@ -202,7 +202,7 @@
                           (when (buffer-live-p buffer) (kill-buffer buffer)))))
                     (pichat-job-executor-contexts executor))))))))
 
-(ert-deftest pichat-integration-job-ssh-authoring-skill-is-staged-only-at-launch ()
+(ert-deftest pichat-integration-job-ssh-authoring-skill-is-acquired-only-at-launch ()
   (pichat-test-real-ssh--run
    (lambda (fixture)
      (pichat-test-real-ssh--stop-starter fixture)
@@ -232,11 +232,11 @@
                (should-not (file-remote-p skill))
                (pichat-test-wait-until
                 (lambda () (equal (plist-get (pichat-job-record store 'runs id) :state) "finished"))
-                25 "SSH job using staged skill")
+                25 "SSH job using cached skill")
                (should (equal (plist-get (pichat-job-record store 'runs id) :result) "completed"))
                (should-not (pichat-test-real-ssh--alive-p fixture (pichat-session-process session)))
-               (should-not (file-exists-p
-                            (pichat-transport-runtime-file-name (pichat-session-transport session) skill)))
+               (should (file-exists-p
+                        (pichat-transport-runtime-file-name (pichat-session-transport session) skill)))
                (should (equal command (plist-get (plist-get (plist-get (pichat-job-record store 'runs id) :spec)
                                                                              :configuration) :command)))
                (pichat-test-assert-provider-script-consumed (plist-get fixture :status)))

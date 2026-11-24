@@ -38,8 +38,9 @@ Unsupported hosts report nil; malformed claimed identities are errors."
   (process-put process 'pichat-exit-confirmed t))
 
 (defun pichat-process-lifetime-cleanup (process)
-  "Clean PROCESS's retained private helper only after validated exit.
-Call outside the shutdown barrier: TRAMP file housekeeping can reconnect."
+  "Clean any legacy private startup files for PROCESS after validated exit.
+Shared cache entries have no cleanup.  Call outside the shutdown barrier:
+TRAMP file housekeeping can reconnect."
   (when-let* (((pichat-process-lifetime-confirmed-p process))
               (cleanup (process-get process 'pichat-helper-cleanup)))
     (process-put process 'pichat-helper-cleanup nil)

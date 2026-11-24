@@ -42,7 +42,7 @@ use the production observer, its parser, or its confirmed-exit property."
                  (plist-get identity :start)))))))
 
 (defun pichat-test-real-ssh--await-exit-and-cleanup (fixture process)
-  "Confirm exact PROCESS absence before cleaning up its private helper."
+  "Confirm exact PROCESS absence before fixture or legacy helper cleanup."
   (pichat-test-wait-until
    (lambda () (not (pichat-test-real-ssh--alive-p fixture process)))
    15 (format "fixture Pi exit before cleanup: %s" (plist-get fixture :project)))

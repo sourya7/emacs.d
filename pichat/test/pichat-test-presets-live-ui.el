@@ -12,6 +12,9 @@
 (require 'pichat-test-support)
 (require 'pichat)
 
+;; Fixture bindings unwind before the runner's `kill-emacs'.
+(setq transient-save-history nil)
+
 (defvar pichat-test-presets-live--answers nil
   "Queue of (PROMPT-REGEXP . INPUT) answered as minibuffers open.")
 

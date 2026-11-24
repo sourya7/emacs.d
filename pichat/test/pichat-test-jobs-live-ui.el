@@ -10,6 +10,9 @@
 (require 'pichat-jobs)
 (require 'pichat-job-definition-ui)
 
+;; Fixture bindings unwind before the runner's `kill-emacs'.
+(setq transient-save-history nil)
+
 (ert-deftest pichat-integration-jobs-live-ui-date-picker ()
   (should-not noninteractive)
   (let* ((process-environment (cons "TZ=UTC" process-environment))

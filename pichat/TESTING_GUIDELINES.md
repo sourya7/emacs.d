@@ -139,7 +139,9 @@ settings, credentials, extensions, or sessions.
 For live UI acceptance, use a **separate non-batch Emacs**, never `emacsclient`
 against an instance containing your conversations. This example runs in a
 terminal; use `script` to provide a private pseudo-terminal when needed.
-Choose a private scratch directory for the history and logs:
+All live UI suites disable Transient's exit-time history saving. Set a private
+`user-emacs-directory` before loading any suite so Transient also avoids reading
+normal user history. This example uses that directory for the result log too:
 
 ```sh
 private=$(mktemp -d)
@@ -147,8 +149,9 @@ PICHAT_TEST_SSH_DIRECTORY=/ssh:test-host:/tmp/ \
 PICHAT_TEST_SSH_PI=/path/on/target/to/pi \
 PICHAT_UI_PRIVATE="$private/" \
   timeout -s USR2 -k 10s 240s emacs -Q -nw \
-  -L pichat -L pichat/test -l pichat-test-ssh-reconfigure-ui \
+  -L pichat -L pichat/test \
   --eval '(setq user-emacs-directory (getenv "PICHAT_UI_PRIVATE") use-dialog-box nil)' \
+  -l pichat-test-ssh-reconfigure-ui \
   --eval '(let ((stats (ert-run-tests-batch "^pichat-integration-ssh-reconfigure-live-ui$")))
     (with-temp-file (expand-file-name "result.log" user-emacs-directory)
       (insert (with-current-buffer "*Messages*" (buffer-string))))
@@ -200,13 +203,16 @@ real transport/procfs behavior, not separate-host or network-failure behavior.
 Run the separate graphical manual-flow smoke (never against your live Emacs):
 
 ```sh
-emacs -Q -L pichat -L pichat/test \
+private=$(mktemp -d)
+PICHAT_UI_PRIVATE="$private/" \
+  emacs -Q -L pichat -L pichat/test \
+  --eval '(setq user-emacs-directory (getenv "PICHAT_UI_PRIVATE") use-dialog-box nil)' \
   -l pichat-test-jobs-live-ui \
-  --eval '(setq use-dialog-box nil)' \
   --eval '(let ((stats (ert-run-tests-batch "^pichat-integration-jobs-live-ui-")))
     (with-temp-file "/tmp/pichat-jobs-live-result.log"
       (insert (with-current-buffer "*Messages*" (buffer-string))))
     (kill-emacs (if (> (ert-stats-completed-unexpected stats) 0) 1 0)))'
+rm -rf "$private"
 ```
 
 On a Wayland setup where graphical startup is unavailable from the test process,

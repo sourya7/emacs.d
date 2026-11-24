@@ -3,6 +3,9 @@
 ;; Load only in a private non-batch Emacs; not part of the ordinary runner.
 (require 'pichat-test-support)
 
+;; Fixture bindings unwind before the runner's `kill-emacs'.
+(setq transient-save-history nil)
+
 (ert-deftest pichat-integration-queue-live-ui-hold-recall-and-native-queue ()
   (should-not noninteractive)
   (should (frame-live-p (selected-frame)))

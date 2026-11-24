@@ -3,6 +3,9 @@
 (require 'pichat-test-real-ssh-support)
 (require 'pichat-jobs)
 
+;; Fixture bindings unwind before the runner's `kill-emacs'.
+(setq transient-save-history nil)
+
 (defun pichat-test-ssh-ui--wait-for-tools (description)
   (pichat-test-wait-until
    (lambda ()

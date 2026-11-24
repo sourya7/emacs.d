@@ -205,6 +205,9 @@
 (ert-deftest pichat-integration-job-ssh-authoring-skill-is-acquired-only-at-launch ()
   (pichat-test-real-ssh--run
    (lambda (fixture)
+     ;; The starter uses --no-skills: it must not acquire the bundled skill.
+     (should-not (file-exists-p (expand-file-name ".pichat-assets/v1-skill"
+                                                  (plist-get fixture :root))))
      (pichat-test-real-ssh--stop-starter fixture)
      (pichat-test-real-ssh--write-script
       fixture '(:turns [(:text "SSH_SKILL_RESULT" :expectContextIncludes ["<name>pichat-jobs</name>"])]))

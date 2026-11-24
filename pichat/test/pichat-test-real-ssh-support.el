@@ -85,10 +85,11 @@ use the production observer, its parser, or its confirmed-exit property."
      (format "SSH restart/recovery; runtime=%s" (pichat-session-runtime-id session)))
     result))
 
-(defun pichat-test-real-ssh--run (scenario)
+(defun pichat-test-real-ssh--run (scenario &optional skills)
   "Run SCENARIO against isolated real SSH and Pi, recording every RPC spawn.
 SCENARIO receives a fixture plist.  Instrumentation delegates actual process
-creation unchanged and checks old actual-Pi lifetimes before each replacement."
+creation unchanged and checks old actual-Pi lifetimes before each replacement.
+When SKILLS is non-nil, allow skill discovery with an empty Pi home."
   (let ((base (getenv "PICHAT_TEST_SSH_DIRECTORY")))
     (unless (and (stringp base) (file-remote-p base))
       (ert-fail "PICHAT_TEST_SSH_DIRECTORY must be a writable TRAMP directory"))
@@ -107,7 +108,7 @@ creation unchanged and checks old actual-Pi lifetimes before each replacement."
              (pichat-default-model nil)
              (pichat-rpc-command nil)
              (pichat-pi-extra-args nil)
-             (pichat-pi-extra-env nil)
+             (pichat-pi-extra-env (when skills `(("HOME" . ,runtime-root))))
              (pichat-pi-default-args '("--mode" "rpc"))
              (pichat-chat-render-markdown nil)
              (pichat-chat-stop-session-on-kill nil)
@@ -119,7 +120,8 @@ creation unchanged and checks old actual-Pi lifetimes before each replacement."
                           :path-mappings ((,root . ,runtime-root))
                           :pi-args
                           ("--offline" "--no-approve" "--no-context-files"
-                           "--no-skills" "--no-prompt-templates" "--no-themes"
+                           ,@(unless skills '("--no-skills"))
+                           "--no-prompt-templates" "--no-themes"
                            "--no-extensions"
                            "-e" ,(expand-file-name "fake-provider.ts" runtime-root)
                            "-e" ,(expand-file-name "tool-control-extension.ts" runtime-root)))))

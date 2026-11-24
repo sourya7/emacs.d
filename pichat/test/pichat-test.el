@@ -33,6 +33,7 @@
 (require 'pichat-test-transient-layout)
 (require 'pichat-test-transient-width)
 (require 'pichat-test-tool-discovery)
+(require 'pichat-test-startup-cache)
 (require 'pichat-test-extension-tools)
 (require 'pichat-test-chat-core)
 (require 'pichat-test-chat-controls)

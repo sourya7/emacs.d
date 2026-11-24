@@ -10,6 +10,61 @@
 (require 'pichat-artifact-runner)
 (require 'pichat-job-executor)
 (require 'pichat-archive)
+(require 'pichat-startup-cache)
+
+(ert-deftest pichat-ssh-boundary-cache-cancel-and-independent-progress ()
+  (let* ((target (pichat-test-ssh-boundary--target))
+         (connection (pichat-transport--connection target))
+         (peer (pichat-transport--create :kind 'ssh :tramp-prefix "/ssh:peer.invalid:"))
+         calls deliveries cancel)
+    (cl-letf (((symbol-function 'pichat-startup-cache--root) (lambda (_) "/cache"))
+              ((symbol-function 'pichat-startup-cache--asset)
+               (lambda (transport &rest _) (push transport calls) "/cached")))
+      (unwind-protect
+          (progn
+            (let ((pichat-transport--active-connections (list connection)))
+              (setq cancel
+                    (pichat-startup-cache-acquire-when-idle
+                     target "/helper" nil (lambda () t)
+                     (lambda (&rest args) (push args deliveries))))
+              (pichat-startup-cache-acquire-when-idle
+               peer "/helper" nil (lambda () t)
+               (lambda (&rest args) (push args deliveries)))
+              (pichat-test-wait-until (lambda () deliveries) 1 "peer cache acquisition")
+              (should (equal calls (list peer)))
+              (should-error (pichat-startup-cache-acquire target "/helper"))
+              (funcall cancel))
+            (accept-process-output nil 0.09)
+            (should (equal calls (list peer)))
+            (should (= 1 (length deliveries))))
+        (when cancel (funcall cancel))))))
+
+(ert-deftest pichat-ssh-boundary-cache-rechecks-ownership-after-reentrant-io ()
+  (let ((target (pichat-test-ssh-boundary--target))
+        (owned t) outer-delivered queued-delivered cancel)
+    (cl-letf (((symbol-function 'pichat-startup-cache--root) (lambda (_) "/cache"))
+              ((symbol-function 'pichat-startup-cache--asset)
+               (lambda (transport _root _kind source _name)
+                 (should (pichat-transport-busy-p transport))
+                 (when (equal source "/first")
+                   (setq owned nil)
+                   (pichat-startup-cache-acquire-when-idle
+                    transport "/next" nil (lambda () t)
+                    (lambda (assets err)
+                      (should-not err)
+                      (setq queued-delivered assets)))
+                   (accept-process-output nil 0.07)
+                   (should-not queued-delivered))
+                 "/cached")))
+      (unwind-protect
+          (progn
+            (setq cancel
+                  (pichat-startup-cache-acquire-when-idle
+                   target "/first" nil (lambda () owned)
+                   (lambda (&rest _) (setq outer-delivered t))))
+            (pichat-test-wait-until (lambda () queued-delivered) 1 "same-connection cache handoff")
+            (should-not outer-delivered))
+        (when cancel (funcall cancel))))))
 
 (ert-deftest pichat-ssh-boundary-archive-reset-keeps-busy-endpoint-owned ()
   "Reset retires remote endpoints on their own connection, not the UI target."

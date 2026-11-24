@@ -20,7 +20,8 @@
   "Configured PiChat runtime targets.
 Each entry has the form (ID :kind KIND ...).  KIND is `local' or `ssh'.  SSH
 targets accept :tramp-prefix, :pi-executable, :pi-args, :remote-path,
-:runtime-home, and :path-mappings.  Path mappings are (EMACS-PREFIX . RUNTIME-PREFIX)."
+:runtime-home, :startup-cache-root (a remote-native path), and :path-mappings.
+Path mappings are (EMACS-PREFIX . RUNTIME-PREFIX)."
   :type '(repeat (cons (symbol :tag "Target ID") (plist :tag "Properties")))
   :group 'pichat)
 
@@ -34,7 +35,7 @@ The longest matching normalized project prefix wins."
 (cl-defstruct (pichat-transport
                (:constructor pichat-transport--create))
   id kind label tramp-prefix pi-executable pi-args remote-path
-  runtime-home-value mappings)
+  runtime-home-value startup-cache-root mappings)
 
 (cl-defstruct (pichat-path-context
                (:constructor pichat-path-context--create))
@@ -108,6 +109,12 @@ The longest matching normalized project prefix wins."
        (copy-sequence args))
      :remote-path (copy-tree (plist-get properties :remote-path))
      :runtime-home-value (plist-get properties :runtime-home)
+     :startup-cache-root
+     (let ((root (plist-get properties :startup-cache-root)))
+       (when root
+         (unless (and (eq kind 'ssh) (stringp root))
+           (user-error "Target %s has an invalid :startup-cache-root" id))
+         (copy-sequence root)))
      :mappings (pichat-transport--copy-mappings
                 (plist-get properties :path-mappings)))))
 

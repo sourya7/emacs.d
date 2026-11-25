@@ -45,6 +45,25 @@
                                   (plist-get msg :content) "\n")))))
 
 (when pichat-test-include-integration
+  (ert-deftest pichat-integration-mcp-runtime-derives-route-without-declaring-indirect-tools ()
+    (pichat-test-with-presets
+      (pichat-make-preset 'indirect :tools '("read") :mcp '(("probe" . "deferred")))
+      (pichat-test-with-integration-session
+          (session :preset 'indirect :no-session t
+                   :extensions '("builtin:mcp" "builtin:codemode" "builtin:tool-search")
+                   :before-start (pichat-test-mcp-rpc--config agent-dir :json-false)
+                   :script '(:turns
+                             [(:expectDeclaredTools ["read" "codemode"]
+                               :toolCall
+                               (:name "codemode" :arguments
+                                (:code "const names = ALL_TOOLS.map(x => x.name).filter(n => n.startsWith('mcp__')); if (names.join(',') !== 'mcp__probe__deferred') throw Error(names.join(',')); text((await tools.mcp__probe__deferred({})).content[0].text);")))
+                              (:expectDeclaredTools ["read" "codemode"] :text "done")]))
+        (pcase-let ((`(,result) (pichat-test-mcp-rpc--run session status-file)))
+          (should (string-match-p (regexp-quote "CALLED deferred") result)))
+        (should-not (plist-get (pichat-session-tool-selection session) :extensions))
+        (should (member "read,mcp__probe__deferred,codemode" (pichat-session-rpc-command session)))
+        (should-not (member "--no-mcp" (pichat-session-rpc-command session))))))
+
   (ert-deftest pichat-integration-mcp-rpc-codemode-exact-allowlist ()
     (pichat-test-with-integration-session
         (session :no-session t

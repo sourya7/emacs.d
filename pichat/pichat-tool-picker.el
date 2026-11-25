@@ -943,7 +943,8 @@ Emacs-defined tools remain explicit per-group or per-tool choices."
          (snapshot (pichat-tool-selection-resolve (plist-get state :preset) selection)))
     (when (plist-get snapshot :mcp)
       (unless (plist-get state :loaded) (user-error "MCP discovery has not succeeded for this target"))
-      (pichat-tool-selection-check-catalogue snapshot (plist-get state :servers)))
+      (pichat-tool-selection-mcp-access snapshot (plist-get state :servers)
+                                        (pichat-tool-picker--extension-tools)))
     ;; Future tools are applied as the exact tools discovered now.
     (when (or (plist-get snapshot :extensions) (plist-get snapshot :all)
               (plist-get snapshot :unexpanded))

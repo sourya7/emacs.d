@@ -447,7 +447,9 @@ A local startup failure retains a diagnostic."
   (when (pichat-session-rpc-startup-control session)
     (pichat-tool-runtime-dispose session))
   (pichat-rpc--retire-process-state session)
-  (let* ((argv (or validated-command (pichat-rpc-build-command session)))
+  (require 'pichat-mcp-launch)
+  (let* ((argv (or validated-command
+                   (pichat-mcp-launch-command session (pichat-rpc-build-command session))))
          (program (car argv))
          (args (cdr argv))
          (transport (pichat-session-transport session))
@@ -461,6 +463,7 @@ A local startup failure retains a diagnostic."
                            (or (pichat-session-tool-selection session)
                                (when (pichat-session-preset-spec session)
                                  (pichat-tool-selection-resolve (pichat-session-preset-spec session))))))
+         (tool-names (pichat-mcp-launch-startup-extensions tool-selection argv))
          (extensions (if extensions-p startup-extensions
                        (pichat-rpc-session-extensions session)))
          (runtime-cwd (or (pichat-session-runtime-cwd session)
@@ -489,13 +492,12 @@ A local startup failure retains a diagnostic."
               (message "PiChat: %s" note)))
           ;; Added extensions also use the startup barrier: it holds input
           ;; until Pi's stderr shows they loaded (see `pichat-tool-runtime').
-          (when (or (plist-get tool-selection :extensions)
-                    extensions
+          (when (or tool-names extensions
                     (eq (pichat-transport-kind transport) 'ssh))
             (require 'pichat-tool-runtime)
             (let ((path (if skill
-                            (pichat-tool-runtime-prepare session (plist-get tool-selection :extensions) skill)
-                          (pichat-tool-runtime-prepare session (plist-get tool-selection :extensions)))))
+                            (pichat-tool-runtime-prepare session tool-names skill)
+                          (pichat-tool-runtime-prepare session tool-names))))
               ;; Stop or restart cancellation can run while TRAMP acquires
               ;; the assets.  A retired attempt must not spawn a writer.
               (when (and acquiring

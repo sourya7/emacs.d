@@ -9,6 +9,7 @@
 
 ;;; Code:
 (require 'pichat-job-launch)
+(require 'pichat-mcp-launch)
 (require 'pichat-chat)
 (require 'pichat-process-lifetime)
 (require 'pichat-job-conversation)
@@ -1025,6 +1026,58 @@ error only reaches FAILURE as a report; a quit propagates."
       (push (cons event handler) (pichat-job-execution-handlers execution))
       (pichat-on event handler (pichat-job-execution-session execution)))))
 
+(defun pichat-job-executor--start-validated (execution session command)
+  "Start EXECUTION's prepared SESSION with the destination-validated COMMAND."
+  (let ((non-essential t))
+    (setf (pichat-job-execution-session execution) session
+          (pichat-session-input-guard session)
+          (lambda (command) (pichat-job-executor--guard execution command)))
+    (let ((buffer (pichat-chat-ensure session)))
+      (with-current-buffer buffer
+        (setq-local pichat-chat-stop-session-on-kill nil)
+        (setq-local pichat-job-executor--buffer-execution execution)
+        (add-hook 'kill-buffer-query-functions #'pichat-job-executor--guard-kill nil t)))
+    (pichat-job-executor--listen execution)
+    (pichat-start-prepared-session session t command)
+    (setf (pichat-job-execution-process execution) (pichat-session-process session)
+          (pichat-job-execution-generation execution) (pichat-session-process-generation session))
+    (when (pichat-job-executor--owned-p execution)
+      (pichat-job-executor--deadline execution "Job startup did not become ready")
+      (pichat-job-executor--call execution "get_state" nil
+                                 (lambda (response) (pichat-job-executor--ready execution response))))))
+
+(defun pichat-job-executor--launch-failed (execution reason)
+  "Report a failure REASON before or during EXECUTION's runtime startup."
+  (if (pichat-job-execution-session execution)
+      (pichat-job-executor--failed execution reason)
+    (pichat-job-executor--advance execution "finished"
+                                 (list :result "failed" :safe-to-release t
+                                       :reason (pichat-chat-diagnostics-safe-summary-text reason)))))
+
+(defun pichat-job-executor--discover-mcp (execution session command)
+  "Validate COMMAND on SESSION's captured destination before starting EXECUTION."
+  (let* ((transport (pichat-session-transport session))
+         (pichat-mcp-launch-catalogue nil) ; Never borrow an interactive check.
+         (cancel
+          (pichat-mcp-launch-start
+           session command
+           (lambda (argv error)
+             ;; Never spawn inside a probe's sentinel or SSH teardown.
+             (pichat-transport-defer
+              transport
+              (lambda ()
+                (when (pichat-job-executor--owned-p execution)
+                  (setf (pichat-job-execution-watch execution) nil)
+                  (condition-case err
+                      (if error
+                          (pichat-job-executor--launch-failed execution error)
+                        (pichat-job-executor--start-validated execution session argv))
+                    ((error quit)
+                     (pichat-job-executor--launch-failed execution (error-message-string err)))))))))))
+    (if (pichat-job-executor--owned-p execution)
+        (setf (pichat-job-execution-watch execution) cancel)
+      (funcall cancel))))
+
 (defun pichat-job-executor--start (executor run)
   "Start admitted RUN through EXECUTOR without displaying or selecting a chat."
   (let* ((non-essential t)
@@ -1033,30 +1086,12 @@ error only reaches FAILURE as a report; a quit propagates."
                                                  :token (plist-get run :attempt))))
     (puthash id execution (pichat-job-executor-contexts executor))
     (condition-case err
-        (pcase-let* ((`(,session ,command) (pichat-job-launch-prepare (plist-get run :spec))))
-          (setf (pichat-job-execution-session execution) session
-                (pichat-session-input-guard session)
-                (lambda (command) (pichat-job-executor--guard execution command)))
-          (let ((buffer (pichat-chat-ensure session)))
-            (with-current-buffer buffer
-              (setq-local pichat-chat-stop-session-on-kill nil)
-              (setq-local pichat-job-executor--buffer-execution execution)
-              (add-hook 'kill-buffer-query-functions #'pichat-job-executor--guard-kill nil t)))
-          (pichat-job-executor--listen execution)
-          (pichat-start-prepared-session session t command)
-          (setf (pichat-job-execution-process execution) (pichat-session-process session)
-                (pichat-job-execution-generation execution) (pichat-session-process-generation session))
-          (when (pichat-job-executor--owned-p execution)
-            (pichat-job-executor--deadline execution "Job startup did not become ready")
-            (pichat-job-executor--call execution "get_state" nil
-                                       (lambda (response) (pichat-job-executor--ready execution response)))))
+        (pcase-let ((`(,session ,command) (pichat-job-launch-prepare (plist-get run :spec))))
+          (if (plist-get (pichat-session-tool-selection session) :mcp)
+              (pichat-job-executor--discover-mcp execution session command)
+            (pichat-job-executor--start-validated execution session command)))
       ((error quit)
-       (if (pichat-job-execution-session execution)
-           (pichat-job-executor--failed execution (error-message-string err))
-         (pichat-job-executor--advance execution "finished"
-                                       (list :result "failed" :safe-to-release t
-                                             :reason (pichat-chat-diagnostics-safe-summary-text
-                                                      (error-message-string err)))))))
+       (pichat-job-executor--launch-failed execution (error-message-string err))))
     execution))
 
 (defun pichat-job-executor--cancel-launch-wait (executor id)
@@ -1186,12 +1221,18 @@ Retire the runs' executions only after the store commits."
       (when (and (pichat-job-execution-borrowed execution)
                  (not (pichat-job-executor--source-p execution)))
         (user-error "Captured conversation changed; abort will not target another source"))
-      (if (not (pichat-job-execution-submitted execution))
-          (pichat-job-executor--stop-before-prompt execution "cancelled" "Cancelled before prompt")
+      (cond
+       ((not (pichat-job-execution-session execution))
+        (pichat-job-executor--advance execution "finished"
+                                      '(:result "cancelled" :safe-to-release t
+                                        :reason "Cancelled before runtime startup")))
+       ((not (pichat-job-execution-submitted execution))
+        (pichat-job-executor--stop-before-prompt execution "cancelled" "Cancelled before prompt"))
+       (t
         (setf (pichat-job-execution-cancelling execution) t)
         (pichat-job-executor--deadline execution "Cancellation did not establish settled execution")
         (pichat-job-executor--call execution "abort" nil (lambda (_ack) nil))
-        (pichat-job-executor--changed executor)))
+        (pichat-job-executor--changed executor))))
      (t (user-error "This run is not cancellable; inspect its recorded state")))))
 
 (defun pichat-job-executor-session-run (executor session)

@@ -125,16 +125,8 @@ only names missing from the registry.  Such names are skipped, not fatal."
             (if bridge-p " (not loaded)" " (no PiChat bridge for this runtime)")
             (string-join names ", "))))
 
-(defun pichat-tool-selection-mcp-access (snapshot servers tools)
-  "Validate SNAPSHOT against destination SERVERS and return a derived route.
-TOOLS is the extension-tool catalogue for the same destination and launch
-configuration.  Return an exact extension tool name only when an indirect
-MCP tool needs a route and no usable one was explicitly selected.  Prefer
-codemode to tool_search; either can serve both indirect exposures.  Signal
-`user-error' for an unavailable MCP choice or missing usable route.
-
-Neither catalogue nor the returned name belongs in a stored selection.
-Recompute from the destination catalogues when preparing each runtime."
+(defun pichat-tool-selection-mcp-indirect-p (snapshot servers)
+  "Validate the exact MCP choices in SNAPSHOT and report indirect exposure."
   (let (indirect)
     (dolist (pair (plist-get snapshot :mcp))
       (let* ((server (cl-find (car pair) servers :key (lambda (entry) (plist-get entry :name))
@@ -147,20 +139,32 @@ Recompute from the destination catalogues when preparing each runtime."
           (user-error "MCP tool %s/%s is not available for selection" (car pair) (cdr pair)))
         (when (member exposure pichat-tool-selection--indirect-mcp-exposures)
           (setq indirect t))))
-    (when indirect
-      (let* ((routes
-              (cl-loop for name in '("codemode" "tool_search")
-                       for tool = (cl-find name tools :key (lambda (entry) (plist-get entry :name))
-                                           :test #'equal)
-                       when (and (plist-get tool :eligible)
-                                 (eq t (plist-get tool :reaches-tools))
-                                 (not (member name (plist-get snapshot :emacs))))
-                       collect name))
-             (selected (plist-get snapshot :extensions)))
-        (unless routes
-          (user-error "Indirect MCP selections require an available codemode or tool_search extension tool that can reach MCP tools"))
-        (unless (cl-some (lambda (route) (member route selected)) routes)
-          (car routes))))))
+    indirect))
+
+(defun pichat-tool-selection-mcp-access (snapshot servers tools)
+  "Validate SNAPSHOT against destination SERVERS and return a derived route.
+TOOLS is the extension-tool catalogue for the same destination and launch
+configuration.  Return an exact extension tool name only when an indirect
+MCP tool needs a route and no usable one was explicitly selected.  Prefer
+codemode to tool_search; either can serve both indirect exposures.  Signal
+`user-error' for an unavailable MCP choice or missing usable route.
+
+Neither catalogue nor the returned name belongs in a stored selection.
+Recompute from the destination catalogues when preparing each runtime."
+  (when (pichat-tool-selection-mcp-indirect-p snapshot servers)
+    (let* ((routes
+            (cl-loop for name in '("codemode" "tool_search")
+                     for tool = (cl-find name tools :key (lambda (entry) (plist-get entry :name))
+                                         :test #'equal)
+                     when (and (plist-get tool :eligible)
+                               (eq t (plist-get tool :reaches-tools))
+                               (not (member name (plist-get snapshot :emacs))))
+                     collect name))
+           (selected (plist-get snapshot :extensions)))
+      (unless routes
+        (user-error "Indirect MCP selections require an available codemode or tool_search extension tool that can reach MCP tools"))
+      (unless (cl-some (lambda (route) (member route selected)) routes)
+        (car routes)))))
 
 (defun pichat-tool-selection-check-catalogue (snapshot servers)
   "Return validated SNAPSHOT for a caller without extension discovery.

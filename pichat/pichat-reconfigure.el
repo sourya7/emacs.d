@@ -16,6 +16,7 @@
 (require 'pichat-rpc)
 (require 'pichat-presets)
 (require 'pichat-tool-selection)
+(require 'pichat-mcp-launch)
 (require 'pichat-tool-runtime)
 (require 'pichat-chat)
 (require 'pichat-pi)
@@ -518,10 +519,11 @@ late callbacks.  Never start a replacement while the old process is live."
                              (error-message-string err)))
          (when (eq (car err) 'quit) (signal (car err) (cdr err))))))))
 
-(defun pichat-reconfigure-validated-command (session configuration state)
+(defun pichat-reconfigure-validated-command (session configuration state &optional current-p)
   "Resolve replacement argv without changing SESSION's committed configuration.
 CONFIGURATION contains a resolved preset, Tools, added extensions and model.
-Fall back to the active model from STATE when CONFIGURATION lacks one."
+Fall back to the active model from STATE when CONFIGURATION lacks one.
+CURRENT-P checks ownership while waiting for MCP discovery."
   (let* ((preset (plist-get configuration :preset-spec))
          (tools (plist-get configuration :tool-selection))
          (model (or (pichat-reconfigure-effective-model configuration)
@@ -541,7 +543,7 @@ Fall back to the active model from STATE when CONFIGURATION lacks one."
       (let ((argv (pichat-rpc-build-command snapshot)))
         (unless (and (consp argv) (cl-every #'stringp argv))
           (user-error "Replacement Pi command is invalid"))
-        (copy-sequence argv)))))
+        (pichat-mcp-launch-command snapshot argv current-p)))))
 
 (defun pichat-reconfigure--expected-state (state configuration)
   "Copy STATE with CONFIGURATION's effective model, retaining other settings."
@@ -1106,7 +1108,8 @@ Only recovery may pass ALLOW-STOPPED for an already-confirmed stopped runtime."
            ;; if Pi's cached model was stale when the launcher opened.
            (requested (plist-put (pichat-presets--copy requested) :model active-model))
            (command (pichat-reconfigure-validated-command
-                     session requested state))
+                     session requested state
+                     (lambda () (pichat-reconfigure--owned-p operation 'preflight))))
            (retained (plist-get result :baseline)))
       (unless (pichat-entry-cache-p retained)
         (user-error "Preflight returned no fresh conversation baseline"))
@@ -1203,8 +1206,13 @@ The launcher enters this operation only after explicit confirmation."
              (if blockers
                  (pichat-reconfigure--finish
                   operation nil (string-join blockers "; "))
-               (pichat-reconfigure--continue-after-preflight
-                operation requested result)))))))
+               (pichat-transport-run-when-idle
+                (plist-get operation :transport)
+                (lambda ()
+                  (when (pichat-reconfigure--owned-p operation 'preflight)
+                    (pichat-reconfigure--retiring operation nil
+                      (pichat-reconfigure--continue-after-preflight
+                       operation requested result)))))))))))
     operation))
 
 (defun pichat-reconfigure--recovery-attempt (failed configuration command callback)
@@ -1272,7 +1280,8 @@ second writer while the failed process remains live."
         (when (pichat--selected-file-reserved-p key)
           (user-error "Another PiChat launch is loading this saved conversation"))))
     (let* ((command (pichat-reconfigure-validated-command
-                     session requested (plist-get failed :expected-state)))
+                     session requested (plist-get failed :expected-state)
+                     (lambda () (eq failed (pichat-session-restart-operation session)))))
            (operation (pichat-reconfigure--recovery-attempt
                        failed requested command callback)))
       (setf (pichat-session-restart-operation session) operation)

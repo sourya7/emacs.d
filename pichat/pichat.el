@@ -20,6 +20,7 @@
 (require 'pichat-rpc)
 (require 'pichat-reconfigure)
 (require 'pichat-tool-picker)
+(require 'pichat-mcp-launch)
 (require 'pichat-launch-extensions)
 (require 'pichat-presets)
 (require 'pichat-pi)
@@ -678,9 +679,7 @@ tools that added.  A failed probe cancels the launch with a message."
 
 (defun pichat--verify-launch-mcp (profile directory continue)
   "Check PROFILE's preset MCP baseline at its destination, then call CONTINUE.
-Discovery runs in the destination target and directory, as the Tools picker
-would.  Missing, hidden, non-direct or disconnected tools cancel the launch
-with a message; no tool outside the baseline is enabled."
+Pass the destination catalogue to runtime startup for access-route discovery."
   (let* ((destination (pichat--launch-destination profile directory))
          (scope (car destination))
          (transport (cdr destination))
@@ -690,6 +689,7 @@ with a message; no tool outside the baseline is enabled."
                                      :path)
                           (user-error "Directory is unavailable to target %s"
                                       (pichat-transport-label transport))))
+         (executable (or (pichat-transport-pi-executable transport) pichat-pi-executable))
          (preset (plist-get profile :preset))
          (snapshot (pichat-tool-selection-resolve
                     (pichat-presets-resolve (if (eq preset 'default)
@@ -699,8 +699,7 @@ with a message; no tool outside the baseline is enabled."
       (user-error "Preset MCP tools cannot be selected through a complete Pi command wrapper"))
     (message "Checking preset MCP tools for %s..." (pichat-transport-label transport))
     (pichat-mcp-discovery-start
-     transport runtime-cwd
-     (or (pichat-transport-pi-executable transport) pichat-pi-executable)
+     transport runtime-cwd executable
      (lambda (servers errors)
        (run-at-time
         0 nil
@@ -709,8 +708,9 @@ with a message; no tool outside the baseline is enabled."
               (progn
                 (unless servers
                   (user-error "MCP discovery failed: %s" (or errors "no MCP servers")))
-                (pichat-tool-selection-check-catalogue snapshot servers)
-                (let ((pichat--launch-mcp-verified t))
+                (pichat-tool-selection-mcp-indirect-p snapshot servers)
+                (let ((pichat--launch-mcp-verified t)
+                      (pichat-mcp-launch-catalogue (list transport runtime-cwd executable servers)))
                   (funcall continue)))
             (error
              (message "PiChat launch cancelled: %s"

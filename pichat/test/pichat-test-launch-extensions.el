@@ -608,7 +608,7 @@
                 ((symbol-function 'pichat-mcp-discovery-start)
                  (lambda (_transport _cwd _executable callback)
                    (push 'mcp mcp-checks)
-                   (funcall callback '((:name "s" :tools ((:name "t" :eligible t)))) nil)))
+                   (funcall callback '((:name "s" :tools ((:name "t" :exposure "direct" :eligible t)))) nil)))
                 ((symbol-function 'pichat-start-session)
                  (lambda (_cwd _scope options) (push options started) 'runtime))
                 ((symbol-function 'pichat--display-and-synchronize-session) #'ignore)

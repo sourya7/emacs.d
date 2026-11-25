@@ -24,8 +24,19 @@ suffixes that its shell discovery command does not report."
                                   :null-object nil :false-object nil))
          (raw-servers (gethash "servers" data :missing))
          (errors (gethash "errors" data))
+         (seen (make-hash-table :test #'equal))
          (_ (unless (listp raw-servers)
               (error "Malformed Pi MCP catalogue: missing servers array")))
+         ;; Compare the complete normalized names, including across servers.
+         (_ (dolist (server raw-servers)
+              (let ((name (gethash "name" server))
+                    (raw-tools (gethash "tools" server)))
+                (unless (and (stringp name) (listp raw-tools)
+                             (cl-every #'stringp raw-tools))
+                  (error "Malformed Pi MCP server catalogue"))
+                (dolist (tool raw-tools)
+                  (let ((key (pichat-tool-selection--name name tool)))
+                    (puthash key (1+ (gethash key seen 0)) seen))))))
          (servers
           (mapcar
            (lambda (server)
@@ -33,16 +44,9 @@ suffixes that its shell discovery command does not report."
                     (exposure (gethash "exposure" server))
                     (overrides (gethash "toolExposure" server))
                     (raw-tools (gethash "tools" server))
-                    (seen (make-hash-table :test #'equal))
+                    (enabled (eq t (gethash "enabled" server)))
                     (state (gethash "state" server)))
-               (unless (and (stringp name) (listp raw-tools)
-                            (cl-every #'stringp raw-tools))
-                 (error "Malformed Pi MCP server catalogue"))
-               (dolist (tool raw-tools)
-                 (let ((key (pichat-tool-selection--name name tool)))
-                   (puthash key (1+ (gethash key seen 0)) seen)))
-               (list :name name :state state :enabled
-                     (gethash "enabled" server)
+               (list :name name :state state :enabled enabled
                      :error (gethash "error" server)
                      :tools
                      (mapcar (lambda (tool)
@@ -50,9 +54,9 @@ suffixes that its shell discovery command does not report."
                                       (or (and overrides (gethash tool overrides))
                                           exposure)))
                                  (list :name tool :exposure effective
-                                       :eligible (and (gethash "enabled" server)
+                                       :eligible (and enabled
                                                       (equal state "connected")
-                                                      (equal effective "direct")
+                                                      (pichat-tool-selection-mcp-exposure-p effective)
                                                       (= 1 (gethash
                                                             (pichat-tool-selection--name name tool)
                                                             seen 0))))))

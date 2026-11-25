@@ -63,6 +63,60 @@
               '(:builtins nil :mcp (("probe" . "search"))))
              servers))))
 
+(defun pichat-test-mcp-eligibility-catalogue ()
+  "Return an MCP catalogue with inherited and overridden exposures."
+  (car (pichat-mcp-discovery--normalize
+        (concat "{\"servers\":["
+                "{\"name\":\"probe\",\"enabled\":true,\"state\":\"connected\","
+                "\"exposure\":\"codemode\",\"tools\":[\"coded\",\"later\",\"direct\",\"hidden\",\"unknown\"],"
+                "\"toolExposure\":{\"later\":\"deferred\",\"direct\":\"direct\",\"hidden\":\"hidden\",\"unknown\":\"unknown\"}},"
+                "{\"name\":\"disabled\",\"enabled\":false,\"state\":\"connected\",\"exposure\":\"deferred\",\"tools\":[\"x\"]},"
+                "{\"name\":\"offline\",\"enabled\":true,\"state\":\"failed\",\"exposure\":\"codemode\",\"tools\":[\"x\"]},"
+                "{\"name\":\"a-b\",\"enabled\":true,\"state\":\"connected\",\"exposure\":\"codemode\",\"tools\":[\"x\"]},"
+                "{\"name\":\"a_b\",\"enabled\":true,\"state\":\"connected\",\"exposure\":\"deferred\",\"tools\":[\"x\"]}]}"))))
+
+(ert-deftest pichat-tool-selection-mcp-eligibility-fails-closed ()
+  (let* ((servers (pichat-test-mcp-eligibility-catalogue))
+         (eligible (cl-loop for server in servers
+                            append (cl-loop for tool in (plist-get server :tools)
+                                            when (plist-get tool :eligible)
+                                            collect (plist-get tool :exposure)))))
+    (should (equal eligible '("codemode" "deferred" "direct")))
+    (dolist (pair '(("probe" . "hidden") ("probe" . "unknown") ("probe" . "absent")
+                    ("disabled" . "x") ("offline" . "x") ("a-b" . "x") ("a_b" . "x")))
+      (should-error (pichat-tool-selection-mcp-access
+                     (list :mcp (list pair)) servers
+                     '((:name "codemode" :eligible t :reaches-tools t)))
+                    :type 'user-error))))
+
+(ert-deftest pichat-tool-selection-mcp-access-derives-one-route-without-persisting ()
+  (let* ((servers (pichat-test-mcp-eligibility-catalogue))
+         (tools '((:name "tool_search" :eligible t :reaches-tools t)
+                  (:name "codemode" :eligible t :reaches-tools t)))
+         (snapshot '(:mcp (("probe" . "coded") ("probe" . "later") ("probe" . "direct")))))
+    (should-not (pichat-tool-selection-mcp-access nil nil nil))
+    (should-not (pichat-tool-selection-mcp-access '(:mcp (("probe" . "direct"))) servers nil))
+    (should (equal "codemode" (pichat-tool-selection-mcp-access snapshot servers tools)))
+    (should-not (pichat-tool-selection-mcp-access
+                 (append snapshot '(:extensions ("tool_search"))) servers tools))
+    ;; A same-name replacement that cannot reach tools does not count, even
+    ;; when explicitly selected. Recheck against the destination catalogue.
+    (let ((replacement '(:name "codemode" :eligible t)))
+      (should (equal "tool_search"
+                     (pichat-tool-selection-mcp-access
+                      (append snapshot '(:extensions ("codemode"))) servers
+                      (list (car tools) replacement))))
+      (should-error (pichat-tool-selection-mcp-access snapshot servers (list replacement))
+                    :type 'user-error))
+    (should-error (pichat-tool-selection-mcp-access
+                   snapshot servers '((:name "codemode" :reaches-tools t :eligible nil)))
+                  :type 'user-error)
+    (should (equal "tool_search"
+                   (pichat-tool-selection-mcp-access
+                    (append snapshot '(:emacs ("codemode"))) servers tools)))
+    (should-error (pichat-tool-selection-check-catalogue snapshot servers) :type 'user-error)
+    (should (equal snapshot '(:mcp (("probe" . "coded") ("probe" . "later") ("probe" . "direct")))))))
+
 (ert-deftest pichat-tool-selection-launch-customization-forces-independent-runtime ()
   (let ((profile (pichat--launch-profile-from-arguments
                   '("--preset=default")

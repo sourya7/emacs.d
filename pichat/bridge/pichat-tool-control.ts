@@ -106,6 +106,7 @@ export default function (pi: ExtensionAPI) {
 						name: tool.name,
 						description: tool.description.slice(0, 4096),
 						exposure: tool.exposure ?? "direct",
+						reachesTools: typeof tool.reachesTools === "function",
 						sourceInfo: boundedSourceInfo(tool.sourceInfo),
 					})),
 					activeTools,

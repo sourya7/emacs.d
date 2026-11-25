@@ -15,6 +15,13 @@
 
 (defalias 'pichat-tool-selection--name #'pichat-presets-mcp-name)
 
+(defconst pichat-tool-selection--indirect-mcp-exposures '("codemode" "deferred"))
+
+(defun pichat-tool-selection-mcp-exposure-p (exposure)
+  "Return non-nil when an MCP tool with EXPOSURE can be selected."
+  (or (equal exposure "direct")
+      (member exposure pichat-tool-selection--indirect-mcp-exposures)))
+
 (defun pichat-tool-selection-resolve (preset &optional selection)
   "Resolve PRESET and optional explicit SELECTION into a runtime snapshot.
 SELECTION contains :builtins, :mcp (SERVER . TOOL) pairs, :extensions and
@@ -118,17 +125,48 @@ only names missing from the registry.  Such names are skipped, not fatal."
             (if bridge-p " (not loaded)" " (no PiChat bridge for this runtime)")
             (string-join names ", "))))
 
+(defun pichat-tool-selection-mcp-access (snapshot servers tools)
+  "Validate SNAPSHOT against destination SERVERS and return a derived route.
+TOOLS is the extension-tool catalogue for the same destination and launch
+configuration.  Return an exact extension tool name only when an indirect
+MCP tool needs a route and no usable one was explicitly selected.  Prefer
+codemode to tool_search; either can serve both indirect exposures.  Signal
+`user-error' for an unavailable MCP choice or missing usable route.
+
+Neither catalogue nor the returned name belongs in a stored selection.
+Recompute from the destination catalogues when preparing each runtime."
+  (let (indirect)
+    (dolist (pair (plist-get snapshot :mcp))
+      (let* ((server (cl-find (car pair) servers :key (lambda (entry) (plist-get entry :name))
+                              :test #'equal))
+             (tool (cl-find (cdr pair) (plist-get server :tools)
+                            :key (lambda (entry) (plist-get entry :name)) :test #'equal))
+             (exposure (plist-get tool :exposure)))
+        (unless (and (plist-get tool :eligible)
+                     (pichat-tool-selection-mcp-exposure-p exposure))
+          (user-error "MCP tool %s/%s is not available for selection" (car pair) (cdr pair)))
+        (when (member exposure pichat-tool-selection--indirect-mcp-exposures)
+          (setq indirect t))))
+    (when indirect
+      (let* ((routes
+              (cl-loop for name in '("codemode" "tool_search")
+                       for tool = (cl-find name tools :key (lambda (entry) (plist-get entry :name))
+                                           :test #'equal)
+                       when (and (plist-get tool :eligible)
+                                 (eq t (plist-get tool :reaches-tools))
+                                 (not (member name (plist-get snapshot :emacs))))
+                       collect name))
+             (selected (plist-get snapshot :extensions)))
+        (unless routes
+          (user-error "Indirect MCP selections require an available codemode or tool_search extension tool that can reach MCP tools"))
+        (unless (cl-some (lambda (route) (member route selected)) routes)
+          (car routes))))))
+
 (defun pichat-tool-selection-check-catalogue (snapshot servers)
-  "Validate SNAPSHOT MCP choices against discovered SERVERS.
-Fail closed on disconnected, hidden, non-direct, absent, or ambiguous tools."
-  (dolist (pair (plist-get snapshot :mcp))
-    (let* ((server (cl-find (car pair) servers :key (lambda (entry) (plist-get entry :name))
-                            :test #'equal))
-           (tool (cl-find (cdr pair) (plist-get server :tools)
-                          :key (lambda (entry) (plist-get entry :name)) :test #'equal)))
-      (unless (and server tool (plist-get tool :eligible))
-        (user-error "MCP tool %s/%s is not available with direct exposure"
-                    (car pair) (cdr pair)))))
+  "Return validated SNAPSHOT for a caller without extension discovery.
+Indirect choices require `pichat-tool-selection-mcp-access' with a destination
+extension catalogue, so refuse them rather than launch without a route."
+  (pichat-tool-selection-mcp-access snapshot servers nil)
   snapshot)
 
 (defun pichat-tool-selection-check-extensions (snapshot tools)

@@ -21,6 +21,19 @@
     (puthash "tools" nil data)
     (should-error (pichat-tool-discovery--catalogue data "test"))))
 
+(ert-deftest pichat-tool-discovery-validates-reaching-capability ()
+  (let* ((data (json-parse-string
+                (concat "{\"protocolVersion\":1,\"requestId\":\"test\",\"ok\":true,\"tools\":["
+                        "{\"name\":\"codemode\",\"description\":\"\",\"exposure\":\"direct\",\"reachesTools\":true},"
+                        "{\"name\":\"tool_search\",\"description\":\"\",\"exposure\":\"direct\",\"reachesTools\":false},"
+                        "{\"name\":\"legacy\",\"description\":\"\",\"exposure\":\"direct\"}],\"activeTools\":[]}")))
+         (tools (pichat-tool-discovery--catalogue data "test")))
+    (should (eq t (plist-get (car tools) :reaches-tools)))
+    (should-not (plist-get (cadr tools) :reaches-tools))
+    (should-not (plist-get (caddr tools) :reaches-tools))
+    (puthash "reachesTools" "true" (aref (gethash "tools" data) 0))
+    (should-error (pichat-tool-discovery--catalogue data "test"))))
+
 (ert-deftest pichat-tool-discovery-validates-and-stores-provenance ()
   (let* ((raw (concat
                "{\"protocolVersion\":1,\"requestId\":\"test\",\"ok\":true,\"tools\":["
@@ -256,6 +269,28 @@
              ,@body))))))
 
 (when pichat-test-include-integration
+  (ert-deftest pichat-tool-discovery-real-pi-reports-reaching-capability ()
+    (pichat-test-with-tool-probe (:scenario "normal")
+      (dolist (replacement (list nil (expand-file-name "fixtures/non-reaching-codemode.ts"
+                                                       pichat-test-directory)))
+        (let* (result
+               (cancel (pichat-tool-discovery-start
+                        pichat-transport-local project-dir pichat-test-pi-executable
+                        (lambda (tools error) (setq result (list tools error)))
+                        :args (append args '("-e" "builtin:codemode" "-e" "builtin:tool-search")
+                                      (when replacement (list "-e" replacement))))))
+          (unwind-protect
+              (progn
+                (pichat-test-wait-until (lambda () result) 15 "reaching tool probe")
+                (should-not (cadr result))
+                (cl-flet ((find-tool (name)
+                            (cl-find name (car result) :key (lambda (tool) (plist-get tool :name))
+                                     :test #'equal)))
+                  (should (find-tool "codemode"))
+                  (should (eq (not replacement) (plist-get (find-tool "codemode") :reaches-tools)))
+                  (should (eq t (plist-get (find-tool "tool_search") :reaches-tools)))))
+            (funcall cancel))))))
+
   (ert-deftest pichat-tool-discovery-real-pi-catalogue-and-orderly-cleanup ()
     (pichat-test-with-tool-probe (:scenario "normal")
       (let ((pichat-pi-extra-env '(("PICHAT_TOOL_PROBE_MARKER" . "captured"))) result cancel)

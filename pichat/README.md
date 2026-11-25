@@ -2508,6 +2508,36 @@ evidence at point.
 The manager's existing `SPC m D` remains unchanged. In Insert state use
 `M-SPC m`; native mode keys remain usable without these personal menus or Evil.
 
+### Inspection functions
+
+`pichat-debug.el` returns the same retained state as plain Lisp data, for
+`M-:` or an `emacsclient --eval` caller such as an agent. Each function takes a
+runtime ID, a chat buffer or its name (except `pichat-debug-runtimes`), and none
+sends RPC, launches processes, reads files or changes state.
+
+- `pichat-debug-runtimes` / `pichat-debug-runtime`: one plist per retained
+  runtime: chat buffer, name, state, liveness, preferred, streaming/compacting/
+  retrying, RPC requests awaiting a reply, the chat's queued (steering .
+  follow-up) counts, pending user-input requests, preset, model, persistence,
+  Pi session ID, saved session file and working directory.
+- `pichat-debug-events RUNTIME &optional COUNT FULL TYPES`: the COUNT
+  (default 10) most recent retained RPC events, oldest first, summarized to
+  `type`, `command`, `id`, `success`, `error`, `method`, `name`, `reason`,
+  `toolName` and `isError` (long strings shortened) plus the names of other
+  keys. FULL returns the retained raw events, which are the same bounded subset
+  the report shows. By default streaming updates (`message_update`,
+  `tool_execution_update`) and display-only extension requests (`setStatus`,
+  `setWidget`, `setTitle`) are skipped; TYPES `t` keeps every event, and a list
+  of type strings keeps only those types.
+- `pichat-debug-tail RUNTIME &optional CHARS` and `pichat-debug-stderr`: the
+  last CHARS (default 2000) characters of the chat buffer as displayed, or of
+  Pi's stderr, without text properties. For the conversation's messages use
+  the Chats tool function `pichat-chat-tools-read`.
+- `pichat-debug-diagnostics RUNTIME`: the report's sections as
+  `(TITLE SUMMARY…)` lists of redacted problem summaries.
+
+Results can still contain prompts, paths and credentials.
+
 ## Evil integration
 
 PiChat does not depend on Evil. Evil users can start editable chat buffers ready

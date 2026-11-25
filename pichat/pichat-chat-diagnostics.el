@@ -594,6 +594,15 @@ never replaced by the snapshot time.  Raw record fields are not printed."
             (pichat-chat-diagnostics-safe-summary-text
              (pichat-diagnostic-summary record)))))
 
+(defun pichat-chat-diagnostics-sections (session)
+  "Return SESSION's cached diagnostic sections as (TITLE . RECORDS).
+Use retained state only: no RPC, process launch or filesystem checks."
+  (cons (cons "Runtime / transport"
+              (reverse (copy-sequence (pichat-session-diagnostics session))))
+        (apply #'append
+               (mapcar (lambda (provider) (funcall provider session))
+                       pichat-diagnostics-section-functions))))
+
 ;;;###autoload
 (defun pichat-show-diagnostics (&optional session)
   "Show the cached runtime troubleshooting report for SESSION.
@@ -606,13 +615,7 @@ not healthy.  Collector lifetimes and retention remain unchanged."
          (buffer (get-buffer-create
                   (format "*PiChat Diagnostics %s*"
                           (pichat-session-runtime-id session)))))
-    (let ((sections
-           (cons (cons "Runtime / transport"
-                       (reverse (copy-sequence
-                                 (pichat-session-diagnostics session))))
-                 (apply #'append
-                        (mapcar (lambda (provider) (funcall provider session))
-                                pichat-diagnostics-section-functions)))))
+    (let ((sections (pichat-chat-diagnostics-sections session)))
       (with-current-buffer buffer
         (unless (eq major-mode 'pichat-diagnostics-mode)
           (pichat-diagnostics-mode))

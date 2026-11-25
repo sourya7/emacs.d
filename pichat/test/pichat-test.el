@@ -89,6 +89,7 @@
 (require 'pichat-test-evil)
 (require 'pichat-test-sessions-integration)
 (require 'pichat-test-integration)
+(require 'pichat-test-mcp-rpc)
 (require 'pichat-test-compaction-characterization)
 (require 'pichat-test-held-input)
 (require 'pichat-test-queue-panel)

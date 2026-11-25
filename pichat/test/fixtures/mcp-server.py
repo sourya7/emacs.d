@@ -4,6 +4,9 @@ import json
 import sys
 
 
+TOOL_NAMES = sys.argv[1:] or ("search", "other", "alpha-beta", "alpha_beta")
+
+
 def reply(message):
     sys.stdout.write(json.dumps(message) + "\n")
     sys.stdout.flush()
@@ -30,10 +33,10 @@ for line in sys.stdin:
                         "description": "Fixture " + name,
                         "inputSchema": {"type": "object", "properties": {}},
                     }
-                    for name in ("search", "other", "alpha-beta", "alpha_beta")
+                    for name in TOOL_NAMES
                 ]
             }
-        elif method == "tools/call":
+        elif method == "tools/call" and request["params"]["name"] in TOOL_NAMES:
             response["result"] = {
                 "content": [
                     {"type": "text", "text": "CALLED " + request["params"]["name"]}

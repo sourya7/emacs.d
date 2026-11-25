@@ -28,6 +28,7 @@ type FakeTurn = {
   expectContextIncludes?: string | string[];
   expectTool?: { name: string; parameters?: Record<string, unknown> };
   expectToolAbsent?: string;
+  expectDeclaredTools?: string[];
   expectToolResultError?: string;
 };
 
@@ -143,6 +144,13 @@ function requireExpectedContext(turn: FakeTurn, context: Context) {
   }
 
   const tools = activeTools(context);
+  if (turn.expectDeclaredTools) {
+    const actual = tools.map(({ name }) => name).sort();
+    const expected = [...turn.expectDeclaredTools].sort();
+    if (!isDeepStrictEqual(actual, expected)) {
+      throw new Error(`fake provider expected declared tools ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+    }
+  }
   if (turn.expectTool) {
     const tool = tools.find((candidate) => candidate.name === turn.expectTool?.name);
     if (!tool) throw new Error(`fake provider expected tool ${turn.expectTool.name}`);

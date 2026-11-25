@@ -611,6 +611,37 @@ included, and checking none also stops including them."
                                 count (length (plist-get entry :tools)))))
                     :transient t)))))
 
+(defun pichat-tool-picker--mcp-access (selection)
+  "Validate the MCP part of SELECTION and return its launch-only route, if any."
+  (when (plist-get selection :mcp)
+    (let ((draft (plist-get pichat-tool-picker--state :discovery))
+          (servers (plist-get pichat-tool-picker--state :servers)))
+      (if (and draft (eq 'ready (pichat-tool-discovery-draft-status draft)))
+          (pichat-tool-selection-mcp-access selection servers (pichat-tool-picker--extension-tools))
+        (when (pichat-tool-selection-mcp-indirect-p selection servers)
+          (user-error "Indirect MCP selections require successful extension discovery"))))))
+
+(defun pichat-tool-picker--mcp-heading (label)
+  "Append any MCP access requirement or selection diagnostic to LABEL."
+  (if (not (plist-get pichat-tool-picker--state :loaded))
+      label
+    (condition-case err
+        (if-let* ((route (pichat-tool-picker--mcp-access (pichat-tool-picker--selection))))
+            (concat label "\n" (pichat-transient-fill
+                                (format "%s (required by MCP selection at launch)" route)))
+          label)
+      (user-error
+       (concat label "\n"
+               (propertize (pichat-transient-fill (error-message-string err)) 'face 'warning))))))
+
+(defun pichat-tool-picker--mcp-servers-heading ()
+  "Describe the MCP server list and any launch-only access requirement."
+  (pichat-tool-picker--mcp-heading "MCP servers"))
+
+(defun pichat-tool-picker--server-tools-heading ()
+  "Describe the MCP tool list and any launch-only access requirement."
+  (pichat-tool-picker--mcp-heading "Server tools"))
+
 (defun pichat-tool-picker--server-tools (_)
   "Build checkboxes for the selected server."
   (let ((server (pichat-tool-picker--current-server)))
@@ -620,15 +651,19 @@ included, and checking none also stops including them."
               for key in pichat-tool-picker--keys
               collect
               (let* ((name (plist-get tool :name)) (eligible (plist-get tool :eligible))
+                     (exposure (or (plist-get tool :exposure) "unknown exposure"))
                      (pair (cons (plist-get server :name) name)))
                 (list key name
                       (lambda () (interactive)
-                        (if eligible (pichat-tool-picker--toggle :mcp pair)
-                          (user-error "MCP tool %s/%s is not directly available" (car pair) name)))
+                        (unless (or eligible
+                                    (member pair (plist-get (pichat-tool-picker--selection) :mcp)))
+                          (user-error "MCP tool %s/%s is not available for selection" (car pair) name))
+                        (pichat-tool-picker--toggle :mcp pair))
                       :description
-                      (lambda () (concat (pichat-tool-picker--description
-                                          (member pair (plist-get (pichat-tool-picker--selection) :mcp)) name)
-                                         (unless eligible (format " (%s)" (or (plist-get tool :exposure) "unavailable")))))
+                      (lambda () (pichat-tool-picker--description
+                                  (member pair (plist-get (pichat-tool-picker--selection) :mcp))
+                                  (format "%s (%s%s)" name exposure
+                                          (if eligible "" ", unavailable"))))
                       :transient t))))))
 
 ;;; Emacs-defined tool groups
@@ -943,8 +978,7 @@ Emacs-defined tools remain explicit per-group or per-tool choices."
          (snapshot (pichat-tool-selection-resolve (plist-get state :preset) selection)))
     (when (plist-get snapshot :mcp)
       (unless (plist-get state :loaded) (user-error "MCP discovery has not succeeded for this target"))
-      (pichat-tool-selection-mcp-access snapshot (plist-get state :servers)
-                                        (pichat-tool-picker--extension-tools)))
+      (pichat-tool-picker--mcp-access snapshot))
     ;; Future tools are applied as the exact tools discovered now.
     (when (or (plist-get snapshot :extensions) (plist-get snapshot :all)
               (plist-get snapshot :unexpanded))
@@ -964,7 +998,8 @@ Emacs-defined tools remain explicit per-group or per-tool choices."
   "Select tools for this runtime."
   ["Built-in tools" :class transient-column :setup-children pichat-tool-picker--builtins]
   ["Extension tools" :class transient-column :setup-children pichat-tool-picker--extensions]
-  ["MCP servers" :class transient-column :setup-children pichat-tool-picker--servers]
+  [:description pichat-tool-picker--mcp-servers-heading
+   :class transient-column :setup-children pichat-tool-picker--servers]
   [:description pichat-tool-picker--emacs-heading :class transient-column
    :setup-children pichat-tool-picker--emacs-group-entries]
   [["Selection"
@@ -997,7 +1032,8 @@ Emacs-defined tools remain explicit per-group or per-tool choices."
   (interactive) (transient-setup 'pichat-tool-picker-extension-group))
 (transient-define-prefix pichat-tool-picker-server ()
   "Select MCP server tools."
-  ["Server tools" :class transient-column :setup-children pichat-tool-picker--server-tools]
+  [:description pichat-tool-picker--server-tools-heading
+   :class transient-column :setup-children pichat-tool-picker--server-tools]
   [["Selection" ("a" "All eligible" pichat-tool-picker-server-all)
     ("n" "None" pichat-tool-picker-server-none)
     ("[" "Previous page" pichat-tool-picker-prev) ("]" "Next page" pichat-tool-picker-next)]

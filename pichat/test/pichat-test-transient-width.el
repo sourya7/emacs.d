@@ -229,7 +229,8 @@
        "hidden (unavailable)" "github (connected, 0/2)"
        "^Not loaded, skipped: pichat_gone_tool" "Jobs (1/6) →" "a All eligible")
       (pichat-test-transient-width--check
-       'pichat-tool-picker-server nil "search_repositories" "create_issue (proxy)")
+       'pichat-tool-picker-server nil "search_repositories (direct)"
+       "create_issue (proxy, unavailable)")
       (pichat-test-transient-width--check
        'pichat-tool-picker-emacs-group nil "^Jobs: 1/6 selected$"
        "does not approve" "\\[✓\\] pichat_job_run_now (approval)"

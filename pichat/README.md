@@ -630,7 +630,7 @@ retains its current-tab display behavior.
 | `e` | Ephemeral | Start Pi with `--no-session`; implies independent |
 | `m` | Model | List models and stage a listed or entered ID for this launch (implies independent); with a model staged, `m` clears it back to the preset's model or Pi's default |
 | `p` | Preset | Choose a named tool/prompt preset; explicit selection implies independent and restores its model |
-| `x` | Tools | Choose that preset's built-ins, extension tools and direct MCP tools for a new independent runtime |
+| `x` | Tools | Choose tools for a new independent runtime |
 | `l` | Extensions | Add extensions for this launch: a path, `npm:` or `git:` spec loaded with `-e` on top of the extensions Pi discovers; checked ones imply independent. See [Added extensions](#added-extensions) |
 | `s` | Conversation | Pick a saved session, or clear the staged selection |
 | `r` | Reconfigure | From an owning chat, toggle between the launch draft and this runtime's restart draft |
@@ -784,8 +784,8 @@ to resolve the current instructions before confirming the restart.
 
 `:tools :default` (or omission) leaves tool selection to Pi;
 `:tools nil` disables built-in tools. Explicit lists select exactly those
-built-ins. Explicit-tool presets default to no extension tools and disable MCP
-unless a direct MCP tool is selected. `standard` and custom presets with
+built-ins. Explicit-tool presets default to no explicit extension tools and
+use `--no-mcp` when no MCP tool is selected. `standard` and custom presets with
 inherited tools (`:default` or omission) remain Pi-controlled: they cannot use
 the Tools picker or select extension tools in `:tools`. They can still load
 extensions with `:extensions`, whose tools then follow Pi's own selection.
@@ -808,10 +808,32 @@ falling back to the preset.
 The picker configures a new independent runtime, or the captured replacement
 in reconfigure mode; it never edits a live process in place.
 
-MCP discovery connects configured servers and reports failures. Non-direct,
-hidden, disabled, unavailable, and normalization-colliding MCP tools cannot be
-selected through the MCP group. Customizations are runtime properties, not
-Pi session or saved-session-file properties (see `GLOSSARY.md`). Presets reject
+MCP discovery connects configured servers and reports failures. Each listed
+MCP tool shows its effective exposure, including per-tool overrides. Tools
+with `direct`, `codemode` or `deferred` exposure are selectable when available.
+Hidden, disabled, disconnected, unavailable and normalization-colliding tools
+cannot be added; a checked but now unavailable row can still be unchecked.
+In a server's page, `a` replaces that server's choices with all its currently
+eligible tools (including other pages); `n` removes only that server's choices.
+Both use exact `(SERVER . TOOL)` pairs, not a grant to future tools.
+
+Selection keeps Pi's configured exposure: `direct` tools are offered to the
+model directly, while `codemode` and `deferred` tools are not declared initially.
+Either `codemode` or `tool_search` can reach either indirect exposure when the
+extension tool supports MCP access. `tool_search` may later load and declare a
+matching selected tool on the active branch. PiChat allowlists the exact
+selected MCP tools; it does not grant access to all tools on a selected server.
+
+PiChat reuses an explicitly selected usable access tool. Otherwise it derives
+one for launch, preferring `codemode` and falling back to `tool_search`. The
+MCP heading shows that requirement without checking an extension tool on the
+user's behalf. The derived route is never saved in Tools customizations,
+presets or jobs. Apply and launch refuse indirect choices without a usable
+route. Top-level `a` explicitly selects eligible extension tools as well as
+MCP tools, so an access tool selected that way is an explicit choice.
+
+Customizations are runtime properties, not Pi session or saved-session-file
+properties (see `GLOSSARY.md`). Presets reject
 conflicting generic Pi tool/prompt flags before runtime creation; use `standard`
 when generic Pi arguments should govern, and leave
 `pichat-append-system-prompt` nil if supplying a generic appended-prompt flag.
@@ -879,7 +901,7 @@ under the same name with `c`.
 
 ### Preset MCP tools and models
 
-An explicit-tool preset can also select direct MCP tools by default with exact
+An explicit-tool preset can also select MCP tools by default with exact
 `(SERVER . TOOL)` pairs, and pin a model for runtimes launched by naming it:
 
 ```elisp
@@ -892,12 +914,12 @@ An explicit-tool preset can also select direct MCP tools by default with exact
 
 `:mcp` requires explicit `:tools`; pass-through presets cannot declare it.
 Malformed, duplicate or normalization-colliding pairs, and names that overlap an
-extension or Emacs-defined tool, are rejected. Before a new runtime starts with
-an unchanged MCP baseline, the launch checks those exact tools with the same
-destination discovery as `x Tools` (target and directory). A missing, hidden,
-non-direct or disconnected tool cancels the launch with a message; no other tool
-is enabled instead. Reusing a live preferred runtime does not repeat the check,
-and Tools applied in the launcher were already checked. Complete local
+extension or Emacs-defined tool, are rejected. Before starting a new runtime,
+PiChat checks the exact MCP choices from the preset or Tools customization
+against the destination's catalogue (target and directory) and resolves access
+for indirect choices. An ineligible choice or missing access route cancels the
+launch with a message; no other MCP tool is substituted. Reusing a live
+preferred runtime does not repeat the check. Complete local
 `pichat-rpc-command` wrappers cannot use MCP baselines.
 
 `:model` is an exact `provider/model` (no thinking-level suffix) or `default`,
@@ -2070,11 +2092,11 @@ An example reviewer preset that reads the work and can restart the worker:
 Presets select built-in, extension and Emacs-defined tools. Shell tools that
 are registered as extension tools can be added as `:tools` groups
 `(SOURCE "tool")`, and MCP tools as `:mcp` pairs (see [Preset MCP tools and
-models](#preset-mcp-tools-and-models)). A job captures them with the rest of
-the preset and its runs enable exactly those tools; an authored file takes its
-tools from its preset only, so name MCP tools there. Unlike a launch, saving or
-running a job does not first check the preset's MCP tools with MCP discovery.
-The model is part of the job, not the preset.
+models](#preset-mcp-tools-and-models)). A job captures the exact choices with
+the rest of the preset; an authored file takes its tools from its preset only,
+so name MCP tools there. A job run checks its captured MCP tools at the
+execution destination and resolves any launch-only access route without
+changing the saved job. The model is part of the job, not the preset.
 
 ### Scheduled jobs
 

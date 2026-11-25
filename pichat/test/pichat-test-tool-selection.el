@@ -172,6 +172,72 @@
                 (should (string-match-p "probe" (buffer-string))))
             (should (string-match-p "search" (buffer-string)))))))))
 
+(ert-deftest pichat-tool-picker-renders-mcp-exposures-and-derived-route ()
+  (let ((pichat-tool-picker--state
+         (list :draft '(:mcp (("probe" . "later")))
+               :loaded t :page 0 :server "probe"
+               :servers (pichat-test-mcp-eligibility-catalogue)
+               :discovery (pichat-tool-discovery-draft-create
+                           :status 'ready
+                           :tools '((:name "tool_search" :description "Search tools"
+                                     :eligible t :reaches-tools t))))))
+    (dolist (prefix '(pichat-tool-picker pichat-tool-picker-server))
+      (let* ((transient--prefix (transient--init-prefix prefix))
+             (transient--layout (transient--init-suffixes prefix))
+             (transient--suffixes (transient--flatten-suffixes transient--layout)))
+        (with-temp-buffer
+          (transient--insert-groups)
+          (should (string-search "tool_search (required by MCP selection" (buffer-string)))
+          (when (eq prefix 'pichat-tool-picker-server)
+            (dolist (row '("[ ] coded (codemode)" "[✓] later (deferred)"
+                           "[ ] direct (direct)" "[ ] hidden (hidden, unavailable)"))
+              (should (string-search row (buffer-string))))))))))
+
+(ert-deftest pichat-tool-picker-mcp-bulk-actions-keep-exact-choices ()
+  (let* ((pairs '(("probe" . "coded") ("probe" . "later") ("probe" . "direct")))
+         (peer '("peer" . "later"))
+         (baseline '(:mcp (("probe" . "hidden") ("peer" . "later"))))
+         (pichat-tool-picker--state
+          (list :preset baseline :draft (copy-tree baseline) :loaded t :server "probe"
+                :servers (append (pichat-test-mcp-eligibility-catalogue)
+                                 '((:name "peer" :tools ((:name "later" :exposure "direct" :eligible t)))))
+                :discovery (pichat-tool-discovery-draft-create :status 'ready)))
+         (pichat-tool-picker--page-size 2))
+    (pichat-tool-picker-server-all)
+    (should (equal (cons peer pairs) (plist-get (pichat-tool-picker--selection) :mcp)))
+    (pichat-tool-picker-server-none)
+    (should (equal (list peer) (plist-get (pichat-tool-picker--selection) :mcp)))
+    (pichat-tool-picker-all)
+    (should (equal (append pairs (list peer)) (plist-get (pichat-tool-picker--selection) :mcp)))
+    (should-not (plist-get (pichat-tool-picker--selection) :extensions))
+    (pichat-tool-picker-none)
+    (should-not (plist-get (pichat-tool-picker--selection) :mcp))
+    (pichat-tool-picker-reset)
+    (should (equal (plist-get baseline :mcp) (plist-get (pichat-tool-picker--selection) :mcp)))
+    ;; A checked row that became unavailable can be removed but not re-added.
+    (let ((pichat-tool-picker--page-size 20))
+      (cl-letf (((symbol-function 'transient-parse-suffixes) (lambda (_ specs) specs)))
+        (let ((toggle (nth 2 (nth 3 (pichat-tool-picker--server-tools nil)))))
+          (funcall toggle)
+          (should (equal (list peer) (plist-get (pichat-tool-picker--selection) :mcp)))
+          (should-error (funcall toggle) :type 'user-error))))))
+
+(ert-deftest pichat-tool-picker-apply-does-not-save-derived-mcp-access ()
+  (let* ((selection '(:builtins nil :mcp (("probe" . "later"))))
+         (draft (pichat-tool-discovery-draft-create :status 'ready))
+         applied
+         (pichat-tool-picker--state
+          (list :preset (pichat-presets-resolve 'review) :draft (copy-tree selection)
+                :loaded t :servers (pichat-test-mcp-eligibility-catalogue)
+                :discovery draft :callback (lambda (value) (setq applied value)))))
+    (should-error (pichat-tool-picker-apply) :type 'user-error)
+    (should-not applied)
+    (setf (pichat-tool-discovery-draft-tools draft)
+          '((:name "codemode" :eligible t :reaches-tools t)))
+    (pichat-tool-picker-apply)
+    (should (equal (plist-get selection :mcp) (plist-get applied :mcp)))
+    (should-not (plist-get applied :extensions))))
+
 (ert-deftest pichat-tool-picker-discovery-rebuilds-visible-choices-without-paging ()
   (let ((pichat-tool-picker--state
          (list :preset (pichat-presets-resolve 'manual)

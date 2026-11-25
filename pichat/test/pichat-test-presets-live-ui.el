@@ -4,8 +4,9 @@
 ;; Opt-in separate Emacs only; not loaded by the regular suite.  Drives the real
 ;; launcher, Tools picker and model keys in a non-batch Emacs with a private
 ;; `custom-file', isolated Pi state, the offline fake provider and the offline
-;; MCP fixture.  No runtime is launched.  This is a programmatic check, not
-;; human visual review.  See TESTING_GUIDELINES.md.
+;; MCP fixture.  The indirect MCP scenario also launches a real runtime.
+;; These are programmatic checks, not human visual review.
+;; See TESTING_GUIDELINES.md.
 
 ;;; Code:
 
@@ -360,6 +361,108 @@
               (message "PICHAT-PRESETS-LIVE-LEGACY-OK evil=%s" (bound-and-true-p evil-mode)))
           (remove-hook 'minibuffer-setup-hook #'pichat-test-presets-live--answer)
           (when transient--prefix (transient-quit-all)))))))
+
+(ert-deftest pichat-integration-presets-live-ui-launches-exact-indirect-mcp-selection ()
+  (should-not noninteractive)
+  (pichat-test-require-pi)
+  (pichat-test-with-clean-state
+    (pichat-test-with-temp-dir project-dir
+      (pichat-test-with-temp-dir agent-dir
+        (let* ((fixture (expand-file-name "fixtures/mcp-server.py"
+                                          (file-name-directory
+                                           (locate-library "pichat-test-support"))))
+               (python (or (executable-find "python3") (ert-fail "MCP fixture needs python3")))
+               (script-file (expand-file-name "provider-script.json" agent-dir))
+               (status-file (expand-file-name "provider-status.json" agent-dir))
+               (process-environment
+                (append (list "PI_OFFLINE=1" "PI_SKIP_VERSION_CHECK=1" "PI_TELEMETRY=0"
+                              (concat "PI_CODING_AGENT_DIR=" agent-dir)
+                              (concat "PI_CODING_AGENT_SESSION_DIR=" agent-dir)
+                              (concat "PICHAT_FAKE_PROVIDER_SCRIPT=" script-file)
+                              (concat "PICHAT_FAKE_PROVIDER_STATUS=" status-file))
+                        process-environment))
+               (transient-history nil)
+               (pichat-presets (copy-tree pichat-presets))
+               (pichat-saved-presets nil)
+               (pichat-rpc-command nil)
+               (pichat-bridge-extension-file nil)
+               (pichat-pi-executable pichat-test-pi-executable)
+               (pichat-pi-default-args
+                '("--mode" "rpc" "--offline" "--no-approve" "--no-context-files"
+                  "--no-skills" "--no-prompt-templates" "--no-themes" "--no-extensions"))
+               (pichat-pi-extra-args (list "-e" pichat-test-fake-provider-extension))
+               (default-directory project-dir)
+               (pichat-test-presets-live--answers nil))
+          (pichat-make-preset 'indirect-fixture :tools nil
+            :extensions '("builtin:mcp" "builtin:codemode") :model "pichat-fake/pichat-fake")
+          (with-temp-file (expand-file-name "mcp.json" agent-dir)
+            (insert (json-serialize
+                     `(:autoEnableCodemode :json-false
+                       :mcpServers (:probe (:command ,python :args [,fixture "coded" "other"]
+                                            :exposure "codemode")))
+                     :false-object :json-false)))
+          (with-temp-file script-file
+            (insert (json-serialize
+                     '(:turns
+                       [(:expectDeclaredTools ["codemode"]
+                         :toolCall (:name "codemode" :arguments
+                                    (:code "const names = ALL_TOOLS.filter(x => x.name.startsWith('mcp__')).map(x => x.name); if (names.join(',') !== 'mcp__probe__coded') throw Error(names.join(',')); text((await tools.mcp__probe__coded({})).content[0].text);")))
+                        (:expectDeclaredTools ["codemode"] :text "done")]))))
+          (add-hook 'minibuffer-setup-hook #'pichat-test-presets-live--answer)
+          (unwind-protect
+              (progn
+                (execute-kbd-macro (kbd "M-x pichat-launch RET"))
+                (pichat-test-presets-live--expect "Preset" "indirect-fixture")
+                (execute-kbd-macro (kbd "p"))
+                (pichat-test-presets-live--wait-menu 'pichat-launch "indirect-fixture" "fixture preset")
+                (execute-kbd-macro (kbd "x"))
+                (pichat-test-presets-live--wait-menu
+                 'pichat-tool-picker "probe (connected" "real MCP discovery")
+                ;; Enter as soon as MCP is ready, even if extension discovery
+                ;; is still pending. Its eventual result must refresh Tools.
+                (execute-kbd-macro (kbd "A"))
+                (pichat-test-presets-live--wait-menu
+                 'pichat-tool-picker-server "coded.*codemode" "exposure on fixture row")
+                (execute-kbd-macro (kbd "1"))
+                (execute-kbd-macro (kbd "RET"))
+                (pichat-test-presets-live--wait-menu
+                 'pichat-tool-picker "codemode (required by MCP selection at launch)" "derived route")
+                (execute-kbd-macro (kbd "RET"))
+                (pichat-test-presets-live--wait-menu 'pichat-launch "indirect-fixture" "applied Tools")
+                (let ((selection (plist-get (transient-scope) :tool-selection)))
+                  (should (equal '(("probe" . "coded")) (plist-get selection :mcp)))
+                  (should-not (plist-get selection :extensions)))
+                (execute-kbd-macro (kbd "e"))
+                (execute-kbd-macro (kbd "RET"))
+                (let* ((session (pichat-test-wait-until
+                                 (lambda () (car (pichat-session-list))) 30 "launched runtime"))
+                       (argv (pichat-session-rpc-command session)))
+                  (should (member "--no-session" argv))
+                  (should (equal "mcp__probe__coded,codemode" (cadr (member "--tools" argv))))
+                  (should-not (member "--no-mcp" argv))
+                  (pichat-test-wait-until
+                   (lambda ()
+                     (and (pichat-session-rpc-ready-p session)
+                          (plist-get (pichat-session-rpc-startup-control session) :verified)))
+                   30 "access tool startup verification")
+                  (pichat-test-prompt-and-wait session "Check the selected MCP tool")
+                  (pichat-test-assert-provider-script-consumed status-file)
+                  (should-not (plist-get (pichat-test-provider-status status-file) :error))
+                  (let* ((response (pichat-test-rpc-call session "get_messages"))
+                         (messages (plist-get (plist-get response :data) :messages))
+                         (result (cl-find "toolResult" messages :test #'equal
+                                          :key (lambda (msg) (plist-get msg :role)))))
+                    (should result)
+                    (should-not (eq t (plist-get result :isError)))
+                    (should (cl-some (lambda (content)
+                                       (string-search "CALLED coded" (or (plist-get content :text) "")))
+                                     (plist-get result :content))))))
+            (remove-hook 'minibuffer-setup-hook #'pichat-test-presets-live--answer)
+            (when transient--prefix (transient-quit-all))
+            (dolist (session (pichat-session-list))
+              (pichat-rpc-stop session)
+              (when-let* ((proc (pichat-session-process session)))
+                (when (process-live-p proc) (delete-process proc))))))))))
 
 (provide 'pichat-test-presets-live-ui)
 ;;; pichat-test-presets-live-ui.el ends here

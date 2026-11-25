@@ -1093,7 +1093,9 @@ EXTENSIONS the runtime will load; no unrelated runtime is queried."
                 :extension-group nil
                 :executable executable :callback callback :page 0 :cancel nil
                 :cancel-extension-start nil
-                :servers nil :loaded nil :error nil :version 0))
+                ;; Entering a server page must preserve the plist identity
+                ;; captured by the asynchronous discovery callbacks.
+                :servers nil :server nil :loaded nil :error nil :version 0))
     ;; A reused ready cache shows included future tools checked at once.
     (pichat-tool-picker--materialize-all)
     (transient-setup 'pichat-tool-picker)

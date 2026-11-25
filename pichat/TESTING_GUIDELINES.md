@@ -384,9 +384,13 @@ then reloads the saved presets in a fresh Emacs. It also adds the
 **Include future tools** on its `x` Tools group page and saves it, checking
 the saved `:extensions` and `(SOURCE . :all)` forms after a fresh-Emacs
 reload, and checks that an old-style saved `:extensions` preset stays listed
-under `p` while `x` and `RET` refuse it. It uses a private
-`custom-file`, never the user's, and launches no runtime. It needs a terminal, so
-run it in a separate `emacs -Q -nw` (for example under `script` when no tty is
+under `p` while `x` and `RET` refuse it. The preset-saving scenarios use a
+private `custom-file` and launch no runtime. The indirect MCP scenario selects
+one `codemode` MCP row in `x` Tools, verifies that the derived access tool is
+shown but not saved in the draft, and launches a real ephemeral Pi runtime. The
+offline provider checks the exact callable MCP set and initial tool declarations
+and calls the selected local fixture tool through codemode. Run these scenarios
+in a separate `emacs -Q -nw` (for example under `script` when no tty is
 available) with the result/exit wrapper above and selector
 `"^pichat-integration-presets-live-ui-"`. For Evil, add the optional load
 paths and enable `evil-mode` and `pichat-evil-setup` first. It is a programmatic

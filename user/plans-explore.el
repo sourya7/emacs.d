@@ -4,7 +4,8 @@
 
 ;; Loaded after json-explore by the configuration's module loader.
 (require 'org)
-(require 'view)
+(require 'cl-lib)
+(require 'subr-x)
 
 (defgroup plans-explore nil
   "Browse plans without changing their records or workspace state."
@@ -82,14 +83,88 @@ key or :local t for the checkout's local plans.  Nil uses CLI defaults."
                             (vectorp (gethash "orphans" value)))))
       (error "Unexpected plans %s output" (plans-explore--context-operation context)))))
 
+(defun plans-explore--state-label (value)
+  (if (not (stringp value)) (format "%s" value)
+    (let ((face (pcase value
+                  ("DONE" 'shadow) ("TODO" 'bold) ("IN-PROGRESS" 'highlight)
+                  ("BLOCKED" 'warning))))
+      (if face (propertize value 'face face) value))))
+
+(defun plans-explore--display-text (value)
+  (if (stringp value) (replace-regexp-in-string "[[:cntrl:]]" " " value)
+    (json-serialize value :null-object :null :false-object :false)))
+
+(defun plans-explore--progress-line (value)
+  (let* ((counts (gethash "task_counts" value))
+         (progress (plans-explore--progress counts))
+         (total (and (hash-table-p counts) (gethash "total" counts)))
+         (done (and (hash-table-p counts) (gethash "done" counts)))
+         (bar (when (and (natnump done) (natnump total) (> total 0))
+                (let ((filled (min 10 (/ (* done 10) total))))
+                  (concat "  " (make-string filled ?█) (make-string (- 10 filled) ?░)))))
+         (status (gethash "status" value))
+         (updated (gethash "updated" value)))
+    (string-join (delq nil (list (and (stringp status)
+                                     (format "[%s]" (plans-explore--display-text status)))
+                                (unless (equal progress "—") (concat progress " done" bar))
+                                (and (stringp updated)
+                                     (concat "updated " (plans-explore--display-text updated)))))
+                 "   ")))
+
+(defun plans-explore--show-page (value)
+  (let ((tasks (gethash "tasks" value))
+        (org-text (gethash "org" value))
+        (progress (plans-explore--progress-line value)))
+    (vui-vstack
+     (vui-text (plans-explore--display-text (or (gethash "title" value) (gethash "id" value)))
+               :face 'bold)
+     (unless (string-empty-p progress) (vui-text progress))
+     (json-explore-fields :fields '(("next_action" "Next" plans-explore--display-text)
+                                    ("path" "File" plans-explore--display-text)))
+     (json-explore-section :path '("tasks") :title (format "Tasks (%d)" (length tasks))
+                           :expanded t
+                           :body (json-explore-table :path '("tasks")
+                                  :columns '(("state" "State" plans-explore--state-label)
+                                             ("title" "Title" plans-explore--display-text)
+                                             ("line" "Line"))))
+     (json-explore-section :path '("org")
+                           :title (format "Org text (%s)" (file-size-human-readable (string-bytes org-text)))
+                           :body (vui-text org-text))
+     (json-explore-section :path '("task_counts") :title "Details"
+                           :body (vui-vstack
+                                  (apply #'vui-vstack
+                                         (cl-loop for key in '("id" "created" "archived")
+                                                  for item = (gethash key value)
+                                                  when item collect
+                                                  (vui-text (format "%s  %s" key (plans-explore--display-text item)))))
+                                  (json-explore-fields :path '("task_counts")))))))
+
+(defun plans-explore--workspaces-page ()
+  (vui-vstack
+   (json-explore-fields :fields '(("project" "Project" plans-explore--display-text)
+                                  ("version" "Version")))
+   (json-explore-section :path '("workspaces") :title "Workspaces" :expanded t
+                         :body (json-explore-table :path '("workspaces")))
+   (json-explore-section :path '("orphans") :title "Orphans" :expanded t
+                         :body (json-explore-table :path '("orphans")))))
+
+(defun plans-explore--page (value view-context)
+  ;; Drilled entries retain the source and use the usual typed JSON renderer.
+  (unless (plist-get view-context :path)
+    (pcase (plans-explore--context-operation (plist-get view-context :context))
+      ('show (plans-explore--show-page value))
+      ('workspaces (plans-explore--workspaces-page)))))
+
 (defun plans-explore--source (program directory global-argv operation id archived local)
   (unless (or (not (eq operation 'show)) (plans-explore--id-p id))
     (user-error "Invalid plan ID: %s" id))
   (let* ((id (and id (copy-sequence id)))
          (context (plans-explore--make-context :operation operation :id id :local local
                                               :global-argv global-argv)))
-    (json-explore--make-source
-     :program (copy-sequence program) :directory directory :context context
+    (json-explore-make-source
+     :program program :directory directory :context context
+     :label (if id (format "Plans %s %s" operation id) (format "Plans %s" operation))
+     :view (when (memq operation '(show workspaces)) #'plans-explore--page)
      :argv (append global-argv
                    (pcase operation
                      ('show (append '("show") (when archived '("--archived")) (list id)))
@@ -101,21 +176,14 @@ key or :local t for the checkout's local plans.  Nil uses CLI defaults."
                 ('check plans-explore--check-columns)))))
 
 (defun plans-explore--start (operation id archived root project local config no-display)
-  (let* ((directory (json-explore--local-directory default-directory))
-         (global-argv (plans-explore--global-args root project local config))
-         (source (plans-explore--source plans-explore-program directory global-argv
-                                        operation id archived local))
-         (label (if id (format "Plans %s %s" operation id) (format "Plans %s" operation)))
-         (name (format "*%s [%x]*" label
-                       (sxhash-equal (list plans-explore-program directory
-                                          (json-explore--source-argv source)))))
-         (unavailable (and local (eq operation 'workspaces)))
-         (view (json-explore--make-view
-                :label label :source (unless unavailable source)
-                :diagnostic (when unavailable "Workspace inventory unavailable with --local.")))
-         (buffer (json-explore--show-view view name no-display #'plans-explore-mode)))
-    (unless unavailable (with-current-buffer buffer (json-explore-refresh)))
-    buffer))
+  (let ((global-argv (plans-explore--global-args root project local config)))
+    (if (and local (eq operation 'workspaces))
+        (json-explore-show-message "Plans workspaces" "Workspace inventory unavailable with --local."
+                                   :mode #'plans-explore-mode :no-display no-display)
+      (json-explore-open-source
+       (plans-explore--source plans-explore-program default-directory global-argv
+                              operation id archived local)
+       :mode #'plans-explore-mode :no-display no-display))))
 
 ;;;###autoload
 (cl-defun plans-explore-list (&key root project local config archived no-display)
@@ -142,110 +210,74 @@ key or :local t for the checkout's local plans.  Nil uses CLI defaults."
   (interactive plans-explore-selection)
   (plans-explore--start 'workspaces nil nil root project local config no-display))
 
-(defun plans-explore--context ()
-  (when-let* ((source (json-explore--view-source json-explore--view)))
-    (json-explore--source-context source)))
+(defun plans-explore--operation (context)
+  (when (plans-explore--context-p context) (plans-explore--context-operation context)))
+
+(defun plans-explore--fetch-row (thing)
+  (let* ((source (plist-get thing :source))
+         (context (plist-get thing :context))
+         (row (plist-get thing :row-value)))
+    (unless (and (memq (plans-explore--operation context) '(list check))
+                 (not (json-explore-current-path)) (hash-table-p row))
+      (user-error "Select a row in the plans list or check inventory"))
+    (json-explore-push-source
+     (plans-explore--source
+      (json-explore-source-program source) (json-explore-source-directory source)
+      (plans-explore--context-global-argv context) 'show (gethash "id" row)
+      (eq (gethash "archived" row) t) (plans-explore--context-local context)))))
 
 (defun plans-explore-open-plan ()
   "Fetch the inventory row's details and push a view in this buffer."
   (interactive)
-  (let* ((view json-explore--view)
-         (source (json-explore--view-source view))
-         (context (plans-explore--context))
-         (value (json-explore--view-value view)))
-    (unless (and context (memq (plans-explore--context-operation context) '(list check))
-                 (not (json-explore--view-path view)) (vectorp value))
-      (user-error "Select a row in the plans list or check inventory"))
-    (let* ((row (aref value (nth 1 (json-explore--selected-cell))))
-           (id (gethash "id" row))
-           (detail (plans-explore--source
-                    (json-explore--source-program source) (json-explore--source-directory source)
-                    (plans-explore--context-global-argv context) 'show id
-                    (eq (gethash "archived" row) t) (plans-explore--context-local context))))
-      (json-explore--push-view
-       (json-explore--make-view :source detail :label (format "Plans show %s" id)))
-      (json-explore-refresh))))
+  (plans-explore--fetch-row (json-explore-thing-at-point)))
 
 (defun plans-explore--record ()
-  (when-let* ((context (plans-explore--context)))
-    (when (eq (plans-explore--context-operation context) 'show)
-      (json-explore--view-snapshot json-explore--view))))
+  (when (eq (plans-explore--operation (json-explore-current-context)) 'show)
+    (json-explore-current-snapshot)))
 
-(defun plans-explore--point-path ()
-  (if-let* ((cell (json-explore--cell-at)))
-      (json-explore--cell-path cell)
-    (json-explore--view-path json-explore--view)))
+(defun plans-explore--open-handler (thing action)
+  (cond
+   ((and (plans-explore--record) (equal (plist-get thing :path) '("org")))
+    (let ((org-inhibit-startup t))
+      (json-explore-inspect-text (plist-get thing :value) :mode #'org-mode
+                                 :stay (eq action 'display))))
+   ((and (eq action 'drill)
+         (eq (plans-explore--operation (plist-get thing :context)) 'list)
+         (not (json-explore-current-path)) (eq (plist-get thing :column) 'index))
+    (plans-explore--fetch-row thing)
+    t)))
 
-(defun plans-explore--org-at-point-p ()
-  (and (plans-explore--record) (equal (plans-explore--point-path) '("org"))))
-
-(defun plans-explore--inspect-org (stay)
-  (let ((org-inhibit-startup t))
-    (json-explore--inspect-value (gethash "org" (plans-explore--record)) t stay #'org-mode)))
-
-(defun plans-explore-open ()
-  "Fetch a plan from its list index, inspect its Org text, or drill into JSON."
-  (interactive)
-  (cond ((plans-explore--org-at-point-p) (plans-explore--inspect-org nil))
-        ((and (plans-explore--context)
-              (eq (plans-explore--context-operation (plans-explore--context)) 'list)
-              (not (json-explore--view-path json-explore--view))
-              (eq (nth 2 (json-explore--cell-at)) 'index))
-         (plans-explore-open-plan))
-        (t (json-explore-open))))
-
-(defun plans-explore-open-other-window ()
-  "Open this cell in another window, using Org mode for plan text."
-  (interactive)
-  (if (plans-explore--org-at-point-p) (plans-explore--inspect-org nil)
-    (json-explore-open-other-window)))
-
-(defun plans-explore-display-other-window ()
-  "Display this cell without selecting its window, using Org mode for plan text."
-  (interactive)
-  (if (plans-explore--org-at-point-p) (plans-explore--inspect-org t)
-    (json-explore-display-other-window)))
-
-(defun plans-explore-visit ()
-  "Visit the fetched record's authoritative file, read-only in View mode.
-On a task, use the line from this snapshot, which may no longer be current."
-  (interactive)
-  (let* ((record (or (plans-explore--record) (user-error "Fetch plan details first")))
-         (path (gethash "path" record))
-         (tasks (gethash "tasks" record))
-         (where (plans-explore--point-path))
-         (index (and (equal (car where) "tasks") (cadr where)))
-         (task (and (natnump index) (< index (length tasks)) (aref tasks index)))
-         (line (and (hash-table-p task) (gethash "line" task))))
-    (unless (and (file-name-absolute-p path) (not (file-remote-p path)) (file-regular-p path))
-      (user-error "No local plan file at %s" path))
-    (let* ((enable-local-variables nil)
-           (enable-local-eval nil)
-           (org-inhibit-startup t)
-           (buffer (find-file-noselect path)))
-      (pop-to-buffer buffer)
-      (view-mode 1)
-      (when (and (integerp line) (> line 0))
-        (widen)
-        (goto-char (point-min))
-        (forward-line (1- line))
-        (message "Snapshot task line %d may be stale; refresh to check" line)))))
+(defun plans-explore--visit-handler (thing)
+  (when-let* ((record (plans-explore--record)))
+    (let* ((file (gethash "path" record))
+           (tasks (gethash "tasks" record))
+           (where (if thing (plist-get thing :path) (json-explore-current-path)))
+           (index (and (equal (car where) "tasks") (cadr where)))
+           (task (and (natnump index) (< index (length tasks)) (aref tasks index))))
+      (unless (and (stringp file) (file-name-absolute-p file)
+                   (not (file-remote-p file)) (file-regular-p file))
+        (user-error "No local plan file at %s" file))
+      (let ((org-inhibit-startup t)
+            (enable-local-variables nil)
+            (enable-local-eval nil))
+        (list :buffer (find-file-noselect file)
+              :line (and (hash-table-p task) (gethash "line" task)))))))
 
 (define-derived-mode plans-explore-mode json-explore-mode "Plans Explore"
   "Browse plans CLI results.  RET on a plan's list index fetches details.
 C-c C-o fetches the selected plan from list or check; C-c C-v (gf in
 Evil) visits the fetched file or task in View mode.  RET on the Org
-cell opens a read-only snapshot without visiting the file.")
+section opens a read-only snapshot without visiting the file."
+  (add-hook 'json-explore-open-functions #'plans-explore--open-handler nil t)
+  (add-hook 'json-explore-visit-functions #'plans-explore--visit-handler nil t))
 
-(let ((map plans-explore-mode-map))
-  (define-key map [remap json-explore-open] #'plans-explore-open)
-  (define-key map [remap json-explore-open-other-window] #'plans-explore-open-other-window)
-  (define-key map [remap json-explore-display-other-window] #'plans-explore-display-other-window)
-  (define-key map (kbd "C-c C-o") #'plans-explore-open-plan)
-  (define-key map (kbd "C-c C-v") #'plans-explore-visit))
+(define-key plans-explore-mode-map (kbd "C-c C-o") #'plans-explore-open-plan)
 
-(with-eval-after-load 'evil-collection
-  (evil-collection-bind 'plans-explore-mode-map 'find-file #'plans-explore-visit))
+;; Keep existing M-x entry points without remapping the explorer's actions.
+(defalias 'plans-explore-open #'json-explore-open)
+(defalias 'plans-explore-open-other-window #'json-explore-open-other-window)
+(defalias 'plans-explore-display-other-window #'json-explore-display-other-window)
+(defalias 'plans-explore-visit #'json-explore-visit)
 
 (provide 'plans-explore)
 ;;; plans-explore.el ends here

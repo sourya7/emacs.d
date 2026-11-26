@@ -400,4 +400,114 @@
           (kill-buffer buffer)
           (should-not (process-live-p pending)))))))
 
+(defun json-explore-test--widget-page (_value context)
+  (unless (plist-get context :path)
+    (vui-vstack
+     (json-explore-fields :fields '(("name" "Widget")))
+     (json-explore-section :path '("items") :title "Items" :expanded t
+                           :body (json-explore-table :path '("items")
+                                  :columns '(("n" "Units" number-to-string)))))))
+
+(ert-deftest json-explore-public-adapter-source-view-and-hooks ()
+  (json-explore-test--with-command
+    (write-region "printf '%s' '{\"name\":\"demo\",\"items\":[{\"n\":10,\"hidden\":true},{\"n\":2}]}'"
+                  nil fixture nil 'silent)
+    (let* ((location-file (expand-file-name "widget.txt" directory))
+           (context (list :file location-file))
+           (source (json-explore-make-source
+                    :program "sh" :argv '("./fixture.sh") :directory directory
+                    :context context :label "Widgets" :view #'json-explore-test--widget-page
+                    :validate (lambda (value exit)
+                                (unless (and (= exit 0) (hash-table-p value)
+                                             (vectorp (gethash "items" value)))
+                                  (error "Expected widgets")))
+                    :future-option t)))
+      (write-region "header\nwidget\n" nil location-file nil 'silent)
+      (unwind-protect
+          (save-window-excursion
+            (with-current-buffer (json-explore-open-source source :buffer-name name :no-display t)
+              (json-explore-test--wait)
+              (should (eq (json-explore-current-source) source))
+              (should (eq (json-explore-current-context) context))
+              (should (equal (json-explore-source-label source) "Widgets"))
+              (should (eq (json-explore-current-value) (json-explore-current-snapshot)))
+              (should (string-match-p "Widget.*demo" (buffer-string)))
+              (should (string-match-p "Units" (buffer-string)))
+              (should-not (string-match-p "hidden" (buffer-string)))
+              (should (vui-goto-key '(("items") 0 index)))
+              (json-explore-next-column 1)
+              (should (equal (plist-get (json-explore-thing-at-point) :path) '("items" 0 "n")))
+              (json-explore-sort)
+              (should (< (save-excursion (vui-goto-key '(("items") 1 "n")) (point)) (point)))
+              (should-error (json-explore-visit) :type 'user-error)
+              (let ((actions nil))
+                (add-hook 'json-explore-open-functions
+                          (lambda (thing action)
+                            (when (equal (plist-get thing :path) '("items" 0 "n"))
+                              (push action actions)
+                              t)) nil t)
+                (add-hook 'json-explore-visit-functions (lambda (_) nil) nil t)
+                (add-hook 'json-explore-visit-functions
+                          (lambda (thing) (list :file (plist-get (plist-get thing :context) :file) :line 2))
+                          10 t)
+                (json-explore-open)
+                (json-explore-open-other-window)
+                (json-explore-display-other-window)
+                (should (equal actions '(display other-window drill)))
+                (should (= (plist-get (json-explore-thing-at-point) :value) 10))
+                (should-not (get-file-buffer location-file))
+                (save-current-buffer (json-explore-visit))
+                (with-current-buffer (get-file-buffer location-file)
+                  (should (and view-mode buffer-read-only (= (line-number-at-pos) 2)))))
+              (kill-local-variable 'json-explore-open-functions)
+              ;; No handler: drill and use the generic fallback on the nested view.
+              (json-explore-open)
+              (should (equal (json-explore-current-path) '("items" 0 "n")))
+              (should (= (json-explore-current-value) 10))
+              (json-explore-back)
+              (let ((snapshot (json-explore-current-snapshot)))
+                (write-region "echo '{}'" nil fixture nil 'silent)
+                (json-explore-refresh)
+                (json-explore-test--wait)
+                (should (eq snapshot (json-explore-current-snapshot)))
+                (should (string-match-p "Expected widgets" (buffer-string))))
+              (json-explore-push-source
+               (json-explore-make-source :value (json-explore-parse "[{\"n\":7,\"hidden\":false}]")
+                                         :columns '(("n" "Detail units")))
+               :label "Details")
+              (should (equal header-line-format "Details"))
+              (should (string-match-p "Detail units" (buffer-string)))
+              (should-not (string-match-p "hidden" (buffer-string)))
+              (should-error (json-explore-refresh) :type 'user-error)
+              (json-explore-back)
+              (should (eq (json-explore-current-source) source))))
+        (when-let* ((buffer (get-file-buffer location-file))) (kill-buffer buffer))))))
+
+(ert-deftest json-explore-public-visit-and-open-fall-through-to-global-handlers ()
+  (let* ((location (generate-new-buffer " *widget location*"))
+         (buffer (json-explore-show-value [42] "*Widget fallback*" t))
+         actions
+         (open (lambda (thing action) (push (list 'global (plist-get thing :value) action) actions)))
+         (visit (lambda (_) location)))
+    (unwind-protect
+        (save-window-excursion
+          (add-hook 'json-explore-open-functions open)
+          (add-hook 'json-explore-visit-functions visit)
+          (with-current-buffer buffer
+            (should (vui-goto-key '(nil 0 value)))
+            (add-hook 'json-explore-open-functions
+                      (lambda (_ action) (when (eq action 'display) (push 'local actions))) nil t)
+            (add-hook 'json-explore-visit-functions (lambda (_) nil) nil t)
+            (json-explore-display-other-window)
+            (should (equal actions '(local)))
+            (json-explore-open)
+            (should (equal actions '((global 42 drill) local)))
+            (json-explore-visit)
+            (should (eq (current-buffer) location))
+            (should (and view-mode buffer-read-only))))
+      (remove-hook 'json-explore-open-functions open)
+      (remove-hook 'json-explore-visit-functions visit)
+      (kill-buffer buffer)
+      (kill-buffer location))))
+
 ;;; json-explore-test.el ends here

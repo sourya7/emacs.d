@@ -8,6 +8,7 @@
 (require 'subr-x)
 (require 'vui)
 (require 'vui-components)
+(require 'view)
 
 (defgroup json-explore nil
   "Browse finite JSON values."
@@ -62,13 +63,71 @@
 ;; symbols for structural columns and strings for actual object members.
 (cl-defstruct (json-explore--view (:constructor json-explore--make-view))
   value path label columns rows cell start hscroll source diagnostic snapshot
-  presentation tables)
+  presentation tables layouts active-tables column-spec section-defaults)
 
-;; Optional adapter policies: VALIDATE sees (snapshot exit-code) before it is
-;; installed; COLUMNS is a list of (key header [formatter]) for a root array of
-;; objects.  These labels do not change cell values or paths.
 (cl-defstruct (json-explore--source (:constructor json-explore--make-source))
-  program argv directory context success-codes validate columns)
+  program argv directory label context success-codes validate columns view value)
+
+(cl-defun json-explore-make-source (&key program argv directory label context
+                                        (success-codes '(0)) validate columns view value
+                                        &allow-other-keys)
+  "Describe a local PROGRAM and ARGV, or a static JSON VALUE without PROGRAM.
+DIRECTORY defaults to the caller's `default-directory' for commands.  LABEL
+names the source; CONTEXT is opaque and retained through drill and refresh.
+Only SUCCESS-CODES are parsed.  VALIDATE receives (parsed-value exit-code)
+and signals an error to reject a result without replacing the last good view.
+COLUMNS selects root object-array columns as (KEY HEADER [FORMATTER]); the
+optional formatter receives the typed value and returns display text only.
+VIEW is called with (value view-context) and returns a vui vnode or nil to
+use the generic renderer.  Treat the source and its values as read-only."
+  (json-explore--make-source
+   :program (copy-sequence program) :argv (mapcar #'copy-sequence argv)
+   :directory (if (or program directory)
+                  (json-explore--local-directory (or directory default-directory))
+                default-directory)
+   :label (or label program "JSON") :context context
+   :success-codes (copy-sequence success-codes) :validate validate
+   :columns columns :view view :value value))
+
+(defun json-explore-source-program (source)
+  "Return SOURCE's executable, or nil for a static source."
+  (json-explore--source-program source))
+
+(defun json-explore-source-argv (source)
+  "Return SOURCE's arguments, excluding the executable."
+  (json-explore--source-argv source))
+
+(defun json-explore-source-directory (source)
+  "Return SOURCE's captured working directory."
+  (json-explore--source-directory source))
+
+(defun json-explore-source-label (source)
+  "Return SOURCE's display label."
+  (json-explore--source-label source))
+
+(defun json-explore-source-context (source)
+  "Return SOURCE's opaque context."
+  (json-explore--source-context source))
+
+(defun json-explore-source-success-codes (source)
+  "Return SOURCE's accepted exit codes."
+  (json-explore--source-success-codes source))
+
+(defun json-explore-source-validate (source)
+  "Return SOURCE's result validator, if any."
+  (json-explore--source-validate source))
+
+(defun json-explore-source-columns (source)
+  "Return SOURCE's root table column specification, if any."
+  (json-explore--source-columns source))
+
+(defun json-explore-source-view (source)
+  "Return SOURCE's custom view renderer, if any."
+  (json-explore--source-view source))
+
+(defun json-explore-source-value (source)
+  "Return SOURCE's static value, if supplied."
+  (json-explore--source-value source))
 
 (cl-defstruct (json-explore--request (:constructor json-explore--make-request))
   process pipe stdout stderr)
@@ -79,6 +138,46 @@
 (defvar-local json-explore--back nil)
 (defvar-local json-explore--forward nil)
 (defvar-local json-explore--inspection nil)
+
+(defvar json-explore-open-functions nil
+  "Abnormal hook for opening a JSON cell.
+Functions receive the plist from `json-explore-thing-at-point' and one of
+`drill', `other-window' or `display'.  The first non-nil result wins;
+otherwise the standard action runs.  No handlers run off a cell.
+Use `add-hook' with LOCAL non-nil for adapter-specific handlers.")
+
+(defvar-local json-explore-view-function nil
+  "Optional fallback renderer for this buffer when its source has no :view.
+Called with (value view-context), as in `json-explore-make-source'.")
+
+(defvar json-explore-visit-functions nil
+  "Abnormal hook for finding a location for `json-explore-visit'.
+Functions receive the thing-at-point plist (nil off a cell).  Return nil
+for no match, a live buffer, or a plist with :file (an absolute local
+file) or :buffer (a live buffer) and optional :line (one-based).
+Use :buffer when the handler needs to control how the file is opened.
+The first non-nil result wins.")
+
+(defun json-explore-current-source ()
+  "Return the current view's source, or nil outside an explorer."
+  (when json-explore--view (json-explore--view-source json-explore--view)))
+
+(defun json-explore-current-context ()
+  "Return the current source's opaque context, or nil."
+  (when-let* ((source (json-explore-current-source)))
+    (json-explore-source-context source)))
+
+(defun json-explore-current-value ()
+  "Return the current view's typed JSON value, or nil before a result."
+  (when json-explore--view (json-explore--view-value json-explore--view)))
+
+(defun json-explore-current-snapshot ()
+  "Return the root JSON snapshot backing the current history entry."
+  (when json-explore--view (json-explore--view-snapshot json-explore--view)))
+
+(defun json-explore-current-path ()
+  "Return the current view's absolute JSON path, nil at the root."
+  (when json-explore--view (json-explore--view-path json-explore--view)))
 
 (defun json-explore--breadcrumb ()
   (let ((label (replace-regexp-in-string "[[:cntrl:]]" " "
@@ -129,8 +228,10 @@
   (or (hash-table-p value) (vectorp value)))
 
 (defun json-explore--lookup (view path)
-  (json-explore--at-path (json-explore--view-value view)
-                         (nthcdr (length (json-explore--view-path view)) path)))
+  (let ((prefix (json-explore--view-path view)))
+    (when (equal prefix (seq-take path (length prefix)))
+      (json-explore--at-path (json-explore--view-value view)
+                             (nthcdr (length prefix) path) t))))
 
 (defun json-explore--table-view (view path)
   (if (equal path (json-explore--view-path view)) view
@@ -167,6 +268,19 @@
   (pcase-let ((`(,path ,row ,column) cell))
     (if (eq row 'scalar) path
       (append path (list row) (when (stringp column) (list column))))))
+
+(defun json-explore-thing-at-point ()
+  "Return a plist describing the selected JSON cell, or nil off a cell.
+Keys are :path (absolute), :row (original key or index, or `scalar'),
+:row-value (the whole row value), :column, :value, :source and :context.
+Display formatting does not change these values.  Treat them as read-only."
+  (when-let* ((cell (json-explore--cell-at)))
+    (pcase-let ((`(,path ,row ,column) cell))
+      (list :path (json-explore--cell-path cell) :row row :column column
+            :row-value (json-explore--row-value (json-explore--lookup json-explore--view path)
+                                               row nil)
+            :value (json-explore--cell-value json-explore--view cell)
+            :source (json-explore-current-source) :context (json-explore-current-context)))))
 
 (defun json-explore--display-value (view row column)
   (if (memq column '(key index)) row
@@ -214,8 +328,7 @@
     (_ (json-explore--summary column))))
 
 (defun json-explore--column-spec (view column)
-  (when (and (not (json-explore--view-path view)) (json-explore--view-source view))
-    (assoc column (json-explore--source-columns (json-explore--view-source view)))))
+  (assoc column (json-explore--view-column-spec view)))
 
 (defun json-explore--column-header (view column)
   (or (nth 1 (json-explore--column-spec view column)) (json-explore--header column)))
@@ -273,7 +386,9 @@
                  (cons (cons (car path) new) (remq old children))))))
 
 (defun json-explore--fields (view rows)
-  (let* ((labels (mapcar #'json-explore--summary rows))
+  (let* ((labels (mapcar (lambda (row) (or (nth 1 (json-explore--column-spec view row))
+                                          (json-explore--summary row)))
+                         rows))
          (width (apply #'max 0 (mapcar #'string-width labels))))
     (apply #'vui-vstack
            (cl-mapcar
@@ -282,7 +397,10 @@
                 (vui-region :key (json-explore--cell-key view row 'key)
                   (vui-text (concat label (make-string (- width (string-width label)) ?\s))))
                 (vui-region :key (json-explore--cell-key view row 'value)
-                  (vui-text (json-explore--label view row 'value)))))
+                  (let* ((value (json-explore--display-value view row 'value))
+                         (formatter (nth 2 (json-explore--column-spec view row))))
+                    (vui-text (if formatter (json-explore--clip (funcall formatter value))
+                                (json-explore--summary value)))))))
             rows labels))))
 
 (vui-defcomponent json-explore--table-component (view sort row-limit cell-width)
@@ -306,6 +424,72 @@
            ((or (vectorp value) (and (hash-table-p value) (zerop (hash-table-count value))))
             (vui-text (json-explore--summary value)))))))
 
+(defun json-explore--active-table (path)
+  (or (and (json-explore--view-active-tables json-explore--view)
+           (gethash path (json-explore--view-active-tables json-explore--view)))
+      (json-explore--table-view json-explore--view path)))
+
+(defun json-explore--layout-table (path spec fields)
+  (let* ((view json-explore--view)
+         (layouts (or (json-explore--view-layouts view)
+                      (setf (json-explore--view-layouts view) (make-hash-table :test #'equal))))
+         (active (or (json-explore--view-active-tables view)
+                     (setf (json-explore--view-active-tables view) (make-hash-table :test #'equal))))
+         (key (list path spec fields))
+         (base (json-explore--table-view view path)))
+    (puthash
+     path
+     (if (not spec) base
+       (or (gethash key layouts)
+           (let ((table (copy-json-explore--view base)))
+             (setf (json-explore--view-column-spec table) spec)
+             (cond (fields
+                    (setf (json-explore--view-rows table)
+                          (seq-filter (lambda (key) (gethash key (json-explore--view-value table)))
+                                      (mapcar #'car spec))))
+                   ((json-explore--object-array-p (json-explore--view-value table))
+                    (setf (json-explore--view-columns table) (cons 'index (mapcar #'car spec)))))
+             (puthash key table layouts))))
+     active)))
+
+(cl-defun json-explore-table (&key (path (json-explore-current-path)) columns &allow-other-keys)
+  "Render the array at absolute PATH as a navigable vui table vnode.
+Call during a source's VIEW renderer.  PATH defaults to the current view.
+COLUMNS uses (KEY HEADER [FORMATTER]) for arrays of objects.  Use only one
+cell layout per path.  Sorting operates on the typed values, not labels."
+  (when (vectorp (json-explore--lookup json-explore--view path))
+    (vui-component 'json-explore--table-component :key (list :table path)
+      :view (json-explore--layout-table path columns nil)
+      :sort (plist-get (json-explore--presentation-at path) :sort)
+      :row-limit json-explore-row-limit :cell-width json-explore-cell-width)))
+
+(cl-defun json-explore-fields (&key (path (json-explore-current-path)) fields &allow-other-keys)
+  "Render object fields at absolute PATH as a navigable vui vnode.
+Call during a source's VIEW renderer.  FIELDS selects (KEY LABEL [FORMATTER])
+in order, skipping absent keys.  Without FIELDS show the scalar fields."
+  (when (hash-table-p (json-explore--lookup json-explore--view path))
+    (vui-component 'json-explore--table-component :key (list :fields path)
+      :view (json-explore--layout-table path fields t)
+      :sort (plist-get (json-explore--presentation-at path) :sort)
+      :row-limit json-explore-row-limit :cell-width json-explore-cell-width)))
+
+(cl-defun json-explore-section (&key path title expanded body &allow-other-keys)
+  "Render a fold at absolute PATH, a member of the current view's JSON.
+Call during a source's VIEW renderer.  TITLE overrides the default summary;
+EXPANDED is the initial state.  BODY is an optional vnode displayed when
+open; by default the generic page for that value is shown.  The heading
+itself is navigable and refers to the typed value at PATH."
+  (when (and (not (equal path (json-explore-current-path)))
+             (json-explore--lookup json-explore--view path))
+    (let ((defaults (or (json-explore--view-section-defaults json-explore--view)
+                        (setf (json-explore--view-section-defaults json-explore--view)
+                              (make-hash-table :test #'equal)))))
+      (puthash path expanded defaults))
+    (vui-component 'json-explore--section :key (list :section path)
+      :view json-explore--view :path path :node (json-explore--presentation-at path)
+      :title title :body body :expanded (json-explore--fold-open-p path expanded)
+      :row-limit json-explore-row-limit :cell-width json-explore-cell-width)))
+
 (defun json-explore--page (view path node)
   (let ((table (json-explore--table-view view path)) sections)
     (when (hash-table-p (json-explore--view-value table))
@@ -315,6 +499,7 @@
            (let ((section-path (append path (list key))))
              (push (vui-component 'json-explore--section :key (list :section section-path)
                      :view view :path section-path :node (cdr (assoc key (plist-get node :children)))
+                     :expanded (json-explore--fold-open-p section-path nil)
                      :row-limit json-explore-row-limit :cell-width json-explore-cell-width)
                    sections))))
        (json-explore--view-value table)))
@@ -324,25 +509,36 @@
              :row-limit json-explore-row-limit :cell-width json-explore-cell-width)
            (nreverse sections))))
 
-(vui-defcomponent json-explore--section (view path node row-limit cell-width)
+(vui-defcomponent json-explore--section (view path node row-limit cell-width title body expanded)
   :memo t
   :render
   (let* ((json-explore-row-limit row-limit)
          (json-explore-cell-width cell-width)
          (row (car (last path)))
-         (value (json-explore--lookup view path))
-         (expanded (plist-get node :open)))
+         (value (json-explore--lookup view path)))
     (vui-collapsible :key (list (butlast path) row 'section)
-      :title (format "%s  %s" (json-explore--summary row) (json-explore--summary value))
+      :title (or title (format "%s  %s" (json-explore--summary row) (json-explore--summary value)))
       :expanded-indicator "▾" :collapsed-indicator "▸"
       :expanded expanded :on-toggle (lambda (open) (json-explore--set-fold path open))
-      (when expanded (json-explore--page view path node)))))
+      (when expanded (or body (json-explore--page view path node))))))
+
+(defun json-explore--custom-page (view)
+  (let* ((source (json-explore--view-source view))
+         (renderer (or (and source (json-explore-source-view source))
+                       json-explore-view-function)))
+    (when renderer
+      (funcall renderer (json-explore--view-value view)
+               (list :path (json-explore--view-path view) :source source
+                     :context (json-explore-current-context)
+                     :snapshot (json-explore--view-snapshot view))))))
 
 (vui-defcomponent json-explore--root ()
   :state ((presentation nil))
   :render
   (let ((view json-explore--view)
         (commit (make-symbol "explorer-render")))
+    (setf (json-explore--view-active-tables view) nil
+          (json-explore--view-section-defaults view) nil)
     ;; The collapsible may be redrawn by vui itself (e.g. on resize).
     (vui-use-effect (commit) (json-explore--prepare-sections))
     (vui-vstack
@@ -353,7 +549,8 @@
               (mapcar (lambda (line) (vui-text line :face 'warning))
                       (split-string diagnostic "\n"))))
      (cond ((json-explore--view-value view)
-            (json-explore--page view (json-explore--view-path view) presentation))
+            (or (json-explore--custom-page view)
+                (json-explore--page view (json-explore--view-path view) presentation)))
            ((not (json-explore--view-diagnostic view))
             (vui-text "No JSON result yet."))))))
 
@@ -467,7 +664,7 @@
   (pcase-let ((`(,path ,row ,column) (json-explore--selected-cell)))
     (unless (eq column 'section)
       (let* ((columns (json-explore--view-columns
-                       (json-explore--table-view json-explore--view path)))
+                       (json-explore--active-table path)))
              (next (nth (mod (+ (cl-position column columns :test #'equal) step)
                              (length columns))
                         columns)))
@@ -495,7 +692,7 @@
 (defun json-explore--sort-at (path)
   (let ((sort (plist-get (json-explore--presentation-at path) :sort)))
     (when (member (car sort) (json-explore--view-columns
-                              (json-explore--table-view json-explore--view path)))
+                              (json-explore--active-table path)))
       sort)))
 
 (defun json-explore--set-sort (reverse)
@@ -526,11 +723,20 @@
   (json-explore--update-presentation path (lambda (node) (plist-put node :open open)))
   (unless open (vui-goto-key (list (butlast path) (car (last path)) 'section))))
 
+(defun json-explore--fold-open-p (path default)
+  (let ((node (json-explore--presentation-at path))
+        (root (json-explore--presentation)))
+    (cond ((plist-member node :open) (plist-get node :open))
+          ((plist-member root :fold-default) (plist-get root :fold-default))
+          (t default))))
+
 (defun json-explore-toggle-section ()
   "Toggle the section at or enclosing point."
   (interactive)
-  (let ((path (json-explore--section-at)))
-    (json-explore--set-fold path (not (plist-get (json-explore--presentation-at path) :open)))))
+  (let* ((path (json-explore--section-at))
+         (defaults (json-explore--view-section-defaults json-explore--view)))
+    (json-explore--set-fold path (not (json-explore--fold-open-p
+                                      path (and defaults (gethash path defaults)))))))
 
 (defun json-explore-open-section ()
   "Expand the section at or enclosing point."
@@ -542,35 +748,22 @@
   (interactive)
   (json-explore--set-fold (json-explore--section-at) nil))
 
-(defun json-explore--open-tree (node value)
-  (let* ((node (plist-put (copy-sequence node) :open t))
-         (existing (plist-get node :children))
-         children)
-    (when (hash-table-p value)
-      (maphash (lambda (key child)
-                 (when (json-explore--section-p child)
-                   (push (cons key (json-explore--open-tree (cdr (assoc key existing)) child))
-                         children)))
-               value))
-    (plist-put node :children (nreverse children))))
-
-(defun json-explore--close-tree (node)
-  (let ((node (plist-put (copy-sequence node) :open nil)))
-    (plist-put node :children
-               (mapcar (lambda (child)
-                         (cons (car child) (json-explore--close-tree (cdr child))))
-                       (plist-get node :children)))))
+(defun json-explore--reset-folds (node)
+  (cl-loop for (key value) on node by #'cddr
+           unless (eq key :open) append
+           (list key (if (eq key :children)
+                         (mapcar (lambda (child)
+                                   (cons (car child) (json-explore--reset-folds (cdr child))))
+                                 value)
+                       value))))
 
 (defun json-explore--fold-all (open)
-  (let ((path (json-explore--view-path json-explore--view))
-        (value (json-explore--view-value json-explore--view))
+  (let ((path (json-explore-current-path))
         (cell (json-explore--cell-at)))
-    (when (hash-table-p value)
-      (json-explore--update-presentation
-       path (if open (lambda (node) (json-explore--open-tree node value))
-              #'json-explore--close-tree))
-      (when (and (not open) cell (not (equal (car cell) path)))
-        (vui-goto-key (list path (nth (length path) (car cell)) 'section))))))
+    (json-explore--update-presentation
+     path (lambda (node) (plist-put (json-explore--reset-folds node) :fold-default open)))
+    (when (and (not open) cell (not (equal (car cell) path)))
+      (vui-goto-key (list path (nth (length path) (car cell)) 'section)))))
 
 (defun json-explore-open-all-sections ()
   "Expand all sections on the current page (without drilling into table rows)."
@@ -592,7 +785,7 @@
     (kill-new path)
     (message "%s" path)))
 
-(defun json-explore--inspect-value (value raw stay &optional text-mode-function)
+(defun json-explore--inspect-value (value raw stay &optional text-mode-function label)
   (unless (buffer-live-p json-explore--inspection)
     (setq json-explore--inspection
           (generate-new-buffer (format "*Inspect %s*" (string-trim (buffer-name) "[*]+" "[*]+")))))
@@ -608,12 +801,26 @@
             (insert (json-explore--json value))
             (json-pretty-print-buffer)))
         (setq buffer-read-only t)
+        (when label
+          (setq-local header-line-format (replace-regexp-in-string "%" "%%" label)))
         (set-buffer-modified-p nil)
         (goto-char (point-min))))
     (let ((window (display-buffer buffer
                                   '((display-buffer-reuse-window display-buffer-pop-up-window)
                                     (inhibit-same-window . t)))))
-      (when (and window (not stay)) (select-window window)))))
+      (when (and window (not stay)) (select-window window)))
+    buffer))
+
+(cl-defun json-explore-inspect-text (text &key mode stay label &allow-other-keys)
+  "Display TEXT read-only in this explorer's reused inspection buffer.
+MODE defaults to `text-mode'; LABEL is an optional header-line label.
+With STAY keep focus in the explorer.  Return the inspection buffer."
+  (json-explore--inspect-value text t stay mode label))
+
+(cl-defun json-explore-inspect-value (value &key stay &allow-other-keys)
+  "Inspect typed JSON VALUE read-only and return the reused buffer.
+With STAY keep focus in the explorer."
+  (json-explore--inspect-value value nil stay))
 
 (defun json-explore--value-at-point ()
   (if-let* ((cell (json-explore--cell-at))) (json-explore--cell-value json-explore--view cell)
@@ -623,19 +830,25 @@
 (defun json-explore-inspect ()
   "Inspect the full, typed JSON value in the reused companion buffer."
   (interactive)
-  (json-explore--inspect-value (json-explore--value-at-point) nil nil))
+  (json-explore-inspect-value (json-explore--value-at-point)))
+
+(defun json-explore--run-open-handlers (action)
+  (when-let* ((thing (json-explore-thing-at-point)))
+    (run-hook-with-args-until-success 'json-explore-open-functions thing action)))
 
 (defun json-explore-open-other-window ()
   "Open the full cell in another window (strings as plain text)."
   (interactive)
-  (let ((value (json-explore--value-at-point)))
-    (json-explore--inspect-value value (stringp value) nil)))
+  (unless (json-explore--run-open-handlers 'other-window)
+    (let ((value (json-explore--value-at-point)))
+      (json-explore--inspect-value value (stringp value) nil))))
 
 (defun json-explore-display-other-window ()
   "Display the full cell in another window without selecting it."
   (interactive)
-  (let ((value (json-explore--value-at-point)))
-    (json-explore--inspect-value value (stringp value) t)))
+  (unless (json-explore--run-open-handlers 'display)
+    (let ((value (json-explore--value-at-point)))
+      (json-explore--inspect-value value (stringp value) t))))
 
 (defun json-explore--open (cell)
   (let* ((value (json-explore--cell-value json-explore--view cell))
@@ -665,7 +878,38 @@
 (defun json-explore-open ()
   "Drill into the cell at point.  Use its index/key cell to open a row."
   (interactive)
-  (json-explore--open (json-explore--selected-cell)))
+  (unless (json-explore--run-open-handlers 'drill)
+    (json-explore--open (json-explore--selected-cell))))
+
+(defun json-explore-visit ()
+  "Visit the first location provided by `json-explore-visit-functions'."
+  (interactive)
+  (let* ((location (run-hook-with-args-until-success 'json-explore-visit-functions
+                                                    (json-explore-thing-at-point)))
+         (line (and (listp location) (plist-get location :line)))
+         (buffer
+          (cond ((buffer-live-p location) location)
+                ((null location) (user-error "This view has no location"))
+                ((and (listp location) (plist-member location :buffer))
+                 (let ((target (plist-get location :buffer)))
+                   (unless (buffer-live-p target)
+                     (user-error "Explorer location requires a live buffer"))
+                   target))
+                ((listp location)
+                 (let ((file (plist-get location :file)))
+                   (unless (and (stringp file) (file-name-absolute-p file)
+                                (not (file-remote-p file)) (file-regular-p file))
+                     (user-error "No local file at %s" file))
+                   (let ((enable-local-variables nil) (enable-local-eval nil))
+                     (find-file-noselect file))))
+                (t (user-error "Invalid explorer location")))))
+    (pop-to-buffer buffer)
+    (view-mode 1)
+    (when (and (integerp line) (> line 0))
+      (widen)
+      (goto-char (point-min))
+      (forward-line (1- line))
+      (message "Snapshot line %d may be stale; refresh to check" line))))
 
 (defun json-explore--kill-inspection ()
   (when (buffer-live-p json-explore--inspection)
@@ -716,6 +960,7 @@ ordinary Emacs or Evil search keys to find rendered text."
   (define-key map (kbd "C-c C-b") #'json-explore-back)
   (define-key map (kbd "C-c C-f") #'json-explore-forward)
   (define-key map (kbd "C-c C-r") #'json-explore-refresh)
+  (define-key map (kbd "C-c C-v") #'json-explore-visit)
   (define-key map (kbd "q") #'json-explore-quit))
 
 (with-eval-after-load 'evil-collection
@@ -727,6 +972,7 @@ ordinary Emacs or Evil search keys to find rendered text."
     'next-button #'json-explore-next-cell
     'previous-button #'json-explore-previous-cell
     'lookup-doc #'json-explore-inspect
+    'find-file #'json-explore-visit
     'refresh #'json-explore-refresh
     'quit #'json-explore-quit
     'quit-save #'json-explore-quit
@@ -749,6 +995,8 @@ ordinary Emacs or Evil search keys to find rendered text."
       (user-error "Buffer %s is not in %s" buffer-name mode))
     (with-current-buffer buffer
       (unless existing (funcall mode))
+      (unless (derived-mode-p 'json-explore-mode)
+        (user-error "%s does not derive from json-explore-mode" mode))
       (json-explore--cancel-request)
       (unless (json-explore--view-label view)
         (setf (json-explore--view-label view) buffer-name))
@@ -758,12 +1006,57 @@ ordinary Emacs or Evil search keys to find rendered text."
     (with-current-buffer buffer (json-explore--first-cell))
     buffer))
 
+(defun json-explore--initial-view (source &optional label)
+  (let* ((value (and (not (json-explore-source-program source))
+                     (json-explore-source-value source)))
+         (view (if value (json-explore--new-view value nil) (json-explore--make-view))))
+    (setf (json-explore--view-source view) source
+          (json-explore--view-label view) (or label (json-explore-source-label source))
+          (json-explore--view-snapshot view) value)
+    (json-explore--apply-source-columns view source)
+    view))
+
+(defun json-explore--source-name (source)
+  (format "*%s [%x]*" (json-explore-source-label source)
+          (sxhash-equal (list (json-explore-source-program source)
+                             (json-explore-source-directory source)
+                             (json-explore-source-argv source)))))
+
+(cl-defun json-explore-open-source (source &key buffer-name mode no-display &allow-other-keys)
+  "Open SOURCE at its root and return the explorer buffer immediately.
+Run command sources asynchronously; display static sources directly.
+MODE defaults to `json-explore-mode' and must derive from it.  Without
+BUFFER-NAME, reuse the name based on the label and command identity.
+NO-DISPLAY leaves windows alone.  Opening resets that buffer's history."
+  (let ((buffer (json-explore--show-view (json-explore--initial-view source)
+                                        (or buffer-name (json-explore--source-name source))
+                                        no-display mode)))
+    (when (json-explore-source-program source)
+      (with-current-buffer buffer (json-explore-refresh)))
+    buffer))
+
+(cl-defun json-explore-push-source (source &key label &allow-other-keys)
+  "Push SOURCE into this explorer's history and run it if it has a command.
+LABEL overrides the entry's breadcrumb label.  Do not create a new buffer."
+  (unless json-explore--view (user-error "No explorer view here"))
+  (json-explore--push-view (json-explore--initial-view source label))
+  (when (json-explore-source-program source) (json-explore-refresh)))
+
+(cl-defun json-explore-show-message (label text &key mode buffer-name no-display &allow-other-keys)
+  "Show TEXT under LABEL in a non-refreshable explorer and return the buffer.
+MODE, BUFFER-NAME and NO-DISPLAY work as in `json-explore-open-source'."
+  (let* ((source (json-explore-make-source :label label))
+         (view (json-explore--initial-view source)))
+    (setf (json-explore--view-diagnostic view) text)
+    (json-explore--show-view view (or buffer-name (json-explore--source-name source)) no-display mode)))
+
 (defun json-explore-show-value (value buffer-name &optional no-display)
   "Show parsed JSON VALUE in explorer BUFFER-NAME and return that buffer.
 The caller owns the source identity and supplies one name per source.
 Replace that source's history with a new root.  With NO-DISPLAY, do not
 switch to the buffer."
-  (json-explore--show-view (json-explore--new-view value nil) buffer-name no-display))
+  (json-explore-open-source (json-explore-make-source :value value :label buffer-name)
+                            :buffer-name buffer-name :no-display no-display))
 
 (defun json-explore-buffer (&optional begin end)
   "Explore a JSON snapshot of the current buffer or active region.
@@ -774,12 +1067,12 @@ When BEGIN and END are provided, explore only the text between them."
          (name (format "*JSON: %s*" origin)))
     (save-restriction
       (unless region (widen))
-      (let ((view (json-explore--new-view
-                   (json-explore-parse (buffer-substring-no-properties (or begin (point-min))
-                                                                      (or end (point-max))))
-                   nil)))
-        (setf (json-explore--view-label view) (if region (format "%s (region)" origin) origin))
-        (json-explore--show-view view name nil)))))
+      (json-explore-open-source
+       (json-explore-make-source
+        :value (json-explore-parse (buffer-substring-no-properties (or begin (point-min))
+                                                                  (or end (point-max))))
+        :label (if region (format "%s (region)" origin) origin))
+       :buffer-name name))))
 
 (defun json-explore--dispose-request (request)
   (dolist (process (list (json-explore--request-process request)
@@ -832,23 +1125,29 @@ When BEGIN and END are provided, explore only the text between them."
       (error "Executable not found or not executable: %s" program))
     file))
 
-(defun json-explore--at-path (value path)
+(defun json-explore--at-path (value path &optional noerror)
   (dolist (part path value)
     (setq value
           (cond ((and (stringp part) (hash-table-p value)) (gethash part value))
                 ((and (natnump part) (vectorp value) (< part (length value)))
                  (aref value part))))
-    (unless value (error "Refreshed JSON has no value at %s" (json-explore-path-string path)))))
+    (unless (or value noerror)
+      (error "Refreshed JSON has no value at %s" (json-explore-path-string path)))))
+
+(defun json-explore--apply-source-columns (view source)
+  (when (and (not (json-explore--view-path view))
+             (json-explore--object-array-p (json-explore--view-value view))
+             (json-explore-source-columns source))
+    (let ((spec (json-explore-source-columns source)))
+      (setf (json-explore--view-columns view) (cons 'index (mapcar #'car spec))
+            (json-explore--view-column-spec view) spec))))
 
 (defun json-explore--replace-snapshot (view snapshot)
   (let* ((path (json-explore--view-path view))
          (value (json-explore--at-path snapshot path))
          (source (json-explore--view-source view))
          (new (json-explore--new-view value path)))
-    (when (and (not path) (json-explore--object-array-p value)
-               (json-explore--source-columns source))
-      (setf (json-explore--view-columns new)
-            (cons 'index (mapcar #'car (json-explore--source-columns source)))))
+    (json-explore--apply-source-columns new source)
     (setf (json-explore--view-label new) (json-explore--view-label view)
           (json-explore--view-cell new) (json-explore--view-cell view)
           (json-explore--view-start new) (json-explore--view-start view)
@@ -891,7 +1190,8 @@ When BEGIN and END are provided, explore only the text between them."
 For a nested view, select the same JSON path in the fresh result."
   (interactive)
   (let ((source (and json-explore--view (json-explore--view-source json-explore--view))))
-    (unless source (user-error "This snapshot has no command to refresh"))
+    (unless (and source (json-explore-source-program source))
+      (user-error "This snapshot has no command to refresh"))
     (json-explore--cancel-request)
     (let* ((request (json-explore--make-request))
            (generation (cl-incf json-explore--generation))
@@ -949,15 +1249,11 @@ Replace the root in BUFFER-NAME, or allocate a new explorer if omitted.
 Return the explorer buffer immediately; NO-DISPLAY leaves windows alone."
   (interactive (list (read-string "JSON executable: ")
                      (split-string-shell-command (read-string "Arguments (quoted as needed): "))))
-  (let* ((source (json-explore--make-source
-                  :program (copy-sequence program) :argv (mapcar #'copy-sequence argv)
-                  :directory (json-explore--local-directory (or directory default-directory))
-                  :context context :success-codes (copy-sequence success-codes)))
-         (name (or buffer-name (generate-new-buffer-name (format "*JSON: %s*" program))))
-         (view (json-explore--make-view :source source :label program))
-         (buffer (json-explore--show-view view name no-display)))
-    (with-current-buffer buffer (json-explore-refresh))
-    buffer))
+  (json-explore-open-source
+   (json-explore-make-source :program program :argv argv :directory directory
+                             :context context :success-codes success-codes)
+   :buffer-name (or buffer-name (generate-new-buffer-name (format "*JSON: %s*" program)))
+   :no-display no-display))
 
 (provide 'json-explore)
 ;;; json-explore.el ends here

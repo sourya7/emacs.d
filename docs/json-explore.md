@@ -50,11 +50,13 @@ and region snapshots have no command to refresh.
   `--local` selection, workspace inventory is unavailable and is not requested.
 
 Use `C-u` before list or check to include archives, or before show to select an
-archived record. Details and refresh retain the original CLI selectors. In a
-fetched detail, expand `tasks` to browse tasks inline or drill into it with
-`RET`. Expand both `workspaces` and `orphans` to see them on the same page.
-`RET` on `org` displays a read-only Org snapshot without visiting the file. `gf` (or `C-c C-v`) visits the
-actual file in View mode; within a task it jumps to the line from the snapshot,
+archived record. Details and refresh retain the original CLI selectors. The
+plan page shows status and progress above an initially expanded Tasks table.
+Press `RET` on a task index to drill into that task, or `Y` to copy its path.
+The workspace page shows Workspaces and Orphans as independent inline tables.
+Press `za` on Org text to read it inline, or `RET` to open a read-only Org
+snapshot without visiting the file. `gf` (or `C-c C-v`) visits the actual file
+in View mode; within a task it jumps to the line from the snapshot,
 which may be stale. The adapter does not mutate records or perform workspace
 operations.
 
@@ -100,6 +102,129 @@ or `json-explore-copy-path`.
 
 The explorer parses finite JSON values in memory. The row limit limits rendering,
 not input size. No streaming or TRAMP command execution is supported.
+
+## Writing an adapter
+
+An adapter describes a trusted JSON source, optionally adds buffer-local action
+handlers, and can render a page using `vui`. It can derive a mode from
+`json-explore-mode`, but does not need command remaps or access to private
+explorer state. Plans is one adapter; the explorer does not depend on it.
+
+### Sources and history
+
+- `json-explore-make-source` accepts `:program`, `:argv`, `:directory`, `:label`,
+  and opaque `:context`. Without a program, pass parsed JSON as `:value` for a
+  static source. Treat sources, contexts and typed values as read-only.
+- `:success-codes` defaults to `(0)`. `:validate` is called with the parsed root
+  value and accepted exit code before installing it. Signal an error to reject
+  the result and retain the last good view. `:columns` selects columns in a root
+  array of objects: `(KEY HEADER [FORMATTER])`. A formatter receives the typed
+  member and returns a single-line display string, optionally with faces;
+  missing members bypass it. Labels never change sorting, paths, or inspection.
+- Accessors: `json-explore-source-program`, `json-explore-source-argv`,
+  `json-explore-source-directory`, `json-explore-source-label`,
+  `json-explore-source-context`, `json-explore-source-success-codes`,
+  `json-explore-source-validate`, `json-explore-source-columns`,
+  `json-explore-source-view`, and `json-explore-source-value`.
+- `json-explore-open-source` takes a source and optional `:buffer-name`, `:mode`,
+  and `:no-display`. It returns the explorer buffer immediately and starts a
+  command asynchronously. By default the name uses the label plus a hash of
+  executable, directory and arguments. Reopening resets that buffer's history.
+- `json-explore-push-source` takes a source and optional `:label`, and starts a
+  new history entry in the current explorer. Use this for an explicit detail
+  fetch. Back/forward reuse snapshots; refreshing runs only the active source.
+- `json-explore-show-message` takes a label and text plus the same options as
+  `json-explore-open-source`. It shows a non-refreshable message, not an empty
+  JSON result. Unknown keyword arguments to the adapter entry points are ignored.
+
+### Queries and actions
+
+- `json-explore-current-source`, `json-explore-current-context`,
+  `json-explore-current-value`, `json-explore-current-snapshot`, and
+  `json-explore-current-path` query the active entry. The snapshot is the root
+  result; the value is the portion at the current path. A path is a list of
+  string keys and zero-based array indices (`nil` at the root).
+- `json-explore-thing-at-point` returns `nil` off a cell, or a plist with
+  `:path`, `:row`, `:row-value`, `:column`, `:value`, `:source`, and `:context`.
+  `:row` is an original key or index, not a sorted offset. `:column` is a JSON
+  key or a structural symbol such as `index`, `value` or `section`.
+- Add an open handler to `json-explore-open-functions` using
+  `(add-hook 'json-explore-open-functions #'my-open nil t)` in the derived mode.
+  It receives the thing plist and an action (`drill`, `other-window`, or
+  `display`, which should keep focus). The first non-nil return handles the
+  action. If all decline, the explorer drills or inspects normally.
+- A handler on `json-explore-visit-functions` receives the thing plist (or nil
+  off a cell) and returns nil, a live buffer, or a location plist with `:file`
+  (an absolute local file) or `:buffer` (a live buffer), and optional `:line`
+  (one-based). Use `:buffer` with `:line` when the handler needs to control
+  how the file is opened. `json-explore-visit` opens the first location in
+  View mode and jumps to the supplied line, or reports that there is no location.
+  Both hooks also accept global handlers; the usual `add-hook` ordering applies.
+- `json-explore-inspect-text` takes a string and optional `:mode`, `:stay`, and
+  `:label`; `json-explore-inspect-value` takes typed JSON and optional `:stay`.
+  Both return the reused, read-only companion buffer.
+
+### Layout
+
+`:view` is called with `(value view-context)`. The context plist has `:path`,
+`:source`, `:context`, and `:snapshot`. Use `json-explore-view-function` as a
+buffer-local renderer when a source does not specify one. Return nil to let the
+normal renderer take over (for instance, when drilling into a custom page).
+Renderers should not fetch data or run actions. They can compose `vui` vnodes
+with these builders during rendering:
+
+- `json-explore-table`: render an array at `:path` with optional `:columns`.
+- `json-explore-fields`: render an object at `:path` with optional `:fields`
+  (`(KEY LABEL [FORMATTER])` entries in order; absent keys are skipped).
+- `json-explore-section`: fold a value at `:path` with optional `:title`,
+  `:expanded` (initial state), and `:body` (a vnode; defaults to the generic
+  page for the value). A fold heading points to the value at its path.
+
+Use absolute JSON paths within the current view. Tables and fields default to
+its path; a section needs a descendant path. Render at most one cell layout
+per path. The explorer supplies keyed navigation, sort and fold history, and
+copy-path without adapters having to name or track individual cells.
+
+### Example: widgets
+
+This small adapter uses a fixed fake command. Replace the source with a real
+local executable and arguments to browse your own data.
+
+```elisp
+(defun widget-explore-validate (value _exit)
+  (unless (and (hash-table-p value) (vectorp (gethash "items" value)))
+    (error "Expected a widget object with an items array")))
+
+(defun widget-explore-page (_value view-context)
+  (unless (plist-get view-context :path)
+    (vui-vstack
+     (json-explore-fields :fields '(("name" "Widget")))
+     (json-explore-section :path '("items") :title "Items" :expanded t
+       :body (json-explore-table :path '("items")
+                                :columns '(("n" "Units" number-to-string)))))))
+
+(defun widget-explore-open (thing action)
+  (when (equal (plist-get thing :path) '("name"))
+    (json-explore-inspect-text (plist-get thing :value)
+                               :stay (eq action 'display))))
+
+(defun widget-explore-visit (thing)
+  (when-let* ((file (plist-get (plist-get thing :context) :file)))
+    (list :file file :line 1)))
+
+(define-derived-mode widget-explore-mode json-explore-mode "Widgets"
+  (add-hook 'json-explore-open-functions #'widget-explore-open nil t)
+  (add-hook 'json-explore-visit-functions #'widget-explore-visit nil t))
+
+(defun widget-explore (file)
+  (interactive "fWidget notes file: ")
+  (json-explore-open-source
+   (json-explore-make-source
+    :program "printf" :argv '("%s" "{\"name\":\"demo\",\"items\":[{\"n\":10},{\"n\":2}]}")
+    :label "Widgets" :context (list :file (expand-file-name file))
+    :validate #'widget-explore-validate :view #'widget-explore-page)
+   :mode #'widget-explore-mode))
+```
 
 ## Fixture tests
 

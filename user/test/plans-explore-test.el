@@ -40,7 +40,7 @@
     (split-string (buffer-string) "\n" t)))
 
 (defun plans-explore-test--detail (id path line)
-  (format "{\"id\":%s,\"path\":%s,\"org\":\"* Snapshot only\\n\",\"tasks\":[{\"line\":%d,\"title\":\"Fixture task\"}]}"
+  (format "{\"id\":%s,\"path\":%s,\"org\":\"* Snapshot only\\n\",\"tasks\":[{\"line\":%d,\"state\":\"TODO\",\"title\":\"Fixture task\"}]}"
           (json-serialize id) (json-serialize path) line))
 
 (ert-deftest plans-explore-archived-list-to-detail-preserves-context-and-history ()
@@ -70,7 +70,8 @@
         (json-explore-sort)
         (should (vui-goto-key '(nil 1 index)))
         (let ((plans-explore-program "/different-executable") (default-directory "/"))
-          (call-interactively (command-remapping 'json-explore-open))
+          (should-not (command-remapping 'json-explore-open))
+          (json-explore-open)
           (plans-explore-test--wait)
           (should (equal (gethash "id" (plans-explore--record)) "old-plan"))
           (json-explore-back)
@@ -141,7 +142,9 @@
 
 (ert-deftest plans-explore-workspaces-list-and-local-unavailable ()
   (plans-explore-test--with-cli
-    (plans-explore-test--write "workspace.json" "{\"workspaces\":[{\"plan_id\":\"fixture\"}],\"orphans\":[]}")
+    (plans-explore-test--write
+     "workspace.json"
+     "{\"project\":\"demo\",\"version\":1,\"workspaces\":[{\"plan_id\":\"fixture\"}],\"orphans\":[{\"name\":\"stray\"}]}")
     (with-current-buffer (plans-explore-workspaces :local t :no-display t)
       (should-not json-explore--request)
       (should (string-match-p "unavailable with --local" (buffer-string)))
@@ -151,8 +154,14 @@
       (plans-explore-test--wait)
       (should (equal (plans-explore-test--argv directory)
                      (list directory "--json" "--root" directory "workspace" "list")))
+      (should (vui-goto-key '(nil "project" value)))
+      (should (string-match-p "Workspaces" (buffer-string)))
+      (should (string-match-p "Orphans" (buffer-string)))
+      (should (vui-goto-key '(("workspaces") 0 "plan_id")))
+      (json-explore-next-cell 3)
+      (should (equal (plist-get (json-explore-thing-at-point) :path) '("orphans" 0 "name")))
       (should (vui-goto-key '(nil "workspaces" section)))
-      (plans-explore-open)
+      (json-explore-open)
       (should (vui-goto-key '(("workspaces") 0 "plan_id")))
       (should (equal (json-explore--value-at-point) "fixture")))))
 
@@ -160,13 +169,20 @@
   (plans-explore-test--with-cli
     (let ((first (expand-file-name "first.org")) (next (expand-file-name "next.org"))
           (response (expand-file-name "show.json")))
-      (dolist (file (list first next))
-        (plans-explore-test--write file "* First\n* Second\n* Third\n"))
+      (plans-explore-test--write first "* First\n* Second\n* Third\n")
+      (plans-explore-test--write next "#+STARTUP: overview\n* Tasks\n** Visited task\n")
       (plans-explore-test--write response (plans-explore-test--detail "fixture" first 2))
       (save-window-excursion
         (with-current-buffer (plans-explore-show "fixture" :local t :no-display t)
           (plans-explore-test--wait)
-          (should (vui-goto-key '(nil "org" value)))
+          (should (string-match-p "Tasks (1)" (buffer-string)))
+          (should (vui-goto-key '(("tasks") 0 "state")))
+          (should (eq (get-text-property (point) 'face) 'bold))
+          (should (vui-goto-key '(nil "org" section)))
+          (should-not (string-match-p "Snapshot only" (buffer-string)))
+          (json-explore-toggle-section)
+          (should (string-match-p "Snapshot only" (buffer-string)))
+          (json-explore-toggle-section)
           (cl-letf (((symbol-function 'display-buffer) (lambda (&rest _) nil)))
             (plans-explore-open)
             (with-current-buffer json-explore--inspection
@@ -179,8 +195,14 @@
           (with-current-buffer (get-file-buffer first)
             (should view-mode)
             (should buffer-read-only))
+          (should (vui-goto-key '(("tasks") 0 index)))
+          (let ((kill-ring nil) (interprogram-cut-function nil))
+            (json-explore-copy-path)
+            (should (equal (current-kill 0) ".[\"tasks\"][0]")))
           (should (vui-goto-key '(nil "tasks" section)))
-          (json-explore-open-section)
+          (json-explore-toggle-section)
+          (should-not (vui-goto-key '(("tasks") 0 "title")))
+          (json-explore-toggle-section)
           (should (vui-goto-key '(("tasks") 0 "title")))
           (save-current-buffer (plans-explore-visit))
           (with-current-buffer (get-file-buffer first)
@@ -189,10 +211,14 @@
           (json-explore-refresh)
           (plans-explore-test--wait)
           (should (equal (json-explore--cell-at) '(("tasks") 0 "title")))
-          (save-current-buffer (plans-explore-visit))
+          (should-not (get-file-buffer next))
+          (should (equal (save-current-buffer (plans-explore-visit))
+                         "Snapshot line 3 may be stale; refresh to check"))
           (with-current-buffer (get-file-buffer next)
             (should view-mode)
-            (should (= (line-number-at-pos) 3)))
+            (should buffer-read-only)
+            (should (= (line-number-at-pos) 3))
+            (should-not (invisible-p (point))))
           (plans-explore-test--write response (plans-explore-test--detail "wrong-id" next 1))
           (json-explore-refresh)
           (plans-explore-test--wait)
@@ -204,5 +230,11 @@
   (should-error (plans-explore-show "Uppercase" :no-display t) :type 'user-error)
   (should-error (plans-explore-list :local t :project "fixture" :no-display t) :type 'user-error)
   (should-error (plans-explore-check :root "/ssh:fixture:/tmp/" :no-display t) :type 'user-error))
+
+(ert-deftest plans-explore-uses-only-the-public-explorer-api ()
+  (with-temp-buffer
+    (insert-file-contents (symbol-file 'plans-explore-list 'defun))
+    (goto-char (point-min))
+    (should-not (re-search-forward "\\_<json-explore--" nil t))))
 
 ;;; plans-explore-test.el ends here

@@ -17,8 +17,7 @@
 (advice-add #'enable-theme :after #'my/ad-theme-switch)
 
 (use-package vui
-  :functions (widget-forward widget-backward widget-button-press
-                             vui-refresh vui-quit)
+  :after evil-collection
   :general
   (:states 'normal :keymaps 'vui-mode-map
            [remap evil-insert]      #'evil-insert
@@ -31,15 +30,32 @@
            [remap evil-change-line] #'evil-change-line
            [remap evil-delete]      #'evil-delete
            [remap evil-paste-after] #'evil-paste-after
-           [remap evil-paste-before] #'evil-paste-before
-
-           "TAB"       #'widget-forward
-           "<backtab>" #'widget-backward
-           "RET"       #'widget-button-press
-           "<"         #'beginning-of-buffer
-           ">"         #'end-of-buffer
-           "gr"         #'vui-refresh
-           "q"         #'vui-quit))
+           [remap evil-paste-before] #'evil-paste-before)
+  :config
+  ;; Let VUI's button and field keymaps handle activation.
+  (evil-collection-bind 'vui-mode-map
+    'next-button #'vui-forward
+    'previous-button #'vui-backward
+    'refresh #'vui-refresh
+    'quit #'vui-quit
+    'quit-save #'vui-quit
+    'quit-cancel #'evil-quit
+    'describe-mode #'describe-mode)
+  ;; A field's local map hides the major-mode map.  Keep the terminal
+  ;; navigation keys available there, and restore Evil's mode bindings
+  ;; on leaving a field after a state change (such as exiting insert).
+  (defvar-local my/vui-evil-field-map nil)
+  (defun my/vui-evil-sync-keymaps ()
+    (when evil-local-mode
+      (let ((field-map (get-char-property (point) 'local-map)))
+        (unless (eq field-map my/vui-evil-field-map)
+          (setq my/vui-evil-field-map field-map)
+          (evil-normalize-keymaps)))))
+  (add-hook 'vui-mode-hook
+            (lambda ()
+              (evil-local-set-key 'normal (kbd "g]") #'vui-forward)
+              (evil-local-set-key 'normal (kbd "g[") #'vui-backward)
+              (add-hook 'post-command-hook #'my/vui-evil-sync-keymaps nil t))))
 
 (use-package nerd-icons-completion
   :functions nerd-icons-completion-marginalia-setup

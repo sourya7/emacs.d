@@ -156,7 +156,7 @@ key or :local t for the checkout's local plans.  Nil uses CLI defaults."
     (unless (and context (memq (plans-explore--context-operation context) '(list check))
                  (not (json-explore--view-path view)) (vectorp value))
       (user-error "Select a row in the plans list or check inventory"))
-    (let* ((row (aref value (car (json-explore--selected-cell))))
+    (let* ((row (aref value (nth 1 (json-explore--selected-cell))))
            (id (gethash "id" row))
            (detail (plans-explore--source
                     (json-explore--source-program source) (json-explore--source-directory source)
@@ -172,8 +172,8 @@ key or :local t for the checkout's local plans.  Nil uses CLI defaults."
       (json-explore--view-snapshot json-explore--view))))
 
 (defun plans-explore--point-path ()
-  (if-let* ((cell (vui-key-at)))
-      (json-explore--cell-path json-explore--view cell)
+  (if-let* ((cell (json-explore--cell-at)))
+      (json-explore--cell-path cell)
     (json-explore--view-path json-explore--view)))
 
 (defun plans-explore--org-at-point-p ()
@@ -190,7 +190,7 @@ key or :local t for the checkout's local plans.  Nil uses CLI defaults."
         ((and (plans-explore--context)
               (eq (plans-explore--context-operation (plans-explore--context)) 'list)
               (not (json-explore--view-path json-explore--view))
-              (eq (cdr (vui-key-at)) 'index))
+              (eq (nth 2 (json-explore--cell-at)) 'index))
          (plans-explore-open-plan))
         (t (json-explore-open))))
 

@@ -17,10 +17,16 @@ Elpaca activates the installed `vui` package.
   executables and arguments you trust; the explorer does not sandbox them.
 
 Arrays of objects show the union of their keys; other arrays use index/value
-columns and objects use key/value columns. Missing members, `null`, `false`,
-zero, empty strings, and empty containers remain distinct. Use the index/key
-cell to open a whole row. Long or multiline strings open as full text; the
-inspection command opens typed JSON rather than the shortened table summary.
+columns. An object opens as a page with an aligned list of scalar fields and
+initially folded sections for nested objects and arrays. Expand a section to
+browse it inline, or press `RET` on its heading to drill into a separate history
+entry. Expanded arrays have their own table headers and sort order. Cell motion,
+inspection and path copying also work on inline cells.
+
+Missing members, `null`, `false`, zero, empty strings, and empty containers
+remain distinct. Use a table's index cell to open the whole row. Long or
+multiline strings open as full text; inspection opens typed JSON rather than
+the shortened summary.
 The header line shows the source at the root and adds path segments as you
 open cells (for example, `Plans list › [0] › tasks`). When you scroll into a
 table, the column names take over the header line; scroll back up to see the
@@ -45,8 +51,9 @@ and region snapshots have no command to refresh.
 
 Use `C-u` before list or check to include archives, or before show to select an
 archived record. Details and refresh retain the original CLI selectors. In a
-fetched detail, drill into `tasks` to browse tasks. `RET` on `org` displays a
-read-only Org snapshot without visiting the file. `gf` (or `C-c C-v`) visits the
+fetched detail, expand `tasks` to browse tasks inline or drill into it with
+`RET`. Expand both `workspaces` and `orphans` to see them on the same page.
+`RET` on `org` displays a read-only Org snapshot without visiting the file. `gf` (or `C-c C-v`) visits the
 actual file in View mode; within a task it jumps to the line from the snapshot,
 which may be stale. The adapter does not mutate records or perform workspace
 operations.
@@ -60,22 +67,27 @@ overrides):
   between cells; `g]`/`g[` also work in terminals where Tab and `C-i` coincide.
 - `RET` drills into a cell. `S-RET`/`go` opens the full cell in another window;
   `M-RET`/`gO` displays it there without moving focus. `K` inspects typed JSON.
-- `C-o`/`C-i` go back/forward through view history, restoring position and sort.
-- `o` sorts by the column at point (toggle direction on that column); `O`
-  reverses the sort. `/` and `?` search rendered text; `y` remains Evil yank.
+- `za` toggles the section at or enclosing point, `zo` opens it, and `zc`
+  closes it. `zR` opens all sections on the page and `zM` closes them.
+- `C-o`/`C-i` go back/forward through view history, restoring expansions,
+  sort order, cell and scroll position.
+- `o` sorts the table or field list at point (toggle direction on that column);
+  `O` reverses its sort. `/` and `?` search rendered text; `y` remains Evil yank.
   `Y` copies the selected cell's jq-compatible bracket path.
 - `gr` refreshes, `g?` describes the mode, and `q`/`ZZ`/`ZQ` quit.
 
 Without Evil, use `RET`, `TAB`/`S-TAB`, `C-c C-b`/`C-c C-f` for history,
 `C-c C-r` for refresh, `C-s`/`C-r` to search, and `q` to quit the explorer
 window. Other actions are also available by command name via `M-x`, for example
-`json-explore-sort`, `json-explore-inspect`, or `json-explore-copy-path`.
+`json-explore-toggle-section`, `json-explore-sort`, `json-explore-inspect`,
+or `json-explore-copy-path`.
 
 ## Settings and limits
 
-- `json-explore-row-limit` (default 500) caps rendered rows per view; the view
-  reports how many rows are shown. `json-explore-cell-width` (default 40) caps
-  cell summary width, not inspection text.
+- `json-explore-row-limit` (default 500) caps rendered rows per table or field
+  list; each capped list reports how many rows are shown.
+  `json-explore-cell-width` (default 40) caps summary width, not inspection
+  text.
 - `plans-explore-program` defaults to `plans` on Emacs's `exec-path`; set it to
   the path of an executable wrapper if needed. `plans-explore-selection`
   defaults to `nil` (normal CLI discovery from the current directory). Set it to
@@ -117,9 +129,9 @@ EXPLORER_OVERRIDE=1 emacs -Q -nw -l user/test/explorer-live-smoke.el
 Set `ELPACA_BUILDS` to the existing Elpaca builds directory if it is not
 `.local/elpaca/builds`. The smoke test uses the repository's explorer module
 registration in an isolated session without installing packages or loading
-unrelated user modules. It checks cell navigation, scroll and history, the
-breadcrumb and pinned column headers, refresh diagnostics and read-only visits
-through the real `plans` CLI. It needs `plans` on PATH and a centrally mapped
+unrelated user modules. It checks cell navigation, fold keys, inline tables,
+scroll and history, the breadcrumb and pinned column headers, refresh
+diagnostics and read-only visits through the real `plans` CLI. It needs `plans` on PATH and a centrally mapped
 checkout. Set
 `EXPLORER_PLAN` to a valid active-inventory ID with tasks if `json-data-explorer`
 is not in that checkout's inventory. No plans or workspace state is written.

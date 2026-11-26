@@ -7,13 +7,14 @@
 (require 'seq)
 (require 'subr-x)
 (require 'vui)
+(require 'vui-components)
 
 (defgroup json-explore nil
   "Browse finite JSON values."
   :group 'tools)
 
 (defcustom json-explore-row-limit 500
-  "Maximum number of rows rendered in each view (at least one)."
+  "Maximum number of rows rendered in each table (at least one)."
   :type 'natnum)
 
 (defcustom json-explore-cell-width 40
@@ -60,7 +61,8 @@
 ;; Row IDs are the original array indices or object keys.  Column IDs are
 ;; symbols for structural columns and strings for actual object members.
 (cl-defstruct (json-explore--view (:constructor json-explore--make-view))
-  value path label columns rows sort descending cell start hscroll source diagnostic snapshot)
+  value path label columns rows cell start hscroll source diagnostic snapshot
+  presentation tables)
 
 ;; Optional adapter policies: VALIDATE sees (snapshot exit-code) before it is
 ;; installed; COLUMNS is a list of (key header [formatter]) for a root array of
@@ -105,7 +107,8 @@
     (cond
      ((hash-table-p value)
       (setq columns '(key value))
-      (maphash (lambda (key _val) (push key rows)) value)
+      (maphash (lambda (key val)
+                 (unless (json-explore--section-p val) (push key rows))) value)
       (setq rows (nreverse rows)))
      ((vectorp value)
       (setq rows (number-sequence 0 (1- (length value))))
@@ -122,23 +125,52 @@
      (t (setq columns '(value) rows '(scalar))))
     (json-explore--make-view :value value :path path :columns columns :rows rows)))
 
+(defun json-explore--section-p (value)
+  (or (hash-table-p value) (vectorp value)))
+
+(defun json-explore--lookup (view path)
+  (json-explore--at-path (json-explore--view-value view)
+                         (nthcdr (length (json-explore--view-path view)) path)))
+
+(defun json-explore--table-view (view path)
+  (if (equal path (json-explore--view-path view)) view
+    (let ((cache (or (json-explore--view-tables view)
+                     (setf (json-explore--view-tables view)
+                           (make-hash-table :test #'equal)))))
+      (or (gethash path cache)
+          (puthash path (json-explore--new-view (json-explore--lookup view path) path)
+                   cache)))))
+
+(defun json-explore--cell-key (view row column)
+  (list (json-explore--view-path view) row column))
+
+(defun json-explore--cell-at (&optional pos)
+  (let* ((pos (or pos (point))) (key (vui-key-at pos)))
+    ;; A collapsible also puts its key on unkeyed text in its body.
+    (when (and (consp key) (listp (car key))
+               (or (not (eq (nth 2 key) 'section)) (button-at pos)
+                   (and (save-excursion (goto-char pos) (and (eolp) (not (bolp))))
+                        (button-at (1- pos)))))
+      key)))
+
+(defun json-explore--row-value (value row column)
+  (cond ((eq row 'scalar) value)
+        ((hash-table-p value) (gethash row value))
+        ((stringp column) (gethash column (aref value row) json-explore-missing))
+        (t (aref value row))))
+
 (defun json-explore--cell-value (view cell)
-  (let ((value (json-explore--view-value view))
-        (row (car cell)) (column (cdr cell)))
-    (cond
-     ((eq row 'scalar) value)
-     ((hash-table-p value) (gethash row value))
-     ((stringp column) (gethash column (aref value row) json-explore-missing))
-     (t (aref value row)))))
+  (pcase-let ((`(,path ,row ,column) cell))
+    (json-explore--row-value (json-explore--lookup view path) row column)))
 
-(defun json-explore--cell-path (view cell)
-  (let ((path (json-explore--view-path view)))
-    (if (eq (car cell) 'scalar) path
-      (append path (list (car cell)) (when (stringp (cdr cell)) (list (cdr cell)))))))
+(defun json-explore--cell-path (cell)
+  (pcase-let ((`(,path ,row ,column) cell))
+    (if (eq row 'scalar) path
+      (append path (list row) (when (stringp column) (list column))))))
 
-(defun json-explore--display-value (view cell)
-  (if (memq (cdr cell) '(key index)) (car cell)
-    (json-explore--cell-value view cell)))
+(defun json-explore--display-value (view row column)
+  (if (memq column '(key index)) row
+    (json-explore--row-value (json-explore--view-value view) row column)))
 
 (defun json-explore--sort-key (value)
   "Order by type, then by numeric value, string, or container size."
@@ -157,10 +189,10 @@
       (if (= (car a) 4) (string-lessp (cdr a) (cdr b)) (< (cdr a) (cdr b)))
     (< (car a) (car b))))
 
-(defun json-explore--visible-rows (view)
+(defun json-explore--visible-rows (view sort)
   (let* ((rows (json-explore--view-rows view))
-         (column (json-explore--view-sort view))
-         (descending (json-explore--view-descending view))
+         (column (car sort))
+         (descending (cdr sort))
          (limit (min (length rows) (max 1 json-explore-row-limit))))
     (when column
       (setq rows
@@ -169,7 +201,7 @@
                      (mapcar (lambda (row)
                                (cons row (json-explore--sort-key
                                           (json-explore--display-value
-                                           view (cons row column)))))
+                                           view row column))))
                              rows)
                      (if descending (lambda (a b) (json-explore--less-p b a))
                        #'json-explore--less-p)
@@ -189,7 +221,7 @@
   (or (nth 1 (json-explore--column-spec view column)) (json-explore--header column)))
 
 (defun json-explore--label (view row column)
-  (let ((value (json-explore--display-value view (cons row column)))
+  (let ((value (json-explore--display-value view row column))
         (formatter (nth 2 (json-explore--column-spec view column))))
     (if (and formatter (not (eq value json-explore-missing)))
         (json-explore--clip (funcall formatter value))
@@ -217,16 +249,102 @@
      :rows (cl-loop for row in rows for line in labels collect
                     (cl-loop for column in columns for label in line
                              for width across widths
-                             collect (vui-region :key (cons row column)
+                             collect (vui-region :key (json-explore--cell-key view row column)
                                        (vui-text (concat label
                                                          (make-string (- width (string-width label)) ?\s)))))))))
 
-(vui-defcomponent json-explore--root ()
+;; Each node carries only its own presentation and that of its descendants.
+;; Replacing a node leaves sibling props untouched, so their memoized
+;; components don't rebuild tables. History retains immutable root nodes.
+(defun json-explore--presentation ()
+  (vui-get-state (vui-get-instance) :presentation))
+
+(defun json-explore--presentation-at (path)
+  (let ((node (json-explore--presentation)))
+    (dolist (part (nthcdr (length (json-explore--view-path json-explore--view)) path) node)
+      (setq node (cdr (assoc part (plist-get node :children)))))))
+
+(defun json-explore--edit-presentation (node path update)
+  (if (null path) (funcall update (copy-sequence node))
+    (let* ((children (plist-get node :children))
+           (old (assoc (car path) children))
+           (new (json-explore--edit-presentation (cdr old) (cdr path) update)))
+      (plist-put (copy-sequence node) :children
+                 (cons (cons (car path) new) (remq old children))))))
+
+(defun json-explore--fields (view rows)
+  (let* ((labels (mapcar #'json-explore--summary rows))
+         (width (apply #'max 0 (mapcar #'string-width labels))))
+    (apply #'vui-vstack
+           (cl-mapcar
+            (lambda (row label)
+              (vui-hstack :spacing 2
+                (vui-region :key (json-explore--cell-key view row 'key)
+                  (vui-text (concat label (make-string (- width (string-width label)) ?\s))))
+                (vui-region :key (json-explore--cell-key view row 'value)
+                  (vui-text (json-explore--label view row 'value)))))
+            rows labels))))
+
+(vui-defcomponent json-explore--table-component (view sort row-limit cell-width)
+  :memo t
   :render
-  (let* ((view json-explore--view)
-         (rows (json-explore--visible-rows view))
+  (let* ((json-explore-row-limit row-limit)
+         (json-explore-cell-width cell-width)
+         (sort (and (member (car sort) (json-explore--view-columns view)) sort))
+         (rows (json-explore--visible-rows view sort))
          (total (length (json-explore--view-rows view)))
-         (column (json-explore--view-sort view)))
+         (column (car sort))
+         (value (json-explore--view-value view)))
+    (vui-vstack
+     (when column
+       (vui-text (format "Sorted by %s (%s)" (json-explore--column-header view column)
+                         (if (cdr sort) "descending" "ascending"))))
+     (when (< (length rows) total)
+       (vui-text (format "showing %d of %d" (length rows) total)))
+     (cond ((and rows (hash-table-p value)) (json-explore--fields view rows))
+           (rows (json-explore--table view rows))
+           ((or (vectorp value) (and (hash-table-p value) (zerop (hash-table-count value))))
+            (vui-text (json-explore--summary value)))))))
+
+(defun json-explore--page (view path node)
+  (let ((table (json-explore--table-view view path)) sections)
+    (when (hash-table-p (json-explore--view-value table))
+      (maphash
+       (lambda (key value)
+         (when (json-explore--section-p value)
+           (let ((section-path (append path (list key))))
+             (push (vui-component 'json-explore--section :key (list :section section-path)
+                     :view view :path section-path :node (cdr (assoc key (plist-get node :children)))
+                     :row-limit json-explore-row-limit :cell-width json-explore-cell-width)
+                   sections))))
+       (json-explore--view-value table)))
+    (apply #'vui-vstack
+           (vui-component 'json-explore--table-component :key (list :table path)
+             :view table :sort (plist-get node :sort)
+             :row-limit json-explore-row-limit :cell-width json-explore-cell-width)
+           (nreverse sections))))
+
+(vui-defcomponent json-explore--section (view path node row-limit cell-width)
+  :memo t
+  :render
+  (let* ((json-explore-row-limit row-limit)
+         (json-explore-cell-width cell-width)
+         (row (car (last path)))
+         (value (json-explore--lookup view path))
+         (expanded (plist-get node :open)))
+    (vui-collapsible :key (list (butlast path) row 'section)
+      :title (format "%s  %s" (json-explore--summary row) (json-explore--summary value))
+      :expanded-indicator "▾" :collapsed-indicator "▸"
+      :expanded expanded :on-toggle (lambda (open) (json-explore--set-fold path open))
+      (when expanded (json-explore--page view path node)))))
+
+(vui-defcomponent json-explore--root ()
+  :state ((presentation nil))
+  :render
+  (let ((view json-explore--view)
+        (commit (make-symbol "explorer-render")))
+    ;; The collapsible may be redrawn by vui itself (e.g. on resize).
+    (vui-use-effect (commit) (json-explore--prepare-sections))
     (vui-vstack
      (when json-explore--request
        (vui-text "Running command…" :face 'shadow))
@@ -234,14 +352,8 @@
        (apply #'vui-vstack
               (mapcar (lambda (line) (vui-text line :face 'warning))
                       (split-string diagnostic "\n"))))
-     (when column
-       (vui-text (format "Sorted by %s (%s)" (json-explore--column-header view column)
-                         (if (json-explore--view-descending view) "descending" "ascending"))))
-     (when (< (length rows) total)
-       (vui-text (format "showing %d of %d" (length rows) total)))
-     (cond (rows (json-explore--table view rows))
-           ((json-explore--view-value view)
-            (vui-text (json-explore--summary (json-explore--view-value view))))
+     (cond ((json-explore--view-value view)
+            (json-explore--page view (json-explore--view-path view) presentation))
            ((not (json-explore--view-diagnostic view))
             (vui-text "No JSON result yet."))))))
 
@@ -251,7 +363,8 @@
     (get-buffer-window)))
 
 (defun json-explore--save-position ()
-  (setf (json-explore--view-cell json-explore--view) (vui-key-at))
+  (setf (json-explore--view-cell json-explore--view) (json-explore--cell-at)
+        (json-explore--view-presentation json-explore--view) (json-explore--presentation))
   (when-let* ((window (json-explore--window)))
     (setf (json-explore--view-start json-explore--view) (window-start window)
           (json-explore--view-hscroll json-explore--view) (window-hscroll window))))
@@ -259,8 +372,12 @@
 (defun json-explore--cell-positions ()
   (let ((pos (point-min)) positions)
     (while (< pos (point-max))
-      (when (get-text-property pos 'vui-key) (push pos positions))
-      (setq pos (next-single-property-change pos 'vui-key nil (point-max))))
+      (let ((key (get-text-property pos 'vui-key)))
+        (when (or (and (consp key) (listp (car key)) (not (eq (nth 2 key) 'section)))
+                  (and (button-at pos) (eq (nth 2 (json-explore--cell-at pos)) 'section)))
+          (push pos positions)))
+      (setq pos (min (next-single-property-change pos 'vui-key nil (point-max))
+                     (next-single-property-change pos 'button nil (point-max)))))
     (vconcat (nreverse positions))))
 
 (defun json-explore-next-cell (count)
@@ -270,9 +387,12 @@
          (len (length positions))
          (pos (point)))
     (unless (or (zerop count) (zerop len))
-      (let ((index (cl-position-if (if (> count 0) (lambda (p) (> p pos))
-                                     (lambda (p) (< p pos)))
-                                   positions :from-end (< count 0))))
+      (let* ((key (json-explore--cell-at))
+             (index (cl-position-if
+                     (lambda (p)
+                       (and (if (> count 0) (> p pos) (< p pos))
+                            (not (and key (equal key (json-explore--cell-at p))))))
+                     positions :from-end (< count 0))))
         (goto-char (aref positions (mod (+ (or index (if (> count 0) 0 (1- len)))
                                            (if (> count 0) (1- count) (1+ count)))
                                         len)))))))
@@ -283,12 +403,32 @@
   (json-explore-next-cell (- count)))
 
 (defun json-explore--first-cell ()
-  (goto-char (point-min))
-  (json-explore-next-cell 1))
+  (let ((positions (json-explore--cell-positions)))
+    (goto-char (if (length= positions 0) (point-min) (aref positions 0)))))
+
+(defvar json-explore--section-mouse-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mouse-2] #'push-button)
+    map)
+  "Let disclosure buttons handle mouse clicks, but leave keys to the mode.")
+
+(defun json-explore--prepare-sections ()
+  ;; vui-collapsible uses a button whose RET and TAB would shadow the
+  ;; explorer's drill and next-cell keys (including Evil overrides).
+  (let ((pos (point-min)) (inhibit-read-only t))
+    (with-silent-modifications
+      (while (< pos (point-max))
+        (let ((end (next-single-property-change pos 'button nil (point-max))))
+          (when (and (button-at pos) (eq (nth 2 (json-explore--cell-at pos)) 'section))
+            (put-text-property pos end 'keymap json-explore--section-mouse-map))
+          (setq pos end))))))
 
 (defun json-explore--render (&optional restore-scroll)
   (json-explore--update-breadcrumb)
-  (vui-refresh)
+  (let ((presentation (json-explore--view-presentation json-explore--view)))
+    (if (eq presentation (json-explore--presentation))
+        (vui-refresh)
+      (vui-set-state :presentation presentation (vui-get-instance))))
   (vui-flush-sync)
   (unless (and (json-explore--view-cell json-explore--view)
                (vui-goto-key (json-explore--view-cell json-explore--view)))
@@ -321,15 +461,17 @@
   (json-explore--render t))
 
 (defun json-explore--selected-cell ()
-  (or (vui-key-at) (user-error "Point is not on a JSON cell")))
+  (or (json-explore--cell-at) (user-error "Point is not on a JSON cell")))
 
 (defun json-explore--move-column (step)
-  (pcase-let* ((`(,row . ,column) (json-explore--selected-cell))
-               (columns (json-explore--view-columns json-explore--view))
-               (next (nth (mod (+ (cl-position column columns :test #'equal) step)
-                               (length columns))
-                          columns)))
-    (vui-goto-key (cons row next))))
+  (pcase-let ((`(,path ,row ,column) (json-explore--selected-cell)))
+    (unless (eq column 'section)
+      (let* ((columns (json-explore--view-columns
+                       (json-explore--table-view json-explore--view path)))
+             (next (nth (mod (+ (cl-position column columns :test #'equal) step)
+                             (length columns))
+                        columns)))
+        (vui-goto-key (list path row next))))))
 
 (defun json-explore-next-column (count)
   "Move COUNT columns right within the current row, wrapping."
@@ -341,33 +483,111 @@
   (interactive "p")
   (json-explore--move-column (- count)))
 
+(defun json-explore--update-presentation (path update)
+  (json-explore--save-position)
+  (setf (json-explore--view-presentation json-explore--view)
+        (json-explore--edit-presentation
+         (json-explore--presentation)
+         (nthcdr (length (json-explore--view-path json-explore--view)) path)
+         update))
+  (json-explore--render))
+
+(defun json-explore--sort-at (path)
+  (let ((sort (plist-get (json-explore--presentation-at path) :sort)))
+    (when (member (car sort) (json-explore--view-columns
+                              (json-explore--table-view json-explore--view path)))
+      sort)))
+
+(defun json-explore--set-sort (reverse)
+  (pcase-let ((`(,path ,_row ,column) (json-explore--selected-cell)))
+    (when (eq column 'section) (user-error "Select a cell within a table or field list"))
+    (let* ((old (json-explore--sort-at path))
+           (sort (if reverse (cons (or (car old) column) (not (cdr old)))
+                   (cons column (and (equal column (car old)) (not (cdr old)))))))
+      (json-explore--update-presentation path (lambda (node) (plist-put node :sort sort))))))
+
 (defun json-explore-sort ()
-  "Sort by the column at point; toggle direction on repeated use."
+  "Sort the table at point by its selected column; toggle on repeated use."
   (interactive)
-  (let ((column (cdr (json-explore--selected-cell))) (view json-explore--view))
-    (setf (json-explore--view-descending view)
-          (and (equal column (json-explore--view-sort view))
-               (not (json-explore--view-descending view)))
-          (json-explore--view-sort view) column)
-    (json-explore--save-position)
-    (json-explore--render)))
+  (json-explore--set-sort nil))
 
 (defun json-explore-reverse-sort ()
-  "Reverse the active sort, or sort the column at point descending."
+  "Reverse the sort in the table at point, using the current column if unsorted."
   (interactive)
-  (let ((view json-explore--view))
-    (unless (json-explore--view-sort view)
-      (setf (json-explore--view-sort view) (cdr (json-explore--selected-cell))))
-    (setf (json-explore--view-descending view) (not (json-explore--view-descending view)))
-    (json-explore--save-position)
-    (json-explore--render)))
+  (json-explore--set-sort t))
+
+(defun json-explore--section-at ()
+  (pcase-let ((`(,path ,row ,column) (json-explore--selected-cell)))
+    (cond ((eq column 'section) (append path (list row)))
+          ((not (equal path (json-explore--view-path json-explore--view))) path)
+          (t (user-error "Point is not in a foldable section")))))
+
+(defun json-explore--set-fold (path open)
+  (json-explore--update-presentation path (lambda (node) (plist-put node :open open)))
+  (unless open (vui-goto-key (list (butlast path) (car (last path)) 'section))))
+
+(defun json-explore-toggle-section ()
+  "Toggle the section at or enclosing point."
+  (interactive)
+  (let ((path (json-explore--section-at)))
+    (json-explore--set-fold path (not (plist-get (json-explore--presentation-at path) :open)))))
+
+(defun json-explore-open-section ()
+  "Expand the section at or enclosing point."
+  (interactive)
+  (json-explore--set-fold (json-explore--section-at) t))
+
+(defun json-explore-close-section ()
+  "Collapse the section at or enclosing point."
+  (interactive)
+  (json-explore--set-fold (json-explore--section-at) nil))
+
+(defun json-explore--open-tree (node value)
+  (let* ((node (plist-put (copy-sequence node) :open t))
+         (existing (plist-get node :children))
+         children)
+    (when (hash-table-p value)
+      (maphash (lambda (key child)
+                 (when (json-explore--section-p child)
+                   (push (cons key (json-explore--open-tree (cdr (assoc key existing)) child))
+                         children)))
+               value))
+    (plist-put node :children (nreverse children))))
+
+(defun json-explore--close-tree (node)
+  (let ((node (plist-put (copy-sequence node) :open nil)))
+    (plist-put node :children
+               (mapcar (lambda (child)
+                         (cons (car child) (json-explore--close-tree (cdr child))))
+                       (plist-get node :children)))))
+
+(defun json-explore--fold-all (open)
+  (let ((path (json-explore--view-path json-explore--view))
+        (value (json-explore--view-value json-explore--view))
+        (cell (json-explore--cell-at)))
+    (when (hash-table-p value)
+      (json-explore--update-presentation
+       path (if open (lambda (node) (json-explore--open-tree node value))
+              #'json-explore--close-tree))
+      (when (and (not open) cell (not (equal (car cell) path)))
+        (vui-goto-key (list path (nth (length path) (car cell)) 'section))))))
+
+(defun json-explore-open-all-sections ()
+  "Expand all sections on the current page (without drilling into table rows)."
+  (interactive)
+  (json-explore--fold-all t))
+
+(defun json-explore-close-all-sections ()
+  "Collapse all sections on the current page."
+  (interactive)
+  (json-explore--fold-all nil))
 
 (defun json-explore-copy-path ()
   "Copy the jq path of the cell at point, or of the current view."
   (interactive)
   (let ((path (json-explore-path-string
-               (if-let* ((cell (vui-key-at)))
-                   (json-explore--cell-path json-explore--view cell)
+               (if-let* ((cell (json-explore--cell-at)))
+                   (json-explore--cell-path cell)
                  (json-explore--view-path json-explore--view)))))
     (kill-new path)
     (message "%s" path)))
@@ -396,7 +616,7 @@
       (when (and window (not stay)) (select-window window)))))
 
 (defun json-explore--value-at-point ()
-  (if-let* ((cell (vui-key-at))) (json-explore--cell-value json-explore--view cell)
+  (if-let* ((cell (json-explore--cell-at))) (json-explore--cell-value json-explore--view cell)
     (or (json-explore--view-value json-explore--view)
         (user-error "No JSON result yet"))))
 
@@ -419,15 +639,15 @@
 
 (defun json-explore--open (cell)
   (let* ((value (json-explore--cell-value json-explore--view cell))
-         (path (json-explore--cell-path json-explore--view cell)))
+         (path (json-explore--cell-path cell)))
     (cond
      ((eq value json-explore-missing) (user-error "No such object member"))
      ((and (stringp value)
-           (or (eq (car cell) 'scalar) (string-match-p "[\r\n]" value)
+           (or (eq (nth 1 cell) 'scalar) (string-match-p "[\r\n]" value)
                (> (length value) (json-explore--width))
                (> (string-width (json-explore--json value)) (json-explore--width))))
       (json-explore--inspect-value value t nil))
-     ((eq (car cell) 'scalar) (json-explore-inspect))
+     ((eq (nth 1 cell) 'scalar) (json-explore-inspect))
      (t
       (let ((next (json-explore--new-view value path)))
         (setf (json-explore--view-label next) (json-explore--view-label json-explore--view)
@@ -455,7 +675,9 @@
   "Browse JSON cells.  RET drills into a cell; K inspects full JSON.
 Use TAB/backtab to move between cells, gh/gl to move within a row in
 Evil, and ordinary vertical motion to move between rows.  C-o/C-i
-visit history, o/O sort, and Y copies the jq path in Evil.  Use gr
+visit history, o/O sort the current table, and Y copies the jq path.
+On object pages, za/zo/zc toggle/open/close a section; zR/zM open/close
+all sections in Evil.  RET drills into a section in a new history entry.  Use gr
 in Evil or C-c C-r to refresh a command snapshot explicitly.  Use
 ordinary Emacs or Evil search keys to find rendered text."
   (setq-local truncate-lines t)
@@ -514,7 +736,9 @@ ordinary Emacs or Evil search keys to find rendered text."
     "gh" #'json-explore-previous-column "gl" #'json-explore-next-column
     (kbd "C-o") #'json-explore-back (kbd "C-i") #'json-explore-forward
     "o" #'json-explore-sort "O" #'json-explore-reverse-sort
-    "Y" #'json-explore-copy-path)
+    "za" #'json-explore-toggle-section "zo" #'json-explore-open-section
+    "zc" #'json-explore-close-section "zR" #'json-explore-open-all-sections
+    "zM" #'json-explore-close-all-sections "Y" #'json-explore-copy-path)
   (setq json-explore--evil-bindings-installed t))
 
 (defun json-explore--show-view (view buffer-name no-display &optional mode)
@@ -620,8 +844,7 @@ When BEGIN and END are provided, explore only the text between them."
   (let* ((path (json-explore--view-path view))
          (value (json-explore--at-path snapshot path))
          (source (json-explore--view-source view))
-         (new (json-explore--new-view value path))
-         (sort (json-explore--view-sort view)))
+         (new (json-explore--new-view value path)))
     (when (and (not path) (json-explore--object-array-p value)
                (json-explore--source-columns source))
       (setf (json-explore--view-columns new)
@@ -631,10 +854,8 @@ When BEGIN and END are provided, explore only the text between them."
           (json-explore--view-start new) (json-explore--view-start view)
           (json-explore--view-hscroll new) (json-explore--view-hscroll view)
           (json-explore--view-source new) source
-          (json-explore--view-snapshot new) snapshot)
-    (when (member sort (json-explore--view-columns new))
-      (setf (json-explore--view-sort new) sort
-            (json-explore--view-descending new) (json-explore--view-descending view)))
+          (json-explore--view-snapshot new) snapshot
+          (json-explore--view-presentation new) (json-explore--view-presentation view))
     (setq json-explore--view new)))
 
 (defun json-explore--deliver (status code stdout stderr)

@@ -171,6 +171,28 @@
     (should (vui-goto-key '(nil "empty" section)))
     (should (equal (json-explore--value-at-point) []))))
 
+(ert-deftest json-explore-table-row-keys-cover-layout-whitespace ()
+  (dolist (inline '(nil t))
+    (json-explore-test--with-view
+        (if inline "{\"rows\":[{\"n\":1},{\"n\":22}]}" "[{\"n\":1},{\"n\":22}]")
+      (let ((path (when inline '("rows"))))
+        (when inline
+          (should (vui-goto-key '(nil "rows" section)))
+          (json-explore-toggle-section))
+        (dotimes (row 2)
+          (should (vui-goto-key (list path row "n")))
+          (let ((second-column (point)) (end (line-end-position)))
+            (beginning-of-line)
+            (when inline (should (= (char-after) ?\s)))
+            (should (= (char-before second-column) ?\s))
+            (cl-loop for pos from (point) to end do
+                     (goto-char pos)
+                     (let ((column (if (< pos second-column) 'index "n"))
+                           (thing (json-explore-thing-at-point)))
+                       (should (equal (vui-key-at) (list path row column)))
+                       (should (equal (plist-get thing :row) row))
+                       (should (equal (plist-get thing :column) column))))))))))
+
 (ert-deftest json-explore-inline-tables-memoize-and-restore-history ()
   (let ((json-explore-row-limit 2))
     (json-explore-test--with-view

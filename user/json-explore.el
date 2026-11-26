@@ -540,7 +540,9 @@ itself is navigable and refers to the typed value at PATH."
     (setf (json-explore--view-active-tables view) nil
           (json-explore--view-section-defaults view) nil)
     ;; The collapsible may be redrawn by vui itself (e.g. on resize).
-    (vui-use-effect (commit) (json-explore--prepare-sections))
+    (vui-use-effect (commit)
+      (json-explore--key-table-whitespace)
+      (json-explore--prepare-sections))
     (vui-vstack
      (when json-explore--request
        (vui-text "Running command…" :face 'shadow))
@@ -608,6 +610,34 @@ itself is navigable and refers to the typed value at PATH."
     (define-key map [mouse-2] #'push-button)
     map)
   "Let disclosure buttons handle mouse clicks, but leave keys to the mode.")
+
+(defun json-explore--key-table-whitespace ()
+  ;; VUI inserts table separators and section indentation outside the
+  ;; keyed cell regions. Extend the keys after layout, without changing
+  ;; widths or rebuilding memoized tables.
+  (with-silent-modifications
+    (save-excursion
+      (let ((pos (point-min)))
+        (while (< pos (point-max))
+          (let ((key (get-text-property pos 'vui-key)))
+            ;; Every data row starts with an index cell; headers don't.
+            (when (and (consp key) (eq (nth 2 key) 'index))
+              (goto-char pos)
+              (let ((end (line-end-position))
+                    (row (butlast key)))
+                (skip-chars-backward " " (line-beginning-position))
+                (when (bolp) (put-text-property (point) pos 'vui-key key))
+                (while (< pos end)
+                  (let* ((gap (next-single-property-change pos 'vui-key nil end))
+                         (next (next-single-property-change gap 'vui-key nil end))
+                         (next-key (get-text-property next 'vui-key)))
+                    (if (and (< next end) (consp next-key)
+                             (equal row (butlast next-key)))
+                        (progn
+                          (put-text-property gap next 'vui-key key)
+                          (setq pos next key next-key))
+                      (setq pos end)))))))
+          (setq pos (next-single-property-change pos 'vui-key nil (point-max))))))))
 
 (defun json-explore--prepare-sections ()
   ;; vui-collapsible uses a button whose RET and TAB would shadow the
@@ -902,13 +932,20 @@ With STAY keep focus in the explorer."
                      (user-error "No local file at %s" file))
                    (let ((enable-local-variables nil) (enable-local-eval nil))
                      (find-file-noselect file))))
-                (t (user-error "Invalid explorer location")))))
+                (t (user-error "Invalid explorer location"))))
+         ;; A handler can set the target buffer's point. Save it before
+         ;; selecting an existing window restores that window's own point.
+         (position (with-current-buffer buffer (point)))
+         (line-p (and (integerp line) (> line 0))))
     (pop-to-buffer buffer)
     (view-mode 1)
-    (when (and (integerp line) (> line 0))
+    (when line-p
       (widen)
       (goto-char (point-min))
       (forward-line (1- line))
+      (setq position (point)))
+    (set-window-point (selected-window) position)
+    (when line-p
       (message "Snapshot line %d may be stale; refresh to check" line))))
 
 (defun json-explore--kill-inspection ()

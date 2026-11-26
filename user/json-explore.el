@@ -60,8 +60,16 @@
 ;; Row IDs are the original array indices or object keys.  Column IDs are
 ;; symbols for structural columns and strings for actual object members.
 (cl-defstruct (json-explore--view (:constructor json-explore--make-view))
-  value path columns rows sort descending cell start hscroll)
+  value path columns rows sort descending cell start hscroll source diagnostic)
 
+(cl-defstruct (json-explore--source (:constructor json-explore--make-source))
+  program argv directory context success-codes)
+
+(cl-defstruct (json-explore--request (:constructor json-explore--make-request))
+  process pipe stdout stderr)
+
+(defvar-local json-explore--request nil)
+(defvar-local json-explore--generation 0)
 (defvar-local json-explore--view nil)
 (defvar-local json-explore--back nil)
 (defvar-local json-explore--forward nil)
@@ -188,13 +196,21 @@
     (vui-region :sticky t
       (vui-vstack
        (vui-text path :face 'bold)
+       (when json-explore--request
+         (vui-text "Running command…" :face 'shadow))
+       (when-let* ((diagnostic (json-explore--view-diagnostic view)))
+         (apply #'vui-vstack
+                (mapcar (lambda (line) (vui-text line :face 'warning))
+                        (split-string diagnostic "\n"))))
        (when column
          (vui-text (format "Sorted by %s (%s)" (json-explore--header column)
                            (if (json-explore--view-descending view) "descending" "ascending"))))
        (when (< (length rows) total)
          (vui-text (format "showing %d of %d" (length rows) total)))
-       (if rows (json-explore--table view rows)
-         (vui-text (json-explore--summary (json-explore--view-value view))))))))
+       (cond (rows (json-explore--table view rows))
+             ((json-explore--view-value view)
+              (vui-text (json-explore--summary (json-explore--view-value view))))
+             (t (vui-text "No JSON result yet.")))))))
 
 (defun json-explore--window ()
   (if (eq (window-buffer (selected-window)) (current-buffer))
@@ -254,6 +270,7 @@
   "Return to the previous JSON view without refetching it."
   (interactive)
   (unless json-explore--back (user-error "No previous JSON view"))
+  (json-explore--cancel-request)
   (json-explore--save-position)
   (push json-explore--view json-explore--forward)
   (setq json-explore--view (pop json-explore--back))
@@ -263,6 +280,7 @@
   "Return to the next JSON view in history."
   (interactive)
   (unless json-explore--forward (user-error "No next JSON view"))
+  (json-explore--cancel-request)
   (json-explore--save-position)
   (push json-explore--view json-explore--back)
   (setq json-explore--view (pop json-explore--forward))
@@ -345,7 +363,8 @@
 
 (defun json-explore--value-at-point ()
   (if-let* ((cell (vui-key-at))) (json-explore--cell-value json-explore--view cell)
-    (json-explore--view-value json-explore--view)))
+    (or (json-explore--view-value json-explore--view)
+        (user-error "No JSON result yet"))))
 
 (defun json-explore-inspect ()
   "Inspect the full, typed JSON value in the reused companion buffer."
@@ -376,10 +395,12 @@
       (json-explore--inspect-value value t nil))
      ((eq (car cell) 'scalar) (json-explore-inspect))
      (t
+      (json-explore--cancel-request)
       (json-explore--save-position)
-      (push json-explore--view json-explore--back)
-      (setq json-explore--forward nil
-            json-explore--view (json-explore--new-view value path))
+      (let ((next (json-explore--new-view value path)))
+        (setf (json-explore--view-source next) (json-explore--view-source json-explore--view))
+        (push json-explore--view json-explore--back)
+        (setq json-explore--forward nil json-explore--view next))
       (json-explore--render t)))))
 
 (defun json-explore-open ()
@@ -395,11 +416,14 @@
   "Browse JSON cells.  RET drills into a cell; K inspects full JSON.
 Use TAB/backtab to move between cells, gh/gl to move within a row in
 Evil, and ordinary vertical motion to move between rows.  C-o/C-i
-visit history, o/O sort, and Y copies the jq path in Evil.  Use the
-usual Emacs or Evil search keys to find rendered text."
+visit history, o/O sort, and Y copies the jq path in Evil.  Use gr
+in Evil or C-c C-r to refresh a command snapshot explicitly.  Use
+ordinary Emacs or Evil search keys to find rendered text."
   (setq-local truncate-lines t)
   (setq-local bidi-paragraph-direction 'left-to-right)
   (setq-local indent-tabs-mode nil)
+  (add-hook 'kill-buffer-hook #'json-explore--cancel-request nil t)
+  (add-hook 'change-major-mode-hook #'json-explore--cancel-request nil t)
   (add-hook 'kill-buffer-hook #'json-explore--kill-inspection nil t))
 
 (defvar json-explore--evil-bindings-installed nil)
@@ -429,7 +453,9 @@ usual Emacs or Evil search keys to find rendered text."
     (define-key map (kbd (car entry))
       `(menu-item "" ,(cdr entry) :filter json-explore--emacs-binding)))
   (define-key map (kbd "C-c C-b") #'json-explore-back)
-  (define-key map (kbd "C-c C-f") #'json-explore-forward))
+  (define-key map (kbd "C-c C-f") #'json-explore-forward)
+  (define-key map (kbd "C-c C-r") #'json-explore-refresh)
+  (define-key map (kbd "q") #'json-explore-quit))
 
 (with-eval-after-load 'evil-collection
   (evil-collection-inhibit-insert-state 'json-explore-mode-map)
@@ -440,9 +466,10 @@ usual Emacs or Evil search keys to find rendered text."
     'next-button #'json-explore-next-cell
     'previous-button #'json-explore-previous-cell
     'lookup-doc #'json-explore-inspect
-    'quit #'quit-window
-    'quit-save #'quit-window
-    'quit-cancel #'evil-quit
+    'refresh #'json-explore-refresh
+    'quit #'json-explore-quit
+    'quit-save #'json-explore-quit
+    'quit-cancel #'json-explore-evil-quit
     'describe-mode #'describe-mode)
   (evil-collection-define-key 'normal 'json-explore-mode-map
     "gh" #'json-explore-previous-column "gl" #'json-explore-next-column
@@ -451,11 +478,7 @@ usual Emacs or Evil search keys to find rendered text."
     "Y" #'json-explore-copy-path)
   (setq json-explore--evil-bindings-installed t))
 
-(defun json-explore-show-value (value buffer-name &optional no-display)
-  "Show parsed JSON VALUE in explorer BUFFER-NAME and return that buffer.
-The caller owns the source identity and supplies one name per source.
-Replace that source's history with a new root.  With NO-DISPLAY, do not
-switch to the buffer."
+(defun json-explore--show-view (view buffer-name no-display)
   (let ((existing (get-buffer buffer-name)))
     (when (and existing (not (provided-mode-derived-p (buffer-local-value 'major-mode existing)
                                                       'json-explore-mode)))
@@ -463,10 +486,199 @@ switch to the buffer."
   (let ((buffer (get-buffer-create buffer-name)))
     (with-current-buffer buffer
       (unless (derived-mode-p 'json-explore-mode) (json-explore-mode))
-      (setq json-explore--view (json-explore--new-view value nil)
-            json-explore--back nil json-explore--forward nil))
+      (json-explore--cancel-request)
+      (setq json-explore--view view json-explore--back nil json-explore--forward nil))
     (vui-mount (vui-component 'json-explore--root) buffer-name no-display)
     (with-current-buffer buffer (json-explore--first-cell))
+    buffer))
+
+(defun json-explore-show-value (value buffer-name &optional no-display)
+  "Show parsed JSON VALUE in explorer BUFFER-NAME and return that buffer.
+The caller owns the source identity and supplies one name per source.
+Replace that source's history with a new root.  With NO-DISPLAY, do not
+switch to the buffer."
+  (json-explore--show-view (json-explore--new-view value nil) buffer-name no-display))
+
+(defun json-explore-buffer (&optional begin end)
+  "Explore a JSON snapshot of the current buffer or active region.
+When BEGIN and END are provided, explore only the text between them."
+  (interactive (when (use-region-p) (list (region-beginning) (region-end))))
+  (let ((name (format "*JSON: %s*" (buffer-name))))
+    (save-restriction
+      (unless (and begin end) (widen))
+      (json-explore-show-value
+       (json-explore-parse (buffer-substring-no-properties (or begin (point-min))
+                                                          (or end (point-max))))
+       name))))
+
+(defun json-explore--dispose-request (request)
+  (dolist (process (list (json-explore--request-process request)
+                        (json-explore--request-pipe request)))
+    (when process
+      (set-process-sentinel process #'ignore)
+      (delete-process process)))
+  (dolist (buffer (list (json-explore--request-stdout request)
+                       (json-explore--request-stderr request)))
+    (when (buffer-live-p buffer) (kill-buffer buffer))))
+
+(defun json-explore--cancel-request ()
+  (when-let* ((request json-explore--request))
+    ;; Invalidate before disconnecting either sentinel.
+    (setq json-explore--request nil)
+    (cl-incf json-explore--generation)
+    (json-explore--dispose-request request)))
+
+(defun json-explore--cancel-and-render ()
+  (when json-explore--request
+    (json-explore--cancel-request)
+    (json-explore--save-position)
+    (json-explore--render t)))
+
+(defun json-explore-quit ()
+  "Cancel a pending request and quit the explorer window."
+  (interactive)
+  (json-explore--cancel-and-render)
+  (quit-window))
+
+(declare-function evil-quit "evil-commands" (force))
+
+(defun json-explore-evil-quit ()
+  "Cancel a pending request, then run `evil-quit'."
+  (interactive)
+  (json-explore--cancel-and-render)
+  (call-interactively #'evil-quit))
+
+(defun json-explore--local-directory (directory)
+  (when (file-remote-p directory) (user-error "JSON commands run locally only"))
+  (let ((directory (file-name-as-directory (expand-file-name directory))))
+    (when (file-remote-p directory) (user-error "JSON commands run locally only"))
+    directory))
+
+(defun json-explore--executable (program)
+  (let ((file (if (string-match-p "/" program) (expand-file-name program)
+                (executable-find program))))
+    (unless (and file (not (file-remote-p file))
+                 (file-executable-p file) (not (file-directory-p file)))
+      (error "Executable not found or not executable: %s" program))
+    file))
+
+(defun json-explore--at-path (value path)
+  (dolist (part path value)
+    (setq value
+          (cond ((and (stringp part) (hash-table-p value)) (gethash part value))
+                ((and (natnump part) (vectorp value) (< part (length value)))
+                 (aref value part))))
+    (unless value (error "Refreshed JSON has no value at %s" (json-explore-path-string path)))))
+
+(defun json-explore--replace-snapshot (view value)
+  (let* ((new (json-explore--new-view value (json-explore--view-path view)))
+         (sort (json-explore--view-sort view)))
+    (setf (json-explore--view-cell new) (json-explore--view-cell view)
+          (json-explore--view-start new) (json-explore--view-start view)
+          (json-explore--view-hscroll new) (json-explore--view-hscroll view)
+          (json-explore--view-source new) (json-explore--view-source view))
+    (when (member sort (json-explore--view-columns new))
+      (setf (json-explore--view-sort new) sort
+            (json-explore--view-descending new) (json-explore--view-descending view)))
+    (setq json-explore--view new)))
+
+(defun json-explore--deliver (status code stdout stderr)
+  (json-explore--save-position)
+  (let* ((view json-explore--view)
+         (source (json-explore--view-source view))
+         (exit (pcase status ('exit (format "Exit status %d" code))
+                           ('signal (format "Terminated by signal %d" code))))
+         diagnostic)
+    (condition-case err
+        (cond
+         ((eq status 'startup) (setq diagnostic stdout))
+         ((not (and (eq status 'exit) (memq code (json-explore--source-success-codes source))))
+          (setq diagnostic exit))
+         (t
+          (when (string-blank-p stdout) (error "Command produced no JSON output"))
+          (let ((value (condition-case parse-error
+                           (json-explore-parse stdout)
+                         (json-error (error "Invalid JSON: %s" (error-message-string parse-error))))))
+            (json-explore--replace-snapshot
+             view (json-explore--at-path value (json-explore--view-path view))))
+          (unless (zerop code) (setq diagnostic exit))))
+      (error (setq diagnostic (concat exit ": " (error-message-string err)))))
+    (unless (string-blank-p stderr)
+      (setq diagnostic (concat (when diagnostic (concat diagnostic "\n"))
+                               "stderr: " (string-trim-right stderr))))
+    (setf (json-explore--view-diagnostic json-explore--view) diagnostic)
+    (json-explore--render t)))
+
+(defun json-explore-refresh ()
+  "Rerun the current view's command and refresh only that history entry.
+For a nested view, select the same JSON path in the fresh result."
+  (interactive)
+  (let ((source (and json-explore--view (json-explore--view-source json-explore--view))))
+    (unless source (user-error "This snapshot has no command to refresh"))
+    (json-explore--cancel-request)
+    (let* ((request (json-explore--make-request))
+           (generation (cl-incf json-explore--generation))
+           process-done stderr-done
+           (callback
+            (vui-async-callback (startup-error)
+              (when (and (= generation json-explore--generation)
+                         (eq request json-explore--request))
+                (let* ((process (json-explore--request-process request))
+                       (status (if startup-error 'startup (process-status process)))
+                       (code (unless startup-error (process-exit-status process)))
+                       (stdout (or startup-error
+                                   (with-current-buffer (json-explore--request-stdout request)
+                                     (buffer-string))))
+                       (stderr (unless startup-error
+                                 (with-current-buffer (json-explore--request-stderr request)
+                                   (buffer-string)))))
+                  (json-explore--cancel-request)
+                  (json-explore--deliver status code stdout (or stderr ""))))))
+           ;; Both sentinels must have run: each is notified only after its
+           ;; own channel's final bytes have been passed to its filter.
+           (process-sentinel (lambda (process _event)
+                               (when (memq (process-status process) '(exit signal))
+                                 (setq process-done t)
+                                 (when stderr-done (funcall callback nil)))))
+           (stderr-sentinel (lambda (pipe _event)
+                              (unless (process-live-p pipe)
+                                (setq stderr-done t)
+                                (when process-done (funcall callback nil))))))
+      (setq json-explore--request request)
+      (json-explore--save-position)
+      (json-explore--render t)
+      (condition-case err
+          (let* ((default-directory (json-explore--source-directory source))
+                 (program (json-explore--executable (json-explore--source-program source))))
+            (setf (json-explore--request-stdout request) (generate-new-buffer " *JSON stdout*")
+                  (json-explore--request-stderr request) (generate-new-buffer " *JSON stderr*")
+                  (json-explore--request-pipe request)
+                  (make-pipe-process :name "JSON stderr" :buffer (json-explore--request-stderr request)
+                                     :coding 'utf-8-unix :noquery t :sentinel stderr-sentinel)
+                  (json-explore--request-process request)
+                  (make-process :name "JSON command" :buffer (json-explore--request-stdout request)
+                                :command (cons program (json-explore--source-argv source))
+                                :stderr (json-explore--request-pipe request) :coding 'utf-8-unix
+                                :connection-type 'pipe :noquery t :sentinel process-sentinel))
+            (ignore-errors (process-send-eof (json-explore--request-process request))))
+        (error (funcall callback (error-message-string err)))))))
+
+(cl-defun json-explore-run-command (program argv &key directory buffer-name no-display context
+                                           (success-codes '(0)))
+  "Explore a local PROGRAM's JSON stdout, passing ARGV verbatim without a shell.
+DIRECTORY defaults to the caller's `default-directory'.  Retain CONTEXT
+with the command for adapters.  Accept only SUCCESS-CODES, normally (0).
+Replace the root in BUFFER-NAME, or allocate a new explorer if omitted.
+Return the explorer buffer immediately; NO-DISPLAY leaves windows alone."
+  (interactive (list (read-string "JSON executable: ")
+                     (split-string-shell-command (read-string "Arguments (quoted as needed): "))))
+  (let* ((source (json-explore--make-source
+                  :program (copy-sequence program) :argv (mapcar #'copy-sequence argv)
+                  :directory (json-explore--local-directory (or directory default-directory))
+                  :context context :success-codes (copy-sequence success-codes)))
+         (name (or buffer-name (generate-new-buffer-name (format "*JSON: %s*" program))))
+         (buffer (json-explore--show-view (json-explore--make-view :source source) name no-display)))
+    (with-current-buffer buffer (json-explore-refresh))
     buffer))
 
 (provide 'json-explore)

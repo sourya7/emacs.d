@@ -387,7 +387,7 @@
           (mapc (lambda (buffer) (when (buffer-live-p buffer) (kill-buffer buffer)))
                 (list report origin)))))))
 
-(ert-deftest pichat-diagnostics-report-shows-preset-prompt-mode-not-prompt-text ()
+(ert-deftest pichat-diagnostics-report-overview-and-argv-omit-prompt-text ()
   (pichat-test-with-clean-state
     (let* ((argv '("pi" "--system-prompt" "private base instructions"
                    "--append-system-prompt=private additions" "--model" "fake/offline"))
@@ -419,6 +419,53 @@
               (should (string-match-p (regexp-quote "--model") (buffer-string)))
               (should-not (string-match-p "private " (buffer-string))))
             (should (equal (pichat-session-rpc-command session) argv)))
+        (when (buffer-live-p report) (kill-buffer report))))))
+
+(ert-deftest pichat-diagnostics-report-additional-prompt-is-optional-plain-and-foldable ()
+  (pichat-test-with-clean-state
+    (let* ((session (pichat-register-session (pichat-session-make)))
+           (title "Additional system prompt")
+           (text "  First line\nSecond \"line\"  ")
+           (pichat-diagnostics-view-value-limit (length text))
+           report)
+      (unwind-protect
+          (cl-letf (((symbol-function 'pichat-view-display) #'ignore))
+            (setq report (pichat-show-diagnostics session))
+            (with-current-buffer report
+              ;; A missing spec and a Pi-default spec without additions both omit it.
+              (should-not (string-match-p title (buffer-string)))
+              (dolist (spec '((:tools :default)
+                              (:tools :default :append-system-prompt " \t\n")
+                              (:tools :default :append-system-prompt (:file "unused"))))
+                (pichat-session-set-configuration session spec nil)
+                (pichat-diagnostics-refresh)
+                (should-not (string-match-p title (buffer-string))))
+              (pichat-session-set-configuration
+               session (list :tools :default :append-system-prompt text) nil)
+              (pichat-diagnostics-refresh)
+              (should (string-match-p (concat "^▶ " title "$") (buffer-string)))
+              (should-not (string-match-p "First line" (buffer-string)))
+              (pichat-test-diagnostics-toggle title)
+              ;; Exactly at the limit: preserve whitespace, quoting and line breaks.
+              (let ((body (concat "^▼ " title "\n" (regexp-quote text))))
+                (should (string-match-p (concat body "\n[▶▼] ") (buffer-string)))
+                (pichat-session-set-configuration
+                 session (list :tools :default :append-system-prompt (concat text "hidden")) nil)
+                (pichat-diagnostics-refresh)
+                (should (string-match-p (concat body "\n" (regexp-quote "[truncated by PiChat]")
+                                                "\n[▶▼] ")
+                                        (buffer-string))))
+              (pichat-session-set-configuration session nil nil)
+              (pichat-diagnostics-refresh)
+              (should-not (string-match-p title (buffer-string)))
+              (pichat-session-set-configuration
+               session (list :tools :default :append-system-prompt text) nil)
+              (pichat-diagnostics-refresh)
+              (should (string-match-p (concat "^▼ " title "$") (buffer-string)))
+              (pichat-test-diagnostics-toggle title)
+              (pichat-diagnostics-refresh)
+              (should (string-match-p (concat "^▶ " title "$") (buffer-string)))
+              (should-not (string-match-p "First line" (buffer-string)))))
         (when (buffer-live-p report) (kill-buffer report))))))
 
 (ert-deftest pichat-diagnostics-report-provider-sections-keep-stable-independent-folds ()
@@ -455,7 +502,8 @@
 (ert-deftest pichat-diagnostics-report-bounds-retained-events-and-keeps-collectors ()
   (pichat-test-with-clean-state
     (let* ((session (pichat-register-session
-                     (pichat-session-make :event-log
+                     (pichat-session-make :preset-spec '(:append-system-prompt "cached prompt")
+                                          :event-log
                                           `((:type "newest" :text ,(make-string 500 ?x))
                                             (:type "omitted-event")))))
            (before (copy-tree (pichat-session-event-log session)))
@@ -478,7 +526,9 @@
             (with-current-buffer report
               (should (string-match-p "Retained incoming events (1 of 2)" (buffer-string)))
               (pichat-test-diagnostics-toggle "Retained incoming events")
+              (pichat-test-diagnostics-toggle "Additional system prompt")
               (pichat-diagnostics-refresh)
+              (should (string-match-p "^cached prompt$" (buffer-string)))
               (should (string-match-p "Retained incoming events (1 of 2)" (buffer-string)))
               (should (string-match-p "newest" (buffer-string)))
               (should-not (string-match-p "omitted-event" (buffer-string)))

@@ -15,7 +15,9 @@
 (require 'pichat-diagnostic)
 
 (defvar pichat-diagnostics-view-event-limit)
+(defvar pichat-diagnostics-view-value-limit)
 (defvar pichat-diagnostics-stderr-limit)
+(declare-function pichat-chat-diagnostics--bounded-raw "pichat-chat-diagnostics" (text limit))
 (declare-function pichat-chat-diagnostics--text "pichat-chat-diagnostics" (value))
 (declare-function pichat-chat-diagnostics--print-value "pichat-chat-diagnostics" (value))
 (declare-function pichat-chat-diagnostics--safe-record-line "pichat-chat-diagnostics" (record))
@@ -324,7 +326,9 @@ Only abnormal values are highlighted; descriptive words are dimmed."
          (inspect-p (pichat-backend-capable-p session 'diagnostic-view))
          (events (and pi-p inspect-p (pichat-session-event-log session)))
          (shown (seq-take events (max 0 (min 512 pichat-diagnostics-view-event-limit))))
-         (stderr (and pi-p inspect-p (pichat-diagnostics-report--stderr session))))
+         (stderr (and pi-p inspect-p (pichat-diagnostics-report--stderr session)))
+         (additional-prompt (plist-get (pichat-session-preset-spec session)
+                                       :append-system-prompt)))
     (unless pichat-diagnostics-report--folds
       (setq pichat-diagnostics-report--folds (make-hash-table :test #'equal)))
     (setq header-line-format
@@ -359,6 +363,11 @@ Only abnormal values are highlighted; descriptive words are dimmed."
                   (pichat-diagnostics-report--title
                    "Startup tool selections" (pichat-diagnostics-report--tools-summary session))
                   (pichat-diagnostics-report--tools session)))
+           (when (and (stringp additional-prompt) (not (string-blank-p additional-prompt)))
+             (list (list 'additional-system-prompt "Additional system prompt"
+                         (substring-no-properties
+                          (pichat-chat-diagnostics--bounded-raw
+                           additional-prompt pichat-diagnostics-view-value-limit)))))
            ;; Empty and unavailable domains are already reported under Problems.
            (mapcar (lambda (section)
                      (list (list 'domain (car section))

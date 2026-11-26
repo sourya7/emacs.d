@@ -54,11 +54,11 @@ archived record. Details and refresh retain the original CLI selectors. The
 plan page shows status and progress above an initially expanded Tasks table.
 Press `RET` on a task index to drill into that task, or `Y` to copy its path.
 The workspace page shows Workspaces and Orphans as independent inline tables.
-Press `za` on Org text to read it inline, or `RET` to open a read-only Org
-snapshot without visiting the file. `gf` (or `C-c C-v`) visits the actual file
-in View mode; within a task it jumps to the line from the snapshot,
-which may be stale. The adapter does not mutate records or perform workspace
-operations.
+On the plan page, `gf` (or `C-c C-v`) visits the authoritative Org file in
+View mode. It opens at the top unless you are on a task, in which case it
+jumps to the line from the snapshot (which may be stale). The page does not
+render the Org text; `K` off a cell still inspects the full JSON snapshot.
+The adapter does not mutate records or perform workspace operations.
 
 ## Keys
 

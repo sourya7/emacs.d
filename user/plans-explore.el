@@ -113,7 +113,6 @@ key or :local t for the checkout's local plans.  Nil uses CLI defaults."
 
 (defun plans-explore--show-page (value)
   (let ((tasks (gethash "tasks" value))
-        (org-text (gethash "org" value))
         (progress (plans-explore--progress-line value)))
     (vui-vstack
      (vui-text (plans-explore--display-text (or (gethash "title" value) (gethash "id" value)))
@@ -127,9 +126,6 @@ key or :local t for the checkout's local plans.  Nil uses CLI defaults."
                                   :columns '(("state" "State" plans-explore--state-label)
                                              ("title" "Title" plans-explore--display-text)
                                              ("line" "Line"))))
-     (json-explore-section :path '("org")
-                           :title (format "Org text (%s)" (file-size-human-readable (string-bytes org-text)))
-                           :body (vui-text org-text))
      (json-explore-section :path '("task_counts") :title "Details"
                            :body (vui-vstack
                                   (apply #'vui-vstack
@@ -236,16 +232,11 @@ key or :local t for the checkout's local plans.  Nil uses CLI defaults."
     (json-explore-current-snapshot)))
 
 (defun plans-explore--open-handler (thing action)
-  (cond
-   ((and (plans-explore--record) (equal (plist-get thing :path) '("org")))
-    (let ((org-inhibit-startup t))
-      (json-explore-inspect-text (plist-get thing :value) :mode #'org-mode
-                                 :stay (eq action 'display))))
-   ((and (eq action 'drill)
-         (eq (plans-explore--operation (plist-get thing :context)) 'list)
-         (not (json-explore-current-path)) (eq (plist-get thing :column) 'index))
+  (when (and (eq action 'drill)
+             (eq (plans-explore--operation (plist-get thing :context)) 'list)
+             (not (json-explore-current-path)) (eq (plist-get thing :column) 'index))
     (plans-explore--fetch-row thing)
-    t)))
+    t))
 
 (defun plans-explore--visit-handler (thing)
   (when-let* ((record (plans-explore--record)))
@@ -257,17 +248,22 @@ key or :local t for the checkout's local plans.  Nil uses CLI defaults."
       (unless (and (stringp file) (file-name-absolute-p file)
                    (not (file-remote-p file)) (file-regular-p file))
         (user-error "No local plan file at %s" file))
-      (let ((org-inhibit-startup t)
-            (enable-local-variables nil)
-            (enable-local-eval nil))
-        (list :buffer (find-file-noselect file)
+      (let* ((org-inhibit-startup t)
+             (enable-local-variables nil)
+             (enable-local-eval nil)
+             (buffer (find-file-noselect file)))
+        (unless task
+          (with-current-buffer buffer
+            (widen)
+            (goto-char (point-min))))
+        (list :buffer buffer
               :line (and (hash-table-p task) (gethash "line" task)))))))
 
 (define-derived-mode plans-explore-mode json-explore-mode "Plans Explore"
   "Browse plans CLI results.  RET on a plan's list index fetches details.
 C-c C-o fetches the selected plan from list or check; C-c C-v (gf in
-Evil) visits the fetched file or task in View mode.  RET on the Org
-section opens a read-only snapshot without visiting the file."
+Evil) visits the authoritative Org file in View mode, at the top or
+at the snapshot line when on a task."
   (add-hook 'json-explore-open-functions #'plans-explore--open-handler nil t)
   (add-hook 'json-explore-visit-functions #'plans-explore--visit-handler nil t))
 

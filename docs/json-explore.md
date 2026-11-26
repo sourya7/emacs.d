@@ -100,3 +100,22 @@ emacs -Q --batch -L .local/elpaca/builds/vui \
 If testing in a jj workspace without `.local`, substitute the invoking
 checkout's `vui` build path. Tests use fixtures and fake plans commands, not the
 real plans store.
+
+## Live terminal smoke test
+
+From the repository root in a terminal (at least 40 rows by 120 columns),
+run the walkthrough with default keys and with Evil Collection overrides:
+
+```sh
+emacs -Q -nw -l user/test/explorer-live-smoke.el
+EXPLORER_OVERRIDE=1 emacs -Q -nw -l user/test/explorer-live-smoke.el
+```
+
+Set `ELPACA_BUILDS` to the existing Elpaca builds directory if it is not
+`.local/elpaca/builds`. The smoke test uses the repository's explorer module
+registration in an isolated session without installing packages or loading
+unrelated user modules. It checks cell navigation, scroll and history, sticky
+headers, refresh diagnostics and read-only visits through the real `plans`
+CLI. It needs `plans` on PATH and a centrally mapped checkout. Set
+`EXPLORER_PLAN` to a valid active-inventory ID with tasks if `json-data-explorer`
+is not in that checkout's inventory. No plans or workspace state is written.

@@ -60,7 +60,7 @@
 ;; Row IDs are the original array indices or object keys.  Column IDs are
 ;; symbols for structural columns and strings for actual object members.
 (cl-defstruct (json-explore--view (:constructor json-explore--make-view))
-  value path columns rows sort descending cell start hscroll source diagnostic snapshot)
+  value path label columns rows sort descending cell start hscroll source diagnostic snapshot)
 
 ;; Optional adapter policies: VALIDATE sees (snapshot exit-code) before it is
 ;; installed; COLUMNS is a list of (key header [formatter]) for a root array of
@@ -77,6 +77,25 @@
 (defvar-local json-explore--back nil)
 (defvar-local json-explore--forward nil)
 (defvar-local json-explore--inspection nil)
+
+(defun json-explore--breadcrumb ()
+  (let ((label (replace-regexp-in-string "[[:cntrl:]]" " "
+                                         (json-explore--view-label json-explore--view)))
+        (path (json-explore--view-path json-explore--view)))
+    (mapconcat #'identity
+               (cons label (mapcar (lambda (part)
+                                     (if (and (stringp part)
+                                              (string-match-p "\\`[a-zA-Z_][a-zA-Z_0-9]*\\'" part))
+                                         part
+                                       (format "[%s]" (json-explore--json part))))
+                                   path))
+               " › ")))
+
+(defun json-explore--update-breadcrumb ()
+  ;; Escape format directives in names and keys.  vui uses this string
+  ;; whenever the window is not pinning the table's column headers.
+  (setq-local header-line-format
+              (replace-regexp-in-string "%" "%%" (json-explore--breadcrumb))))
 
 (defun json-explore--object-array-p (value)
   (and (vectorp value) (> (length value) 0) (cl-every #'hash-table-p value)))
@@ -207,27 +226,24 @@
   (let* ((view json-explore--view)
          (rows (json-explore--visible-rows view))
          (total (length (json-explore--view-rows view)))
-         (path (json-explore-path-string (json-explore--view-path view)))
          (column (json-explore--view-sort view)))
-    (vui-region :sticky t
-      (vui-vstack
-       (vui-text path :face 'bold)
-       (when json-explore--request
-         (vui-text "Running command…" :face 'shadow))
-       (when-let* ((diagnostic (json-explore--view-diagnostic view)))
-         (apply #'vui-vstack
-                (mapcar (lambda (line) (vui-text line :face 'warning))
-                        (split-string diagnostic "\n"))))
-       (when column
-         (vui-text (format "Sorted by %s (%s)" (json-explore--column-header view column)
-                           (if (json-explore--view-descending view) "descending" "ascending"))))
-       (when (< (length rows) total)
-         (vui-text (format "showing %d of %d" (length rows) total)))
-       (cond (rows (json-explore--table view rows))
-             ((json-explore--view-value view)
-              (vui-text (json-explore--summary (json-explore--view-value view))))
-             ((not (json-explore--view-diagnostic view))
-              (vui-text "No JSON result yet.")))))))
+    (vui-vstack
+     (when json-explore--request
+       (vui-text "Running command…" :face 'shadow))
+     (when-let* ((diagnostic (json-explore--view-diagnostic view)))
+       (apply #'vui-vstack
+              (mapcar (lambda (line) (vui-text line :face 'warning))
+                      (split-string diagnostic "\n"))))
+     (when column
+       (vui-text (format "Sorted by %s (%s)" (json-explore--column-header view column)
+                         (if (json-explore--view-descending view) "descending" "ascending"))))
+     (when (< (length rows) total)
+       (vui-text (format "showing %d of %d" (length rows) total)))
+     (cond (rows (json-explore--table view rows))
+           ((json-explore--view-value view)
+            (vui-text (json-explore--summary (json-explore--view-value view))))
+           ((not (json-explore--view-diagnostic view))
+            (vui-text "No JSON result yet."))))))
 
 (defun json-explore--window ()
   (if (eq (window-buffer (selected-window)) (current-buffer))
@@ -271,6 +287,7 @@
   (json-explore-next-cell 1))
 
 (defun json-explore--render (&optional restore-scroll)
+  (json-explore--update-breadcrumb)
   (vui-refresh)
   (vui-flush-sync)
   (unless (and (json-explore--view-cell json-explore--view)
@@ -413,7 +430,8 @@
      ((eq (car cell) 'scalar) (json-explore-inspect))
      (t
       (let ((next (json-explore--new-view value path)))
-        (setf (json-explore--view-source next) (json-explore--view-source json-explore--view)
+        (setf (json-explore--view-label next) (json-explore--view-label json-explore--view)
+              (json-explore--view-source next) (json-explore--view-source json-explore--view)
               (json-explore--view-snapshot next) (json-explore--view-snapshot json-explore--view))
         (json-explore--push-view next))))))
 
@@ -508,7 +526,10 @@ ordinary Emacs or Evil search keys to find rendered text."
     (with-current-buffer buffer
       (unless existing (funcall mode))
       (json-explore--cancel-request)
-      (setq json-explore--view view json-explore--back nil json-explore--forward nil))
+      (unless (json-explore--view-label view)
+        (setf (json-explore--view-label view) buffer-name))
+      (setq json-explore--view view json-explore--back nil json-explore--forward nil)
+      (json-explore--update-breadcrumb))
     (vui-mount (vui-component 'json-explore--root) buffer-name no-display)
     (with-current-buffer buffer (json-explore--first-cell))
     buffer))
@@ -524,13 +545,17 @@ switch to the buffer."
   "Explore a JSON snapshot of the current buffer or active region.
 When BEGIN and END are provided, explore only the text between them."
   (interactive (when (use-region-p) (list (region-beginning) (region-end))))
-  (let ((name (format "*JSON: %s*" (buffer-name))))
+  (let* ((origin (buffer-name))
+         (region (and begin end))
+         (name (format "*JSON: %s*" origin)))
     (save-restriction
-      (unless (and begin end) (widen))
-      (json-explore-show-value
-       (json-explore-parse (buffer-substring-no-properties (or begin (point-min))
-                                                          (or end (point-max))))
-       name))))
+      (unless region (widen))
+      (let ((view (json-explore--new-view
+                   (json-explore-parse (buffer-substring-no-properties (or begin (point-min))
+                                                                      (or end (point-max))))
+                   nil)))
+        (setf (json-explore--view-label view) (if region (format "%s (region)" origin) origin))
+        (json-explore--show-view view name nil)))))
 
 (defun json-explore--dispose-request (request)
   (dolist (process (list (json-explore--request-process request)
@@ -601,7 +626,8 @@ When BEGIN and END are provided, explore only the text between them."
                (json-explore--source-columns source))
       (setf (json-explore--view-columns new)
             (cons 'index (mapcar #'car (json-explore--source-columns source)))))
-    (setf (json-explore--view-cell new) (json-explore--view-cell view)
+    (setf (json-explore--view-label new) (json-explore--view-label view)
+          (json-explore--view-cell new) (json-explore--view-cell view)
           (json-explore--view-start new) (json-explore--view-start view)
           (json-explore--view-hscroll new) (json-explore--view-hscroll view)
           (json-explore--view-source new) source
@@ -707,7 +733,8 @@ Return the explorer buffer immediately; NO-DISPLAY leaves windows alone."
                   :directory (json-explore--local-directory (or directory default-directory))
                   :context context :success-codes (copy-sequence success-codes)))
          (name (or buffer-name (generate-new-buffer-name (format "*JSON: %s*" program))))
-         (buffer (json-explore--show-view (json-explore--make-view :source source) name no-display)))
+         (view (json-explore--make-view :source source :label program))
+         (buffer (json-explore--show-view view name no-display)))
     (with-current-buffer buffer (json-explore-refresh))
     buffer))
 

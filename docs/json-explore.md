@@ -21,8 +21,11 @@ columns and objects use key/value columns. Missing members, `null`, `false`,
 zero, empty strings, and empty containers remain distinct. Use the index/key
 cell to open a whole row. Long or multiline strings open as full text; the
 inspection command opens typed JSON rather than the shortened table summary.
-The breadcrumb shows the current path. Drilling and history reuse one explorer
-buffer and do not rerun the command. Inspections reuse a companion buffer.
+The header line shows the source at the root and adds path segments as you
+open cells (for example, `Plans list › [0] › tasks`). When you scroll into a
+table, the column names take over the header line; scroll back up to see the
+breadcrumb again. Drilling and history reuse one explorer buffer and do not
+rerun the command. Inspections reuse a companion buffer.
 
 Use explicit refresh to rerun a command for the current history entry, at the
 same JSON path if nested. Pending refresh or a failed command/parse does not
@@ -114,8 +117,9 @@ EXPLORER_OVERRIDE=1 emacs -Q -nw -l user/test/explorer-live-smoke.el
 Set `ELPACA_BUILDS` to the existing Elpaca builds directory if it is not
 `.local/elpaca/builds`. The smoke test uses the repository's explorer module
 registration in an isolated session without installing packages or loading
-unrelated user modules. It checks cell navigation, scroll and history, sticky
-headers, refresh diagnostics and read-only visits through the real `plans`
-CLI. It needs `plans` on PATH and a centrally mapped checkout. Set
+unrelated user modules. It checks cell navigation, scroll and history, the
+breadcrumb and pinned column headers, refresh diagnostics and read-only visits
+through the real `plans` CLI. It needs `plans` on PATH and a centrally mapped
+checkout. Set
 `EXPLORER_PLAN` to a valid active-inventory ID with tasks if `json-data-explorer`
 is not in that checkout's inventory. No plans or workspace state is written.

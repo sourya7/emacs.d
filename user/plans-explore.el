@@ -105,13 +105,14 @@ key or :local t for the checkout's local plans.  Nil uses CLI defaults."
          (global-argv (plans-explore--global-args root project local config))
          (source (plans-explore--source plans-explore-program directory global-argv
                                         operation id archived local))
-         (name (format "*Plans %s%s [%x]*" operation (if id (concat " " id) "")
+         (label (if id (format "Plans %s %s" operation id) (format "Plans %s" operation)))
+         (name (format "*%s [%x]*" label
                        (sxhash-equal (list plans-explore-program directory
                                           (json-explore--source-argv source)))))
          (unavailable (and local (eq operation 'workspaces)))
-         (view (if unavailable
-                   (json-explore--make-view :diagnostic "Workspace inventory unavailable with --local.")
-                 (json-explore--make-view :source source)))
+         (view (json-explore--make-view
+                :label label :source (unless unavailable source)
+                :diagnostic (when unavailable "Workspace inventory unavailable with --local.")))
          (buffer (json-explore--show-view view name no-display #'plans-explore-mode)))
     (unless unavailable (with-current-buffer buffer (json-explore-refresh)))
     buffer))
@@ -161,7 +162,8 @@ key or :local t for the checkout's local plans.  Nil uses CLI defaults."
                     (json-explore--source-program source) (json-explore--source-directory source)
                     (plans-explore--context-global-argv context) 'show id
                     (eq (gethash "archived" row) t) (plans-explore--context-local context))))
-      (json-explore--push-view (json-explore--make-view :source detail))
+      (json-explore--push-view
+       (json-explore--make-view :source detail :label (format "Plans show %s" id)))
       (json-explore-refresh))))
 
 (defun plans-explore--record ()

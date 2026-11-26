@@ -28,5 +28,16 @@
    (work-apps . my/is-work-machine))
  t)
 
+(declare-function my/emacs-main-dir "core/utils.el")
+
+(defun my/load-explorer-modules ()
+  "Load the JSON explorer and its plans adapter after Elpaca activation."
+  (let ((load-file-name (my/emacs-main-dir "user/package.el")))
+    (my/load-packages '(json-explore plans-explore) t)))
+
+;; The generic explorer needs vui on `load-path'; its Elpaca order can
+;; still be pending when this file first loads.
+(add-hook 'elpaca-after-init-hook #'my/load-explorer-modules)
+
 (provide 'user/package)
 ;;; package.el ends here

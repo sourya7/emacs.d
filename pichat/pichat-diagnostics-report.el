@@ -13,6 +13,9 @@
 (require 'pichat-session)
 (require 'pichat-path)
 (require 'pichat-diagnostic)
+(require 'pichat-pi)
+
+(declare-function pichat-chat-canonical-entry-cache "pichat-chat" (session))
 
 (defvar pichat-diagnostics-view-event-limit)
 (defvar pichat-diagnostics-view-value-limit)
@@ -314,6 +317,23 @@ Only abnormal values are highlighted; descriptive words are dimmed."
                     (when (< end (point-max)) "\n[stderr truncated by PiChat]\n"))))
       "unavailable (no owning live stderr buffer); captured stderr, if any, is in failure records\n")))
 
+(defun pichat-diagnostics-report--system-prompt (session)
+  "Read SESSION's stored prompt from its current canonical entry cache."
+  (when (and (pichat-session-id session)
+             (fboundp 'pichat-chat-canonical-entry-cache))
+    (when-let* ((cache (pichat-chat-canonical-entry-cache session)))
+      (condition-case nil
+          (pichat-pi-entry-cache-system-prompt cache)
+        (pichat-pi-invalid-session nil)))))
+
+(defun pichat-diagnostics-report--prompt-section (id title text)
+  "Return a bounded prompt evidence section with ID and TITLE, or nil."
+  (when (and (stringp text) (not (string-blank-p text)))
+    (list (list id title
+                (substring-no-properties
+                 (pichat-chat-diagnostics--bounded-raw
+                  text pichat-diagnostics-view-value-limit))))))
+
 (defun pichat-diagnostics-report-install (session sections)
   "Capture SESSION and provider SECTIONS and render the unified report."
   (let* ((titles '("Runtime / transport" "Canonical transcript" "Live tail" "Session History"))
@@ -363,11 +383,12 @@ Only abnormal values are highlighted; descriptive words are dimmed."
                   (pichat-diagnostics-report--title
                    "Startup tool selections" (pichat-diagnostics-report--tools-summary session))
                   (pichat-diagnostics-report--tools session)))
-           (when (and (stringp additional-prompt) (not (string-blank-p additional-prompt)))
-             (list (list 'additional-system-prompt "Additional system prompt"
-                         (substring-no-properties
-                          (pichat-chat-diagnostics--bounded-raw
-                           additional-prompt pichat-diagnostics-view-value-limit)))))
+           (when pi-p
+             (pichat-diagnostics-report--prompt-section
+              'system-prompt "System prompt"
+              (pichat-diagnostics-report--system-prompt session)))
+           (pichat-diagnostics-report--prompt-section
+            'additional-system-prompt "Additional system prompt" additional-prompt)
            ;; Empty and unavailable domains are already reported under Problems.
            (mapcar (lambda (section)
                      (list (list 'domain (car section))

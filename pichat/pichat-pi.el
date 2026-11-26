@@ -9,6 +9,7 @@
 
 (require 'cl-lib)
 (require 'json)
+(require 'seq)
 (require 'subr-x)
 (require 'pichat-transcript)
 (require 'pichat-diagnostic)
@@ -141,6 +142,51 @@ parent cycles."
             (push entry branch)
             (setq id (plist-get entry :parentId))))
         branch)))))
+
+(defun pichat-pi--system-content-text (content)
+  "Return the text from Pi system message CONTENT."
+  (cond
+   ((stringp content) content)
+   ((proper-list-p content)
+    (mapconcat (lambda (block) (plist-get block :text))
+               (seq-filter (lambda (block)
+                             (and (plistp block)
+                                  (equal (plist-get block :type) "text")
+                                  (stringp (plist-get block :text))))
+                           content)
+               "\n"))
+   (t "")))
+
+(defun pichat-pi-entry-cache-system-prompt (cache)
+  "Replay the stored system prompt on CACHE's active branch.
+A compaction systemMessage replaces earlier state.  Later system messages
+append content and patch ordered sections: updates keep their position and
+removals discard it.  Return nil if there is no nonblank prompt text."
+  (let (content sections)
+    (dolist (entry (pichat-pi-entry-cache-active-branch cache))
+      (let* ((type (plist-get entry :type))
+             (checkpoint (equal type "compaction"))
+             (message (cond (checkpoint (plist-get entry :systemMessage))
+                            ((equal type "message") (plist-get entry :message)))))
+        (when (and (plistp message) (equal (plist-get message :role) "system"))
+          (when checkpoint
+            (setq content nil sections nil))
+          (let ((text (pichat-pi--system-content-text (plist-get message :content)))
+                (patch (plist-get message :sections)))
+            (unless (string-empty-p text) (push text content))
+            (when (plistp patch)
+              (while patch
+                (let* ((name (pop patch))
+                       (value (pop patch))
+                       (existing (assq name sections)))
+                  (cond ((null value) (setq sections (delq existing sections)))
+                        ((and (stringp value) existing) (setcdr existing value))
+                        ((stringp value) (push (cons name value) sections))))))))))
+    (let ((prompt (string-join
+                   (nconc (nreverse content)
+                          (seq-remove #'string-empty-p (mapcar #'cdr (nreverse sections))))
+                   "\n\n")))
+      (unless (string-blank-p prompt) prompt))))
 
 (defconst pichat-pi--diagnostic-limit 100
   "Maximum compatibility diagnostics retained in one transcript build.")

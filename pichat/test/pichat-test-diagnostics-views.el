@@ -166,6 +166,12 @@
                           pichat-chat--source-bound-p t
                           pichat-chat--source-session-id "source-a"
                           pichat-chat--source-session-file nil
+                          pichat-chat--entry-cache
+                          (pichat-pi-entry-cache-full
+                           "source-a" nil
+                           '((:id "s" :type "message"
+                              :message (:role "system" :content "private-system-text")))
+                           "s")
                           pichat-chat--canonical-transcript
                           (pichat-transcript-create :diagnostics nil)
                           pichat-chat--live-draft (pichat-live-draft-create)))
@@ -215,6 +221,8 @@
                     (should (string-match-p "REDACTED" text))
                     (should-not (string-match-p "hidden-summary\\|private-" text)))
                   (should (= (point) (point-min)))
+                  (pichat-test-diagnostics-toggle "System prompt")
+                  (should (string-match-p "private-system-text" (buffer-string)))
                   ;; Source rebinding drops source-bound sections, not failures.
                   (setf (pichat-session-id session) "source-b")
                   (pichat-diagnostics-refresh)
@@ -224,7 +232,7 @@
                                      "Live tail snapshot, Session History snapshot$")
                              text))
                     (should (string-match-p "^Problems\n  Runtime / transport\n    " text))
-                    (should-not (string-match-p "canonical-notice\\|live-notice\\|history-notice" text))
+                    (should-not (string-match-p "canonical-notice\\|live-notice\\|history-notice\\|private-system-text" text))
                     (should (string-match-p "REDACTED" text))))
                 (should (equal before (pichat-session-diagnostics session)))
                 (should (equal events (pichat-session-event-log session))))))
@@ -467,6 +475,77 @@
               (should (string-match-p (concat "^▶ " title "$") (buffer-string)))
               (should-not (string-match-p "First line" (buffer-string)))))
         (when (buffer-live-p report) (kill-buffer report))))))
+
+(ert-deftest pichat-diagnostics-report-replays-stored-system-prompt ()
+  (pichat-test-with-clean-state
+    (let* ((session (pichat-register-session (pichat-session-make :id "source")))
+           (chat (generate-new-buffer " *system-prompt-chat*"))
+           (pichat-diagnostics-view-value-limit 50)
+           ;; KEY order is intentional: replacement stays put, readdition goes last.
+           (entries '((:id "user" :type "message"
+                       :message (:role "user" :content "Not system text"))
+                      (:id "initial" :parentId "user" :type "message"
+                       :message (:role "system" :content " Base\ntext"
+                                 :sections (:z "old Z" :a "removed" :m "M")))
+                      (:id "patch" :parentId "initial" :type "message"
+                       :message (:role "system" :content ""
+                                 :sections (:z "new \"Z\"" :a nil)))
+                      (:id "checkpoint" :parentId "patch" :type "compaction"
+                       :firstKeptEntryId "initial"
+                       :systemMessage (:role "system" :content "Checkpoint"
+                                       :sections (:m "CM" :a "CA" :z "CZ")))
+                      (:id "tail" :parentId "checkpoint" :type "message"
+                       :message (:role "system" :content ((:type "text" :text "Tail"))
+                                 :sections (:m nil :z "updated CZ")))
+                      (:id "leaf" :parentId "tail" :type "message"
+                       :message (:role "system" :sections (:m "added CM")))
+                      (:id "other" :parentId "checkpoint" :type "message"
+                       :message (:role "system" :sections (:z "Wrong branch")))))
+           report)
+      (unwind-protect
+          (cl-letf (((symbol-function 'pichat-view-display) #'ignore))
+            (setf (pichat-session-buffer session) chat)
+            (with-current-buffer chat
+              (setq major-mode 'pichat-chat-mode)
+              (setq-local pichat-chat-session session))
+            (setq report (pichat-show-diagnostics session))
+            (with-current-buffer report
+              (cl-labels ((refresh-at (leaf &optional id)
+                            (with-current-buffer chat
+                              (setq-local pichat-chat--entry-cache
+                                          (pichat-pi-entry-cache-full
+                                           (or id "source") nil entries leaf)))
+                            (pichat-diagnostics-refresh))
+                          (check-body (text)
+                            (should (string-match-p
+                                     (concat "^▼ System prompt\n" (regexp-quote text)
+                                             "\n[▶▼] ")
+                                     (buffer-string)))))
+                (should-not (string-match-p "System prompt" (buffer-string)))
+                (refresh-at "user")
+                (should-not (string-match-p "System prompt" (buffer-string)))
+                (refresh-at "initial")
+                (should (string-match-p "^▶ System prompt$" (buffer-string)))
+                (should-not (string-match-p "old Z" (buffer-string)))
+                (pichat-test-diagnostics-toggle "System prompt")
+                (check-body " Base\ntext\n\nold Z\n\nremoved\n\nM")
+                (refresh-at "patch")
+                (check-body " Base\ntext\n\nnew \"Z\"\n\nM")
+                (refresh-at "leaf" "other-source")
+                (should-not (string-match-p "System prompt" (buffer-string)))
+                (let* ((text "Checkpoint\n\nTail\n\nCA\n\nupdated CZ\n\nadded CM")
+                       (pichat-diagnostics-view-value-limit (length text)))
+                  (refresh-at "leaf")
+                  (check-body text)
+                  (let ((pichat-diagnostics-view-value-limit (1- (length text))))
+                    (refresh-at "leaf")
+                    (check-body (concat (substring text 0 -1) "\n[truncated by PiChat]"))))
+                (setf (pichat-session-backend session) 'no-pi)
+                (pichat-diagnostics-refresh)
+                (should-not (string-match-p "System prompt" (buffer-string))))))
+        (setf (pichat-session-buffer session) nil)
+        (dolist (buffer (list report chat))
+          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
 
 (ert-deftest pichat-diagnostics-report-provider-sections-keep-stable-independent-folds ()
   (pichat-test-with-clean-state

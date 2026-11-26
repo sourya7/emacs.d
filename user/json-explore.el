@@ -60,10 +60,13 @@
 ;; Row IDs are the original array indices or object keys.  Column IDs are
 ;; symbols for structural columns and strings for actual object members.
 (cl-defstruct (json-explore--view (:constructor json-explore--make-view))
-  value path columns rows sort descending cell start hscroll source diagnostic)
+  value path columns rows sort descending cell start hscroll source diagnostic snapshot)
 
+;; Optional adapter policies: VALIDATE sees (snapshot exit-code) before it is
+;; installed; COLUMNS is a list of (key header [formatter]) for a root array of
+;; objects.  These labels do not change cell values or paths.
 (cl-defstruct (json-explore--source (:constructor json-explore--make-source))
-  program argv directory context success-codes)
+  program argv directory context success-codes validate columns)
 
 (cl-defstruct (json-explore--request (:constructor json-explore--make-request))
   process pipe stdout stderr)
@@ -159,13 +162,26 @@
     ('key "Key") ('index "Index") ('value "Value")
     (_ (json-explore--summary column))))
 
+(defun json-explore--column-spec (view column)
+  (when (and (not (json-explore--view-path view)) (json-explore--view-source view))
+    (assoc column (json-explore--source-columns (json-explore--view-source view)))))
+
+(defun json-explore--column-header (view column)
+  (or (nth 1 (json-explore--column-spec view column)) (json-explore--header column)))
+
+(defun json-explore--label (view row column)
+  (let ((value (json-explore--display-value view (cons row column)))
+        (formatter (nth 2 (json-explore--column-spec view column))))
+    (if (and formatter (not (eq value json-explore-missing)))
+        (json-explore--clip (funcall formatter value))
+      (json-explore--summary value))))
+
 (defun json-explore--table (view rows)
   (let* ((columns (json-explore--view-columns view))
-         (headers (mapcar #'json-explore--header columns))
+         (headers (mapcar (lambda (column) (json-explore--column-header view column)) columns))
          (labels (mapcar (lambda (row)
                            (mapcar (lambda (column)
-                                     (json-explore--summary
-                                      (json-explore--display-value view (cons row column))))
+                                     (json-explore--label view row column))
                                    columns))
                          rows))
          (widths (vconcat (mapcar #'string-width headers))))
@@ -203,14 +219,15 @@
                 (mapcar (lambda (line) (vui-text line :face 'warning))
                         (split-string diagnostic "\n"))))
        (when column
-         (vui-text (format "Sorted by %s (%s)" (json-explore--header column)
+         (vui-text (format "Sorted by %s (%s)" (json-explore--column-header view column)
                            (if (json-explore--view-descending view) "descending" "ascending"))))
        (when (< (length rows) total)
          (vui-text (format "showing %d of %d" (length rows) total)))
        (cond (rows (json-explore--table view rows))
              ((json-explore--view-value view)
               (vui-text (json-explore--summary (json-explore--view-value view))))
-             (t (vui-text "No JSON result yet.")))))))
+             ((not (json-explore--view-diagnostic view))
+              (vui-text "No JSON result yet.")))))))
 
 (defun json-explore--window ()
   (if (eq (window-buffer (selected-window)) (current-buffer))
@@ -338,7 +355,7 @@
     (kill-new path)
     (message "%s" path)))
 
-(defun json-explore--inspect-value (value raw stay)
+(defun json-explore--inspect-value (value raw stay &optional text-mode-function)
   (unless (buffer-live-p json-explore--inspection)
     (setq json-explore--inspection
           (generate-new-buffer (format "*Inspect %s*" (string-trim (buffer-name) "[*]+" "[*]+")))))
@@ -347,7 +364,7 @@
       (let ((inhibit-read-only t))
         (erase-buffer)
         (if raw
-            (progn (text-mode) (insert value))
+            (progn (funcall (or text-mode-function #'text-mode)) (insert value))
           (special-mode)
           (if (eq value json-explore-missing)
               (insert "<missing: no such object member>")
@@ -395,13 +412,17 @@
       (json-explore--inspect-value value t nil))
      ((eq (car cell) 'scalar) (json-explore-inspect))
      (t
-      (json-explore--cancel-request)
-      (json-explore--save-position)
       (let ((next (json-explore--new-view value path)))
-        (setf (json-explore--view-source next) (json-explore--view-source json-explore--view))
-        (push json-explore--view json-explore--back)
-        (setq json-explore--forward nil json-explore--view next))
-      (json-explore--render t)))))
+        (setf (json-explore--view-source next) (json-explore--view-source json-explore--view)
+              (json-explore--view-snapshot next) (json-explore--view-snapshot json-explore--view))
+        (json-explore--push-view next))))))
+
+(defun json-explore--push-view (next)
+  (json-explore--cancel-request)
+  (json-explore--save-position)
+  (push json-explore--view json-explore--back)
+  (setq json-explore--forward nil json-explore--view next)
+  (json-explore--render t))
 
 (defun json-explore-open ()
   "Drill into the cell at point.  Use its index/key cell to open a row."
@@ -478,14 +499,14 @@ ordinary Emacs or Evil search keys to find rendered text."
     "Y" #'json-explore-copy-path)
   (setq json-explore--evil-bindings-installed t))
 
-(defun json-explore--show-view (view buffer-name no-display)
-  (let ((existing (get-buffer buffer-name)))
-    (when (and existing (not (provided-mode-derived-p (buffer-local-value 'major-mode existing)
-                                                      'json-explore-mode)))
-      (user-error "Buffer %s is not a JSON explorer" buffer-name)))
-  (let ((buffer (get-buffer-create buffer-name)))
+(defun json-explore--show-view (view buffer-name no-display &optional mode)
+  (let* ((mode (or mode #'json-explore-mode))
+         (existing (get-buffer buffer-name))
+         (buffer (or existing (get-buffer-create buffer-name))))
+    (when (and existing (not (eq (buffer-local-value 'major-mode existing) mode)))
+      (user-error "Buffer %s is not in %s" buffer-name mode))
     (with-current-buffer buffer
-      (unless (derived-mode-p 'json-explore-mode) (json-explore-mode))
+      (unless existing (funcall mode))
       (json-explore--cancel-request)
       (setq json-explore--view view json-explore--back nil json-explore--forward nil))
     (vui-mount (vui-component 'json-explore--root) buffer-name no-display)
@@ -570,13 +591,21 @@ When BEGIN and END are provided, explore only the text between them."
                  (aref value part))))
     (unless value (error "Refreshed JSON has no value at %s" (json-explore-path-string path)))))
 
-(defun json-explore--replace-snapshot (view value)
-  (let* ((new (json-explore--new-view value (json-explore--view-path view)))
+(defun json-explore--replace-snapshot (view snapshot)
+  (let* ((path (json-explore--view-path view))
+         (value (json-explore--at-path snapshot path))
+         (source (json-explore--view-source view))
+         (new (json-explore--new-view value path))
          (sort (json-explore--view-sort view)))
+    (when (and (not path) (json-explore--object-array-p value)
+               (json-explore--source-columns source))
+      (setf (json-explore--view-columns new)
+            (cons 'index (mapcar #'car (json-explore--source-columns source)))))
     (setf (json-explore--view-cell new) (json-explore--view-cell view)
           (json-explore--view-start new) (json-explore--view-start view)
           (json-explore--view-hscroll new) (json-explore--view-hscroll view)
-          (json-explore--view-source new) (json-explore--view-source view))
+          (json-explore--view-source new) source
+          (json-explore--view-snapshot new) snapshot)
     (when (member sort (json-explore--view-columns new))
       (setf (json-explore--view-sort new) sort
             (json-explore--view-descending new) (json-explore--view-descending view)))
@@ -596,11 +625,12 @@ When BEGIN and END are provided, explore only the text between them."
           (setq diagnostic exit))
          (t
           (when (string-blank-p stdout) (error "Command produced no JSON output"))
-          (let ((value (condition-case parse-error
+          (let ((validate (json-explore--source-validate source))
+                (value (condition-case parse-error
                            (json-explore-parse stdout)
                          (json-error (error "Invalid JSON: %s" (error-message-string parse-error))))))
-            (json-explore--replace-snapshot
-             view (json-explore--at-path value (json-explore--view-path view))))
+            (when validate (funcall validate value code))
+            (json-explore--replace-snapshot view value))
           (unless (zerop code) (setq diagnostic exit))))
       (error (setq diagnostic (concat exit ": " (error-message-string err)))))
     (unless (string-blank-p stderr)

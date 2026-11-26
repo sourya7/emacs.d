@@ -2400,9 +2400,26 @@ only where retained.
 
 Expandable evidence holds captured launch arguments, startup tool selections,
 domain records, current or retained stderr/failures and incoming events.
-Headings show a short summary (counts, `empty`, `none` or `unavailable`); domains
-without records have no evidence heading.
-**The report can contain paths, prompts and credentials; review before sharing.**
+Most headings show a short summary (counts, `empty`, `none` or `unavailable`);
+domains without records have no evidence heading.
+
+- **System prompt** shows what Pi stored for the active branch of the current
+  Pi session. It appears only when that session's cached entries contain prompt
+  text, so it is absent before the first request. It does not show changes made
+  by extensions that rewrite the prompt for a request without storing it.
+- **Additional system prompt** shows the text PiChat appended at launch. It
+  appears only when the runtime's resolved preset snapshot contains non-blank
+  appended text, including any contribution from `pichat-append-system-prompt`.
+
+Both sections start collapsed and have no heading summary. When expanded, they
+show plain text with line breaks preserved, up to
+`pichat-diagnostics-view-value-limit` characters per section, with a
+`[truncated by PiChat]` marker if needed. The captured launch command still
+omits the values of `--system-prompt` and `--append-system-prompt`.
+
+**Review before sharing:** prompt text can contain private data, and the report
+can also contain paths and credentials.
+
 Incoming events are a bounded retained subset, **not a complete request/response
 trace**; the heading shows how many retained events are displayed (`N of M`).
 Value truncation is labelled inline. Startup selections

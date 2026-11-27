@@ -65,6 +65,7 @@
 (require 'pichat-test-sessions-tree)
 (require 'pichat-test-sessions-visibility)
 (require 'pichat-test-sessions-navigation)
+(require 'pichat-test-bookmarks)
 (require 'pichat-test-sessions-preview)
 (require 'pichat-test-sessions-fork)
 (require 'pichat-test-sessions-clone)

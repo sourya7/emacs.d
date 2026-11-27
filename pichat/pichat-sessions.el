@@ -23,6 +23,7 @@
 ;; Basic completion and Session History do not need archive services.  Keep
 ;; discovery callable independently, without relying on Consult to load it.
 (autoload 'pichat-archive-discover "pichat-archive" nil nil)
+(autoload 'pichat-bookmark-make-record "pichat-bookmark")
 
 (declare-function pichat-tool-runtime-verify "pichat-tool-runtime" (session callback))
 (declare-function pichat-start-session "pichat"
@@ -46,6 +47,7 @@
                   "pichat-consult" (capability session))
 (declare-function pichat-jobs-session-file-names "pichat-jobs")
 
+(defvar bookmark-make-record-function)
 (defvar pichat-current-session)
 (defvar pichat-chat-stop-session-on-kill)
 (defvar pichat-chat--editor-generation)
@@ -129,6 +131,8 @@ of the same saved session file match.  Reading never starts Jobs execution."
 (defvar-local pichat-sessions--request-generation 0)
 
 (defvar-local pichat-sessions--source-token nil)
+(defvar-local pichat-sessions--rendered-source nil
+  "Owner and source of the last accepted tree, independent of request ownership.")
 
 (defvar-local pichat-sessions--request-id nil)
 
@@ -229,6 +233,23 @@ of the same saved session file match.  Reading never starts Jobs execution."
     map)
   "Keymap for immutable PiChat branch previews.")
 
+(defun pichat-sessions--bookmark-make-record ()
+  "Capture an entry bookmark at point in synchronized Session History."
+  (let ((session pichat-sessions-session)
+        (rendered pichat-sessions--rendered-source))
+    (unless (and rendered (eq (car rendered) session)
+                 (not pichat-sessions--stale-p)
+                 (equal (cdr rendered) (pichat-sessions--session-source-token session)))
+      (user-error "PiChat Session History is not synchronized; refresh before bookmarking"))
+    (let ((id (pichat-sessions--entry-id-at-point)))
+      (unless (and (stringp id) (gethash id pichat-sessions--nodes))
+        (user-error "Move point to a Session History entry to bookmark it"))
+      (let ((record (pichat-bookmark-make-record session id)))
+        (unless (and (eq rendered pichat-sessions--rendered-source)
+                     (equal (cdr rendered) (pichat-sessions--session-source-token session)))
+          (user-error "PiChat Session History changed during bookmark capture; refresh and try again"))
+        record))))
+
 (define-derived-mode pichat-sessions-mode pichat-view-mode "PiChat-History"
   "Inspect entries from the current Pi session file as a tree.
 
@@ -237,6 +258,8 @@ explicitly, v previews, d shows details, C clones the active branch, b browses
 saved sessions, q returns to chat, and ? describes the complete mode bindings.
 TAB folds branches, F cycles filters, / searches, and g refreshes history."
   (setq-local truncate-lines t)
+  (setq-local bookmark-make-record-function
+              #'pichat-sessions--bookmark-make-record)
   (unless (hash-table-p pichat-sessions--folded)
     (setq pichat-sessions--folded (make-hash-table :test #'equal)))
   (add-hook 'post-command-hook #'pichat-sessions--track-selection nil t)
@@ -997,8 +1020,9 @@ Restore SELECTED-ID or a deterministic visible fallback and install FOLDED."
             (old-stale-p pichat-sessions--stale-p))
         (setq pichat-sessions--stale-p nil)
         (condition-case error-data
-            (pichat-sessions--render-and-install
-             model session selected-id folded)
+            (let ((source (pichat-sessions--session-source-token session)))
+              (pichat-sessions--render-and-install model session selected-id folded)
+              (setq pichat-sessions--rendered-source (cons session source)))
           (error
            (setq pichat-sessions--stale-p old-stale-p)
            (signal (car error-data) (cdr error-data))))))))
@@ -1102,7 +1126,8 @@ Interactively, an empty query clears the current search."
   (when (eq session pichat-sessions-session)
     (cl-incf pichat-sessions--request-generation)
     (pichat-sessions--cancel-owned-request)
-    (setq pichat-sessions--source-token nil)
+    (setq pichat-sessions--source-token nil
+          pichat-sessions--rendered-source nil)
     (pichat-sessions--mark-stale)))
 
 (defun pichat-sessions--install-request-owner (session buffer)
@@ -1111,6 +1136,7 @@ Interactively, an empty query clears the current search."
     (unless (eq session pichat-sessions-session)
       (pichat-sessions--release-request-ownership)
       (setq pichat-sessions-session session
+            pichat-sessions--rendered-source nil
             pichat-sessions--source-token
             (pichat-sessions--session-source-token session)))
     (unless pichat-sessions--event-handler

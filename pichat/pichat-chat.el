@@ -37,6 +37,7 @@
 (require 'pichat-view)
 (require 'pichat-bridge-transport)
 
+(defvar bookmark-make-record-function)
 (defvar pichat-current-session)
 (defvar pichat--sessions-by-scope)
 
@@ -432,6 +433,21 @@ Markup characters remain visible; this is fontification only."
     map)
   "Keymap for `pichat-chat-mode'.")
 
+(declare-function pichat-bookmark-make-record "pichat-bookmark" (session &optional entry-id))
+
+(defun pichat-chat--bookmark-make-record ()
+  "Capture a conversation bookmark for this chat's displayed source."
+  (let ((session pichat-chat-session)
+        (buffer (current-buffer))
+        (generation pichat-chat--source-generation))
+    (unless (eq buffer (pichat-chat-owned-buffer session t))
+      (user-error "PiChat chat source is not synchronized; try again after it loads"))
+    (let ((record (pichat-bookmark-make-record session)))
+      (unless (and (= generation pichat-chat--source-generation)
+                   (eq buffer (pichat-chat-owned-buffer session t)))
+        (user-error "PiChat chat source changed during bookmark capture; try again"))
+      record)))
+
 (define-derived-mode pichat-chat-mode text-mode "PiChat"
   "Major mode for chatting with Pi.
 
@@ -443,6 +459,7 @@ RET sends the prompt, S-RET inserts a newline, C-c C-k aborts a run, and
 C-c C-y recovers a failed submission.  C-c C-l provides navigation between
 user messages, activity groups, and tool blocks."
   (setq-local truncate-lines nil truncate-partial-width-windows nil)
+  (setq-local bookmark-make-record-function #'pichat-chat--bookmark-make-record)
   (visual-line-mode 1)
   (setq-local imenu-create-index-function #'pichat-chat-imenu-create-index)
   (setq-local imenu-auto-rescan t)

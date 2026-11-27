@@ -1085,9 +1085,12 @@ With STAY keep focus in the explorer."
 
 (define-derived-mode json-explore-mode vui-mode "JSON Explore"
   "Browse JSON cells.  RET drills into a cell; K inspects full JSON.
-Use TAB/backtab to move between cells, gh/gl to move within a row in
-Evil, and ordinary vertical motion to move between rows.  C-o/C-i
-visit history, o/O sort the current table, and Y copies the jq path.
+Use TAB/backtab or, in Evil, g]/g[ to move between cells.
+In Evil, gh/gl move within a row; ordinary vertical motion moves
+between rows.  H/L (like Evil Collection's eww) and C-o/C-i go back
+and forward in view history.  H/L replace Evil's window-top/bottom
+motions only in explorer buffers.  o/O sort and Y copies the jq path.
+Without Evil, C-c C-b/C-c C-f go back and forward.
 On object pages, za/zo/zc toggle/open/close a section; zR/zM open/close
 all sections in Evil.  RET drills into a section in a new history entry.  Use gr
 in Evil or C-c C-r to refresh a command snapshot explicitly.  Use
@@ -1100,17 +1103,18 @@ ordinary Emacs or Evil search keys to find rendered text."
   (add-hook 'kill-buffer-hook #'json-explore--kill-inspection nil t))
 
 (defvar json-explore--evil-bindings-installed nil)
+(defvar evil-collection-binding-defaults)
 (declare-function evil-normal-state-p "evil-states" ())
 (declare-function evil-local-set-key "evil-core" (state key def))
 
-(defun json-explore--terminal-motion ()
-  ;; This runs after the parent vui-mode hook installs its buffer-local
-  ;; terminal bindings for button/field traversal.
+(defun json-explore--clear-vui-terminal-bindings ()
+  ;; Drop the parent vui-mode hook's buffer-local aliases so they cannot
+  ;; take precedence over the explorer's themed bindings or their overrides.
   (when json-explore--evil-bindings-installed
-    (evil-local-set-key 'normal (kbd "g]") #'json-explore-next-cell)
-    (evil-local-set-key 'normal (kbd "g[") #'json-explore-previous-cell)))
+    (evil-local-set-key 'normal (kbd "g]") nil)
+    (evil-local-set-key 'normal (kbd "g[") nil)))
 
-(add-hook 'json-explore-mode-hook #'json-explore--terminal-motion)
+(add-hook 'json-explore-mode-hook #'json-explore--clear-vui-terminal-bindings)
 
 (defun json-explore--emacs-binding (command)
   ;; Do not restore a default that the Evil Collection theme moved or disabled.
@@ -1137,8 +1141,6 @@ ordinary Emacs or Evil search keys to find rendered text."
     'action #'json-explore-open
     'action-other #'json-explore-open-other-window
     'action-stay #'json-explore-display-other-window
-    'next-button #'json-explore-next-cell
-    'previous-button #'json-explore-previous-cell
     'lookup-doc #'json-explore-inspect
     'find-file #'json-explore-visit
     'refresh #'json-explore-refresh
@@ -1146,9 +1148,22 @@ ordinary Emacs or Evil search keys to find rendered text."
     'quit-save #'json-explore-quit
     'quit-cancel #'json-explore-evil-quit
     'describe-mode #'describe-mode)
+  ;; Keep these defaults specific to explorers (not generic VUI or other
+  ;; history users), while letting the normal theme override mechanism win.
+  (let ((evil-collection-binding-defaults
+         (append '((next-button :state normal :key ("<tab>" "TAB" "g]"))
+                   (previous-button :state normal :key ("<backtab>" "<S-tab>" "g["))
+                   (history-previous :state normal :key ("C-o" "H"))
+                   (history-next :state normal :key ("C-i" "L")))
+                 evil-collection-binding-defaults)))
+    (evil-collection-bind 'json-explore-mode-map
+      'next-button #'json-explore-next-cell
+      'previous-button #'json-explore-previous-cell
+      ;; C-i and text TAB share an event; bind history last.
+      'history-previous #'json-explore-back
+      'history-next #'json-explore-forward))
   (evil-collection-define-key 'normal 'json-explore-mode-map
     "gh" #'json-explore-previous-column "gl" #'json-explore-next-column
-    (kbd "C-o") #'json-explore-back (kbd "C-i") #'json-explore-forward
     "o" #'json-explore-sort "O" #'json-explore-reverse-sort
     "za" #'json-explore-toggle-section "zo" #'json-explore-open-section
     "zc" #'json-explore-close-section "zR" #'json-explore-open-all-sections

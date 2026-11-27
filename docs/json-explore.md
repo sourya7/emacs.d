@@ -69,12 +69,15 @@ overrides):
 
 - `j`/`k` move vertically; `gh`/`gl` move between columns. `TAB`/`S-TAB` move
   between cells; `g]`/`g[` also work in terminals where Tab and `C-i` coincide.
+  The `next-button`/`previous-button` theme IDs cover both pairs.
 - `RET` drills into a cell. `S-RET`/`go` opens the full cell in another window;
   `M-RET`/`gO` displays it there without moving focus. `K` inspects typed JSON.
 - `za` toggles the section at or enclosing point, `zo` opens it, and `zc`
   closes it. `zR` opens all sections on the page and `zM` closes them.
-- `C-o`/`C-i` go back/forward through view history, restoring expansions,
-  sort order, cell and scroll position.
+- `H`/`L` or `C-o`/`C-i` go back/forward through view history, restoring
+  expansions, sort order, cell and scroll position. Like Evil Collection's
+  `eww` bindings, `H`/`L` replace Evil's window-top/bottom motions, but only
+  in explorer buffers. Customize both pairs via `history-previous`/`history-next`.
 - `o` sorts the table or field list at point (toggle direction on that column);
   `O` reverses its sort. `/` and `?` search rendered text; `y` remains Evil yank.
   `Y` copies the selected cell's jq-compatible bracket path.

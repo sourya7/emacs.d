@@ -172,11 +172,11 @@
     (should (vui-goto-key '(("rows") 40 "n")))
     (let ((start (line-beginning-position)))
       (set-window-start window start)
-      (should (string-match-p "Index +\"n\"" (explorer-smoke--header)))
+      (should (string-match-p "Index +n *$" (explorer-smoke--header)))
       (should (= (window-start window) start))
       (explorer-smoke--press action)
       (explorer-smoke--press "C-o")
-      (should (string-match-p "Index +\"n\"" (explorer-smoke--header)))
+      (should (string-match-p "Index +n *$" (explorer-smoke--header)))
       (should (equal (vui-key-at) '(("rows") 40 "n")))
       (should (= (window-start window) start)))
     (should (vui-goto-key '(("rows") 0 "n")))
@@ -189,12 +189,18 @@
         (window (selected-window)))
     (json-explore-show-value
      (json-explore-parse
-      (concat "{\"id\":42,\"first\":["
+      (concat "{\"id\":42,\"name\":\"example\",\"literal\":\"null\",\"first\":["
               (mapconcat (lambda (n) (format "{\"a\":%d}" n)) (number-sequence 0 59) ",")
               "],\"second\":["
               (mapconcat (lambda (n) (format "{\"b\":%d}" n)) (number-sequence 0 59) ",")
               "]}")) name)
+    (should (vui-goto-key '(nil "name" value)))
+    (should (looking-at-p "example *$"))
+    (should (eq (get-text-property (point) 'face) 'json-explore-string-face))
+    (should (vui-goto-key '(nil "literal" value)))
+    (should (looking-at-p "\"null\" *$"))
     (should (vui-goto-key '(nil "first" section)))
+    (should (looking-at-p "▸ first +\\[60 items\\]"))
     (explorer-smoke--press "zo")
     (should (equal (json-explore--cell-at) '(nil "first" section)))
     (explorer-smoke--press next)
@@ -212,7 +218,7 @@
     (dolist (case '((("first") 12 "a") (("second") 12 "b")))
       (should (vui-goto-key case))
       (set-window-start window (line-beginning-position))
-      (should (string-match-p (format "Index +%S" (nth 2 case)) (explorer-smoke--header))))
+      (should (string-match-p (format "Index +%s *$" (nth 2 case)) (explorer-smoke--header))))
     (explorer-smoke--press "Y")
     (should (equal (car kill-ring) ".[\"second\"][12][\"b\"]"))
     (let ((start (window-start window)))

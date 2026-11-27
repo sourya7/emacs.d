@@ -14,6 +14,26 @@
   "Browse finite JSON values."
   :group 'tools)
 
+(defface json-explore-string-face
+  '((t :inherit font-lock-string-face))
+  "Face for JSON string values."
+  :group 'json-explore)
+
+(defface json-explore-constant-face
+  '((t :inherit font-lock-constant-face))
+  "Face for JSON null and booleans."
+  :group 'json-explore)
+
+(defface json-explore-number-face
+  '((t :inherit font-lock-number-face))
+  "Face for JSON numbers."
+  :group 'json-explore)
+
+(defface json-explore-summary-face
+  '((t :inherit shadow))
+  "Face for JSON collection summaries."
+  :group 'json-explore)
+
 (defcustom json-explore-row-limit 500
   "Maximum number of rows rendered in each table (at least one)."
   :type 'natnum)
@@ -39,19 +59,54 @@
 (defun json-explore--clip (text)
   (truncate-string-to-width text (json-explore--width) nil nil "…"))
 
-(defun json-explore--summary (value)
+(defconst json-explore--display-control-re "[\u0000-\u001f\u007f-\u009f\u2028\u2029]"
+  "Control characters and Unicode line/paragraph separators.")
+
+(defun json-explore--escaped-label (text)
+  ;; Bound encoding work even for large values. Encode controls that
+  ;; `json-serialize' is allowed to leave literal, too.
+  (replace-regexp-in-string
+   "[\u007f-\u009f\u2028\u2029]" (lambda (match) (format "\\u%04x" (aref match 0)))
+   (decode-coding-string
+    (json-explore--json (substring-no-properties text 0 (min (length text) (json-explore--width))))
+    'utf-8)
+   t t))
+
+(defun json-explore--quote-string-p (text)
+  (or (string-empty-p text)
+      (member text '("null" "true" "false"))
+      (string-match-p "\\`-?\\(?:0\\|[1-9][0-9]*\\)\\(?:\\.[0-9]+\\)?\\(?:[eE][+-]?[0-9]+\\)?\\'" text)
+      (cl-some (lambda (c) (memq (get-char-code-property c 'general-category) '(Zs Zl Zp)))
+               (list (aref text 0) (aref text (1- (length text)))))
+      (string-match-p json-explore--display-control-re text)))
+
+(defun json-explore--key-label (key)
   (json-explore--clip
-   (cond
-    ((eq value json-explore-missing) "<missing>")
-    ((hash-table-p value)
-     (if (zerop (hash-table-count value)) "{}"
-       (format "{%d keys}" (hash-table-count value))))
-    ((vectorp value)
-     (if (zerop (length value)) "[]" (format "[%d items]" (length value))))
-    ;; Limit work before escaping, even for a very large string.
-    ((and (stringp value) (> (length value) (json-explore--width)))
-     (json-explore--json (substring value 0 (json-explore--width))))
-    (t (json-explore--json value)))))
+   (cond ((string-empty-p key) "⟨empty key⟩")
+         ((string-match-p json-explore--display-control-re key)
+          (substring (json-explore--escaped-label key) 1 -1))
+         (t (substring-no-properties key)))))
+
+(defun json-explore--summary (value)
+  (pcase-let
+      ((`(,text . ,face)
+        (cond
+         ((eq value json-explore-missing) '("<missing>"))
+         ((hash-table-p value)
+          (cons (if (zerop (hash-table-count value)) "{}"
+                  (format "{%d keys}" (hash-table-count value)))
+                'json-explore-summary-face))
+         ((vectorp value)
+          (cons (if (zerop (length value)) "[]" (format "[%d items]" (length value)))
+                'json-explore-summary-face))
+         ((stringp value)
+          (cons (if (json-explore--quote-string-p value) (json-explore--escaped-label value)
+                  (substring-no-properties value))
+                'json-explore-string-face))
+         ((numberp value) (cons (json-explore--json value) 'json-explore-number-face))
+         (t (cons (json-explore--json value) 'json-explore-constant-face)))))
+    (let ((label (json-explore--clip text)))
+      (if face (propertize label 'face face) label))))
 
 (defun json-explore-path-string (path)
   "Return a jq expression for PATH, a list of string keys and array indices."
@@ -325,7 +380,7 @@ Display formatting does not change these values.  Treat them as read-only."
 (defun json-explore--header (column)
   (pcase column
     ('key "Key") ('index "Index") ('value "Value")
-    (_ (json-explore--summary column))))
+    (_ (json-explore--key-label column))))
 
 (defun json-explore--column-spec (view column)
   (assoc column (json-explore--view-column-spec view)))
@@ -336,9 +391,10 @@ Display formatting does not change these values.  Treat them as read-only."
 (defun json-explore--label (view row column)
   (let ((value (json-explore--display-value view row column))
         (formatter (nth 2 (json-explore--column-spec view column))))
-    (if (and formatter (not (eq value json-explore-missing)))
-        (json-explore--clip (funcall formatter value))
-      (json-explore--summary value))))
+    (cond ((and formatter (not (eq value json-explore-missing)))
+           (json-explore--clip (funcall formatter value)))
+          ((eq column 'key) (json-explore--key-label value))
+          (t (json-explore--summary value)))))
 
 (defun json-explore--table (view rows)
   (let* ((columns (json-explore--view-columns view))
@@ -387,7 +443,7 @@ Display formatting does not change these values.  Treat them as read-only."
 
 (defun json-explore--fields (view rows)
   (let* ((labels (mapcar (lambda (row) (or (nth 1 (json-explore--column-spec view row))
-                                          (json-explore--summary row)))
+                                          (json-explore--key-label row)))
                          rows))
          (width (apply #'max 0 (mapcar #'string-width labels))))
     (apply #'vui-vstack
@@ -517,7 +573,9 @@ itself is navigable and refers to the typed value at PATH."
          (row (car (last path)))
          (value (json-explore--lookup view path)))
     (vui-collapsible :key (list (butlast path) row 'section)
-      :title (or title (format "%s  %s" (json-explore--summary row) (json-explore--summary value)))
+      :title (or title (concat (if (stringp row) (json-explore--key-label row)
+                                (json-explore--summary row))
+                              "  " (json-explore--summary value)))
       :expanded-indicator "▾" :collapsed-indicator "▸"
       :expanded expanded :on-toggle (lambda (open) (json-explore--set-fold path open))
       (when expanded (or body (json-explore--page view path node))))))

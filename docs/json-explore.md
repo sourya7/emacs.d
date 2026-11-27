@@ -90,6 +90,14 @@ or `json-explore-copy-path`.
   list; each capped list reports how many rows are shown.
   `json-explore-cell-width` (default 40) caps summary width, not inspection
   text.
+- Default labels show strings and object keys without quotes. String values
+  retain JSON quotes when empty, when they look like `null`, `true`, `false`, or
+  a JSON number, or when they contain control characters or leading/trailing
+  whitespace. Keys with controls show escapes, and an empty key is labeled
+  `⟨empty key⟩`. Customize `json-explore-string-face`,
+  `json-explore-constant-face`, `json-explore-number-face`, and
+  `json-explore-summary-face` to distinguish value types. Labels do not change
+  sorting, the typed JSON shown by `K`, or the jq path copied by `Y`.
 - `plans-explore-program` defaults to `plans` on Emacs's `exec-path`; set it to
   the path of an executable wrapper if needed. `plans-explore-selection`
   defaults to `nil` (normal CLI discovery from the current directory). Set it to
@@ -120,7 +128,9 @@ explorer state. Plans is one adapter; the explorer does not depend on it.
   the result and retain the last good view. `:columns` selects columns in a root
   array of objects: `(KEY HEADER [FORMATTER])`. A formatter receives the typed
   member and returns a single-line display string, optionally with faces;
-  missing members bypass it. Labels never change sorting, paths, or inspection.
+  missing members bypass it. Without a formatter, adapter tables and fields
+  use the same typed labels as generic views. Labels never change sorting,
+  paths, or inspection.
 - Accessors: `json-explore-source-program`, `json-explore-source-argv`,
   `json-explore-source-directory`, `json-explore-source-label`,
   `json-explore-source-context`, `json-explore-source-success-codes`,

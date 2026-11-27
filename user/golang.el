@@ -207,8 +207,5 @@ When PROJECT-ROOT is non-nil, run it from the current Go project root."
     "d i" '(dape-step-in :wk "step-in")
     "d q" '(dape-quit :wk "quit")))
 
-(defvar flycheck-global-modes)
-(setq flycheck-global-modes '(not lisp-interaction-mode go-mode go-ts-mode))
-
 (provide 'user/golang)
 ;;; golang.el ends here

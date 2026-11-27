@@ -11,6 +11,11 @@
   (flycheck-idle-change-delay 1.5)
   (flycheck-check-syntax-automatically '(save mode-enabled))
   (flycheck-emacs-lisp-load-path 'inherit)
+  (flycheck-global-modes
+   '(not lisp-interaction-mode
+         go-mode go-ts-mode
+         java-mode java-ts-mode
+         pichat-chat-mode))
   (global-flycheck-mode t)
   (flycheck-disabled-checkers '(emacs-lisp-checkdoc)))
 

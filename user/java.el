@@ -219,11 +219,5 @@ This can, for example, contain the plugin JARs from vscode-java-test."
 
 (add-hook 'eglot-managed-mode-hook #'my/java-eglot-managed-setup)
 
-;; Eglot supplies Flymake diagnostics; do not duplicate them with Flycheck.
-(with-eval-after-load 'flycheck
-  (when (eq (car-safe flycheck-global-modes) 'not)
-    (dolist (mode '(java-mode java-ts-mode))
-      (add-to-list 'flycheck-global-modes mode t))))
-
 (provide 'user/java)
 ;;; java.el ends here

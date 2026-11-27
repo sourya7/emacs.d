@@ -283,5 +283,51 @@
                 (should-error (bookmark-jump record) :type 'user-error))))
         (kill-buffer buffer)))))
 
+(ert-deftest pichat-bookmark-fresh-emacs-loads-handler-and-rechecks-configured-target ()
+  (pichat-test-bookmark--with-store
+    (let* ((autoloads (expand-file-name "pichat-autoloads.el" root))
+           (pichat-targets '((fixture :kind ssh :tramp-prefix "/ssh:original:")))
+           (source (pichat-session-make
+                    :id "saved" :session-file "/project/saved.jsonl"
+                    :transport (pichat-transport-resolve root 'fixture))))
+      (cl-letf (((symbol-function 'pichat-bookmark--saved-header)
+                 (lambda (file)
+                   (should (equal file "/ssh:original:/project/saved.jsonl"))
+                   '(:id "saved" :cwd "/project"))))
+        (with-temp-buffer
+          (let ((bookmark-make-record-function
+                 (lambda () (pichat-bookmark-make-record source))))
+            (bookmark-set "Configured target"))))
+      (bookmark-save)
+      ;; Generate beside the source, as a package build does.
+      (copy-file (expand-file-name "pichat-bookmark.el" pichat-test-pichat-directory)
+                 (expand-file-name "pichat-bookmark.el" root))
+      (pichat-test-eval-in-fresh-emacs
+       `(progn
+          (require 'loaddefs-gen)
+          (loaddefs-generate ,root ,autoloads)
+          (load ,autoloads nil t)
+          (require 'bookmark)
+          (should (autoloadp (symbol-function 'pichat-bookmark-jump)))
+          (should-not (featurep 'pichat))
+          (should-not (featurep 'pichat-bookmark))
+          (should-not (featurep 'pichat-chat))
+          (let ((bookmark-default-file ,bookmark-default-file)
+                (bookmark-alist nil))
+            (bookmark-load bookmark-default-file t)
+            (setq pichat-targets '((fixture :kind ssh :tramp-prefix "/ssh:changed:")))
+            ;; The moved target must be rejected before any file access.
+            (let ((original (symbol-function 'file-regular-p)))
+              (cl-letf (((symbol-function 'file-regular-p)
+                         (lambda (file)
+                           (when (file-remote-p file)
+                             (ert-fail "Attempted remote file access"))
+                           (funcall original file))))
+                (let ((failure (should-error (bookmark-jump "Configured target")
+                                             :type 'user-error)))
+                  (should (string-match-p "target or path mapping changed"
+                                          (error-message-string failure)))))))
+          (should (featurep 'pichat-bookmark)))))))
+
 (provide 'pichat-test-bookmarks)
 ;;; pichat-test-bookmarks.el ends here

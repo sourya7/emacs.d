@@ -2893,6 +2893,41 @@ Session History keys:
 - `q` — return to the owning live chat buffer
 - `?` — describe the mode and its bindings
 
+### Emacs bookmarks
+
+Use the ordinary Emacs bookmark commands with a persistent Pi runtime whose
+saved session file already exists:
+
+- In a **chat buffer**, `C-x r m` (`bookmark-set`) bookmarks the current saved
+  Pi session, regardless of point. The bookmark opens its chat, not a transcript
+  position or an unsent draft.
+- In **Session History** (`C-c C-p` from chat), put point on an entry row and use
+  `C-x r m`. This bookmark opens Session History at that exact entry, even on an
+  inactive branch. It does not activate the branch. If a search, filter, or
+  folded branch hides the row, reveal it in Session History and retry the jump.
+
+Use `C-x r b` (`bookmark-jump`) from any buffer. Bookmarks live in Emacs's
+ordinary bookmark file and follow its usual save settings (`M-x bookmark-save`
+to save explicitly). They survive buffer closure, stopping the original runtime,
+and restarting Emacs, provided PiChat's package autoloads and target configuration
+are available in the new Emacs. A manual load-path-only setup without generated
+package autoloads needs `(autoload 'pichat-bookmark-jump "pichat-bookmark")`.
+
+A jump reuses a compatible live runtime already hosting the exact saved Pi session
+without reloading it. Otherwise PiChat opens the saved session independently in
+its recorded project directory with the current default preset, not the original
+runtime's preset. Jumping does not switch another runtime, change which runtime
+is preferred, or send a prompt. A conflicting or unverified PiChat writer can
+block a jump; inspect the runtime manager before retrying.
+
+Ephemeral or not-yet-written Pi sessions cannot be bookmarked. Bookmarks record
+the saved file, Pi session ID, project directory, target and (for Session History)
+entry ID, not a copy of the conversation. They do not follow moved or archived
+files, replaced sessions, or changed target/path mappings. Restore access to the
+original file and target, or recreate the bookmark from the intended session.
+
+### Forking, cloning, and branch previews
+
 A successful fork waits for the rebound session state, restores Pi's returned
 prompt text into the chat editor, and focuses the prompt without an extra
 repaint. If the editor is non-empty when state arrives, PiChat asks before

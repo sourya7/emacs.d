@@ -42,6 +42,12 @@
   "Maximum display width of a cell summary (at least eight)."
   :type 'natnum)
 
+(defcustom json-explore-stderr-line-limit 20
+  "Maximum number of stderr lines shown in the explorer.
+Zero shows only the omitted-line count.  Use `json-explore-inspect-stderr'
+to read the full output."
+  :type 'natnum)
+
 (defconst json-explore-missing (make-symbol "json-explore-missing")
   "Sentinel for an absent object member, distinct from JSON null.")
 
@@ -119,7 +125,7 @@
 ;; Row IDs are the original array indices or object keys.  Column IDs are
 ;; symbols for structural columns and strings for actual object members.
 (cl-defstruct (json-explore--view (:constructor json-explore--make-view))
-  value path label columns rows cell start hscroll source diagnostic snapshot
+  value path label columns rows cell start hscroll source diagnostic stderr snapshot
   presentation tables layouts active-tables column-spec section-defaults)
 
 (cl-defstruct (json-explore--source (:constructor json-explore--make-source))
@@ -677,11 +683,36 @@ itself is navigable and refers to the typed value at PATH."
        (apply #'vui-vstack
               (mapcar (lambda (line) (vui-text line :face 'warning))
                       (split-string diagnostic "\n"))))
+     (when-let* ((stderr (json-explore--view-stderr view)))
+       (apply #'vui-vstack
+              (mapcar (lambda (line) (vui-text line :face 'warning))
+                      (json-explore--stderr-preview stderr))))
      (cond ((json-explore--view-value view)
             (or (json-explore--custom-page view)
                 (json-explore--page view (json-explore--view-path view) presentation)))
-           ((not (json-explore--view-diagnostic view))
+           ((not (or (json-explore--view-diagnostic view)
+                     (json-explore--view-stderr view)))
             (vui-text "No JSON result yet."))))))
+
+(defun json-explore--stderr-preview (stderr)
+  "Return display lines for nonblank STDERR, without splitting hidden lines."
+  (let ((start 0)
+        (end (length stderr))
+        lines)
+    (cl-loop repeat (max 0 json-explore-stderr-line-limit)
+             while (< start end)
+             for newline = (string-search "\n" stderr start)
+             do (push (substring stderr start (or newline end)) lines)
+             (setq start (if newline (1+ newline) end)))
+    (when (< start end)
+      (let ((more (+ (cl-count ?\n stderr :start start)
+                     (if (= (aref stderr (1- end)) ?\n) 0 1))))
+        (push (format "… %d more %s (M-x json-explore-inspect-stderr)"
+                      more (if (= more 1) "line" "lines"))
+              lines)))
+    (setq lines (nreverse lines))
+    (setcar lines (concat "stderr: " (car lines)))
+    lines))
 
 (defun json-explore--window ()
   (if (eq (window-buffer (selected-window)) (current-buffer))
@@ -993,6 +1024,14 @@ With STAY keep focus in the explorer."
   (interactive)
   (json-explore-inspect-value (json-explore--value-at-point)))
 
+(defun json-explore-inspect-stderr ()
+  "Inspect the current entry's full stderr in the reused read-only buffer."
+  (interactive)
+  (if-let* ((view json-explore--view)
+            (stderr (json-explore--view-stderr view)))
+      (json-explore-inspect-text stderr :label "Command stderr")
+    (user-error "No command stderr for this entry")))
+
 (defun json-explore--run-open-handlers (action)
   (when-let* ((thing (json-explore-thing-at-point)))
     (run-hook-with-args-until-success 'json-explore-open-functions thing action)))
@@ -1094,6 +1133,7 @@ Without Evil, C-c C-b/C-c C-f go back and forward.
 On object pages, za/zo/zc toggle/open/close a section; zR/zM open/close
 all sections in Evil.  RET drills into a section in a new history entry.  Use gr
 in Evil or C-c C-r to refresh a command snapshot explicitly.  Use
+M-x json-explore-inspect-stderr to read full command stderr, and
 ordinary Emacs or Evil search keys to find rendered text."
   (setq-local truncate-lines t)
   (setq-local bidi-paragraph-direction 'left-to-right)
@@ -1364,10 +1404,9 @@ When BEGIN and END are provided, explore only the text between them."
             (json-explore--replace-snapshot view value))
           (unless (zerop code) (setq diagnostic exit))))
       (error (setq diagnostic (concat exit ": " (error-message-string err)))))
-    (unless (string-blank-p stderr)
-      (setq diagnostic (concat (when diagnostic (concat diagnostic "\n"))
-                               "stderr: " (string-trim-right stderr))))
-    (setf (json-explore--view-diagnostic json-explore--view) diagnostic)
+    (setf (json-explore--view-diagnostic json-explore--view) diagnostic
+          (json-explore--view-stderr json-explore--view)
+          (unless (string-blank-p stderr) stderr))
     (json-explore--render t)))
 
 (defun json-explore-refresh ()

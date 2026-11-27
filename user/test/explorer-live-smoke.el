@@ -8,6 +8,8 @@
 (require 'cl-lib)
 (require 'ert)
 
+(defvar json-explore-stderr-line-limit)
+
 (defun explorer-smoke--load ()
   (let* ((builds (or (getenv "ELPACA_BUILDS") ".local/elpaca/builds"))
          (vui (expand-file-name "vui" builds)))
@@ -257,7 +259,8 @@
     (should (equal (explorer-smoke--header) name))))
 
 (defun explorer-smoke--command (refresh override)
-  (let ((file (make-temp-file "explorer-smoke-")))
+  (let ((file (make-temp-file "explorer-smoke-"))
+        (json-explore-stderr-line-limit 1))
     (unwind-protect
         (progn
           (write-region "echo '{\"x\":42}'; echo initial-warning >&2" nil file nil 'silent)
@@ -267,11 +270,19 @@
           (explorer-smoke--wait)
           (should (= (json-explore--value-at-point) 42))
           (should (string-match-p "stderr: initial-warning" (buffer-string)))
-          (write-region "echo invalid; echo failed >&2" nil file nil 'silent)
+          (write-region "echo invalid; printf 'failed\\nhidden\\n' >&2" nil file nil 'silent)
           (explorer-smoke--press refresh)
           (explorer-smoke--wait)
           (should (= (json-explore--value-at-point) 42))
-          (should (string-match-p "Exit status 0:.*\nstderr: failed" (buffer-string)))
+          (should (string-match-p "Exit status 0:.*\nstderr: failed\n… 1 more line" (buffer-string)))
+          (should-not (string-match-p "hidden" (buffer-string)))
+          (let ((explorer (current-buffer)))
+            (save-selected-window
+              (call-interactively #'json-explore-inspect-stderr)
+              (should (eq (current-buffer)
+                          (buffer-local-value 'json-explore--inspection explorer)))
+              (should buffer-read-only)
+              (should (equal (buffer-string) "failed\nhidden\n"))))
           (write-region "echo '{\"x\":43}'" nil file nil 'silent)
           (explorer-smoke--press refresh)
           (explorer-smoke--wait)

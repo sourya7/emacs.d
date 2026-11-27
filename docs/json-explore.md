@@ -37,8 +37,12 @@ buffer.
 
 Use explicit refresh to rerun a command for the current history entry, at the
 same JSON path if nested. Pending refresh or a failed command/parse does not
-replace the last good data; look in the explorer for errors and stderr. Buffer
-and region snapshots have no command to refresh.
+replace the last good data; look in the explorer for errors and stderr. The
+stderr preview shows at most `json-explore-stderr-line-limit` lines (default
+20; zero shows only the count), followed by `… N more lines` when truncated.
+`M-x json-explore-inspect-stderr` opens the current entry's full stderr in the
+reused read-only companion buffer. `K` still inspects typed JSON. Buffer and
+region snapshots have no command to refresh.
 
 ## Browse plans
 

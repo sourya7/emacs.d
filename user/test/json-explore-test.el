@@ -461,6 +461,38 @@
         (should (string-match-p "Executable not found.*sh" (buffer-string)))
         (should (eq good json-explore--view))))))
 
+(ert-deftest json-explore-stderr-preview-line-boundaries ()
+  (let ((json-explore-stderr-line-limit 2))
+    (should (equal (json-explore--stderr-preview "one\n") '("stderr: one")))
+    (should (equal (json-explore--stderr-preview "one\ntwo\n") '("stderr: one" "two")))
+    (should (equal (json-explore--stderr-preview "one\n\nthree\nlast")
+                   '("stderr: one" "" "… 2 more lines (M-x json-explore-inspect-stderr)")))
+    (let ((json-explore-stderr-line-limit 0))
+      (should (equal (json-explore--stderr-preview "one\n")
+                     '("stderr: … 1 more line (M-x json-explore-inspect-stderr)"))))))
+
+(ert-deftest json-explore-command-caps-stderr-and-inspects-original-text ()
+  (json-explore-test--with-command
+    (let ((json-explore-stderr-line-limit 2))
+      (write-region "printf 'first\\nsecond\\nthird  \\n\\n' >&2; exit 7" nil fixture nil 'silent)
+      (save-window-excursion
+        (with-current-buffer (json-explore-run-command "sh" '("./fixture.sh") :directory directory
+                                                       :buffer-name name :no-display t)
+          (json-explore-test--wait)
+          (should (string-match-p "Exit status 7\nstderr: first\nsecond\n… 2 more lines"
+                                  (buffer-string)))
+          (should-not (string-match-p "third" (buffer-string)))
+          (let ((inspection (save-current-buffer (json-explore-inspect-stderr))))
+            (with-current-buffer inspection
+              (should buffer-read-only)
+              (should (equal (buffer-string) "first\nsecond\nthird  \n\n")))
+            (should (eq inspection (save-current-buffer (json-explore-inspect-stderr)))))
+          (write-region "echo false" nil fixture nil 'silent)
+          (json-explore-refresh)
+          (json-explore-test--wait)
+          (should-not (string-match-p "stderr:" (buffer-string)))
+          (should-error (json-explore-inspect-stderr) :type 'user-error))))))
+
 (ert-deftest json-explore-explicit-exit-policy-and-local-only ()
   (should-error (json-explore-run-command "sh" nil :directory "/ssh:fixture:/tmp/")
                 :type 'user-error)

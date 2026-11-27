@@ -62,13 +62,14 @@
 (defconst json-explore--display-control-re "[\u0000-\u001f\u007f-\u009f\u2028\u2029]"
   "Control characters and Unicode line/paragraph separators.")
 
-(defun json-explore--escaped-label (text)
+(defun json-explore--escaped-label (text &optional full)
   ;; Bound encoding work even for large values. Encode controls that
   ;; `json-serialize' is allowed to leave literal, too.
   (replace-regexp-in-string
    "[\u007f-\u009f\u2028\u2029]" (lambda (match) (format "\\u%04x" (aref match 0)))
    (decode-coding-string
-    (json-explore--json (substring-no-properties text 0 (min (length text) (json-explore--width))))
+    (json-explore--json (substring-no-properties
+                        text 0 (unless full (min (length text) (json-explore--width)))))
     'utf-8)
    t t))
 
@@ -87,7 +88,7 @@
           (substring (json-explore--escaped-label key) 1 -1))
          (t (substring-no-properties key)))))
 
-(defun json-explore--summary (value)
+(defun json-explore--summary (value &optional full)
   (pcase-let
       ((`(,text . ,face)
         (cond
@@ -100,12 +101,13 @@
           (cons (if (zerop (length value)) "[]" (format "[%d items]" (length value)))
                 'json-explore-summary-face))
          ((stringp value)
-          (cons (if (json-explore--quote-string-p value) (json-explore--escaped-label value)
+          (cons (if (json-explore--quote-string-p value)
+                    (json-explore--escaped-label value full)
                   (substring-no-properties value))
                 'json-explore-string-face))
          ((numberp value) (cons (json-explore--json value) 'json-explore-number-face))
          (t (cons (json-explore--json value) 'json-explore-constant-face)))))
-    (let ((label (json-explore--clip text)))
+    (let ((label (if full text (json-explore--clip text))))
       (if face (propertize label 'face face) label))))
 
 (defun json-explore-path-string (path)
@@ -234,24 +236,39 @@ The first non-nil result wins.")
   "Return the current view's absolute JSON path, nil at the root."
   (when json-explore--view (json-explore--view-path json-explore--view)))
 
-(defun json-explore--breadcrumb ()
-  (let ((label (replace-regexp-in-string "[[:cntrl:]]" " "
-                                         (json-explore--view-label json-explore--view)))
-        (path (json-explore--view-path json-explore--view)))
-    (mapconcat #'identity
-               (cons label (mapcar (lambda (part)
-                                     (if (and (stringp part)
-                                              (string-match-p "\\`[a-zA-Z_][a-zA-Z_0-9]*\\'" part))
-                                         part
-                                       (format "[%s]" (json-explore--json part))))
-                                   path))
-               " › ")))
+(defun json-explore--breadcrumb (width)
+  (let* ((label (replace-regexp-in-string "[[:cntrl:]]" " "
+                                          (json-explore--view-label json-explore--view)))
+         (separator " › ")
+         (prefix (concat "…" separator))
+         (segments
+          (cons label (mapcar (lambda (part)
+                                (if (and (stringp part)
+                                         (string-match-p "\\`[a-zA-Z_][a-zA-Z_0-9]*\\'" part))
+                                    part
+                                  (format "[%s]" (json-explore--json part))))
+                              (json-explore--view-path json-explore--view))))
+         (full (string-join segments separator)))
+    (cond
+     ((<= (string-width full) width) full)
+     ((or (not (cdr segments)) (<= width (string-width prefix)))
+      (truncate-string-to-width (if (cdr segments) prefix label) width nil nil "…"))
+     (t
+      (let* ((segments (reverse (cdr segments)))
+             (budget (- width (string-width prefix)))
+             (tail (truncate-string-to-width (pop segments) budget nil nil "…")))
+        (while (and segments
+                    (<= (+ (string-width tail) (string-width separator)
+                           (string-width (car segments))) budget))
+          (setq tail (concat (pop segments) separator tail)))
+        (concat prefix tail))))))
 
-(defun json-explore--update-breadcrumb ()
-  ;; Escape format directives in names and keys.  vui uses this string
-  ;; whenever the window is not pinning the table's column headers.
+(defun json-explore--install-breadcrumb ()
+  ;; Redisplay selects the header's window, including when VUI falls back
+  ;; to this construct rather than pinning a table's column headers.
   (setq-local header-line-format
-              (replace-regexp-in-string "%" "%%" (json-explore--breadcrumb))))
+              '(:eval (replace-regexp-in-string
+                       "%" "%%" (json-explore--breadcrumb (window-width))))))
 
 (defun json-explore--object-array-p (value)
   (and (vectorp value) (> (length value) 0) (cl-every #'hash-table-p value)))
@@ -441,25 +458,55 @@ Display formatting does not change these values.  Treat them as read-only."
       (plist-put (copy-sequence node) :children
                  (cons (cons (car path) new) (remq old children))))))
 
-(defun json-explore--fields (view rows)
-  (let* ((labels (mapcar (lambda (row) (or (nth 1 (json-explore--column-spec view row))
-                                          (json-explore--key-label row)))
+(defun json-explore--wrap-field (text width)
+  "Split TEXT into lines of WIDTH columns, preserving its faces and text.
+Prefer breaks at spaces, but split long words (including file paths)."
+  (let (lines)
+    (dolist (line (split-string text "\n"))
+      (let ((start 0) (end 0) (column 0) space)
+        (while (< end (length line))
+          (let* ((char (aref line end))
+                 (size (max 0 (char-width char))))
+            (if (and (> (+ column size) width) (> end start))
+                (let ((break (or space end)))
+                  (push (substring line start break) lines)
+                  (setq start break end break column 0 space nil))
+              (cl-incf end)
+              (cl-incf column size)
+              (when (eq char ?\s) (setq space end)))))
+        (push (substring line start) lines)))
+    (nreverse lines)))
+
+(defun json-explore--fields (view rows width outer-indent)
+  (let* ((width (- width outer-indent))
+         (gap 2)
+         (labels (mapcar (lambda (row)
+                           (truncate-string-to-width
+                            (or (nth 1 (json-explore--column-spec view row))
+                                (json-explore--key-label row))
+                            (max 1 (- width gap 4)) nil nil "…"))
                          rows))
-         (width (apply #'max 0 (mapcar #'string-width labels))))
+         (label-width (apply #'max 0 (mapcar #'string-width labels)))
+         (indent (+ label-width gap))
+         (value-width (max 1 (- width indent)))
+         (continuation (concat "\n" (make-string (+ outer-indent indent) ?\s))))
     (apply #'vui-vstack
            (cl-mapcar
             (lambda (row label)
-              (vui-hstack :spacing 2
-                (vui-region :key (json-explore--cell-key view row 'key)
-                  (vui-text (concat label (make-string (- width (string-width label)) ?\s))))
-                (vui-region :key (json-explore--cell-key view row 'value)
-                  (let* ((value (json-explore--display-value view row 'value))
-                         (formatter (nth 2 (json-explore--column-spec view row))))
-                    (vui-text (if formatter (json-explore--clip (funcall formatter value))
-                                (json-explore--summary value)))))))
+              (let* ((value (json-explore--display-value view row 'value))
+                     (formatter (nth 2 (json-explore--column-spec view row)))
+                     (text (if formatter (funcall formatter value)
+                             (json-explore--summary value t))))
+                (vui-hstack :spacing gap
+                  (vui-region :key (json-explore--cell-key view row 'key)
+                    (vui-text (concat label (make-string (- label-width (string-width label)) ?\s))))
+                  (vui-region :key (json-explore--cell-key view row 'value)
+                    (vui-text (if (string-empty-p text) " "
+                                (string-join (json-explore--wrap-field text value-width)
+                                             continuation)))))))
             rows labels))))
 
-(vui-defcomponent json-explore--table-component (view sort row-limit cell-width)
+(vui-defcomponent json-explore--table-component (view sort row-limit cell-width field-width)
   :memo t
   :render
   (let* ((json-explore-row-limit row-limit)
@@ -475,7 +522,9 @@ Display formatting does not change these values.  Treat them as read-only."
                          (if (cdr sort) "descending" "ascending"))))
      (when (< (length rows) total)
        (vui-text (format "showing %d of %d" (length rows) total)))
-     (cond ((and rows (hash-table-p value)) (json-explore--fields view rows))
+     (cond ((and rows (hash-table-p value))
+            (json-explore--fields view rows field-width
+                                  (vui-use-context vui-collapsible-indent-context)))
            (rows (json-explore--table view rows))
            ((or (vectorp value) (and (hash-table-p value) (zerop (hash-table-count value))))
             (vui-text (json-explore--summary value)))))))
@@ -516,6 +565,8 @@ cell layout per path.  Sorting operates on the typed values, not labels."
   (when (vectorp (json-explore--lookup json-explore--view path))
     (vui-component 'json-explore--table-component :key (list :table path)
       :view (json-explore--layout-table path columns nil)
+      :field-width (and (hash-table-p (json-explore--lookup json-explore--view path))
+                        (json-explore--field-window-width))
       :sort (plist-get (json-explore--presentation-at path) :sort)
       :row-limit json-explore-row-limit :cell-width json-explore-cell-width)))
 
@@ -526,6 +577,7 @@ in order, skipping absent keys.  Without FIELDS show the scalar fields."
   (when (hash-table-p (json-explore--lookup json-explore--view path))
     (vui-component 'json-explore--table-component :key (list :fields path)
       :view (json-explore--layout-table path fields t)
+      :field-width (json-explore--field-window-width)
       :sort (plist-get (json-explore--presentation-at path) :sort)
       :row-limit json-explore-row-limit :cell-width json-explore-cell-width)))
 
@@ -543,6 +595,7 @@ itself is navigable and refers to the typed value at PATH."
       (puthash path expanded defaults))
     (vui-component 'json-explore--section :key (list :section path)
       :view json-explore--view :path path :node (json-explore--presentation-at path)
+      :field-width (json-explore--field-window-width)
       :title title :body body :expanded (json-explore--fold-open-p path expanded)
       :row-limit json-explore-row-limit :cell-width json-explore-cell-width)))
 
@@ -555,6 +608,7 @@ itself is navigable and refers to the typed value at PATH."
            (let ((section-path (append path (list key))))
              (push (vui-component 'json-explore--section :key (list :section section-path)
                      :view view :path section-path :node (cdr (assoc key (plist-get node :children)))
+                     :field-width (and (hash-table-p value) (json-explore--field-window-width))
                      :expanded (json-explore--fold-open-p section-path nil)
                      :row-limit json-explore-row-limit :cell-width json-explore-cell-width)
                    sections))))
@@ -562,10 +616,13 @@ itself is navigable and refers to the typed value at PATH."
     (apply #'vui-vstack
            (vui-component 'json-explore--table-component :key (list :table path)
              :view table :sort (plist-get node :sort)
+             :field-width (and (hash-table-p (json-explore--view-value table))
+                               (json-explore--field-window-width))
              :row-limit json-explore-row-limit :cell-width json-explore-cell-width)
            (nreverse sections))))
 
-(vui-defcomponent json-explore--section (view path node row-limit cell-width title body expanded)
+(vui-defcomponent json-explore--section (view path node row-limit cell-width title body expanded field-width)
+  ;; Propagate resize through memoized sections to any fields in the body.
   :memo t
   :render
   (let* ((json-explore-row-limit row-limit)
@@ -590,17 +647,29 @@ itself is navigable and refers to the typed value at PATH."
                      :context (json-explore-current-context)
                      :snapshot (json-explore--view-snapshot view))))))
 
+(defvar-local json-explore--rendered-width nil)
+
 (vui-defcomponent json-explore--root ()
   :state ((presentation nil))
   :render
-  (let ((view json-explore--view)
-        (commit (make-symbol "explorer-render")))
+  (let* ((view json-explore--view)
+         (commit (make-symbol "explorer-render"))
+         (width (json-explore--field-window-width))
+         ;; A reflow changes line text, so VUI's text-based point restoration
+         ;; may land on another field. Keep the cell selected across a resize.
+         (cell (and json-explore--rendered-width
+                    (/= width json-explore--rendered-width)
+                    (json-explore--cell-at))))
     (setf (json-explore--view-active-tables view) nil
           (json-explore--view-section-defaults view) nil)
     ;; The collapsible may be redrawn by vui itself (e.g. on resize).
     (vui-use-effect (commit)
+      (setq json-explore--rendered-width width)
       (json-explore--key-table-whitespace)
-      (json-explore--prepare-sections))
+      (json-explore--prepare-sections)
+      (when (and cell (not (equal cell (json-explore--cell-at))))
+        (vui-goto-key cell))
+      nil)
     (vui-vstack
      (when json-explore--request
        (vui-text "Running command…" :face 'shadow))
@@ -618,6 +687,10 @@ itself is navigable and refers to the typed value at PATH."
   (if (eq (window-buffer (selected-window)) (current-buffer))
       (selected-window)
     (get-buffer-window)))
+
+(defun json-explore--field-window-width ()
+  ;; Match the window chosen by VUI's resize hook; the body excludes margins.
+  (window-body-width (or (get-buffer-window nil t) (selected-window))))
 
 (defun json-explore--save-position ()
   (setf (json-explore--view-cell json-explore--view) (json-explore--cell-at)
@@ -709,7 +782,7 @@ itself is navigable and refers to the typed value at PATH."
           (setq pos end))))))
 
 (defun json-explore--render (&optional restore-scroll)
-  (json-explore--update-breadcrumb)
+  (force-mode-line-update)
   (let ((presentation (json-explore--view-presentation json-explore--view)))
     (if (eq presentation (json-explore--presentation))
         (vui-refresh)
@@ -1096,9 +1169,11 @@ ordinary Emacs or Evil search keys to find rendered text."
       (unless (json-explore--view-label view)
         (setf (json-explore--view-label view) buffer-name))
       (setq json-explore--view view json-explore--back nil json-explore--forward nil)
-      (json-explore--update-breadcrumb))
+      (json-explore--install-breadcrumb))
     (vui-mount (vui-component 'json-explore--root) buffer-name no-display)
-    (with-current-buffer buffer (json-explore--first-cell))
+    (with-current-buffer buffer
+      (vui-rerender-on-resize)
+      (json-explore--first-cell))
     buffer))
 
 (defun json-explore--initial-view (source &optional label)

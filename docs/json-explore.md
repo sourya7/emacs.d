@@ -30,8 +30,10 @@ the shortened summary.
 The header line shows the source at the root and adds path segments as you
 open cells (for example, `Plans list › [0] › tasks`). When you scroll into a
 table, the column names take over the header line; scroll back up to see the
-breadcrumb again. Drilling and history reuse one explorer buffer and do not
-rerun the command. Inspections reuse a companion buffer.
+breadcrumb again. If the breadcrumb is too wide, `… ›` replaces leading
+segments so the end of the path stays visible. Drilling and history reuse one
+explorer buffer without rerunning the command. Inspections reuse a companion
+buffer.
 
 Use explicit refresh to rerun a command for the current history entry, at the
 same JSON path if nested. Pending refresh or a failed command/parse does not
@@ -88,8 +90,9 @@ or `json-explore-copy-path`.
 
 - `json-explore-row-limit` (default 500) caps rendered rows per table or field
   list; each capped list reports how many rows are shown.
-  `json-explore-cell-width` (default 40) caps summary width, not inspection
-  text.
+  `json-explore-cell-width` (default 40) caps table cell summaries, not field
+  values or inspection text. Field values (such as Next and File in Plans
+  show) wrap beneath the value column and reflow when the window is resized.
 - Default labels show strings and object keys without quotes. String values
   retain JSON quotes when empty, when they look like `null`, `true`, `false`, or
   a JSON number, or when they contain control characters or leading/trailing
@@ -265,7 +268,8 @@ Set `ELPACA_BUILDS` to the existing Elpaca builds directory if it is not
 `.local/elpaca/builds`. The smoke test uses the repository's explorer module
 registration in an isolated session without installing packages or loading
 unrelated user modules. It checks cell navigation, fold keys, inline tables,
-scroll and history, the breadcrumb and pinned column headers, refresh
+scroll and history, the breadcrumb and pinned column headers, reflow of
+fields and the breadcrumb in a 40-column window, refresh
 diagnostics and read-only visits through the real `plans` CLI. It needs `plans` on PATH and a centrally mapped
 checkout. Set
 `EXPLORER_PLAN` to a valid active-inventory ID with tasks if `json-data-explorer`

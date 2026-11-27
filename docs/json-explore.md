@@ -79,9 +79,13 @@ overrides):
 - `za` toggles the section at or enclosing point, `zo` opens it, and `zc`
   closes it. `zR` opens all sections on the page and `zM` closes them.
 - `H`/`L` or `C-o`/`C-i` go back/forward through view history, restoring
-  expansions, sort order, cell and scroll position. Like Evil Collection's
+  expansions, table layout overrides, sort order, cell and scroll position.
+  Like Evil Collection's
   `eww` bindings, `H`/`L` replace Evil's window-top/bottom motions, but only
   in explorer buffers. Customize both pairs via `history-previous`/`history-next`.
+- `T` toggles the record array at point between table and stacked layout,
+  overriding the width-based choice for that table. It replaces Evil's
+  backward-till motion only in explorer buffers; customize `toggle-layout`.
 - `o` sorts the table or field list at point (toggle direction on that column);
   `O` reverses its sort. `/` and `?` search rendered text; `y` remains Evil yank.
   `Y` copies the selected cell's jq-compatible bracket path.
@@ -90,7 +94,8 @@ overrides):
 Without Evil, use `RET`, `TAB`/`S-TAB`, `C-c C-b`/`C-c C-f` for history,
 `C-c C-r` for refresh, `C-s`/`C-r` to search, and `q` to quit the explorer
 window. Other actions are also available by command name via `M-x`, for example
-`json-explore-toggle-section`, `json-explore-sort`, `json-explore-inspect`,
+`json-explore-toggle-section`, `json-explore-toggle-layout`,
+`json-explore-sort`, `json-explore-inspect`,
 or `json-explore-copy-path`.
 
 ## Settings and limits
@@ -100,6 +105,11 @@ or `json-explore-copy-path`.
   `json-explore-cell-width` (default 40) caps table cell summaries, not field
   values or inspection text. Field values (such as Next and File in Plans
   show) wrap beneath the value column and reflow when the window is resized.
+- Arrays of objects that don't fit the window switch to stacked records on
+  resize. Each record has a navigable index heading and wrapped fields.
+  Absent fields are omitted in stacked records and blank in tables; neither
+  is equivalent to JSON `null`. Sort and the row limit still apply to whole
+  records, and `gh`/`gl` move among the visible cells of the current record.
 - Default labels show strings and object keys without quotes. String values
   retain JSON quotes when empty, when they look like `null`, `true`, `false`, or
   a JSON number, or when they contain control characters or leading/trailing
@@ -194,6 +204,8 @@ Renderers should not fetch data or run actions. They can compose `vui` vnodes
 with these builders during rendering:
 
 - `json-explore-table`: render an array at `:path` with optional `:columns`.
+  For record arrays, `:layout` is `auto` (default), `table`, or `stacked`;
+  the user's per-table toggle takes precedence.
 - `json-explore-fields`: render an object at `:path` with optional `:fields`
   (`(KEY LABEL [FORMATTER])` entries in order; absent keys are skipped).
 - `json-explore-section`: fold a value at `:path` with optional `:title`,
@@ -276,7 +288,7 @@ Set `ELPACA_BUILDS` to the existing Elpaca builds directory if it is not
 registration in an isolated session without installing packages or loading
 unrelated user modules. It checks cell navigation, fold keys, inline tables,
 scroll and history, the breadcrumb and pinned column headers, reflow of
-fields and the breadcrumb in a 40-column window, refresh
+fields, stacked records and the breadcrumb in a 40-column window, refresh
 diagnostics and read-only visits through the real `plans` CLI. It needs `plans` on PATH and a centrally mapped
 checkout. Set
 `EXPLORER_PLAN` to a valid active-inventory ID with tasks if `json-data-explorer`

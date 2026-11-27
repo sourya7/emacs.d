@@ -411,15 +411,16 @@ Display formatting does not change these values.  Treat them as read-only."
 (defun json-explore--column-header (view column)
   (or (nth 1 (json-explore--column-spec view column)) (json-explore--header column)))
 
-(defun json-explore--label (view row column)
+(defun json-explore--label (view row column &optional full)
   (let ((value (json-explore--display-value view row column))
         (formatter (nth 2 (json-explore--column-spec view column))))
-    (cond ((and formatter (not (eq value json-explore-missing)))
-           (json-explore--clip (funcall formatter value)))
+    (cond ((eq value json-explore-missing) "")
+          (formatter (let ((text (funcall formatter value)))
+                       (if full text (json-explore--clip text))))
           ((eq column 'key) (json-explore--key-label value))
-          (t (json-explore--summary value)))))
+          (t (json-explore--summary value full)))))
 
-(defun json-explore--table (view rows)
+(defun json-explore--measure-table (view rows)
   (let* ((columns (json-explore--view-columns view))
          (headers (mapcar (lambda (column) (json-explore--column-header view column)) columns))
          (labels (mapcar (lambda (row)
@@ -428,12 +429,17 @@ Display formatting does not change these values.  Treat them as read-only."
                                    columns))
                          rows))
          (widths (vconcat (mapcar #'string-width headers))))
-    ;; Key the padding too, so native vertical motion keeps the column
-    ;; even on a shorter label.  Keyed regions leave RET and TAB to the
-    ;; mode maps (vui buttons bind them before Evil can see them).
     (dolist (line labels)
       (cl-loop for label in line for i from 0 do
                (aset widths i (max (aref widths i) (string-width label)))))
+    (list headers labels widths)))
+
+(defun json-explore--table (view rows &optional measured)
+  ;; Key the padding too, so native vertical motion keeps the column
+  ;; even on a shorter label. Keyed regions leave RET and TAB to the mode.
+  (pcase-let ((`(,headers ,labels ,widths)
+               (or measured (json-explore--measure-table view rows)))
+              (columns (json-explore--view-columns view)))
     (vui-table
      :sticky-header t
      :columns (cl-loop for name in headers for width across widths
@@ -512,7 +518,52 @@ Prefer breaks at spaces, but split long words (including file paths)."
                                              continuation)))))))
             rows labels))))
 
-(vui-defcomponent json-explore--table-component (view sort row-limit cell-width field-width)
+(defun json-explore--record-columns (view row)
+  (let ((record (aref (json-explore--view-value view) row)))
+    (seq-remove (lambda (column)
+                  (and (stringp column)
+                       (eq (gethash column record json-explore-missing) json-explore-missing)))
+                (json-explore--view-columns view))))
+
+(defun json-explore--stacked-cell (view row column text)
+  (vui-region :key (json-explore--cell-key view row column)
+    (vui-text (propertize text 'json-explore--stacked t))))
+
+(defun json-explore--record (view row width outer-indent)
+  (let* ((columns (cdr (json-explore--record-columns view row)))
+         (indent 2)
+         (available (- width outer-indent indent))
+         (labels (mapcar (lambda (column)
+                           (truncate-string-to-width (json-explore--column-header view column)
+                                                     (max 1 (- available 6)) nil nil "…"))
+                         columns))
+         (texts (mapcar (lambda (column) (json-explore--label view row column t)) columns))
+         (label-width (apply #'max 0 (mapcar #'string-width labels)))
+         (value-column (+ indent label-width 2))
+         (value-width (max 1 (- width outer-indent value-column)))
+         (continuation (concat "\n" (make-string (+ outer-indent value-column) ?\s)))
+         (index (format "[%d]" row))
+         (preview-width (min 24 (- width outer-indent (length index) 2)))
+         (preview (cl-loop for column in columns for text in texts
+                           for value = (json-explore--display-value view row column)
+                           when (and (not (json-explore--section-p value))
+                                     (not (string-empty-p text))
+                                     (not (string-match-p "\n" text))
+                                     (<= (string-width text) preview-width))
+                           return text)))
+    (apply #'vui-vstack
+           (json-explore--stacked-cell view row 'index
+                                      (if preview (concat index "  " preview) index))
+           (cl-mapcar
+            (lambda (column label text)
+              (json-explore--stacked-cell
+               view row column
+               (concat (make-string indent ?\s) label
+                       (make-string (+ 2 (- label-width (string-width label))) ?\s)
+                       (string-join (json-explore--wrap-field text value-width) continuation))))
+            columns labels texts))))
+
+(vui-defcomponent json-explore--table-component (view sort row-limit cell-width field-width layout)
   :memo t
   :render
   (let* ((json-explore-row-limit row-limit)
@@ -531,6 +582,18 @@ Prefer breaks at spaces, but split long words (including file paths)."
      (cond ((and rows (hash-table-p value))
             (json-explore--fields view rows field-width
                                   (vui-use-context vui-collapsible-indent-context)))
+           ((and rows layout (json-explore--object-array-p value))
+            (let* ((indent (vui-use-context vui-collapsible-indent-context))
+                   (measured (unless (eq layout 'stacked) (json-explore--measure-table view rows)))
+                   (widths (nth 2 measured)))
+              (if (or (eq layout 'stacked)
+                      (and (eq layout 'auto)
+                           ;; VUI inserts a space between adjacent columns.
+                           (> (+ indent (1- (length widths)) (seq-reduce #'+ widths 0))
+                              field-width)))
+                  (apply #'vui-vstack
+                         (mapcar (lambda (row) (json-explore--record view row field-width indent)) rows))
+                (json-explore--table view rows measured))))
            (rows (json-explore--table view rows))
            ((or (vectorp value) (and (hash-table-p value) (zerop (hash-table-count value))))
             (vui-text (json-explore--summary value)))))))
@@ -563,18 +626,22 @@ Prefer breaks at spaces, but split long words (including file paths)."
              (puthash key table layouts))))
      active)))
 
-(cl-defun json-explore-table (&key (path (json-explore-current-path)) columns &allow-other-keys)
-  "Render the array at absolute PATH as a navigable vui table vnode.
+(cl-defun json-explore-table (&key (path (json-explore-current-path)) columns (layout 'auto)
+                                  &allow-other-keys)
+  "Render the array at absolute PATH as a navigable vui vnode.
 Call during a source's VIEW renderer.  PATH defaults to the current view.
-COLUMNS uses (KEY HEADER [FORMATTER]) for arrays of objects.  Use only one
-cell layout per path.  Sorting operates on the typed values, not labels."
+COLUMNS uses (KEY HEADER [FORMATTER]) for arrays of objects.  LAYOUT is
+`auto' (default), `table' or `stacked' for record arrays; a user toggle
+can override it.  Use only one cell layout per path.  Sorting operates
+on the typed values, not labels."
   (when (vectorp (json-explore--lookup json-explore--view path))
-    (vui-component 'json-explore--table-component :key (list :table path)
-      :view (json-explore--layout-table path columns nil)
-      :field-width (and (hash-table-p (json-explore--lookup json-explore--view path))
-                        (json-explore--field-window-width))
-      :sort (plist-get (json-explore--presentation-at path) :sort)
-      :row-limit json-explore-row-limit :cell-width json-explore-cell-width)))
+    (let ((node (json-explore--presentation-at path)))
+      (vui-component 'json-explore--table-component :key (list :table path)
+        :view (json-explore--layout-table path columns nil)
+        :field-width (json-explore--field-window-width)
+        :layout (or (plist-get node :layout) layout)
+        :sort (plist-get node :sort)
+        :row-limit json-explore-row-limit :cell-width json-explore-cell-width))))
 
 (cl-defun json-explore-fields (&key (path (json-explore-current-path)) fields &allow-other-keys)
   "Render object fields at absolute PATH as a navigable vui vnode.
@@ -614,7 +681,7 @@ itself is navigable and refers to the typed value at PATH."
            (let ((section-path (append path (list key))))
              (push (vui-component 'json-explore--section :key (list :section section-path)
                      :view view :path section-path :node (cdr (assoc key (plist-get node :children)))
-                     :field-width (and (hash-table-p value) (json-explore--field-window-width))
+                     :field-width (json-explore--field-window-width)
                      :expanded (json-explore--fold-open-p section-path nil)
                      :row-limit json-explore-row-limit :cell-width json-explore-cell-width)
                    sections))))
@@ -622,8 +689,8 @@ itself is navigable and refers to the typed value at PATH."
     (apply #'vui-vstack
            (vui-component 'json-explore--table-component :key (list :table path)
              :view table :sort (plist-get node :sort)
-             :field-width (and (hash-table-p (json-explore--view-value table))
-                               (json-explore--field-window-width))
+             :field-width (json-explore--field-window-width)
+             :layout (or (plist-get node :layout) 'auto)
              :row-limit json-explore-row-limit :cell-width json-explore-cell-width)
            (nreverse sections))))
 
@@ -674,7 +741,7 @@ itself is navigable and refers to the typed value at PATH."
       (json-explore--key-table-whitespace)
       (json-explore--prepare-sections)
       (when (and cell (not (equal cell (json-explore--cell-at))))
-        (vui-goto-key cell))
+        (json-explore--goto-cell cell))
       nil)
     (vui-vstack
      (when json-explore--request
@@ -782,8 +849,11 @@ itself is navigable and refers to the typed value at PATH."
       (let ((pos (point-min)))
         (while (< pos (point-max))
           (let ((key (get-text-property pos 'vui-key)))
-            ;; Every data row starts with an index cell; headers don't.
-            (when (and (consp key) (eq (nth 2 key) 'index))
+            ;; Table rows start with an index cell; stacked field lines
+            ;; also need to claim indentation inserted by a collapsible.
+            (when (and (consp key) (listp (car key))
+                       (or (eq (nth 2 key) 'index)
+                           (get-text-property pos 'json-explore--stacked)))
               (goto-char pos)
               (let ((end (line-end-position))
                     (row (butlast key)))
@@ -812,6 +882,12 @@ itself is navigable and refers to the typed value at PATH."
             (put-text-property pos end 'keymap json-explore--section-mouse-map))
           (setq pos end))))))
 
+(defun json-explore--goto-cell (cell)
+  (or (vui-goto-key cell)
+      ;; The selected field may be absent from this record's stacked block.
+      (and (numberp (nth 1 cell)) (stringp (nth 2 cell))
+           (vui-goto-key (list (car cell) (nth 1 cell) 'index)))))
+
 (defun json-explore--render (&optional restore-scroll)
   (force-mode-line-update)
   (let ((presentation (json-explore--view-presentation json-explore--view)))
@@ -820,7 +896,7 @@ itself is navigable and refers to the typed value at PATH."
       (vui-set-state :presentation presentation (vui-get-instance))))
   (vui-flush-sync)
   (unless (and (json-explore--view-cell json-explore--view)
-               (vui-goto-key (json-explore--view-cell json-explore--view)))
+               (json-explore--goto-cell (json-explore--view-cell json-explore--view)))
     (json-explore--first-cell))
   (when restore-scroll
     (when-let* ((window (json-explore--window)))
@@ -852,11 +928,18 @@ itself is navigable and refers to the typed value at PATH."
 (defun json-explore--selected-cell ()
   (or (json-explore--cell-at) (user-error "Point is not on a JSON cell")))
 
+(defun json-explore--stacked-at-point-p ()
+  (save-excursion
+    (back-to-indentation)
+    (get-text-property (point) 'json-explore--stacked)))
+
 (defun json-explore--move-column (step)
   (pcase-let ((`(,path ,row ,column) (json-explore--selected-cell)))
     (unless (eq column 'section)
-      (let* ((columns (json-explore--view-columns
-                       (json-explore--active-table path)))
+      (let* ((view (json-explore--active-table path))
+             (columns (if (json-explore--stacked-at-point-p)
+                          (json-explore--record-columns view row)
+                        (json-explore--view-columns view)))
              (next (nth (mod (+ (cl-position column columns :test #'equal) step)
                              (length columns))
                         columns)))
@@ -880,6 +963,20 @@ itself is navigable and refers to the typed value at PATH."
          (nthcdr (length (json-explore--view-path json-explore--view)) path)
          update))
   (json-explore--render))
+
+(defun json-explore-toggle-layout ()
+  "Toggle the record array at point between table and stacked layout."
+  (interactive)
+  (pcase-let ((`(,path ,_row ,column) (json-explore--selected-cell)))
+    (unless (and (not (eq column 'section))
+                 (json-explore--object-array-p
+                  (json-explore--view-value (json-explore--active-table path))))
+      (user-error "Select a cell within a record array"))
+    (let ((layout (if (json-explore--stacked-at-point-p) 'table 'stacked)))
+      (json-explore--update-presentation path (lambda (node) (plist-put node :layout layout)))
+      (when (eq layout 'stacked)
+        (when-let* ((window (json-explore--window)))
+          (set-window-hscroll window 0))))))
 
 (defun json-explore--sort-at (path)
   (let ((sort (plist-get (json-explore--presentation-at path) :sort)))
@@ -1128,7 +1225,9 @@ Use TAB/backtab or, in Evil, g]/g[ to move between cells.
 In Evil, gh/gl move within a row; ordinary vertical motion moves
 between rows.  H/L (like Evil Collection's eww) and C-o/C-i go back
 and forward in view history.  H/L replace Evil's window-top/bottom
-motions only in explorer buffers.  o/O sort and Y copies the jq path.
+motions only in explorer buffers.  T (replacing Evil's backward till)
+toggles table/stacked layout for a record array.  o/O sort and Y copies
+the jq path.
 Without Evil, C-c C-b/C-c C-f go back and forward.
 On object pages, za/zo/zc toggle/open/close a section; zR/zM open/close
 all sections in Evil.  RET drills into a section in a new history entry.  Use gr
@@ -1194,14 +1293,16 @@ ordinary Emacs or Evil search keys to find rendered text."
          (append '((next-button :state normal :key ("<tab>" "TAB" "g]"))
                    (previous-button :state normal :key ("<backtab>" "<S-tab>" "g["))
                    (history-previous :state normal :key ("C-o" "H"))
-                   (history-next :state normal :key ("C-i" "L")))
+                   (history-next :state normal :key ("C-i" "L"))
+                   (toggle-layout :state normal :key "T"))
                  evil-collection-binding-defaults)))
     (evil-collection-bind 'json-explore-mode-map
       'next-button #'json-explore-next-cell
       'previous-button #'json-explore-previous-cell
       ;; C-i and text TAB share an event; bind history last.
       'history-previous #'json-explore-back
-      'history-next #'json-explore-forward))
+      'history-next #'json-explore-forward
+      'toggle-layout #'json-explore-toggle-layout))
   (evil-collection-define-key 'normal 'json-explore-mode-map
     "gh" #'json-explore-previous-column "gl" #'json-explore-next-column
     "o" #'json-explore-sort "O" #'json-explore-reverse-sort

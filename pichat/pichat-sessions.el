@@ -34,6 +34,8 @@
 (declare-function pichat-forget-session "pichat" (session))
 (declare-function pichat-note-session-updated "pichat" (session))
 (declare-function pichat-chat-open "pichat-chat" (session &optional synchronize))
+(declare-function pichat-chat-ensure "pichat-chat" (session &optional synchronize))
+(declare-function pichat-chat-apply-selected-source-sync "pichat-chat" (session response))
 (declare-function pichat-chat-input-restore-fork-text
                   "pichat-chat-input" (text))
 (declare-function pichat-chat-repaint "pichat-chat")
@@ -1160,11 +1162,12 @@ Interactively, an empty query clears the current search."
               (equal source-token
                      (pichat-sessions--session-source-token session))))))
 
-(defun pichat-sessions--request-tree (session buffer &optional origin target-id)
+(defun pichat-sessions--request-tree
+    (session buffer &optional origin target-id completion accept-p)
   "Request SESSION's tree for BUFFER with stale-callback protection.
-When ORIGIN is non-nil, show BUFFER from that captured view origin after the
-accepted response.  When TARGET-ID is non-nil, move to that visible entry
-before displaying BUFFER."
+ORIGIN displays an accepted result and TARGET-ID selects an exact visible row.
+Optionally call COMPLETION with (BUFFER ERROR), either of which may be nil.
+If ACCEPT-P is supplied, install nothing once it returns nil."
   (pichat-backend-require-capability
    session 'session-history "Session history")
   (pichat-sessions--install-request-owner session buffer)
@@ -1180,34 +1183,39 @@ before displaying BUFFER."
           ((current-p ()
              (pichat-sessions--request-current-p
               buffer session generation source-token))
+           (report (result reason)
+             (if completion
+                 (funcall completion result reason)
+               (when reason
+                 (message "PiChat session history refresh failed: %s"
+                          (pichat-sessions--shorten reason 160)))))
+           (finish (response response-session reason)
+             (unless completed
+               (setq completed t)
+               (cond
+                ((and (eq response-session session) (current-p))
+                 (with-current-buffer buffer
+                   (setq pichat-sessions--request-id nil))
+                 (cond
+                  ((and accept-p (not (funcall accept-p)))
+                   (when completion (report nil "Session History request became stale")))
+                  (reason (report nil reason))
+                  (t
+                   (condition-case error-data
+                       (progn
+                         (pichat-sessions--refresh-from-response response session buffer)
+                         (when target-id
+                           (with-current-buffer buffer
+                             (pichat-sessions--goto-id target-id)))
+                         (when origin (pichat-view-display buffer origin 'bury))
+                         (report buffer nil))
+                     (error (report nil (error-message-string error-data)))))))
+                (completion (report nil "Session History request became stale")))))
            (success (response response-session)
-             (setq completed t)
-             (when (and (eq response-session session) (current-p))
-               (with-current-buffer buffer
-                 (setq pichat-sessions--request-id nil))
-               (condition-case error-data
-                   (progn
-                     (pichat-sessions--refresh-from-response
-                      response session buffer)
-                     (when target-id
-                       (with-current-buffer buffer
-                         (pichat-sessions--goto-id target-id)))
-                     (when origin
-                       (pichat-view-display buffer origin 'bury)))
-                 (error
-                  (message "PiChat session history refresh failed: %s"
-                           (pichat-sessions--shorten
-                            (error-message-string error-data) 160))))))
+             (finish response response-session nil))
            (failure (response response-session)
-             (setq completed t)
-             (when (and (eq response-session session) (current-p))
-               (with-current-buffer buffer
-                 (setq pichat-sessions--request-id nil))
-               (message "PiChat session history refresh failed: %s"
-                        (pichat-sessions--shorten
-                         (format "%s" (or (plist-get response :error)
-                                          "unknown error"))
-                         160)))))
+             (finish nil response-session
+                     (format "%s" (or (plist-get response :error) "unknown error")))))
         (setq request-id
               (pichat-rpc-get-tree session #'success #'failure))
         ;; Synchronous test transports may complete before returning an ID.
@@ -1224,11 +1232,13 @@ before displaying BUFFER."
    pichat-sessions-session (current-buffer)))
 
 ;;;###autoload
-(defun pichat-sessions-list (&optional session entry-id)
+(defun pichat-sessions-list (&optional session entry-id completion accept-p)
   "Show complete Session History for SESSION's current file.
 This view previews entries or forks user prompts into new sessions; it does not
 change the active leaf within the current file.  When ENTRY-ID is non-nil, move
-to that visible entry after the tree is synchronized."
+to that visible entry after the tree is synchronized.  With COMPLETION, return
+the accepted buffer or error to that callback instead of displaying it.
+Optional ACCEPT-P controls whether the requested result may still be installed."
   (interactive)
   (let ((session (pichat-session-current session)))
     (unless session (user-error "No current PiChat session"))
@@ -1239,7 +1249,8 @@ to that visible entry after the tree is synchronized."
         (unless (derived-mode-p 'pichat-sessions-mode)
           (pichat-sessions-mode)))
       (pichat-sessions--request-tree
-       session buffer (pichat-view-capture-origin) entry-id))))
+       session buffer (unless completion (pichat-view-capture-origin))
+       entry-id completion accept-p))))
 
 (defun pichat-sessions--root-dir (&optional session)
   "Return the Emacs-visible Pi session root for optional SESSION."
@@ -1648,11 +1659,13 @@ runtime instead of resolving one from the current buffer."
 CWD is saved runtime metadata.  OWNER-DIRECTORY determines the startup
 location and defaults to the mapped CWD or `default-directory'.  OWNER-SCOPE,
 when non-nil, is the exact immutable (KEY CWD LABEL) owner scope.
+With no SOURCE-SESSION, an explicit `:transport' in LAUNCH-OPTIONS
+resolves FILE and CWD without consulting the invoking runtime.
 DISPLAY-FUNCTION receives the state-synchronized runtime; nil suppresses
 display.  READINESS is `state-ready' (browser behavior) or
 `transcript-ready' (selected launch): the latter verifies identity and model
-and synchronizes the chat before calling READY.  ERROR-CALLBACK receives a bounded
-failure response and the cleaned-up runtime.  Any startup, switch,
+and synchronizes the chat before calling READY.  ERROR-CALLBACK receives
+a failure response and the cleaned-up runtime.  Any startup, switch,
 cancellation, or state-synchronization failure stops and forgets only the new
 runtime."
   (unless (and (stringp file) (not (string-empty-p (string-trim file))))
@@ -1691,8 +1704,19 @@ runtime."
                (funcall error-callback
                         (list :success nil :error "Saved-session origin changed")
                         nil))))))))
-  (let* ((runtime-file (pichat-sessions--runtime-file file source-session))
-         (cwd-resolution (pichat-sessions--host-cwd-resolution cwd source-session))
+  (let* ((transport (and (not source-session) (plist-get launch-options :transport)))
+         (context (and transport (pichat-transport-path-context transport pichat-path-mappings)))
+         (runtime-file
+          (cond
+           ((not transport) (pichat-sessions--runtime-file file source-session))
+           ((and (eq (pichat-transport-kind transport) 'ssh)
+                 (equal (file-remote-p file) (pichat-transport-tramp-prefix transport)))
+            (file-local-name file))
+           (t (or (plist-get (pichat-path-resolve-to-runtime file context) :path)
+                  (user-error "Saved session path is unavailable to the launch target")))))
+         (cwd-resolution (if transport
+                             (and cwd (pichat-path-resolve-from-runtime cwd context))
+                           (pichat-sessions--host-cwd-resolution cwd source-session)))
          (session-cwd
           (when-let* ((host-cwd (plist-get cwd-resolution :path)))
             (file-name-as-directory (expand-file-name host-cwd))))
@@ -1748,24 +1772,30 @@ runtime."
                    (when display-function
                      (funcall display-function response-session))
                    (if (eq readiness 'transcript-ready)
-                       (let ((pichat-rpc-request-timeout
-                              pichat-sessions-selection-timeout))
+                       (let ((pichat-rpc-request-timeout pichat-sessions-selection-timeout)
+                             (epoch (pichat-session-diagnostic-source-generation response-session))
+                             (process (pichat-session-process response-session)))
+                         (pichat-chat-ensure response-session)
                          (pichat-rpc-get-entries
                           response-session nil
-                        (lambda (entries synchronized-session)
-                          (unless finished
-                            (condition-case sync-error
-                                (progn
-                                  (unless (equal (pichat-session-session-file
-                                                  synchronized-session)
-                                                 runtime-file)
-                                    (user-error "Selected saved session did not synchronize in a chat"))
-                                  (pichat-chat-apply-selected-source-sync
-                                   synchronized-session entries)
-                                  (complete synchronized-session))
-                              (error (cleanup
-                                      (list :success nil :error
-                                            (error-message-string sync-error)))))))
+                          (lambda (entries synchronized-session)
+                            (unless finished
+                              (condition-case sync-error
+                                  (progn
+                                    (unless (and (eq response-session synchronized-session)
+                                                 (eq process (pichat-session-process synchronized-session))
+                                                 (= epoch (pichat-session-diagnostic-source-generation
+                                                           synchronized-session))
+                                                 (equal runtime-file (pichat-session-session-file
+                                                                      synchronized-session))
+                                                 (or (null expected-session-id)
+                                                     (equal expected-session-id (pichat-session-id
+                                                                                synchronized-session))))
+                                      (user-error "Selected saved session changed before synchronization"))
+                                    (pichat-chat-apply-selected-source-sync synchronized-session entries)
+                                    (complete synchronized-session))
+                                (error (cleanup (list :success nil :error
+                                                      (error-message-string sync-error)))))))
                           #'failure))
                      ;; Preserve the existing independent-browser contract.
                      (when-let* ((buffer (pichat-session-buffer response-session)))

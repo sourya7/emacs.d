@@ -454,10 +454,17 @@ working directory and PROFILE's explicit target, if any."
     (pichat-backend-get-state session (lambda (_response _session) nil)))
   session)
 
-(defun pichat--selected-file-key (transport runtime-file)
-  "Return a transport-qualified canonical identity for RUNTIME-FILE."
-  (let* ((host-file (pichat-transport-runtime-file-name
-                     transport runtime-file))
+(defun pichat--selected-file-key (transport runtime-file &optional context)
+  "Return the canonical writer key for RUNTIME-FILE on TRANSPORT.
+For a mapped local runtime, canonicalize the host path using CONTEXT."
+  (let* ((host-file
+          (or (and (eq (pichat-transport-kind transport) 'local)
+                   (plist-get
+                    (pichat-path-resolve-from-runtime
+                     runtime-file (or context (pichat-transport-path-context
+                                               transport pichat-path-mappings)))
+                    :path))
+              (pichat-transport-runtime-file-name transport runtime-file)))
          (canonical (file-truename host-file)))
     (cons (if (eq (pichat-transport-kind transport) 'ssh)
               (pichat-transport-tramp-prefix transport)
@@ -476,7 +483,8 @@ working directory and PROFILE's explicit target, if any."
               (condition-case nil
                   (equal key (pichat--selected-file-key
                               (pichat-session-transport session)
-                              (pichat-session-session-file session)))
+                              (pichat-session-session-file session)
+                              (pichat-session-path-context session)))
                 (error nil))))))
    (pichat-session-list)))
 
@@ -899,7 +907,7 @@ LAUNCH-OPTIONS supports `:persistence', `:preset' (or a resolved
 `:restore-saved-model'; see `pichat-prepare-session')."
   (interactive)
   (let ((session (pichat-prepare-session cwd scope launch-options)))
-    (pichat-start-prepared-session session)
+    (pichat-start-prepared-session session (plist-get launch-options :background))
     (when (called-interactively-p 'interactive)
       (if (pichat-session-alive-p session)
           (message "PiChat RPC started: %S"

@@ -140,7 +140,7 @@ key or :local t for the checkout's local plans.  Nil uses CLI defaults."
    (json-explore-fields :fields '(("project" "Project" plans-explore--display-text)
                                   ("version" "Version")))
    (json-explore-section :path '("workspaces") :title "Workspaces" :expanded t
-                         :body (json-explore-table :path '("workspaces")))
+                         :body (json-explore-table :path '("workspaces") :heading "plan_id"))
    (json-explore-section :path '("orphans") :title "Orphans" :expanded t
                          :body (json-explore-table :path '("orphans")))))
 
@@ -148,6 +148,7 @@ key or :local t for the checkout's local plans.  Nil uses CLI defaults."
   ;; Drilled entries retain the source and use the usual typed JSON renderer.
   (unless (plist-get view-context :path)
     (pcase (plans-explore--context-operation (plist-get view-context :context))
+      ('list (json-explore-table :heading "id"))
       ('show (plans-explore--show-page value))
       ('workspaces (plans-explore--workspaces-page)))))
 
@@ -160,7 +161,7 @@ key or :local t for the checkout's local plans.  Nil uses CLI defaults."
     (json-explore-make-source
      :program program :directory directory :context context
      :label (if id (format "Plans %s %s" operation id) (format "Plans %s" operation))
-     :view (when (memq operation '(show workspaces)) #'plans-explore--page)
+     :view (when (memq operation '(list show workspaces)) #'plans-explore--page)
      :argv (append global-argv
                    (pcase operation
                      ('show (append '("show") (when archived '("--archived")) (list id)))

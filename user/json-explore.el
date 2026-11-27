@@ -126,7 +126,7 @@ to read the full output."
 ;; symbols for structural columns and strings for actual object members.
 (cl-defstruct (json-explore--view (:constructor json-explore--make-view))
   value path label columns rows cell start hscroll source diagnostic stderr snapshot
-  presentation tables layouts active-tables column-spec section-defaults)
+  presentation tables layouts active-tables column-spec heading section-defaults)
 
 (cl-defstruct (json-explore--source (:constructor json-explore--make-source))
   program argv directory label context success-codes validate columns view value)
@@ -518,12 +518,17 @@ Prefer breaks at spaces, but split long words (including file paths)."
                                              continuation)))))))
             rows labels))))
 
+(defun json-explore--heading-column (view)
+  (or (json-explore--view-heading view) (cadr (json-explore--view-columns view))))
+
 (defun json-explore--record-columns (view row)
-  (let ((record (aref (json-explore--view-value view) row)))
-    (seq-remove (lambda (column)
-                  (and (stringp column)
-                       (eq (gethash column record json-explore-missing) json-explore-missing)))
-                (json-explore--view-columns view))))
+  (let* ((record (aref (json-explore--view-value view) row))
+         (heading (json-explore--heading-column view))
+         (fields (seq-filter (lambda (column) (gethash column record))
+                             (cdr (json-explore--view-columns view)))))
+    (cons 'index (if (member heading fields)
+                     (cons heading (remove heading fields))
+                   fields))))
 
 (defun json-explore--stacked-cell (view row column text)
   (vui-region :key (json-explore--cell-key view row column)
@@ -531,6 +536,8 @@ Prefer breaks at spaces, but split long words (including file paths)."
 
 (defun json-explore--record (view row width outer-indent)
   (let* ((columns (cdr (json-explore--record-columns view row)))
+         (heading (when (and columns (equal (car columns) (json-explore--heading-column view)))
+                    (pop columns)))
          (indent 2)
          (available (- width outer-indent indent))
          (labels (mapcar (lambda (column)
@@ -543,17 +550,18 @@ Prefer breaks at spaces, but split long words (including file paths)."
          (value-width (max 1 (- width outer-indent value-column)))
          (continuation (concat "\n" (make-string (+ outer-indent value-column) ?\s)))
          (index (format "[%d]" row))
-         (preview-width (min 24 (- width outer-indent (length index) 2)))
-         (preview (cl-loop for column in columns for text in texts
-                           for value = (json-explore--display-value view row column)
-                           when (and (not (json-explore--section-p value))
-                                     (not (string-empty-p text))
-                                     (not (string-match-p "\n" text))
-                                     (<= (string-width text) preview-width))
-                           return text)))
+         (heading-width (max 1 (- width outer-indent (string-width index) 2))))
     (apply #'vui-vstack
-           (json-explore--stacked-cell view row 'index
-                                      (if preview (concat index "  " preview) index))
+           (if heading
+               (let ((label (truncate-string-to-width
+                             (replace-regexp-in-string json-explore--display-control-re " "
+                                                       (json-explore--label view row heading t))
+                             heading-width nil nil "…")))
+                 (vui-hstack :spacing 0
+                   (json-explore--stacked-cell view row 'index (concat index "  "))
+                   (json-explore--stacked-cell view row heading
+                                              (if (string-empty-p label) " " label))))
+             (json-explore--stacked-cell view row 'index index))
            (cl-mapcar
             (lambda (column label text)
               (json-explore--stacked-cell
@@ -603,41 +611,43 @@ Prefer breaks at spaces, but split long words (including file paths)."
            (gethash path (json-explore--view-active-tables json-explore--view)))
       (json-explore--table-view json-explore--view path)))
 
-(defun json-explore--layout-table (path spec fields)
+(defun json-explore--layout-table (path spec fields &optional heading)
   (let* ((view json-explore--view)
          (layouts (or (json-explore--view-layouts view)
                       (setf (json-explore--view-layouts view) (make-hash-table :test #'equal))))
          (active (or (json-explore--view-active-tables view)
                      (setf (json-explore--view-active-tables view) (make-hash-table :test #'equal))))
-         (key (list path spec fields))
+         (key (list path spec fields heading))
          (base (json-explore--table-view view path)))
     (puthash
      path
-     (if (not spec) base
+     (if (not (or spec heading)) base
        (or (gethash key layouts)
            (let ((table (copy-json-explore--view base)))
-             (setf (json-explore--view-column-spec table) spec)
+             (setf (json-explore--view-heading table) heading)
+             (when spec (setf (json-explore--view-column-spec table) spec))
              (cond (fields
                     (setf (json-explore--view-rows table)
                           (seq-filter (lambda (key) (gethash key (json-explore--view-value table)))
                                       (mapcar #'car spec))))
-                   ((json-explore--object-array-p (json-explore--view-value table))
+                   ((and spec (json-explore--object-array-p (json-explore--view-value table)))
                     (setf (json-explore--view-columns table) (cons 'index (mapcar #'car spec)))))
              (puthash key table layouts))))
      active)))
 
 (cl-defun json-explore-table (&key (path (json-explore-current-path)) columns (layout 'auto)
-                                  &allow-other-keys)
+                                  heading &allow-other-keys)
   "Render the array at absolute PATH as a navigable vui vnode.
 Call during a source's VIEW renderer.  PATH defaults to the current view.
 COLUMNS uses (KEY HEADER [FORMATTER]) for arrays of objects.  LAYOUT is
 `auto' (default), `table' or `stacked' for record arrays; a user toggle
-can override it.  Use only one cell layout per path.  Sorting operates
-on the typed values, not labels."
+can override it.  HEADING is the key of the displayed column shown beside
+each stacked record's index, defaulting to the first data column.
+Use only one cell layout per path.  Sorting operates on typed values."
   (when (vectorp (json-explore--lookup json-explore--view path))
     (let ((node (json-explore--presentation-at path)))
       (vui-component 'json-explore--table-component :key (list :table path)
-        :view (json-explore--layout-table path columns nil)
+        :view (json-explore--layout-table path columns nil heading)
         :field-width (json-explore--field-window-width)
         :layout (or (plist-get node :layout) layout)
         :sort (plist-get node :sort)

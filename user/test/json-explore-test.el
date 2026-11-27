@@ -96,7 +96,7 @@
         (should (equal (vui-key-at) '(("rows") 1 index)))
         (should (vui-goto-key '(("rows") 0 "score")))
         (json-explore-sort)
-        (should (string-match-p "^ +\\[1\\].*\n +score.*\n +\\[0\\]" (buffer-string)))
+        (should (string-match-p "^ +\\[1\\]  1\n +\\[0\\]  2" (buffer-string)))
         (json-explore-reverse-sort)
         (should (vui-goto-key '(("rows") 2 "score")))
         (should-not (vui-goto-key '(("rows") 1 index)))
@@ -104,23 +104,54 @@
         (json-explore-open)
         (should (equal (json-explore-current-path) '("rows" 0 "meta")))))))
 
+(ert-deftest json-explore-stacked-heading-is-fixed-and-navigable ()
+  (let ((kill-ring nil))
+    (cl-letf (((symbol-function 'json-explore--field-window-width) (lambda () 40)))
+      (json-explore-test--with-view
+          "[{\"primary\":7,\"status\":\"active\"},{\"primary\":\"abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz\",\"status\":\"draft\"},{\"status\":\"paused\"}]"
+        (should-not (string-match-p "^ +primary " (buffer-string)))
+        (should (vui-goto-key '(nil 1 "primary")))
+        (should (equal (thing-at-point 'line t) "[1]  abcdefghijklmnopqrstuvwxyz-abcdefg…\n"))
+        (should (equal (json-explore--value-at-point)
+                       "abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz"))
+        (should-not (vui-goto-key '(nil 2 "primary")))
+        (should (vui-goto-key '(nil 2 index)))
+        (should (looking-at-p "\\[2\\]$"))
+        (json-explore-next-column 1)
+        (should (equal (vui-key-at) '(nil 2 "status")))
+        (should (vui-goto-key '(nil 0 index)))
+        (json-explore-copy-path)
+        (should (equal (current-kill 0 t) ".[0]"))
+        (json-explore-next-cell 1)
+        (should (equal (vui-key-at) '(nil 0 "primary")))
+        (json-explore-copy-path)
+        (should (equal (current-kill 0 t) ".[0][\"primary\"]"))
+        (json-explore-open)
+        (should (equal (json-explore-current-path) '(0 "primary")))
+        (should (= (json-explore-current-value) 7))))))
+
 (ert-deftest json-explore-adapter-table-layout-defaults-are-overridable ()
   (let ((width 80))
     (cl-letf (((symbol-function 'json-explore--field-window-width) (lambda () width)))
       (let ((buffer (json-explore-open-source
                      (json-explore-make-source
-                      :value (json-explore-parse "{\"a\":[{\"x\":1}],\"b\":[{\"x\":2}]}")
+                      :value (json-explore-parse "{\"a\":[{\"x\":1,\"y\":2,\"z\":3}],\"b\":[{\"x\":2}]}")
                       :view (lambda (_value _context)
                               (vui-vstack
-                               (json-explore-table :path '("a") :layout 'stacked
-                                                   :columns '(("x" "Custom")))
+                               (json-explore-table :path '("a") :layout 'stacked :heading "z"
+                                                   :columns '(("x" "Custom") ("y" "Y") ("z" "Z")))
                                (json-explore-table :path '("b") :layout 'table
                                                    :columns '(("x" "An intentionally long custom column"))))))
                      :buffer-name (generate-new-buffer-name "*JSON layouts*") :no-display t)))
         (unwind-protect
             (with-current-buffer buffer
-              (should (vui-goto-key '(("a") 0 "x")))
+              (should (vui-goto-key '(("a") 0 index)))
               (should (json-explore--stacked-at-point-p))
+              (should (looking-at-p "\\[0\\]  3$"))
+              (json-explore-next-column 1)
+              (should (equal (vui-key-at) '(("a") 0 "z")))
+              (json-explore-next-column 1)
+              (should (equal (vui-key-at) '(("a") 0 "x")))
               (should (looking-at-p "  Custom  1"))
               (json-explore-toggle-layout)
               (should-not (json-explore--stacked-at-point-p))

@@ -106,8 +106,12 @@ or `json-explore-copy-path`.
   values or inspection text. Field values (such as Next and File in Plans
   show) wrap beneath the value column and reflow when the window is resized.
 - Arrays of objects that don't fit the window switch to stacked records on
-  resize. Each record has a navigable index heading and wrapped fields.
-  Absent fields are omitted in stacked records and blank in tables; neither
+  resize. Each heading shows the row index and a fixed field, clipped with
+  `…` if needed. The index selects the row, and the text next to it selects
+  the field. The field is not repeated below the heading; if absent, only
+  the index is shown. Plans list and Workspaces use the plan ID.
+  Other stacked fields wrap. Absent fields are omitted in stacked records
+  and blank in tables; neither
   is equivalent to JSON `null`. Sort and the row limit still apply to whole
   records, and `gh`/`gl` move among the visible cells of the current record.
 - Default labels show strings and object keys without quotes. String values
@@ -205,7 +209,9 @@ with these builders during rendering:
 
 - `json-explore-table`: render an array at `:path` with optional `:columns`.
   For record arrays, `:layout` is `auto` (default), `table`, or `stacked`;
-  the user's per-table toggle takes precedence.
+  the user's per-table toggle takes precedence. `:heading` selects a displayed
+  column by its JSON key (for example `:heading "id"`). It defaults to the
+  first data column and only affects stacked records.
 - `json-explore-fields`: render an object at `:path` with optional `:fields`
   (`(KEY LABEL [FORMATTER])` entries in order; absent keys are skipped).
 - `json-explore-section`: fold a value at `:path` with optional `:title`,
@@ -288,7 +294,8 @@ Set `ELPACA_BUILDS` to the existing Elpaca builds directory if it is not
 registration in an isolated session without installing packages or loading
 unrelated user modules. It checks cell navigation, fold keys, inline tables,
 scroll and history, the breadcrumb and pinned column headers, reflow of
-fields, stacked records and the breadcrumb in a 40-column window, refresh
+fields, stacked records (including Plans list ID headings) and the
+breadcrumb in a 40-column window, refresh
 diagnostics and read-only visits through the real `plans` CLI. It needs `plans` on PATH and a centrally mapped
 checkout. Set
 `EXPLORER_PLAN` to a valid active-inventory ID with tasks if `json-data-explorer`

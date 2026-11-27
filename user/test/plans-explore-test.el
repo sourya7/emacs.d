@@ -144,7 +144,7 @@
   (plans-explore-test--with-cli
     (plans-explore-test--write
      "workspace.json"
-     "{\"project\":\"demo\",\"version\":1,\"workspaces\":[{\"plan_id\":\"fixture\"}],\"orphans\":[{\"name\":\"stray\"}]}")
+     "{\"project\":\"demo\",\"version\":1,\"workspaces\":[{\"status\":\"active\",\"plan_id\":\"fixture\"}],\"orphans\":[{\"name\":\"stray\"}]}")
     (with-current-buffer (plans-explore-workspaces :local t :no-display t)
       (should-not json-explore--request)
       (should (string-match-p "unavailable with --local" (buffer-string)))
@@ -158,7 +158,10 @@
       (should (string-match-p "Workspaces" (buffer-string)))
       (should (string-match-p "Orphans" (buffer-string)))
       (should (vui-goto-key '(("workspaces") 0 "plan_id")))
-      (json-explore-next-cell 3)
+      (json-explore-toggle-layout)
+      (should (json-explore--stacked-at-point-p))
+      (should (string-match-p "^ +\\[0\\]  fixture$" (thing-at-point 'line t)))
+      (json-explore-next-cell 4)
       (should (equal (plist-get (json-explore-thing-at-point) :path) '("orphans" 0 "name")))
       (should (vui-goto-key '(nil "workspaces" section)))
       (json-explore-open)

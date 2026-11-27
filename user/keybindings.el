@@ -61,6 +61,7 @@
  :keymaps 'minibuffer-local-map
  "C-;" 'embark-act
  "C-c a" 'embark-act
+ "C-c e" 'embark-export
  "C-c C-;" 'embark-export
  "C-c C-l" 'embark-collect
  "M-s" 'consult-history
